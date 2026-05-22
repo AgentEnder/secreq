@@ -35,6 +35,7 @@ inside a PTY that masks any secret that leaks to stdout/stderr.
 - **First-class `.env` migration** (`import`) — the primary onboarding path.
 - Project-scope **and** user-scope manifests, merged.
 - Secrets held only in the Rust core, **zeroized**, never in a GC heap.
+- **Nested `run` instances must work as expected** (hard requirement — see §8.3).
 
 ### Non-goals (YAGNI — explicitly out)
 - **No secret storage backend of our own.** We read/write *your* existing stores.
@@ -192,17 +193,48 @@ with `$`, so no collision with secret names).
 - **Merge**: union of secrets; **project wins** on key conflict. `providers` merge,
   project may override a scheme.
 
+### Settings reference
+
+**Per-secret** (object form; the shorthand string is just `ref`):
+
+| Option | Type | Default | At base it does… |
+|---|---|---|---|
+| `ref` *(or shorthand string)* | string | — | The locator. With its provider it forms `secret://<provider>/<locator>`. |
+| `provider` | string | group `$provider`, else error | Which scheme resolves it (overrides the group default). |
+| `required` | bool | `true` | **`true`** → in the **eager set**: collected by `run`, **hard error before exec** if unavailable. **`false`** → **on-demand only**: never eagerly collected; resolved *only* when hydrating an ambient env ref (matched by env-var name), via `secret request`, or for a nested run. |
+| `default` | string \| null | none | Fallback value if resolution returns nothing — *satisfies* a required secret instead of erroring. |
+| `description` | string | — | Shown in the consent prompt, `list`, and `doctor`. The "why this exists." |
+
+**Group settings** (`$`-prefixed): `$provider` (group-default provider), `$reason`
+(consent rationale for the group), `$required` (group-default for `required`),
+`$description`.
+
+**Resolution order per secret during `run`:**
+1. In scope? (`required:true`, **or** matched by ambient-ref hydration / `secret request`)
+2. Resolve via provider (may sub-prompt: Touch ID, `op` biometric).
+3. Found → inject.
+4. Missing + `default` set → use default.
+5. Missing + required + no default → **hard error, fail before exec.**
+6. Missing + not required → skip silently.
+
+> The manifest serves two roles: the *eager set* (`required:true`) is "always
+> inject these," while **every** declaration — including `required:false` ones —
+> also acts as a **resolution rule + metadata** for ambient `secret://` refs that
+> appear at runtime. A `required:false` entry is a documented, provider-mapped
+> alias that costs nothing until something references it (by env-var name).
+
 ## 7. Resolution model (union)
 
 `run` resolves the **union** of:
-1. **Manifest-declared** secrets (project ∪ user, filtered by `--only`), typed,
-   with metadata; and
+1. **The eager set** — manifest-declared secrets that are `required:true`
+   (project ∪ user, filtered by `--only`), typed, with metadata. These are always
+   collected; a missing one (with no `default`) is a hard error *before* exec.
 2. **Ambient-env refs** — any inherited env var whose *value* matches
    `secret://...` is resolved in place (op-run parity; supports `.env`-with-refs
-   and ad-hoc usage).
+   and ad-hoc usage). A `required:false` manifest entry contributes only here:
+   if its env-var name matches an ambient ref, its metadata/default/provider apply.
 
-Both resolve through the same provider definitions. Manifest metadata applies to
-matching keys.
+Both resolve through the same provider definitions.
 
 ## 8. `run` flow & consent ceremony
 
@@ -230,6 +262,29 @@ run [--only db,stripe] -- <cmd>
 ### Prompt fatigue
 "Approve & remember" caches a decision keyed by `(manifest hash, command, cwd)`
 with a TTL (default 8h, configurable; `--no-remember` to force a prompt).
+
+### 8.3 Nested `run` (hard requirement)
+
+`tool run -- script` where `script` itself runs `tool run -- thing` **must work
+as expected**. Mechanisms:
+
+- **Session marker**: the outer `run` sets `SECREQ_SESSION=<id>` and
+  `SECREQ_DEPTH=n` on the child env, so an inner `run` detects nesting.
+- **Inherit hydrated values**: the outer already resolved + injected real values;
+  the inner `run` sees them as plain values (no longer `secret://` refs) and
+  **does not re-resolve or re-prompt** for them. **A secret crosses the consent
+  boundary once.**
+- **Inner resolves only the delta**: its own `required:true` set not already
+  present, plus any still-unhydrated ambient refs.
+- **Consent decision = delta re-prompt**: the inner `run` prompts *only* for
+  secrets the outer didn't already provide, and the prompt shows the nesting
+  (e.g. "launched under `outer.sh` → `deploy`"). Already-injected secrets stay
+  silent.
+- **Consent on the real terminal**: the prompt reads/writes `/dev/tty`, not the
+  PTY pipe, so it renders correctly even nested inside the outer's PTY.
+- **Masking composes**: each layer masks its own secrets; the sliding-window
+  matcher must be re-entrant so layered masking never corrupts output.
+- **Signal/resize chaining**: SIGINT, SIGWINCH propagate through nested PTYs.
 
 ## 9. CLI surface
 
