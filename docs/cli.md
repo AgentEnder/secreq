@@ -1,0 +1,231 @@
+# CLI reference
+
+`secreq` has admin subcommands (configuration) and a wrap-and-run path
+(invoked when the first argument is a binary name rather than an admin
+verb). The wrap-and-run path is what fires when a PATH shim invokes
+`secreq <BINARY> "$@"`.
+
+```
+secreq [GLOBAL OPTIONS] <ADMIN VERB> ...   # init, wrap, unwrap, wraps, check, doctor, edit
+secreq [GLOBAL OPTIONS] <BINARY> [ARGS...] # wrap-and-run (external subcommand)
+```
+
+## Global options
+
+| Flag | Effect |
+|---|---|
+| `--config <PATH>` | Use this config instead of `$XDG_CONFIG_HOME/secreq/wraps.json5`. |
+| `--raw` | Disable output masking for the wrap-and-run path. |
+| `-y`, `--yes` | Auto-approve without prompting. Bypasses the daemon entirely; intended for scripted/CI runs. |
+| `-h`, `--help` | Print help. |
+| `-V`, `--version` | Print version. |
+
+To revoke a "remembered" approval, run `secreq daemon stop` — the cache
+is in-memory, so a daemon restart clears it. There's no per-invocation
+flag because the daemon design coalesces parallel asks; a one-shot
+"don't remember this specific run" doesn't fit cleanly.
+
+## Admin verbs
+
+### `init`
+
+```
+secreq init [--shim-dir <PATH>]
+```
+
+First-time setup. Prompts for a shim directory (defaults to `~/.secreq/shims` — a dedicated dir nobody else manages, so there's no risk of collision with other tools' shims),
+checks whether it's on `PATH`, and if not, offers to append a
+sentinel-bracketed `export PATH=…` block to the appropriate shell config
+(`~/.zshenv`, `~/.bashrc`, `~/.config/fish/conf.d/secreq.fish`, or
+`~/.profile`).
+
+Idempotent: re-running detects the sentinel and skips the append.
+
+The PATH-config edit is shown to you in full and gated by a y/N prompt;
+nothing touches your dotfiles without explicit confirmation.
+
+### `wrap`
+
+```
+secreq wrap [--env NAME=secret://...] [--reason "..."] <BINARY>
+```
+
+Adds (or updates) a wrap entry in the config and installs a PATH shim at
+`<shim_dir>/<BINARY>`.
+
+| Flag | Meaning |
+|---|---|
+| `--env NAME=secret://provider/locator` | Repeatable. Each env var to inject. |
+| `--reason "..."` | Reason shown in the consent prompt. |
+
+If `--env` is not given, runs an interactive flow that prompts for each
+env var, picks a provider from the available list, and asks for the
+locator.
+
+The shim file carries a sentinel comment so `unwrap` knows it's safe to
+remove; if a file already exists at the target without our sentinel,
+`wrap` refuses to clobber it.
+
+> **There is no per-wrap cache TTL.** Approvals live in the daemon's
+> memory for as long as the parent process that approved them is alive
+> *and* the daemon hasn't been stopped. See "How approval is scoped" in
+> [`wraps.md`](./wraps.md).
+
+### `unwrap`
+
+```
+secreq unwrap <BINARY>
+```
+
+Removes the wrap's config entry and deletes the shim file (only if it's
+ours — refuses to remove an unowned file at the target path).
+
+### `wraps`
+
+```
+secreq wraps
+```
+
+Lists configured wraps with their reasons and the env-var names + provider
+each one references. **Never prints values.**
+
+### `check`
+
+```
+secreq check
+```
+
+Validates the config:
+- Top-level structure is an object.
+- Each `env` entry is a valid `secret://provider/locator` reference.
+- Every referenced provider scheme exists (built-in or declared in
+  `providers`).
+
+Exit code 0 if clean; 1 if problems.
+
+### `doctor`
+
+```
+secreq doctor
+```
+
+`check` plus: for every provider scheme that an `env` actually references,
+confirms its retrieve CLI is on `PATH`. Providers declared but unused
+aren't reported.
+
+### `edit`
+
+```
+secreq edit
+```
+
+Opens the config file in `$EDITOR` (falls back to `vi`). The file is
+created (empty object) if it doesn't exist yet.
+
+### `daemon`
+
+```
+secreq daemon
+secreq daemon stop [--force | -f]
+```
+
+Run the consent daemon. You don't usually invoke this directly — the
+first wrap-and-run that finds no live daemon will auto-spawn one. It
+exits after 30 minutes of empty queue.
+
+If a daemon is already running, this exits 0 silently (a fcntl-locked
+pidfile enforces singleton-per-user).
+
+`secreq daemon stop` tells a running daemon to exit cleanly. Since the
+approvals cache lives in the daemon's memory only, this is also how
+you clear any "approve all" decisions you made earlier — the next wrap
+auto-spawns a fresh daemon with an empty cache. Exits 0 whether or not
+a daemon was running.
+
+`secreq daemon stop --force` SIGKILLs the daemon directly instead of
+asking it to exit. Use when the daemon is unresponsive (wedged UI,
+hung socket thread). Liveness is probed via the pidfile flock, not
+just `kill(pid, 0)`, so a recycled pid can't be mistaken for a live
+daemon. The force path also removes the pidfile and socket file,
+which a SIGKILL'd process can't clean up itself.
+
+### `pending`
+
+```
+secreq pending
+```
+
+Open the consent daemon's window so you can review the queue and any
+recent activity. Auto-spawns the daemon if it isn't running. The
+window auto-hides ~2 seconds after the queue empties.
+
+### `view`
+
+```
+secreq view
+```
+
+Open the daemon's window in **viewer mode** — pinned, so it stays
+open after the queue empties. The window has two tabs:
+
+- **Pending** — the consent tree, same as `secreq pending`.
+- **Audit log** — recent grant decisions read from `audit.log`, newest
+  first. Names only (the audit log never contains secret values).
+
+`view` lands on the **Audit log** tab; switch via the tab bar to act
+on queued requests. Clicking the window's close button exits viewer
+mode and hides the window (the daemon keeps running). Auto-spawns the
+daemon if it isn't running.
+
+## Wrap-and-run (external subcommand)
+
+```
+secreq <BINARY> [ARGS...]
+```
+
+Most of the time you don't invoke this by hand — your PATH shim does. The
+shim at `<shim_dir>/<BINARY>` is a 5-line POSIX script that execs
+`secreq <BINARY> "$@"`, so anything that does `execvp("<BINARY>", …)`
+(interactive shells, `npm`, `make`, IDEs) routes through us.
+
+### Flow
+
+1. Load the config. Look up `<BINARY>` in `wraps`.
+2. **If no wrap is configured**: pass through unchanged. Find the real
+   `<BINARY>` on PATH (excluding our shim dir to avoid recursion) and exec
+   it with no injection. This makes blanket-aliasing of binaries safe even
+   before you've wrapped each one.
+3. **If a wrap exists**:
+   - Walk the parent process tree for the consent prompt.
+   - Hand off to the consent daemon (auto-spawning it if no socket is
+     live). The daemon checks its in-memory cache keyed on
+     `(wrap_name, ppid, parent_start_time)`; a hit replies immediately,
+     otherwise the daemon shows a native window listing pending
+     requests. Parallel asks with the same key coalesce into one row.
+   - On approve: resolve every `env` entry through its provider (with
+     batching for providers that support `retrieve_batch`).
+   - Build the child command: real binary path + forwarded args; child
+     env layered with the resolved values.
+   - Spawn in a PTY (or piped if non-tty), streaming output through a
+     masking filter that redacts any resolved value (unless `--raw`).
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | Child exited cleanly. |
+| 1 | Consent denied, or provider resolution failed. |
+| 2 | `secreq` invoked with no command. |
+| child's | Otherwise the child's exit code propagates. |
+
+## Environment variables `secreq` reads or sets
+
+| Variable | When |
+|---|---|
+| `SHELL` | `init` reads this to choose which shell config to edit. |
+| `XDG_CONFIG_HOME` | Config discovery. Falls back to `~/.config`. |
+| `XDG_STATE_HOME` | Audit log lives here (`secreq/audit.log`). Falls back to `~/.local/state`. The approvals cache is in-memory only — `secreq daemon stop` clears it. |
+| `XDG_RUNTIME_DIR` | Consent daemon socket + pidfile. Falls back to `$TMPDIR/secreq-<uid>`. |
+| `EDITOR` / `VISUAL` | Used by `secreq edit`. |
+| `DISPLAY` / `WAYLAND_DISPLAY` | Linux/BSD: when neither is set, `secreq` fails closed instead of spawning a daemon that can't render. |
+| `SECREQ_NO_DAEMON` | Set to `1` to disable the daemon entirely — consent fails closed unless `--yes` is used. Intended for tests and headless automation. |
