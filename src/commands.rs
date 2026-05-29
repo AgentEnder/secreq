@@ -1,0 +1,1142 @@
+//! Subcommand implementations for the per-binary wrap model.
+//!
+//! The center of gravity is [`wrap_run`] — the external-subcommand handler
+//! invoked when the user runs `secreq <BINARY> [args…]`. Everything else is
+//! admin verbs that read/write `~/.config/secreq/wraps.json5`.
+
+use std::collections::{BTreeMap, HashMap};
+use std::os::unix::process::CommandExt as _;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use anyhow::{bail, Context, Result};
+
+use crate::audit::{self, AuditEntry};
+use crate::consent::Decision;
+use crate::daemon::client as daemon_client;
+use crate::daemon::proto;
+use crate::path_setup;
+use crate::provenance;
+use crate::provider;
+use crate::reference::Reference;
+use crate::resolve::{self, SecretRequest, Source};
+use crate::secret::SecretValue;
+use crate::shim;
+use crate::wraps::{self, Wrap, WrapsConfig};
+
+// ── Public entry points ───────────────────────────────────────────────────
+
+/// Options for [`wrap_run`].
+#[derive(Debug, Clone, Default)]
+pub struct WrapRunOpts {
+    /// `--raw`: disable output masking. The wrapped binary runs unchanged
+    /// but its stdout/stderr pass through unredacted.
+    pub raw: bool,
+    /// `--no-remember`: ignore and don't update the approval cache.
+    pub no_remember: bool,
+    /// `--yes`: auto-approve without prompting.
+    pub assume_yes: bool,
+}
+
+/// `secreq <BINARY> [args…]` — wrap-and-run. If `binary` has a wrap entry,
+/// resolve its env, obtain consent, exec the real binary with masking. If
+/// there's no wrap entry, **pass through** unchanged — lets users blanket-
+/// shim binaries and add configs incrementally.
+pub fn wrap_run(
+    binary: &str,
+    args: &[String],
+    opts: WrapRunOpts,
+    config_path: Option<&Path>,
+) -> Result<i32> {
+    let config = load_config_or_default(config_path)?;
+    let Some(wrap) = config.wraps.get(binary).cloned() else {
+        return passthrough_unwrapped(binary, args, config.shim_dir.as_deref());
+    };
+
+    // `caller_chain` already drops `secreq` self-frames during its walk
+    // (see `provenance::caller_chain`), so the chain we get back is the
+    // user-meaningful ancestry — what the consent UI shows and what the
+    // approvals cache anchors on.
+    let callers = provenance::caller_chain();
+
+    // Consent: hand off to the daemon. The daemon owns the cache, the
+    // coalescing queue, the UI, *and* the resolution — on approve it
+    // ships back the resolved env values directly, so a parallel burst
+    // of N invocations causes one provider call (and one biometric
+    // prompt) instead of N.
+    //
+    // `--yes` bypasses the daemon entirely (no biometric coalescing
+    // possible without it; --yes paths are scripted runs that need to
+    // resolve client-side).
+    let resolved: Vec<(String, SecretValue)> = if opts.assume_yes {
+        let decision = Decision::Approve;
+        let env_names: Vec<String> = wrap.env.keys().cloned().collect();
+        let _ = audit::append(&AuditEntry::new(
+            &[format!("wrap {binary}")],
+            &callers,
+            &env_names,
+            decision,
+        ));
+        resolve_wrap_env(&config, &wrap)?
+    } else {
+        let outcome = obtain_wrap_consent(&wrap, &callers, args)?;
+        let env_names: Vec<String> = wrap.env.keys().cloned().collect();
+        let _ = audit::append(&AuditEntry::new(
+            &[format!("wrap {binary}")],
+            &callers,
+            &env_names,
+            outcome.decision,
+        ));
+        if !outcome.decision.approved() {
+            eprintln!("secreq: denied — `{binary}` not run");
+            return Ok(1);
+        }
+        outcome
+            .secrets
+            .into_iter()
+            .map(|(name, value)| (name, SecretValue::new(value)))
+            .collect()
+    };
+
+    // Build the command: find the *real* binary on PATH excluding our shim
+    // dir, then forward args. Without this, our shim would recurse.
+    let real_binary =
+        find_real_binary(binary, config.shim_dir.as_deref()).with_context(|| {
+            format!(
+                "could not locate the real `{binary}` on PATH; check that it's installed and that the wrap's shim dir is the one in your config"
+            )
+        })?;
+    let mut command = vec![real_binary.display().to_string()];
+    command.extend(args.iter().cloned());
+
+    let env_overrides: Vec<(String, String)> = resolved
+        .iter()
+        .map(|(name, value)| (name.clone(), value.expose().to_owned()))
+        .collect();
+
+    // Mask the resolved values unless --raw was given. With --raw, we still
+    // inject the env vars but pass output through verbatim.
+    let secrets_for_masking: Vec<SecretValue> = if opts.raw {
+        Vec::new()
+    } else {
+        resolved.into_iter().map(|(_, v)| v).collect()
+    };
+
+    let cwd = std::env::current_dir().context("could not determine current directory")?;
+
+    crate::exec::run(&command, &env_overrides, &secrets_for_masking, &cwd)
+}
+
+/// `secreq init` — interactive first-time setup. Picks the shim dir,
+/// optionally adds it to the shell's PATH config, and writes a minimal
+/// `wraps.json5`.
+pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Result<i32> {
+    let config_path = config_path
+        .map(PathBuf::from)
+        .or_else(wraps::default_config_path)
+        .context("could not determine config path")?;
+
+    cliclack::intro("secreq init — first-time setup")?;
+
+    // 1. Pick the shim dir. Default to a dedicated `~/.secreq/shims` so
+    // we don't share a directory with anything else — no risk of another
+    // tool (asdf, pip user-installs, etc.) dropping a competing `gh`
+    // shim into the same dir. The dir is also brand-new on first init,
+    // so the "is it on PATH?" answer is unambiguous.
+    let suggested = default_shim_dir
+        .or_else(|| dirs::home_dir().map(|h| h.join(".secreq").join("shims")))
+        .context("could not determine a default shim dir")?;
+    let shim_dir_input = prompt::read_with_default(
+        "Where should secreq drop PATH shims?",
+        &suggested.display().to_string(),
+    )?;
+    let shim_dir = expand_tilde(&shim_dir_input);
+
+    // 2. Ensure the dir exists.
+    std::fs::create_dir_all(&shim_dir)
+        .with_context(|| format!("could not create {}", shim_dir.display()))?;
+
+    // 3. Plan the shell-PATH block. We always run this — being "on PATH"
+    // somewhere is necessary but not sufficient. What actually matters is
+    // whether our sentinel block lives in the *canonical* file for this
+    // shell (e.g. `.zshrc` for zsh, where it'll prepend after homebrew).
+    let shell = path_setup::detect_shell();
+    let home = dirs::home_dir().context("could not determine $HOME")?;
+    match path_setup::plan(&home, shell.clone(), &shim_dir) {
+        Ok(plan) if plan.already_configured => {
+            cliclack::log::success(format!(
+                "PATH already configured via {}; nothing to add.",
+                plan.config_file.display()
+            ))?;
+            // Even when we're already-configured, hint about stale blocks
+            // sitting in non-canonical files (e.g. a pre-pivot .zshenv).
+            let stale = path_setup::find_stale_blocks(&home, &shell, &plan.config_file);
+            if !stale.is_empty() {
+                let list = stale
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                cliclack::log::warning(format!(
+                    "Found leftover secreq PATH blocks in: {list}. They're harmless but you can remove them by hand for tidiness."
+                ))?;
+            }
+        }
+        Ok(plan) => {
+            // Two cases land here: (a) we're not on PATH at all, (b) we
+            // are on PATH but via a non-canonical file (e.g. .zshenv from
+            // before the homebrew-shadowing fix). The diagnostic differs.
+            let already_on_path = path_setup::path_includes(&shim_dir);
+            let preamble = if already_on_path {
+                format!(
+                    "{} is on PATH already, but the secreq block isn't in {}. \
+                     That usually means it's in an earlier-loaded file (e.g. .zshenv) \
+                     where later prepends like `brew shellenv` can shadow our shim. \
+                     I can append a fresh block to {} so we win on PATH:",
+                    shim_dir.display(),
+                    plan.config_file.display(),
+                    plan.config_file.display(),
+                )
+            } else {
+                format!(
+                    "{} isn't on PATH. I can append this to {} ({:?}):",
+                    shim_dir.display(),
+                    plan.config_file.display(),
+                    shell
+                )
+            };
+            cliclack::note(preamble, &plan.block)?;
+            if let Some(caveat) = &plan.caveat {
+                cliclack::log::warning(caveat)?;
+            }
+            let stale = path_setup::find_stale_blocks(&home, &shell, &plan.config_file);
+            if !stale.is_empty() {
+                let list = stale
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                cliclack::log::warning(format!(
+                    "Found leftover secreq PATH blocks in: {list}. The new one in {} will win on PATH, but you may want to remove the old blocks by hand for tidiness.",
+                    plan.config_file.display()
+                ))?;
+            }
+            if prompt::confirm_default_yes("Append it?")? {
+                path_setup::apply(&plan)?;
+                cliclack::log::success(format!(
+                    "wrote {}. Open a new terminal (or `source {}`) to pick it up.",
+                    plan.config_file.display(),
+                    plan.config_file.display()
+                ))?;
+            } else {
+                cliclack::log::info(format!(
+                    "skipped. Add {} to PATH yourself before running `secreq wrap`.",
+                    shim_dir.display()
+                ))?;
+            }
+        }
+        Err(err) => {
+            cliclack::log::warning(format!("couldn't auto-configure your shell: {err:#}"))?;
+            cliclack::note(
+                "Add this to your shell config yourself:",
+                format!(r#"export PATH="{}:$PATH""#, shim_dir.display()),
+            )?;
+        }
+    }
+
+    // 4. Write the wraps file (preserving anything already there).
+    let mut config = if config_path.is_file() {
+        WrapsConfig::load(&config_path)?
+    } else {
+        WrapsConfig::default()
+    };
+    config.shim_dir = Some(shim_dir.clone());
+    write_config(&config_path, &config)?;
+
+    cliclack::outro(format!(
+        "Wrote {}.  Next: `secreq wrap <binary>`, e.g. `secreq wrap gh`.",
+        config_path.display()
+    ))?;
+    Ok(0)
+}
+
+/// Args for `secreq wrap`.
+#[derive(Debug, Clone, Default)]
+pub struct WrapArgs {
+    pub binary: String,
+    pub reason: Option<String>,
+    pub envs: Vec<String>, // each: "ENV_NAME=secret://provider/locator"
+}
+
+/// `secreq wrap <BINARY>` — add (or update) a wrap entry and install the
+/// shim. Interactive when `envs` is empty; non-interactive otherwise.
+pub fn wrap(args: WrapArgs, config_path: Option<&Path>) -> Result<i32> {
+    let config_path = resolve_config_path(config_path)?;
+    let mut config = if config_path.is_file() {
+        WrapsConfig::load(&config_path)?
+    } else {
+        WrapsConfig::default()
+    };
+    // Overlay the built-ins so the interactive picker can offer them even
+    // when the user has no `providers` block. `write_config` filters
+    // built-ins back out, so the file on disk doesn't get them baked in.
+    config.merge_builtin_providers();
+
+    if args.binary.starts_with('-') || args.binary.contains('/') {
+        bail!(
+            "`{}` is not a plain binary name; the wrap name is the executable filename only",
+            args.binary
+        );
+    }
+
+    let shim_dir = config
+        .shim_dir
+        .clone()
+        .context("no $shim_dir configured; run `secreq init` first")?;
+
+    // Interactive flow gets a banner; non-interactive (all flags supplied)
+    // stays quiet so it composes cleanly with scripts.
+    let interactive = args.envs.is_empty();
+    if interactive {
+        cliclack::intro(format!("Wrap `{}`", args.binary))?;
+    }
+
+    // Build the env map.
+    let env: BTreeMap<String, String> = if interactive {
+        prompt::interactive_wrap_envs(&config.providers)?
+    } else {
+        parse_env_assignments(&args.envs)?
+    };
+    if env.is_empty() {
+        bail!(
+            "wrap `{}` would have no env vars; nothing to do",
+            args.binary
+        );
+    }
+
+    let reason = args.reason.or_else(|| {
+        if interactive {
+            prompt::optional_read("Reason (shown in consent prompt)")
+                .ok()
+                .flatten()
+        } else {
+            None
+        }
+    });
+    let wrap = Wrap {
+        name: args.binary.clone(),
+        reason,
+        env,
+    };
+    config.wraps.insert(args.binary.clone(), wrap);
+
+    // Validate by round-tripping through the parser before writing.
+    write_config(&config_path, &config)?;
+
+    // Drop the shim.
+    let shim_path = shim::install(&shim_dir, &args.binary)?;
+
+    let summary = format!(
+        "config: {}\n  shim: {}",
+        config_path.display(),
+        shim_path.display()
+    );
+    if interactive {
+        cliclack::outro(format!("Wrapped `{}`.\n  {summary}", args.binary))?;
+    } else {
+        println!("Wrapped `{}`.\n  {summary}", args.binary);
+    }
+
+    if !path_setup::path_includes(&shim_dir) {
+        cliclack::log::warning(format!(
+            "{} isn't on your current PATH. The shim is installed but new shells won't find it until you source your shell config (or open a new terminal). Run `secreq init` to wire up PATH.",
+            shim_dir.display()
+        ))?;
+    }
+    Ok(0)
+}
+
+/// `secreq unwrap <BINARY>` — remove the wrap entry and the shim.
+pub fn unwrap_cmd(binary: &str, config_path: Option<&Path>) -> Result<i32> {
+    let config_path = resolve_config_path(config_path)?;
+    if !config_path.is_file() {
+        bail!("no config at {}", config_path.display());
+    }
+    let mut config = WrapsConfig::load(&config_path)?;
+    let removed = config.wraps.remove(binary).is_some();
+    let shim_removed = if let Some(shim_dir) = &config.shim_dir {
+        shim::remove(shim_dir, binary)?
+    } else {
+        false
+    };
+    write_config(&config_path, &config)?;
+    // Drop the cache entry if any (best-effort across all parent pids).
+    // We can't know which (ppid, start_time) tuples are in cache, so we
+    // can't precisely target this wrap's entries — that's a known
+    // limitation; entries will expire by TTL.
+    match (removed, shim_removed) {
+        (true, true) => println!("Unwrapped `{binary}` (config + shim removed)."),
+        (true, false) => println!("Removed config entry for `{binary}` (no shim was present)."),
+        (false, true) => println!("Removed shim for `{binary}` (no config entry was present)."),
+        (false, false) => println!("Nothing to remove for `{binary}`."),
+    }
+    Ok(0)
+}
+
+/// `secreq wraps` — list configured wraps.
+pub fn wraps_list(config_path: Option<&Path>) -> Result<i32> {
+    let config_path = resolve_config_path(config_path)?;
+    if !config_path.is_file() {
+        println!("(no config at {})", config_path.display());
+        return Ok(0);
+    }
+    let config = WrapsConfig::load(&config_path)?;
+    if config.wraps.is_empty() {
+        println!("(no wraps configured)");
+        return Ok(0);
+    }
+    for wrap in config.wraps.values() {
+        let reason = wrap.reason.as_deref().unwrap_or("");
+        let reason_suffix = if reason.is_empty() {
+            String::new()
+        } else {
+            format!(" — {reason}")
+        };
+        println!("{}{}", wrap.name, reason_suffix);
+        for (name, ref_str) in &wrap.env {
+            // Render the provider (and a short locator) but never the value.
+            let summary = match Reference::parse(ref_str) {
+                Some(r) => format!("{} ({})", name, r.provider),
+                None => format!("{} (bare locator)", name),
+            };
+            println!("    {summary}");
+        }
+    }
+    Ok(0)
+}
+
+/// `secreq pending` — open the daemon's pending-requests window. Useful
+/// when you want to inspect the queue without waiting for a fresh ask.
+pub fn pending() -> Result<i32> {
+    daemon_client::show_window().context("could not reach the consent daemon")?;
+    Ok(0)
+}
+
+/// `secreq view` — open the daemon's window in viewer mode (pinned).
+/// Lets the user browse the audit log without the empty-queue
+/// auto-hide kicking in two seconds later. Closing the window with the
+/// close button exits viewer mode (the daemon keeps running).
+pub fn view() -> Result<i32> {
+    daemon_client::show_viewer().context("could not reach the consent daemon")?;
+    Ok(0)
+}
+
+/// `secreq daemon stop` — tell the running daemon to exit. The daemon's
+/// approvals cache lives in memory only, so this is also how you clear
+/// any "approve all" decisions you made earlier — the next wrap
+/// invocation auto-spawns a fresh daemon with an empty cache.
+///
+/// With `force=true`, skips the graceful socket protocol and SIGKILLs
+/// the daemon directly. The escape hatch for when the daemon is wedged.
+pub fn daemon_stop(force: bool) -> Result<i32> {
+    if force {
+        match daemon_client::force_stop_daemon()
+            .context("could not force-stop the consent daemon")?
+        {
+            daemon_client::ForceStopOutcome::Killed { pid } => {
+                eprintln!("secreq: daemon (pid {pid}) killed (approvals cache cleared).");
+            }
+            daemon_client::ForceStopOutcome::NotRunning => {
+                eprintln!("secreq: no daemon was running (approvals cache already clear).");
+            }
+        }
+        return Ok(0);
+    }
+    match daemon_client::stop_daemon().context("could not stop the consent daemon")? {
+        true => {
+            eprintln!("secreq: daemon stopped (approvals cache cleared).");
+            Ok(0)
+        }
+        false => {
+            eprintln!("secreq: no daemon was running (approvals cache already clear).");
+            Ok(0)
+        }
+    }
+}
+
+/// `secreq edit` — open the wraps config in `$EDITOR`.
+pub fn edit_cmd(config_path: Option<&Path>) -> Result<i32> {
+    let config_path = resolve_config_path(config_path)?;
+    let editor = std::env::var("EDITOR")
+        .or_else(|_| std::env::var("VISUAL"))
+        .unwrap_or_else(|_| "vi".to_owned());
+
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    if !config_path.exists() {
+        std::fs::write(&config_path, "{\n}\n")?;
+    }
+    let status = Command::new(&editor)
+        .arg(&config_path)
+        .status()
+        .with_context(|| format!("failed to launch $EDITOR ({editor})"))?;
+    Ok(status.code().unwrap_or(0))
+}
+
+/// `secreq check` — validate the config.
+pub fn check(config_path: Option<&Path>) -> Result<i32> {
+    let config_path = resolve_config_path(config_path)?;
+    if !config_path.is_file() {
+        println!(
+            "✗ no config at {} (run `secreq init`)",
+            config_path.display()
+        );
+        return Ok(1);
+    }
+    let mut config = WrapsConfig::load(&config_path)?;
+    config.merge_builtin_providers();
+
+    let mut problems = 0;
+    println!("Config: {}", config_path.display());
+
+    // Every env entry must reference a known provider.
+    for wrap in config.wraps.values() {
+        for (env_name, ref_str) in &wrap.env {
+            let Some(reference) = Reference::parse(ref_str) else {
+                println!(
+                    "  ✗ {}.env.{}: not a valid `secret://provider/locator` reference",
+                    wrap.name, env_name
+                );
+                problems += 1;
+                continue;
+            };
+            if !config.providers.contains_key(&reference.provider) {
+                println!(
+                    "  ✗ {}.env.{}: unknown provider scheme `{}`",
+                    wrap.name, env_name, reference.provider
+                );
+                problems += 1;
+            }
+        }
+    }
+
+    if problems == 0 {
+        println!(
+            "✓ config OK: {} wrap(s), {} provider(s)",
+            config.wraps.len(),
+            config.providers.len()
+        );
+        Ok(0)
+    } else {
+        println!("✗ {problems} problem(s) found");
+        Ok(1)
+    }
+}
+
+/// `secreq doctor` — `check` plus confirm used providers' CLIs are on PATH.
+pub fn doctor(config_path: Option<&Path>) -> Result<i32> {
+    let exit = check(config_path)?;
+    let config_path = resolve_config_path(config_path)?;
+    if !config_path.is_file() {
+        return Ok(exit);
+    }
+    let mut config = WrapsConfig::load(&config_path)?;
+    config.merge_builtin_providers();
+
+    let mut problems = 0;
+
+    // 1. Wrap shadowing: for every wrap, the first thing `execvp(<bin>, …)`
+    // finds on PATH must be *our* shim. Detects the common failure where
+    // homebrew (or any other path-prepending tool) shadows our shim dir.
+    println!("\nWrap resolution (the first match on PATH):");
+    if config.wraps.is_empty() {
+        println!("  (no wraps configured)");
+    } else if let Some(shim_dir) = config.shim_dir.as_ref() {
+        for wrap_name in config.wraps.keys() {
+            let expected = shim_dir.join(wrap_name);
+            match first_on_path(wrap_name) {
+                Some(found) if found == expected => {
+                    println!("  ✓ {wrap_name} → {} (shim)", found.display());
+                }
+                Some(found) => {
+                    println!(
+                        "  ✗ {wrap_name} → {} (shadowed; expected the shim at {})",
+                        found.display(),
+                        expected.display()
+                    );
+                    problems += 1;
+                }
+                None => {
+                    println!("  ✗ {wrap_name} → not on PATH at all");
+                    problems += 1;
+                }
+            }
+        }
+        if problems > 0 {
+            println!(
+                "\n  Fix: make sure {} comes before other PATH entries (e.g. /opt/homebrew/bin) \
+                in your shell's startup. zsh users: the secreq init block must be in .zshrc, \
+                not .zshenv, because .zshrc runs after .zprofile (where `brew shellenv` lives).",
+                shim_dir.display()
+            );
+        }
+    } else {
+        println!("  (no $shim_dir configured — run `secreq init`)");
+        problems += 1;
+    }
+
+    // 2. Provider CLIs.
+    let used: std::collections::BTreeSet<String> = config
+        .wraps
+        .values()
+        .flat_map(|w| w.env.values())
+        .filter_map(|v| Reference::parse(v).map(|r| r.provider))
+        .collect();
+
+    println!("\nProvider CLIs (used by a wrap):");
+    if used.is_empty() {
+        println!("  (no wraps reference any provider yet)");
+    } else {
+        for scheme in &used {
+            let Some(provider) = config.providers.get(scheme) else {
+                continue;
+            };
+            let Some(program) = provider::retrieve_program(provider) else {
+                continue;
+            };
+            if which_on_path(program) {
+                println!("  ✓ {scheme} → {program}");
+            } else {
+                println!("  ✗ {scheme} → {program} (not found on PATH)");
+                problems += 1;
+            }
+        }
+    }
+
+    if problems > 0 {
+        println!("\n✗ {problems} problem(s) found");
+        return Ok(1);
+    }
+    Ok(exit)
+}
+
+/// What `execvp(name, …)` would resolve to: the first executable named
+/// `name` on the current `PATH`, in order. Returns `None` if not found.
+fn first_on_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(name);
+        if is_executable(&candidate) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+// ── Internal helpers ──────────────────────────────────────────────────────
+
+/// Load and merge built-in providers in. The caller can pass `None` to use
+/// the default config path. We don't error if the file doesn't exist — the
+/// wrap-run path treats "missing config" as "no wraps configured."
+fn load_config_or_default(config_path: Option<&Path>) -> Result<WrapsConfig> {
+    let path = resolve_config_path(config_path)?;
+    let mut config = if path.is_file() {
+        WrapsConfig::load(&path)?
+    } else {
+        WrapsConfig::default()
+    };
+    config.merge_builtin_providers();
+    Ok(config)
+}
+
+fn resolve_config_path(config_path: Option<&Path>) -> Result<PathBuf> {
+    config_path
+        .map(PathBuf::from)
+        .or_else(wraps::default_config_path)
+        .context("could not determine config path (no XDG_CONFIG_HOME / no $HOME?)")
+}
+
+/// Build a consent ask, send it to the daemon, and return its decision +
+/// daemon-resolved secret values. The daemon does the resolution itself so
+/// a parallel burst of N asks triggers exactly one provider call per
+/// secret — fixing the "50 Touch ID prompts from 50 `gh api` calls"
+/// problem the file-lock approach couldn't.
+fn obtain_wrap_consent(
+    wrap: &Wrap,
+    callers: &[provenance::Caller],
+    args: &[String],
+) -> Result<daemon_client::ConsentOutcome> {
+    // No direct parent ⇒ the dedupe key would be meaningless. Synthetic
+    // invocations (e.g. some test harnesses) land here. Fail closed.
+    let Some(parent) = callers.first() else {
+        bail!("could not determine direct parent process; refusing to request consent");
+    };
+
+    let cwd = std::env::current_dir().context("could not determine current directory")?;
+    let mut command = vec![wrap.name.clone()];
+    command.extend(args.iter().cloned());
+
+    // Build the secrets list. Bare-locator wraps (no `secret://...` prefix)
+    // never made it through `wraps::parse`, so we can assume `Reference::parse`
+    // succeeds — but if it doesn't, surface the malformed ref early instead
+    // of sending a junk ask the daemon would reject at resolution time.
+    let config = load_config_or_default(None)?;
+    let mut providers = HashMap::new();
+    let mut secrets: Vec<proto::SecretAsk> = Vec::new();
+    for (env_name, ref_str) in &wrap.env {
+        let reference = Reference::parse(ref_str).with_context(|| {
+            format!(
+                "wrap `{}`.env.{env_name}: `{ref_str}` is not a valid `secret://provider/locator` reference",
+                wrap.name
+            )
+        })?;
+        let provider_name = reference.provider.clone();
+        // Include the provider definition the daemon will run. Built-ins
+        // are overlaid by `load_config_or_default`, so they're in here too.
+        if let Some(p) = config.providers.get(&provider_name) {
+            providers.insert(provider_name.clone(), to_wire_provider(p));
+        }
+        secrets.push(proto::SecretAsk {
+            name: env_name.clone(),
+            provider: provider_name,
+            locator: reference.locator,
+            default: None,
+            description: None,
+            reason: wrap.reason.clone(),
+        });
+    }
+
+    let ask = proto::Ask {
+        command,
+        cwd: cwd.display().to_string(),
+        callers: callers
+            .iter()
+            .map(|c| proto::Caller {
+                pid: c.pid,
+                name: c.name.clone(),
+                command: c.command.clone(),
+                start_time: c.start_time,
+            })
+            .collect(),
+        secrets,
+        providers,
+        dedupe_key: proto::DedupeKey {
+            wrap: wrap.name.clone(),
+            ppid: parent.pid,
+            parent_start_time: parent.start_time,
+        },
+    };
+
+    daemon_client::request_consent(ask).context("daemon consent request failed")
+}
+
+fn to_wire_provider(p: &crate::manifest::Provider) -> proto::WireProvider {
+    proto::WireProvider {
+        name: p.name.clone(),
+        retrieve: p.retrieve.clone(),
+        retrieve_batch: p.retrieve_batch.as_ref().map(|b| proto::WireBatchRetrieve {
+            command: b.command.clone(),
+            env_value_template: b.env_value_template.clone(),
+        }),
+    }
+}
+
+/// Resolve every env entry for the wrap through its provider. Reuses the
+/// resolve grouping/batching machinery by building a one-shot manifest with
+/// the wrap's env as eager secrets.
+fn resolve_wrap_env(config: &WrapsConfig, wrap: &Wrap) -> Result<Vec<(String, SecretValue)>> {
+    // Adapt the WrapsConfig.providers into a Manifest so we can reuse
+    // resolve::resolve_all (which already handles batching, defaults,
+    // grouped invocations).
+    let manifest = crate::manifest::Manifest {
+        groups: std::collections::BTreeMap::new(),
+        providers: config.providers.clone(),
+    };
+
+    let mut requests = Vec::with_capacity(wrap.env.len());
+    for (env_name, ref_str) in &wrap.env {
+        let reference = Reference::parse(ref_str).with_context(|| {
+            format!(
+                "wrap `{}`.env.{}: `{}` is not a valid `secret://provider/locator` reference",
+                wrap.name, env_name, ref_str
+            )
+        })?;
+        requests.push(SecretRequest {
+            name: env_name.clone(),
+            provider: reference.provider,
+            locator: reference.locator,
+            group: None,
+            reason: wrap.reason.clone(),
+            description: None,
+            default: None,
+            source: Source::Eager,
+        });
+    }
+    let plan = resolve::ResolutionPlan { requests };
+    let resolved = resolve::resolve_all(&manifest, &plan)?;
+    Ok(resolved.into_iter().map(|r| (r.name, r.value)).collect())
+}
+
+/// Locate the *real* binary on `$PATH`, skipping
+/// - the configured shim dir, and
+/// - any other secreq-managed shim found on PATH (identified by our
+///   sentinel string in the file body).
+///
+/// The second exclusion is load-bearing: a user can end up with stray
+/// shims in `~/.local/bin`, `/usr/local/bin`, or wherever an earlier
+/// `secreq wrap` left one before they moved the shim dir. Those stray
+/// shims are still functional (`exec secreq <wrap> "$@"`) but secreq
+/// doesn't know about them — and if the spawned-process PATH happens
+/// to put one *before* the real binary's location, find_real_binary
+/// would otherwise pick up the stray and spawn `secreq` recursively,
+/// producing infinite-depth `secreq gh → secreq gh → secreq gh`
+/// process chains. Checking the sentinel kills that loop dead.
+fn find_real_binary(binary: &str, skip: Option<&Path>) -> Result<PathBuf> {
+    let path = std::env::var_os("PATH").context("no PATH in environment")?;
+    for dir in std::env::split_paths(&path) {
+        if skip.is_some_and(|s| s == dir) {
+            continue;
+        }
+        let candidate = dir.join(binary);
+        if !is_executable(&candidate) {
+            continue;
+        }
+        if is_secreq_shim(&candidate) {
+            // Silently skip — duplicate shims are user-config drift, not
+            // an error condition. We just don't want them in the lookup.
+            continue;
+        }
+        return Ok(candidate);
+    }
+    bail!("could not find a non-shim `{binary}` on PATH. Is it installed?")
+}
+
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    meta.is_file() && (meta.permissions().mode() & 0o111 != 0)
+}
+
+/// True iff the file at `path` is a secreq-managed shim — i.e. carries
+/// the sentinel string our `shim::body` emits.
+///
+/// We read at most the first 256 bytes, which is plenty: the sentinel
+/// sits on line 2 of a 5-line script. Larger files we read partially
+/// and bail; native binaries we'd never bother loading.
+fn is_secreq_shim(path: &Path) -> bool {
+    use std::io::Read;
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut head = [0u8; 256];
+    let n = f.read(&mut head).unwrap_or(0);
+    let prefix = &head[..n];
+    // Quick reject: a Mach-O / ELF binary won't start with `#!`. Saves a
+    // substring search on the typical case.
+    if !prefix.starts_with(b"#!") {
+        return false;
+    }
+    prefix
+        .windows(crate::shim::SENTINEL.len())
+        .any(|w| w == crate::shim::SENTINEL.as_bytes())
+}
+
+/// Pass through an unwrapped binary unchanged. Used when `secreq <bin>` is
+/// invoked for a binary with no configured wrap — keeps the alias-everything
+/// workflow ergonomic.
+fn passthrough_unwrapped(binary: &str, args: &[String], skip: Option<&Path>) -> Result<i32> {
+    let real = find_real_binary(binary, skip)?;
+    let err = Command::new(real).args(args).exec();
+    // exec() only returns on failure.
+    Err(anyhow::anyhow!("failed to exec `{binary}`: {err}"))
+}
+
+fn parse_env_assignments(envs: &[String]) -> Result<BTreeMap<String, String>> {
+    let mut out = BTreeMap::new();
+    for raw in envs {
+        let (k, v) = raw
+            .split_once('=')
+            .with_context(|| format!("--env `{raw}` is not in NAME=secret://… form"))?;
+        if k.is_empty() {
+            bail!("--env `{raw}` has an empty name");
+        }
+        if Reference::parse(v).is_none() {
+            bail!("--env `{raw}`: value must be a `secret://provider/locator` reference");
+        }
+        out.insert(k.to_owned(), v.to_owned());
+    }
+    Ok(out)
+}
+
+/// Serialize a `WrapsConfig` to JSON-pretty (the parser accepts JSON5, so
+/// this is a valid input). Same caveat as `store`: comments and exact
+/// formatting from a hand-edited file aren't preserved through a write.
+fn write_config(path: &Path, config: &WrapsConfig) -> Result<()> {
+    let value = config_to_json_value(config)?;
+    let text = serde_json::to_string_pretty(&value)?;
+    // Validate by round-tripping before writing.
+    WrapsConfig::parse(&text, &path.display().to_string())
+        .context("internal: serialized config doesn't re-parse")?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, format!("{text}\n"))
+        .with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn config_to_json_value(config: &WrapsConfig) -> Result<serde_json::Value> {
+    let mut root = serde_json::Map::new();
+    if let Some(shim) = &config.shim_dir {
+        root.insert(
+            "$shim_dir".to_owned(),
+            serde_json::Value::String(shim.display().to_string()),
+        );
+    }
+    for (name, wrap) in &config.wraps {
+        let mut obj = serde_json::Map::new();
+        if let Some(reason) = &wrap.reason {
+            obj.insert(
+                "$reason".to_owned(),
+                serde_json::Value::String(reason.clone()),
+            );
+        }
+        let mut env_obj = serde_json::Map::new();
+        for (k, v) in &wrap.env {
+            env_obj.insert(k.clone(), serde_json::Value::String(v.clone()));
+        }
+        obj.insert("env".to_owned(), serde_json::Value::Object(env_obj));
+        root.insert(name.clone(), serde_json::Value::Object(obj));
+    }
+    // Providers: only include user-declared schemes, not built-ins (avoid
+    // baking them into the file; built-ins overlay at load time).
+    let builtin_map = crate::manifest::builtin_providers();
+    let builtin_names: std::collections::BTreeSet<&str> =
+        builtin_map.keys().map(String::as_str).collect();
+    let user_providers: std::collections::BTreeMap<&String, &crate::manifest::Provider> = config
+        .providers
+        .iter()
+        .filter(|(name, _)| !builtin_names.contains(name.as_str()))
+        .collect();
+    if !user_providers.is_empty() {
+        let mut providers_obj = serde_json::Map::new();
+        for (name, p) in user_providers {
+            providers_obj.insert(name.clone(), provider_to_json_value(p));
+        }
+        root.insert(
+            "providers".to_owned(),
+            serde_json::Value::Object(providers_obj),
+        );
+    }
+    Ok(serde_json::Value::Object(root))
+}
+
+fn provider_to_json_value(p: &crate::manifest::Provider) -> serde_json::Value {
+    let mut obj = serde_json::Map::new();
+    obj.insert(
+        "retrieve".to_owned(),
+        serde_json::Value::Array(
+            p.retrieve
+                .iter()
+                .map(|s| serde_json::Value::String(s.clone()))
+                .collect(),
+        ),
+    );
+    // We don't currently round-trip store/retrieve_batch from user-defined
+    // providers when we re-emit the config; users who declare those should
+    // edit the file by hand. `secreq edit` is the supported path.
+    serde_json::Value::Object(obj)
+}
+
+fn which_on_path(program: &str) -> bool {
+    if program.contains('/') {
+        return Path::new(program).exists();
+    }
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&paths).any(|dir| dir.join(program).exists())
+}
+
+fn expand_tilde(raw: &str) -> PathBuf {
+    if let Some(rest) = raw.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    if raw == "~" {
+        if let Some(home) = dirs::home_dir() {
+            return home;
+        }
+    }
+    PathBuf::from(raw)
+}
+
+// ── Interactive prompts (cliclack-backed) ─────────────────────────────────
+//
+// cliclack gives us value-typed select (no index lookup), real placeholders,
+// per-prompt validation, and intro/outro/note framing so multi-step flows
+// (init, wrap) look like one operation rather than a stream of bare lines.
+
+mod prompt {
+    use std::collections::BTreeMap;
+
+    use anyhow::{Context, Result};
+
+    use crate::manifest::Provider;
+    use crate::reference::Reference;
+
+    /// Prompt for a value with a default. cliclack's `default_input` pre-fills
+    /// the line; an empty submission accepts the default unchanged.
+    pub(super) fn read_with_default(label: &str, default: &str) -> Result<String> {
+        cliclack::input(label)
+            .default_input(default)
+            .placeholder(default)
+            .interact()
+            .context("interactive input failed (need a real terminal)")
+    }
+
+    /// Prompt for an optional value. Empty submission returns `None`.
+    pub(super) fn optional_read(label: &str) -> Result<Option<String>> {
+        let value: String = cliclack::input(label)
+            .required(false)
+            .placeholder("(empty to skip)")
+            .interact()
+            .context("interactive input failed (need a real terminal)")?;
+        if value.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(value))
+        }
+    }
+
+    pub(super) fn confirm_default_yes(prompt: &str) -> Result<bool> {
+        cliclack::confirm(prompt)
+            .initial_value(true)
+            .interact()
+            .context("interactive confirm failed (need a real terminal)")
+    }
+
+    /// Drive the interactive `secreq wrap` env-collection loop: pick a
+    /// provider, name the env var, supply a locator; loop until the user
+    /// signals they're done.
+    pub(super) fn interactive_wrap_envs(
+        providers: &BTreeMap<String, Provider>,
+    ) -> Result<BTreeMap<String, String>> {
+        if providers.is_empty() {
+            anyhow::bail!("no providers available; declare some in your config first");
+        }
+
+        let mut env = BTreeMap::new();
+        loop {
+            // cliclack `select<T>` returns the value associated with the
+            // chosen item (not an index) — passing the provider name as the
+            // value means no lookup-by-position bug surface.
+            let mut sel = cliclack::select::<String>("Provider for the next env var");
+            for (name, provider) in providers {
+                let hint = if provider.store.is_some() {
+                    "supports store"
+                } else {
+                    "retrieve-only"
+                };
+                sel = sel.item(name.clone(), name.as_str(), hint);
+            }
+            let provider: String = sel
+                .interact()
+                .context("interactive provider selection failed")?;
+
+            let env_name: String = cliclack::input("Environment variable name")
+                .placeholder("e.g. GITHUB_TOKEN")
+                .validate(|s: &String| {
+                    if !s.is_empty()
+                        && s.chars()
+                            .next()
+                            .is_some_and(|c| c == '_' || c.is_ascii_alphabetic())
+                        && s.chars().all(|c| c == '_' || c.is_ascii_alphanumeric())
+                    {
+                        Ok(())
+                    } else {
+                        Err("env var names must match `[A-Za-z_][A-Za-z0-9_]*`")
+                    }
+                })
+                .interact()
+                .context("interactive input failed")?;
+
+            let locator: String = cliclack::input("Locator")
+                .placeholder("provider-specific address (e.g. Personal/GitHub Token/credential)")
+                .interact()
+                .context("interactive input failed")?;
+
+            let ref_str = format!("secret://{provider}/{locator}");
+            if Reference::parse(&ref_str).is_none() {
+                cliclack::log::warning(format!("invalid ref `{ref_str}`; try again"))?;
+                continue;
+            }
+            env.insert(env_name, ref_str);
+
+            let again = cliclack::confirm("Add another env var?")
+                .initial_value(false)
+                .interact()
+                .context("interactive confirm failed")?;
+            if !again {
+                return Ok(env);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn make_executable(path: &Path) {
+        let mut perms = std::fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms).unwrap();
+    }
+
+    #[test]
+    fn is_secreq_shim_detects_a_managed_shim() {
+        // Mirrors what `shim::body` writes: an sh script whose second
+        // line carries the SENTINEL string.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gh");
+        std::fs::write(
+            &path,
+            "#!/bin/sh\n# secreq-managed-shim: wrap=gh\nexec secreq gh \"$@\"\n",
+        )
+        .unwrap();
+        make_executable(&path);
+        assert!(is_secreq_shim(&path));
+    }
+
+    #[test]
+    fn is_secreq_shim_rejects_a_regular_script() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gh");
+        std::fs::write(&path, "#!/bin/sh\necho hello\n").unwrap();
+        make_executable(&path);
+        assert!(!is_secreq_shim(&path));
+    }
+
+    #[test]
+    fn is_secreq_shim_rejects_a_native_binary() {
+        // Mach-O / ELF headers don't start with `#!`, so our cheap reject
+        // path should kick in immediately. Use a tiny binary-like fixture:
+        // 4 bytes that aren't a shebang.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gh");
+        std::fs::write(&path, b"\x7fELF\0\0\0\0").unwrap();
+        make_executable(&path);
+        assert!(!is_secreq_shim(&path));
+    }
+
+    #[test]
+    fn is_secreq_shim_returns_false_for_missing_files() {
+        let path = std::path::PathBuf::from("/this/does/not/exist/gh");
+        assert!(!is_secreq_shim(&path));
+    }
+}

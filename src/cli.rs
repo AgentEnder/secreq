@@ -1,0 +1,184 @@
+//! Command-line surface for the per-binary wrap model.
+//!
+//! Admin verbs (`init`, `wrap`, `unwrap`, `wraps`, `check`, `doctor`,
+//! `edit`) are parsed by clap. Anything else is treated as an *external
+//! subcommand* (the binary name to wrap-and-run, via [`commands::wrap_run`]).
+
+use std::path::PathBuf;
+
+use clap::{Parser, Subcommand};
+
+use crate::commands::{self, WrapArgs, WrapRunOpts};
+
+/// `op run`, but for every secret store you own — per-binary CLI wrapping
+/// with provenance-aware consent.
+#[derive(Parser)]
+#[command(
+    name = "secreq",
+    version,
+    about,
+    long_about = None,
+    // Anything that isn't an admin verb is the binary to wrap.
+    allow_external_subcommands = true,
+)]
+struct Cli {
+    /// Use a specific config file instead of `$XDG_CONFIG_HOME/secreq/wraps.json5`.
+    #[arg(long, global = true, value_name = "PATH")]
+    config: Option<PathBuf>,
+
+    /// Skip output masking. The wrapped binary still runs with secrets in
+    /// its env; only redaction of its stdout/stderr is disabled.
+    /// Applies only to wrap-and-run, not admin verbs.
+    #[arg(long, global = true)]
+    raw: bool,
+
+    /// Auto-approve without prompting. Composes through nested runs.
+    #[arg(long, short = 'y', global = true)]
+    yes: bool,
+
+    /// Don't read or write the remembered-approval cache.
+    #[arg(long, global = true)]
+    no_remember: bool,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// First-time setup: pick the shim dir and (optionally) wire it into PATH.
+    Init {
+        /// Default shim dir to suggest (overrides `~/.secreq/shims`).
+        #[arg(long)]
+        shim_dir: Option<PathBuf>,
+    },
+
+    /// Add (or update) a wrap for a binary; installs the PATH shim.
+    Wrap {
+        /// The binary name to wrap, e.g. `gh`.
+        binary: String,
+        /// `--env NAME=secret://provider/locator`. Repeatable. If none given,
+        /// runs the interactive flow.
+        #[arg(long = "env", value_name = "NAME=REF")]
+        envs: Vec<String>,
+        /// Reason to show in the consent prompt.
+        #[arg(long)]
+        reason: Option<String>,
+    },
+
+    /// Remove a wrap (config entry + shim).
+    Unwrap {
+        /// The binary name.
+        binary: String,
+    },
+
+    /// List configured wraps.
+    Wraps,
+
+    /// Validate the config.
+    Check,
+
+    /// `check` plus confirm every used provider's CLI is installed.
+    Doctor,
+
+    /// Open the config in `$EDITOR`.
+    Edit,
+
+    /// Run or manage the consent daemon. Bare `secreq daemon` runs it
+    /// (usually auto-spawned by the first wrap that finds no live
+    /// daemon). `secreq daemon stop` tells a running daemon to exit,
+    /// which also clears every remembered approval (the cache is
+    /// in-memory only by design).
+    Daemon {
+        #[command(subcommand)]
+        action: Option<DaemonAction>,
+    },
+
+    /// Open the consent daemon's pending-requests window. Auto-spawns
+    /// the daemon if it isn't running.
+    Pending,
+
+    /// Open the daemon's window in viewer mode — pinned so the
+    /// auto-hide doesn't fire while you browse the audit log. Lands
+    /// on the Audit tab; switch to Pending via the tab bar if you
+    /// want to act on queued requests. Auto-spawns the daemon if it
+    /// isn't running.
+    View,
+
+    /// Anything else: the binary to wrap-and-run.
+    #[command(external_subcommand)]
+    External(Vec<String>),
+}
+
+#[derive(Subcommand)]
+enum DaemonAction {
+    /// Stop the running daemon. Clears the in-memory approvals cache —
+    /// the next wrap invocation auto-spawns a fresh daemon.
+    Stop {
+        /// Skip the graceful protocol and SIGKILL the daemon outright.
+        /// Use when the daemon is unresponsive (wedged UI, hung socket
+        /// thread). Also removes the pidfile + socket, which the
+        /// killed process can no longer clean up itself.
+        #[arg(long, short = 'f')]
+        force: bool,
+    },
+}
+
+/// Parse args, dispatch, return the process exit code.
+pub fn run() -> i32 {
+    let cli = Cli::parse();
+    let config = cli.config.as_deref();
+
+    let result = match cli.command {
+        Some(Command::Init { shim_dir }) => commands::init(config, shim_dir),
+        Some(Command::Wrap {
+            binary,
+            envs,
+            reason,
+        }) => commands::wrap(
+            WrapArgs {
+                binary,
+                reason,
+                envs,
+            },
+            config,
+        ),
+        Some(Command::Unwrap { binary }) => commands::unwrap_cmd(&binary, config),
+        Some(Command::Wraps) => commands::wraps_list(config),
+        Some(Command::Check) => commands::check(config),
+        Some(Command::Doctor) => commands::doctor(config),
+        Some(Command::Edit) => commands::edit_cmd(config),
+        Some(Command::Daemon { action: None }) => crate::daemon::run(),
+        Some(Command::Daemon {
+            action: Some(DaemonAction::Stop { force }),
+        }) => commands::daemon_stop(force),
+        Some(Command::Pending) => commands::pending(),
+        Some(Command::View) => commands::view(),
+        Some(Command::External(parts)) => {
+            let (binary, args) = parts.split_first().expect("external subcommand has a name");
+            commands::wrap_run(
+                binary,
+                args,
+                WrapRunOpts {
+                    raw: cli.raw,
+                    no_remember: cli.no_remember,
+                    assume_yes: cli.yes,
+                },
+                config,
+            )
+        }
+        None => {
+            // `secreq` with no args: short usage hint.
+            eprintln!("secreq: missing command. Try `secreq --help` or `secreq <binary>`.");
+            return 2;
+        }
+    };
+
+    match result {
+        Ok(code) => code,
+        Err(err) => {
+            eprintln!("secreq: error: {err:#}");
+            1
+        }
+    }
+}
