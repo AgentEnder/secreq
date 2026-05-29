@@ -1,0 +1,186 @@
+{
+  "$id": "https://secreq.dev/schema/wraps.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "BatchRetrieve": {
+      "additionalProperties": false,
+      "description": "Batched-retrieve: one command invocation resolves many secrets at once (e.g. `op run -- printenv`). Used automatically when a wrap's `env` references the same provider for ≥2 entries, cutting biometric prompts from N to 1. Protocol: per requested (name, locator), set env var `name` to `env_value` with `{locator}` substituted; spawn `command`; parse stdout as `KEY=VALUE` lines.",
+      "properties": {
+        "command": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "env_value": {
+          "description": "Template for each synthetic env entry's value. For 1Password: `\"op://{locator}\"`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "env_value"
+      ],
+      "type": "object"
+    },
+    "FieldSpec": {
+      "additionalProperties": false,
+      "description": "Schema for one field in a provider's `store.fields`.",
+      "properties": {
+        "default": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "optional": {
+          "description": "Sugar for `required: false`.",
+          "type": "boolean"
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Provider": {
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "retrieve"
+          ]
+        },
+        {
+          "required": [
+            "read"
+          ]
+        }
+      ],
+      "description": "A provider scheme. Required `retrieve`, optional `store`, optional `retrieve_batch`.",
+      "properties": {
+        "read": {
+          "description": "Legacy name for `retrieve` (the design doc §6 uses this name). Both are accepted; prefer `retrieve`.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "retrieve": {
+          "description": "Argv template for fetching a secret. `{locator}` is substituted with the secret's locator; stdout is the value (one trailing newline stripped).",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "retrieveBatch": {
+          "$ref": "#/definitions/BatchRetrieve",
+          "description": "camelCase alias for `retrieve_batch`."
+        },
+        "retrieve_batch": {
+          "$ref": "#/definitions/BatchRetrieve"
+        },
+        "store": {
+          "$ref": "#/definitions/StoreCapability"
+        },
+        "write": {
+          "$ref": "#/definitions/StoreCapability",
+          "description": "Legacy name for `store`. Both are accepted; prefer `store`."
+        }
+      },
+      "type": "object"
+    },
+    "StoreCapability": {
+      "additionalProperties": false,
+      "description": "How this provider persists a new value (currently exposed via custom CLIs the user may write that drive `secreq` programmatically — the public `secreq` CLI no longer exposes a `store` verb).",
+      "properties": {
+        "command": {
+          "description": "Argv template. `{field}` placeholders are filled from caller-supplied inputs; `{value}` (argv mode) is the secret. Prefer stdin mode.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "fields": {
+          "additionalProperties": {
+            "$ref": "#/definitions/FieldSpec"
+          },
+          "type": "object"
+        },
+        "locator": {
+          "description": "Template that builds the retrieve-side locator from the same field inputs.",
+          "type": "string"
+        },
+        "value": {
+          "default": "{value}",
+          "description": "`\"stdin\"` (preferred) pipes via stdin; anything else (typically `\"{value}\"`) selects argv-substitution mode.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "locator"
+      ],
+      "type": "object"
+    },
+    "Wrap": {
+      "additionalProperties": false,
+      "description": "One per-binary wrap. `env` is required; everything else is metadata.",
+      "properties": {
+        "$description": {
+          "description": "Optional free-form description (currently unused at runtime; kept for parity with future tooling).",
+          "type": "string"
+        },
+        "$reason": {
+          "description": "Rationale shown in the consent prompt when this wrap is invoked.",
+          "type": "string"
+        },
+        "env": {
+          "additionalProperties": {
+            "description": "A `secret://provider/locator` reference.",
+            "pattern": "^secret://[^/]+/.+$",
+            "type": "string"
+          },
+          "description": "Environment variables to inject. Each value is a `secret://provider/locator` reference; resolution happens at invocation time.",
+          "minProperties": 1,
+          "type": "object"
+        }
+      },
+      "required": [
+        "env"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "Per-binary wrap configuration for `secreq` (`$XDG_CONFIG_HOME/secreq/wraps.json5`). Top-level keys are binary names; reserved keys are `providers` and any `$`-prefixed metadata. See docs/wraps.md.",
+  "patternProperties": {
+    "^[A-Za-z_][A-Za-z0-9_.+-]*$": {
+      "$ref": "#/definitions/Wrap"
+    }
+  },
+  "properties": {
+    "$schema": {
+      "description": "URL or path of this JSON Schema. Ignored by `secreq`.",
+      "type": "string"
+    },
+    "$shim_dir": {
+      "description": "Directory where `secreq wrap` drops PATH shims. Set by `secreq init`. Supports a leading `~/`.",
+      "type": "string"
+    },
+    "providers": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Provider"
+      },
+      "description": "Provider scheme definitions. Built-in providers (`op`, `keychain` on macOS, `lastpass` / `pass` on Unix) are available without an explicit entry; entries here override or add new schemes.",
+      "type": "object"
+    }
+  },
+  "title": "secreq wraps config",
+  "type": "object"
+}
