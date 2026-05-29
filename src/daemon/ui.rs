@@ -129,6 +129,35 @@ impl ConsentApp {
     }
 }
 
+/// Install the UI's font fallback chain on `ctx`.
+///
+/// egui ships a `FontDefinitions::default()` whose Proportional family
+/// is `[Ubuntu-Light, NotoEmoji-Regular, emoji-icon-font]`. None of those
+/// cover the geometric shapes and arrows the consent UI leans on:
+/// `✓ ⊙ ▾ ▸ ↳ ⏎` (and `•` only renders in some via the emoji fallback).
+/// `Hack` — the monospace font already bundled by egui's `default_fonts`
+/// feature — is a DejaVu Sans Mono derivative with broad symbol coverage,
+/// so appending it as a Proportional fallback is enough to make these
+/// glyphs resolve without bundling a separate symbol font.
+///
+/// Called from `daemon::run` at eframe startup and from the screenshot
+/// harness so the daemon and the regenerated PNGs agree on glyph
+/// coverage.
+pub fn install_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    // `FontDefinitions::default()` always populates both families when
+    // the `default_fonts` feature is on (which this crate enables), so
+    // the `get_mut` lookups are infallible in practice. We still match
+    // defensively rather than unwrap so a stripped build can't panic
+    // on startup.
+    if let Some(proportional) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+        if !proportional.iter().any(|name| name == "Hack") {
+            proportional.push("Hack".to_owned());
+        }
+    }
+    ctx.set_fonts(fonts);
+}
+
 // ── Audit history cache ──────────────────────────────────────────────────
 //
 // The daemon never writes the audit log (clients do, post-decision in
@@ -248,7 +277,18 @@ fn now_unix() -> u64 {
 }
 
 impl eframe::App for ConsentApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        let ctx = &ctx;
+        // eframe's `clear_color` is what fills the OS window background
+        // in production, but it runs at the GL/wgpu layer before egui
+        // draws — so headless test renderers (egui_kittest) see a
+        // transparent buffer and the dark-theme text renders washed out
+        // against the default white. Painting the panel fill at the top
+        // of `ui` is a no-op in production (`clear_color` already drew
+        // the same colour underneath) and makes the harness match.
+        let panel_fill = ui.visuals().panel_fill;
+        ui.painter().rect_filled(ui.max_rect(), 0.0, panel_fill);
         // Snapshot under the mutex, release before drawing.
         let (snapshot, window_visible, last_activity, queue_empty, viewer_mode) = {
             let guard = self.state.lock().expect("state mutex");
@@ -360,22 +400,20 @@ impl eframe::App for ConsentApp {
             }
         }
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.add_space(8.0);
-            render_header(ui, &tree, viewer_mode);
-            ui.add_space(6.0);
-            render_tab_bar(ui, &mut self.current_tab, &tree, self.audit.entries.len());
-            ui.add_space(6.0);
-            ui.separator();
-            ui.add_space(8.0);
+        ui.add_space(8.0);
+        render_header(ui, &tree, viewer_mode);
+        ui.add_space(6.0);
+        render_tab_bar(ui, &mut self.current_tab, &tree, self.audit.entries.len());
+        ui.add_space(6.0);
+        ui.separator();
+        ui.add_space(8.0);
 
-            match self.current_tab {
-                Tab::Pending => {
-                    render_pending_page(ui, &tree, &mut self.collapsed, &mut actions, &self.audit)
-                }
-                Tab::Audit => render_audit_page(ui, &self.audit),
+        match self.current_tab {
+            Tab::Pending => {
+                render_pending_page(ui, &tree, &mut self.collapsed, &mut actions, &self.audit)
             }
-        });
+            Tab::Audit => render_audit_page(ui, &self.audit),
+        }
 
         // Apply actions after rendering. Approvals are in-memory only —
         // no disk write to schedule.
@@ -784,7 +822,13 @@ fn render_audit_entry(ui: &mut egui::Ui, entry: &AuditEntry, now: u64) {
 fn render_empty_state(ui: &mut egui::Ui) {
     ui.vertical_centered(|ui| {
         ui.add_space(32.0);
-        ui.label(egui::RichText::new("✓").size(48.0).color(COLOR_APPROVE_BG));
+        // `√` (U+221A, SQUARE ROOT) is visually equivalent to a heavy
+        // check mark at this size and is present in `Hack-Regular`,
+        // which the bundled egui default fonts use for monospace
+        // fallback. The "obvious" choice — `✓` (U+2713) — isn't in any
+        // of egui's bundled fonts (Hack / Ubuntu-Light / NotoEmoji /
+        // emoji-icon-font), so it would tofu out in production.
+        ui.label(egui::RichText::new("√").size(48.0).color(COLOR_APPROVE_BG));
         ui.add_space(8.0);
         ui.label(egui::RichText::new("All clear").size(18.0).strong());
         ui.add_space(4.0);
@@ -1037,7 +1081,7 @@ fn render_node_header(
             }
             ui.add_space(4.0);
             let approve_label = if is_top_root && depth == 0 {
-                "Approve all (⏎)"
+                "Approve all (↵)"
             } else {
                 "Approve all"
             };
@@ -1337,8 +1381,8 @@ fn paint_hover(
     text: &str,
     text_color: egui::Color32,
 ) {
-    let rounding = ui.visuals().widgets.hovered.rounding;
-    ui.painter().rect_filled(resp.rect, rounding, hover);
+    let corner_radius = ui.visuals().widgets.hovered.corner_radius;
+    ui.painter().rect_filled(resp.rect, corner_radius, hover);
     ui.painter().text(
         resp.rect.center(),
         egui::Align2::CENTER_CENTER,

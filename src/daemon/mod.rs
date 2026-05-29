@@ -99,6 +99,7 @@ pub fn run() -> Result<i32> {
                 .lock()
                 .expect("state mutex")
                 .attach_egui(cc.egui_ctx.clone());
+            ui::install_fonts(&cc.egui_ctx);
             Ok(Box::new(ui::ConsentApp::new(app_state, app_shutdown)))
         }),
     );

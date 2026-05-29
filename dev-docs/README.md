@@ -11,6 +11,7 @@ This directory holds documents aimed at people working **on** `secreq`
 | [`AGENTS.md`](./AGENTS.md) | AI-agent orientation: mental model in 60s, module map, common tasks, invariants. |
 | [`architecture.md`](./architecture.md) | Module map, data flow for `secreq <BINARY>`, consent-daemon threading, masking algorithm. |
 | [`plans/`](./plans/) | Historical design documents (pre-pivot). Kept for context, not as a source of truth. |
+| [`ui-screenshots/`](./ui-screenshots/) | Generated PNGs of the consent-window UI in representative states, plus the regen recipe. |
 
 ## Why "dev-docs" and not "docs/internal"
 
