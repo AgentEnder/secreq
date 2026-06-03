@@ -25,6 +25,19 @@ serialised across fixtures.
 | `05-folded-run.png` | `folded_run` | A `gh→gh→gh→gh` chain folded into a `× 4` badge. |
 | `06-pending-denied-last.png` | `pending_with_deny_history` | Pending wrap whose audit history's last decision was `deny` — exercises the orange tint on the `↳ denied …` line. |
 | `07-audit-tab.png` | `audit_tab_populated` | Viewer mode + Audit tab populated with a mix of decisions. |
+| `08-rules-tab-empty.png` | `rules_tab_empty` | Rules tab with no rules → "No rules yet" empty state. |
+| `09-rules-tab-list.png` | `rules_tab_list_populated` | Rules list with a representative mix: enabled approve, enabled deny with a deny-message, and a disabled rule. Each row's footnote shows its auto-fire count and last-fired recency (14 today / 3 four-days-ago / "No auto-fires yet" for the never-matched disabled rule); the header carries the `Most used` / `Recent` sort toggle (default `Most used`). |
+| `10-rules-form-new.png` | `rules_form_new` | Blank rule form opened via "+ New rule". |
+| `11-rules-form-edit-deny.png` | `rules_form_edit_deny` | Edit form pre-filled from an existing deny rule — exercises the deny-message text area and the trained-secrets chip. |
+| `12-auto-deny-toast.png` | `auto_deny_toast_on_pending` | Pending tab with the transient auto-deny banner at the top (rule name + configured deny message). |
+| `13-rules-tab-suggestions.png` | `rules_tab_suggestions` | Rules tab with the recommendation engine surfacing two clusters (`gh` approves from Superset → segment-aligned glob, `gh auth token` denies from claude → literal pattern). Each card's footnote shows the cluster count and a `last seen …` recency line (today vs. 3 days ago). A two-row aws cluster sits below threshold and is deliberately absent. |
+| `14-audit-tab-with-pending.png` | `audit_tab_with_pending` | Audit tab with entries AND a pending ask still queued — the normal flow where a user has a fresh request waiting and clicks over to history to remind themselves of past decisions. Distinct from `07-audit-tab` because the daemon is not in viewer-pinned mode (subtitle is "Consent requests", both tab badges show counts) and the audit mix includes `approve+auto` / `deny+auto` rows from the auto-rules pipeline. |
+| `15-audit-tab-search-filtering.png` | `audit_tab_search_filtering` | Audit tab with the search bar populated (`gh`) — exercises the filtered render, the carded search bar (frame + hand-painted magnifier glyph), the "N of M" count badge, and the Cmd/Ctrl-F shortcut hint chip. |
+| `16-audit-tab-search-no-matches.png` | `audit_tab_search_no_matches` | Audit tab with a search query that matches nothing — centred "No matching entries" empty state below the still-visible search bar. |
+| `17-audit-tab-search-multi-term.png` | `audit_tab_search_multi_term` | Audit tab with a two-term query (`gh auth`) that narrows to the single `gh auth token` row ("1 of 5"). Regression guard for multi-term search: each term must hit some field, so a query spanning the wrap name and an arg matches even though no single field holds the literal `gh auth`. |
+| `18-rules-tab-suggestions-by-recency.png` | `rules_tab_suggestions_by_recency` | Suggestions section with the sort toggle flipped to `Recent`. Two clusters where count and recency disagree (5× `gh` ~5 days ago vs. 3× `aws` today): the fresher lower-count cluster is promoted to the top, demonstrating the toggle's alternate state. |
+| `19-rules-tab-by-recency.png` | `rules_tab_by_recency` | Rules list with the row sort toggle flipped to `Recent`. Two rules where count and recency disagree (12 auto-fires ~5 days ago vs. 2 auto-fires today): the recently-fired lower-count rule is promoted above the high-count one. |
+| `20-rules-tab-rules-and-suggestions.png` | `rules_tab_rules_and_suggestions` | Both sections at once: the configured "Your rules" list (with usage footnotes + sort toggle) on top, the "Suggested rules" section beneath it. Documents the ordering (saved rules first, proposals second) and that both sections carry a header. |
 
 ## How a fixture is shaped
 
@@ -43,19 +56,69 @@ Each fixture:
 No internal render helpers are exposed by `daemon::ui`; the harness
 exercises the same code path the daemon runs in production.
 
+## Design language
+
+The UI is built around four visual primitives, all sharing one
+palette installed via `install_style`:
+
+- **Title-bar chrome.** A full-bleed `COLOR_CHROME` strip across the
+  top with a drawn app-logo badge (`paint_app_icon` — accent-soft
+  rounded square + stylised key glyph from primitives), a two-line
+  title block (`secreq` 18pt bold + footnote subtitle that swaps
+  between `Consent requests` and `Audit timeline · pinned`), and a
+  right-aligned count pill (`● 2 pending · 2 apps`) in
+  `COLOR_ACCENT_SOFT`. A 1px hairline divides chrome from body.
+- **Underline tab bar.** Custom `render_tab` widget: 2px accent
+  underline + bright text on active, muted grey on inactive, pointer
+  cursor on hover. Reads as native top-of-page nav, not a button
+  pair.
+- **Wrap-leaf cards.** Each pending request renders as an
+  `egui::Frame` card — `COLOR_CARD` fill, 1px `COLOR_CARD_STROKE`
+  border, 8px corners, 14×10 padding, depth-indented via the
+  Frame's outer-margin. Inside: bold command name, optional
+  waiter-count pill, audit-history italics, secret rows (small
+  bullet + name + provider + locator at three contrast tiers), and
+  a footnote `cwd` line.
+- **Drawn icons.** Disclosure chevrons, the app-logo key, and the
+  empty-state circular check badge are all built from `painter`
+  primitives (rounded rects, circles, triangles, polylines) — DPR-
+  clean and immune to font glyph-coverage gaps.
+
+### Palette tiers
+
+| Background tier | Hex | Used for |
+|---|---|---|
+| `COLOR_CANVAS`  | `#0E1116` | Window body |
+| `COLOR_CHROME`  | `#14181E` | Title-bar strip |
+| `COLOR_CARD`    | `#181D24` | Wrap-leaf cards |
+
+| Text tier | Value | Used for |
+|---|---|---|
+| `COLOR_TEXT`     | `#EBEEF4` | Commands, primary labels |
+| `COLOR_MUTED`    | gray 150  | "from", "via", inactive tab |
+| `COLOR_FOOTNOTE` | gray 120  | `pid`, `cwd`, timestamps, locators |
+
+### Audit timeline
+
+The Audit tab keeps a row-with-hairline rhythm rather than cards per
+entry: a fixed-width right-aligned `ago` column anchors the wrap-name
+column to a clean vertical edge across entries, and a coloured dot
+prefixes the verdict word (`● approved`, `● denied`) so the row
+reads its decision at a glance without making the verdict itself
+look like a button.
+
 ## Glyph coverage
 
-egui's bundled fonts have a coverage gap that bit us during the
-initial harness build: `Hack` (monospace) carries the symbol glyphs
-the UI needs (`⊙ ▾ ▸ ↳ •`), but `Ubuntu-Light` (the default
-proportional) and `NotoEmoji-Regular` / `emoji-icon-font` don't.
-`ConsentApp::install_fonts` (in `src/daemon/ui.rs`) appends `Hack` to
-the Proportional fallback chain to close that gap in both the
-production daemon and the harness.
+egui's bundled default fonts (`Hack`, `Ubuntu-Light`,
+`NotoEmoji-Regular`, `emoji-icon-font`) have an asymmetric symbol
+coverage gap: `Hack` (DejaVu-derived) covers `⊙ ▾ ▸ ↳ •`, but the
+Proportional family defaults to Ubuntu-Light + emoji-only fonts and
+misses all of them. `install_style` in `src/daemon/ui.rs` appends
+`Hack` to the Proportional fallback chain to close the gap in both
+the production daemon and the harness.
 
-Two glyphs are absent from *every* bundled font — `✓` (U+2713) and
-`⏎` (U+23CE). Rather than bundle a separate symbol font, the source
-substitutes visually-equivalent forms that `Hack` does cover: `√`
-(U+221A SQUARE ROOT, reads as a heavy check at 48pt) and `↵`
-(U+21B5 DOWNWARDS ARROW WITH CORNER LEFTWARDS, the canonical
-return-key glyph). Both are exercised in the screenshots.
+Two glyphs (`✓`/U+2713 and `⏎`/U+23CE) are absent from *every*
+bundled font. The empty-state badge no longer uses `✓` at all — it
+draws a circular check from shape primitives. The keyboard-
+accelerator hint in the "Approve all" button uses `↵` (U+21B5
+DOWNWARDS ARROW WITH CORNER LEFTWARDS), which `Hack` does cover.

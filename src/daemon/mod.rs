@@ -1,30 +1,29 @@
-//! Consent daemon.
+//! Consent daemon — **headless background service**.
 //!
-//! One process per user that owns:
+//! The daemon process owns:
 //! - The pending-consent queue (asks coalesce by `(wrap, ppid, start_time)`).
-//! - The persistent approvals cache (loaded once, written on change).
-//! - The egui window the user uses to approve / deny / bulk-resolve.
+//! - The in-memory approvals cache.
+//! - A Unix socket where wrap clients submit `Ask`s and consent-window
+//!   child processes stream snapshots back and forth.
 //!
-//! ## Threading
+//! The daemon has **no GUI of its own**. When something needs to be
+//! shown to the user (an `Ask` queued, `ShowViewer`, `ShowWindow`), the
+//! socket handler calls [`ensure_consent_window`], which spawns a
+//! `secreq consent-window` child process if one isn't already
+//! attached. The child opens its own `eframe::run_native`, talks to the
+//! daemon over the socket, and exits when the user closes its NSWindow.
 //!
-//! The GUI event loop must own the main thread (macOS AppKit requirement,
-//! and the path of least friction on Linux/Windows). So:
-//! - `main thread` = `eframe::run_native` → `ConsentApp::update` ticks.
-//! - `accept thread` = `UnixListener::incoming()`; one connection worker
-//!   per accept.
-//! - `connection thread(s)` = block on a `mpsc::Receiver` waiting for the
-//!   UI to resolve the ask.
-//!
-//! ## Lifecycle
-//!
-//! - Started by `secreq daemon` (usually auto-spawned by a wrap client
-//!   that found no live socket).
-//! - Singleton-enforced via a fcntl-locked pidfile: a second daemon
-//!   process sees the lock held and exits 0 quietly.
-//! - Idle-exits after [`ui::IDLE_EXIT_SECS`] of empty queue + no asks.
+//! This shape exists because trying to manage a long-lived hidden
+//! NSWindow inside a single eframe process fights macOS' App Nap,
+//! run-loop suspension for hidden windows, and the multi-viewport
+//! lifecycle bug in eframe's glow + wgpu backends. A short-lived child
+//! per session is a real foreground app the OS understands.
 
 pub mod cache;
+pub mod child;
 pub mod client;
+pub mod in_flight;
+pub mod log;
 pub mod proto;
 pub mod server;
 pub mod state;
@@ -32,84 +31,208 @@ pub mod ui;
 
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 
-/// Run as the daemon. Blocks until the daemon exits.
+/// How long the daemon stays alive with no activity AND no attached
+/// consent window before exiting on its own. "Activity" is anything
+/// that calls `state.touch()` — a wrap ask, a `secreq pending`, a
+/// `Ping`, a resolved decision. An attached consent-window child
+/// continuously suppresses the timeout via the keepalive in the
+/// daemon's main loop, so leaving `secreq view` open for hours
+/// won't trigger an exit.
+const IDLE_EXIT_SECS: u64 = 30 * 60;
+
+/// Cadence at which the main loop wakes to (a) check the shutdown
+/// flag, (b) refresh the UI-attached keepalive, (c) evaluate
+/// idle-exit, and (d) evaluate the auto-hide grace for the consent
+/// window. One-second granularity is fine for a 30-minute timeout —
+/// finer granularity just burns CPU on a sleeping daemon.
+const MAIN_LOOP_TICK: Duration = Duration::from_secs(1);
+
+/// How long the "All clear" empty-queue state stays on screen before
+/// the daemon tells the consent window to exit. Short enough to feel
+/// snappy after a single approval, long enough that the user sees a
+/// confirmation rather than the window vanishing as soon as they
+/// click. Suppressed entirely when `viewer_mode` is set (the user is
+/// browsing the audit log; the window should stay open).
+const AUTO_HIDE_GRACE: Duration = Duration::from_secs(2);
+
+/// Cadence at which the daemon samples its own CPU/memory and writes a
+/// `resource` line to the persistent log. Coarse on purpose: the main
+/// loop ticks every second, but refreshing sysinfo that often would
+/// burn CPU on an otherwise-sleeping daemon (the very thing we're
+/// monitoring for). One sample per minute is plenty to chart the
+/// daemon's footprint over a long-lived session, and sysinfo derives
+/// CPU% as the average over the gap between samples — so a 60s cadence
+/// reports the daemon's mean CPU across each minute.
+const RESOURCE_SAMPLE_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Run as the daemon. Blocks until `ClientMsg::Shutdown` arrives or
+/// SIGTERM. There's no GUI on this thread.
 pub fn run() -> Result<i32> {
     let socket_path = server::default_socket_path()?;
     let pidfile = server::pidfile_path()?;
 
-    // Singleton enforcement: take an exclusive fcntl lock on the pidfile.
-    // If another daemon already holds it, we exit 0 — the caller can
-    // simply connect to the existing socket.
+    log::log(format_args!(
+        "daemon starting (pid={}, socket={}, pidfile={})",
+        std::process::id(),
+        socket_path.display(),
+        pidfile.display()
+    ));
+
     let _pid_guard = match acquire_pidfile_lock(&pidfile)? {
         Some(g) => g,
         None => {
-            // Another daemon is alive. Nothing to do.
+            log::log(format_args!(
+                "another daemon already holds the pidfile lock — exiting 0"
+            ));
             return Ok(0);
         }
     };
 
-    // Approvals are in-memory only — start empty, no disk load.
-    let state: state::SharedState = Arc::new(Mutex::new(state::State::new()));
+    let state: state::SharedState = match crate::rules::default_rules_path() {
+        Some(path) => Arc::new(Mutex::new(state::State::with_rules_path(path))),
+        None => Arc::new(Mutex::new(state::State::new())),
+    };
+    let shutdown_flag = state.lock().expect("state mutex").shutdown_flag();
 
     let _listener =
         server::start(socket_path.clone(), state.clone()).context("start daemon socket server")?;
 
-    // Single shutdown flag, owned by State and observed by both the
-    // socket thread (via `request_shutdown`) and the UI tick.
-    let shutdown_flag = state.lock().expect("state mutex").shutdown_flag();
-    let app_state = state.clone();
-    let app_shutdown = shutdown_flag.clone();
+    log::log(format_args!(
+        "daemon ready; entering main loop (idle exit after {}s, resource sampling every {}s)",
+        IDLE_EXIT_SECS,
+        RESOURCE_SAMPLE_INTERVAL.as_secs()
+    ));
 
-    let viewport = egui::ViewportBuilder::default()
-        .with_title("secreq")
-        .with_inner_size([520.0, 480.0])
-        .with_visible(false)
-        // Don't show up in the dock/taskbar until we actually need to —
-        // the daemon spends most of its life hidden.
-        .with_decorations(true);
-    let native_opts = eframe::NativeOptions {
-        viewport,
-        // On macOS, hiding the window via ViewportCommand::Visible(false)
-        // doesn't hide the app — it still appears in the Dock and the
-        // Cmd+Tab switcher. `Accessory` activation policy removes both
-        // while still letting the app gain focus when we show the
-        // window for a real consent ask. Linux/BSD have no equivalent
-        // problem (no app-level "always on the dock" semantics).
-        #[cfg(target_os = "macos")]
-        event_loop_builder: Some(Box::new(|builder| {
-            use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
-            builder.with_activation_policy(ActivationPolicy::Accessory);
-        })),
-        ..Default::default()
-    };
+    // Headless main loop. Wakes once per second to check the shutdown
+    // flag, refresh the UI keepalive, and evaluate idle-exit. The
+    // socket accept loop runs in its own thread and does the real work
+    // — this loop is just a lifetime governor.
+    let idle_timeout = Duration::from_secs(IDLE_EXIT_SECS);
 
-    // eframe::run_native blocks the main thread until the window closes.
-    // Idle-exit fires `ViewportCommand::Close`, which returns control here.
-    let result = eframe::run_native(
-        "secreq",
-        native_opts,
-        Box::new(move |cc| {
-            // Attach the egui context so the socket thread can request
-            // repaints when the queue changes.
-            app_state
-                .lock()
-                .expect("state mutex")
-                .attach_egui(cc.egui_ctx.clone());
-            ui::install_fonts(&cc.egui_ctx);
-            Ok(Box::new(ui::ConsentApp::new(app_state, app_shutdown)))
-        }),
-    );
+    // Resource-usage sampler. Primed once here so the first real sample
+    // has a CPU baseline to diff against; thereafter the main loop emits
+    // one sample every `RESOURCE_SAMPLE_INTERVAL`. The `System` is held
+    // across ticks because sysinfo computes a process's CPU% from the
+    // delta between consecutive refreshes of that same `System`.
+    let mut resource_sys = log::prime_resource_sampler();
+    let mut last_resource_sample = std::time::Instant::now();
 
-    // Clean up: remove the socket file so the next daemon can bind it.
+    while !shutdown_flag.load(Ordering::SeqCst) {
+        std::thread::sleep(MAIN_LOOP_TICK);
+
+        if last_resource_sample.elapsed() >= RESOURCE_SAMPLE_INTERVAL {
+            log::sample_resources(&mut resource_sys);
+            last_resource_sample = std::time::Instant::now();
+        }
+
+        let mut guard = state.lock().expect("state mutex");
+        if guard.consent_subscriber_count() > 0 {
+            // While a consent window is on screen the user might be
+            // browsing the audit log indefinitely — keep the daemon
+            // alive by resetting the idle clock every tick.
+            guard.touch();
+
+            // Auto-hide: if the queue has been empty for the grace
+            // period AND we're not in viewer mode AND the user isn't
+            // currently focused on the window, tell the consent
+            // window to exit. The "All clear" state has been on screen
+            // long enough that the user has seen the confirmation;
+            // hanging the window indefinitely after a single approval
+            // is noisy desktop clutter.
+            //
+            // Skip the auto-hide entirely when the window is focused —
+            // the user is still interacting with it (e.g. scrolling
+            // the audit log after clearing the queue), and yanking
+            // the window away mid-scroll is exactly the surprise we
+            // want to avoid. The grace clock isn't reset; the next
+            // tick after focus is lost will resume the countdown.
+            let should_auto_hide = !guard.viewer_mode()
+                && !guard.any_consent_focused()
+                && guard
+                    .queue_empty_since()
+                    .is_some_and(|t| t.elapsed() >= AUTO_HIDE_GRACE);
+            if should_auto_hide {
+                log::log(format_args!(
+                    "queue drained {}s ago and not in viewer mode; auto-hiding consent window",
+                    AUTO_HIDE_GRACE.as_secs()
+                ));
+                guard.broadcast_consent_exit_please();
+            }
+        } else if guard.last_activity().elapsed() >= idle_timeout {
+            log::log(format_args!(
+                "no activity for {}s and no UI attached; initiating idle-exit",
+                IDLE_EXIT_SECS
+            ));
+            // `request_shutdown` flips the flag we're observing AND
+            // broadcasts `ConsentExitPlease` to any attached child
+            // (defensive — we just checked there were none, but this
+            // is the canonical "shut everything down" call).
+            guard.request_shutdown();
+        }
+    }
+
+    log::log(format_args!("shutdown flag observed; cleaning up"));
+    // Defensive: if the shutdown was triggered by `ClientMsg::Shutdown`
+    // (vs. our idle path), there may be a consent child still attached.
+    // `request_shutdown` already broadcast `ConsentExitPlease` to it
+    // — but only if it was attached at that moment. Re-broadcast here
+    // to catch any child that attached between the request and now.
+    state
+        .lock()
+        .expect("state mutex")
+        .broadcast_consent_exit_please();
     let _ = std::fs::remove_file(&socket_path);
-    drop(shutdown_flag);
-
-    result.map_err(|e| anyhow::anyhow!("eframe run failed: {e}"))?;
+    log::log(format_args!("daemon exiting cleanly"));
     Ok(0)
+}
+
+/// Spawn a `secreq consent-window` child process if one isn't already
+/// attached and we aren't already mid-spawn. Called from the socket
+/// handler after any state mutation that the user should see (Ask
+/// queued, viewer requested, window requested).
+///
+/// The child re-uses the same binary (`std::env::current_exe()`) so a
+/// dev `cargo run` and an installed `secreq` both work correctly.
+pub fn ensure_consent_window(state: &state::SharedState) -> Result<()> {
+    let mut guard = state.lock().expect("state mutex");
+    if !guard.needs_consent_window() {
+        return Ok(());
+    }
+    if guard.consent_spawn_in_flight() {
+        return Ok(());
+    }
+    // Defer the spawn if a restart is pending: the dying child's
+    // detach handler will fire `ensure_consent_window` once its
+    // process actually exits, so by spawning then (and not now) we
+    // guarantee strict "old window gone before new window appears"
+    // sequencing.
+    if guard.is_consent_restart_pending() {
+        return Ok(());
+    }
+    let exe = std::env::current_exe().context("locate current executable")?;
+    log::log_at(
+        "spawn",
+        format_args!(
+            "spawning consent-window child: {} consent-window",
+            exe.display()
+        ),
+    );
+    guard.mark_consent_spawn_in_flight();
+    drop(guard);
+    std::process::Command::new(exe)
+        .arg("consent-window")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .context("spawn consent-window child")?;
+    Ok(())
 }
 
 /// RAII guard for an exclusive lock on the pidfile.

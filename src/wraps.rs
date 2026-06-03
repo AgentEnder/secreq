@@ -276,10 +276,12 @@ mod tests {
     }
 
     #[test]
-    fn remember_setting_is_rejected_now_that_caching_is_purely_ppid_scoped() {
-        // Pre-pivot we had a `$remember` field for per-wrap TTLs. After
-        // dropping the TTL model entirely (cache lifetime = parent-process
-        // lifetime), `$remember` is no longer a recognised key.
+    fn remember_setting_is_rejected_now_that_caching_is_authorization_gated() {
+        // Pre-pivot we had a `$remember` field for per-wrap TTLs. The
+        // daemon now drops TTLs entirely: the *approvals* cache lives
+        // for the daemon process, and the *secret value* cache keys on
+        // `(wrap, provider, locator)` with no expiry. `$remember` no
+        // longer maps onto anything we can configure per-wrap.
         let err = WrapsConfig::parse(
             r#"{ gh: { $remember: "8h", env: { X: "secret://op/x" } } }"#,
             "t",

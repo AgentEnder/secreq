@@ -17,6 +17,10 @@ path = "src/lib.rs"
 name = "gen-schema"
 path = "examples/gen_schema.rs"
 
+[[example]]
+name = "gen-auto-rules-schema"
+path = "examples/gen_auto_rules_schema.rs"
+
 [dependencies]
 anyhow = "1"
 thiserror = "2"
@@ -32,19 +36,25 @@ crossterm = "0.28"
 dirs = "5"
 signal-hook = "0.3"
 libc = "0.2"
-eframe = { version = "0.34", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+eframe = { version = "0.34", default-features = false, features = ["default_fonts", "wgpu", "wayland", "x11"] }
 egui = "0.34"
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
 blake3 = "1"
 rand = "0.8"
+glob = "0.3"
 
-# macOS-only: needed to set the app's NSApplicationActivationPolicy to
-# `Accessory` so the daemon doesn't show up in the Dock / Cmd+Tab while
-# its window is hidden. eframe pulls in the same winit version
-# transitively; declaring it here lets us name the platform extension
-# traits in src/daemon/mod.rs.
+# macOS-only.
+#
+# `winit` re-exported for platform extension traits in `daemon/mod.rs`.
+#
+# `objc2-foundation` is for `NSProcessInfo.beginActivity(...)` which
+# opts the consent-window child out of App Nap. Without it, macOS
+# throttles our run loop when the window is in the background and
+# updates from the daemon arrive minutes late. Used in
+# `daemon/child.rs::macos_disable_app_nap`.
 [target.'cfg(target_os = "macos")'.dependencies]
 winit = "0.30"
+objc2-foundation = "0.3"
 
 [dev-dependencies]
 tempfile = "3"

@@ -28,7 +28,8 @@ src/
 │   ├── server.rs    — UnixListener accept loop; one thread per connection
 │   ├── state.rs     — coalescing queue + in-memory approvals cache
 │   ├── ui.rs        — egui app: hidden until queue is non-empty
-│   └── client.rs    — auto-spawn + connect; honors SECREQ_NO_DAEMON
+│   ├── client.rs    — auto-spawn + connect; honors SECREQ_NO_DAEMON
+│   └── log.rs        — persistent JSONL daemon log + 60s CPU/mem samples
 ├── audit.rs         — JSONL audit log (names only, never values)
 ├── exec.rs          — PTY + piped child execution with masking
 ├── shim.rs          — PATH shim install/remove (sentinel-protected)

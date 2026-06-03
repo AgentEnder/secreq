@@ -26,20 +26,59 @@ pub struct AuditEntry {
     pub ts_unix: u64,
     /// Working directory of the `run`.
     pub cwd: String,
-    /// The command (argv) that was launched.
-    pub command: Vec<String>,
-    /// Caller process names, nearest first.
-    pub callers: Vec<String>,
+    /// The wrap that ran (the binary name registered in `wraps.json5`).
+    pub wrap: String,
+    /// The wrapped argv passed through after the binary — what the user
+    /// actually typed. Empty for an admin path where args aren't
+    /// applicable.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Caller process chain, nearest-first. Carries pid + command so the
+    /// audit view can render the full process tree that triggered this
+    /// request rather than just a stack of process names.
+    pub callers: Vec<AuditCaller>,
     /// Names of the secrets granted (never their values).
     pub secrets: Vec<String>,
     /// The consent decision.
     pub decision: String,
+    /// Stable id of the auto-rule that produced this decision, if any.
+    /// `Some(...)` for `approve+auto` / `deny+auto`; `None` for every
+    /// other decision shape. `#[serde(default)]` so logs written by an
+    /// older `secreq` deserialize cleanly here.
+    #[serde(default)]
+    pub rule_id: Option<String>,
+}
+
+/// One process in the audit-time caller chain. Mirrors the runtime
+/// [`crate::provenance::Caller`] but only the fields a post-hoc reader
+/// needs: pid (to disambiguate identical names across the chain) plus
+/// `command` (the argv the consent UI showed at decision time) and
+/// `name` (the bare process name; still the load-bearing identifier
+/// for the cache + history-summary key).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuditCaller {
+    pub pid: u32,
+    pub name: String,
+    pub command: String,
+}
+
+impl AuditCaller {
+    pub fn from_runtime(caller: &Caller) -> AuditCaller {
+        AuditCaller {
+            pid: caller.pid,
+            name: caller.name.clone(),
+            command: caller.command.clone(),
+        }
+    }
 }
 
 impl AuditEntry {
-    /// Assemble an entry from the pieces a `run` already has.
+    /// Assemble an entry from the pieces a `run` already has. Rule
+    /// linkage is attached via [`AuditEntry::with_rule_id`] when the
+    /// decision came from an auto-rule.
     pub fn new(
-        command: &[String],
+        wrap: &str,
+        args: &[String],
         callers: &[Caller],
         secret_names: &[String],
         decision: Decision,
@@ -49,11 +88,21 @@ impl AuditEntry {
             cwd: std::env::current_dir()
                 .map(|p| p.display().to_string())
                 .unwrap_or_default(),
-            command: command.to_vec(),
-            callers: callers.iter().map(|c| c.name.clone()).collect(),
+            wrap: wrap.to_owned(),
+            args: args.to_vec(),
+            callers: callers.iter().map(AuditCaller::from_runtime).collect(),
             secrets: secret_names.to_vec(),
             decision: decision.as_str().to_owned(),
+            rule_id: None,
         }
+    }
+
+    /// Chainable setter for the firing rule's id. Used on
+    /// `ApproveAuto` / `DenyAuto` paths so the audit row links back
+    /// to the rule that fired.
+    pub fn with_rule_id(mut self, rule_id: Option<String>) -> AuditEntry {
+        self.rule_id = rule_id;
+        self
     }
 }
 
@@ -177,15 +226,17 @@ mod tests {
         // garbage must be silently ignored so one bad write never blanks
         // the daemon's history view.
         let log = "\
-{\"ts_unix\":100,\"cwd\":\"/a\",\"command\":[\"wrap gh\"],\"callers\":[\"zsh\"],\"secrets\":[\"GITHUB_TOKEN\"],\"decision\":\"approve+remember\"}
+{\"ts_unix\":100,\"cwd\":\"/a\",\"wrap\":\"gh\",\"args\":[\"pr\",\"view\",\"42\"],\"callers\":[{\"pid\":111,\"name\":\"zsh\",\"command\":\"-zsh\"}],\"secrets\":[\"GITHUB_TOKEN\"],\"decision\":\"approve+remember\"}
 
 not json at all
-{\"ts_unix\":200,\"cwd\":\"/b\",\"command\":[\"wrap aws\"],\"callers\":[\"npm\"],\"secrets\":[\"AWS_KEY\"],\"decision\":\"deny\"}
+{\"ts_unix\":200,\"cwd\":\"/b\",\"wrap\":\"aws\",\"args\":[],\"callers\":[{\"pid\":222,\"name\":\"npm\",\"command\":\"npm test\"}],\"secrets\":[\"AWS_KEY\"],\"decision\":\"deny\"}
 ";
         let f = write_log(log);
         let entries = read_path(&f.path().to_path_buf(), None);
         assert_eq!(entries.len(), 2, "two valid entries, garbage dropped");
-        assert_eq!(entries[0].command, vec!["wrap gh".to_string()]);
+        assert_eq!(entries[0].wrap, "gh");
+        assert_eq!(entries[0].args, vec!["pr", "view", "42"]);
+        assert_eq!(entries[0].callers[0].pid, 111);
         assert_eq!(entries[1].decision, "deny");
     }
 
@@ -194,14 +245,14 @@ not json at all
         // Tail-like behaviour: when capped, we keep the *latest* entries
         // (end of file), not the oldest. The UI cares about recency.
         let log = "\
-{\"ts_unix\":1,\"cwd\":\"\",\"command\":[\"a\"],\"callers\":[],\"secrets\":[],\"decision\":\"approve\"}
-{\"ts_unix\":2,\"cwd\":\"\",\"command\":[\"b\"],\"callers\":[],\"secrets\":[],\"decision\":\"approve\"}
-{\"ts_unix\":3,\"cwd\":\"\",\"command\":[\"c\"],\"callers\":[],\"secrets\":[],\"decision\":\"approve\"}
+{\"ts_unix\":1,\"cwd\":\"\",\"wrap\":\"a\",\"args\":[],\"callers\":[],\"secrets\":[],\"decision\":\"approve\"}
+{\"ts_unix\":2,\"cwd\":\"\",\"wrap\":\"b\",\"args\":[],\"callers\":[],\"secrets\":[],\"decision\":\"approve\"}
+{\"ts_unix\":3,\"cwd\":\"\",\"wrap\":\"c\",\"args\":[],\"callers\":[],\"secrets\":[],\"decision\":\"approve\"}
 ";
         let f = write_log(log);
         let entries = read_path(&f.path().to_path_buf(), Some(2));
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].command, vec!["b".to_string()]);
-        assert_eq!(entries[1].command, vec!["c".to_string()]);
+        assert_eq!(entries[0].wrap, "b");
+        assert_eq!(entries[1].wrap, "c");
     }
 }

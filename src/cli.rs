@@ -84,12 +84,19 @@ enum Command {
     /// Open the config in `$EDITOR`.
     Edit,
 
-    /// Run or manage the consent daemon. Bare `secreq daemon` runs it
-    /// (usually auto-spawned by the first wrap that finds no live
-    /// daemon). `secreq daemon stop` tells a running daemon to exit,
-    /// which also clears every remembered approval (the cache is
-    /// in-memory only by design).
+    /// Run or manage the consent daemon. Bare `secreq daemon` ensures a
+    /// daemon is running in the background (spawning one if needed) and
+    /// then tails its log until you Ctrl-C — handy for watching the
+    /// consent flow live. Use `--fg` to run the daemon in the foreground
+    /// in this process instead (the form auto-spawned by wraps).
+    /// `secreq daemon stop` tells a running daemon to exit, which also
+    /// clears every remembered approval (the cache is in-memory only by
+    /// design). `secreq daemon log-path` prints the log file path.
     Daemon {
+        /// Run the daemon in the foreground in this process instead of
+        /// starting a background daemon and tailing its log.
+        #[arg(long)]
+        fg: bool,
         #[command(subcommand)]
         action: Option<DaemonAction>,
     },
@@ -105,9 +112,43 @@ enum Command {
     /// isn't running.
     View,
 
+    /// Manage auto-approve / auto-deny rules. Rules are created from
+    /// the consent window's Rules tab (or by hand-editing the rules
+    /// file). The CLI surface here covers the headless management
+    /// path: list, inspect, enable/disable, delete.
+    Rules {
+        #[command(subcommand)]
+        action: Option<RulesAction>,
+    },
+
+    /// Internal: run the consent-window child process. The daemon
+    /// spawns one of these whenever the user needs to see the
+    /// consent UI. Not meant to be invoked by users directly — if
+    /// the daemon isn't running, this will fail to connect.
+    #[command(hide = true)]
+    ConsentWindow,
+
     /// Anything else: the binary to wrap-and-run.
     #[command(external_subcommand)]
     External(Vec<String>),
+}
+
+#[derive(Subcommand)]
+enum RulesAction {
+    /// One-line listing of every rule with its decide direction and
+    /// enabled state. Default action for `secreq rules`.
+    List,
+    /// Show one rule in full (every match field, trained_secrets,
+    /// deny_message, created_at). `target` matches by id, falling
+    /// back to exact name.
+    Show { target: String },
+    /// Set `enabled = true` on a rule.
+    Enable { target: String },
+    /// Set `enabled = false` on a rule. The rule stays in the file;
+    /// re-enable later without re-typing.
+    Disable { target: String },
+    /// Delete a rule by id or exact name.
+    Rm { target: String },
 }
 
 #[derive(Subcommand)]
@@ -122,6 +163,9 @@ enum DaemonAction {
         #[arg(long, short = 'f')]
         force: bool,
     },
+    /// Print the path of the daemon's persistent log file and exit.
+    /// Does not start a daemon.
+    LogPath,
 }
 
 /// Parse args, dispatch, return the process exit code.
@@ -148,12 +192,31 @@ pub fn run() -> i32 {
         Some(Command::Check) => commands::check(config),
         Some(Command::Doctor) => commands::doctor(config),
         Some(Command::Edit) => commands::edit_cmd(config),
-        Some(Command::Daemon { action: None }) => crate::daemon::run(),
+        Some(Command::Daemon { fg, action: None }) => {
+            if fg {
+                crate::daemon::run()
+            } else {
+                commands::daemon_tail()
+            }
+        }
         Some(Command::Daemon {
             action: Some(DaemonAction::Stop { force }),
+            ..
         }) => commands::daemon_stop(force),
+        Some(Command::Daemon {
+            action: Some(DaemonAction::LogPath),
+            ..
+        }) => commands::daemon_log_path(),
         Some(Command::Pending) => commands::pending(),
         Some(Command::View) => commands::view(),
+        Some(Command::Rules { action }) => match action {
+            None | Some(RulesAction::List) => commands::rules_list(),
+            Some(RulesAction::Show { target }) => commands::rules_show(&target),
+            Some(RulesAction::Enable { target }) => commands::rules_set_enabled(&target, true),
+            Some(RulesAction::Disable { target }) => commands::rules_set_enabled(&target, false),
+            Some(RulesAction::Rm { target }) => commands::rules_rm(&target),
+        },
+        Some(Command::ConsentWindow) => crate::daemon::child::run(),
         Some(Command::External(parts)) => {
             let (binary, args) = parts.split_first().expect("external subcommand has a name");
             commands::wrap_run(

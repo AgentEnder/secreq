@@ -5,9 +5,13 @@
 //! admin verbs that read/write `~/.config/secreq/wraps.json5`.
 
 use std::collections::{BTreeMap, HashMap};
+use std::fs::File;
+use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 
@@ -72,23 +76,29 @@ pub fn wrap_run(
         let decision = Decision::Approve;
         let env_names: Vec<String> = wrap.env.keys().cloned().collect();
         let _ = audit::append(&AuditEntry::new(
-            &[format!("wrap {binary}")],
-            &callers,
-            &env_names,
-            decision,
+            binary, args, &callers, &env_names, decision,
         ));
         resolve_wrap_env(&config, &wrap)?
     } else {
         let outcome = obtain_wrap_consent(&wrap, &callers, args)?;
         let env_names: Vec<String> = wrap.env.keys().cloned().collect();
-        let _ = audit::append(&AuditEntry::new(
-            &[format!("wrap {binary}")],
-            &callers,
-            &env_names,
-            outcome.decision,
-        ));
+        let _ = audit::append(
+            &AuditEntry::new(binary, args, &callers, &env_names, outcome.decision)
+                .with_rule_id(outcome.rule_id.clone()),
+        );
         if !outcome.decision.approved() {
-            eprintln!("secreq: denied — `{binary}` not run");
+            // Auto-deny: surface the rule's configured message (or a
+            // minimal "denied by rule X" fallback) before exiting 1.
+            // Plain manual deny keeps the existing terse message.
+            if outcome.decision == Decision::DenyAuto {
+                let rule_name = outcome.rule_name.as_deref().unwrap_or("(unknown)");
+                match outcome.deny_message.as_deref() {
+                    Some(msg) => eprintln!("secreq: denied by rule '{rule_name}': {msg}"),
+                    None => eprintln!("secreq: denied by rule '{rule_name}'"),
+                }
+            } else {
+                eprintln!("secreq: denied — `{binary}` not run");
+            }
             return Ok(1);
         }
         outcome
@@ -431,6 +441,121 @@ pub fn view() -> Result<i32> {
     Ok(0)
 }
 
+/// `secreq rules` (with no subcommand or with `list`): one-line table
+/// of every configured rule.
+pub fn rules_list() -> Result<i32> {
+    let rules = daemon_client::list_rules().context("could not reach the consent daemon")?;
+    if rules.is_empty() {
+        println!("no auto-rules configured");
+        println!("(create one from the Rules tab in `secreq view`)");
+        return Ok(0);
+    }
+    println!(
+        "{:<24}  {:<8}  {:<8}  {:<16}  name",
+        "id", "decide", "enabled", "wrap"
+    );
+    for r in &rules {
+        let enabled = if r.enabled { "yes" } else { "no" };
+        let decide = match r.decide {
+            crate::rules::RuleDecision::Approve => "approve",
+            crate::rules::RuleDecision::Deny => "deny",
+        };
+        println!(
+            "{:<24}  {:<8}  {:<8}  {:<16}  {}",
+            r.id, decide, enabled, r.r#match.wrap, r.name
+        );
+    }
+    Ok(0)
+}
+
+/// `secreq rules show <target>` — verbose dump of one rule. `target`
+/// matches by id first, then by exact name.
+pub fn rules_show(target: &str) -> Result<i32> {
+    let rules = daemon_client::list_rules().context("could not reach the consent daemon")?;
+    let rule = find_rule(&rules, target)?;
+    println!("id:             {}", rule.id);
+    println!("name:           {}", rule.name);
+    println!("enabled:        {}", rule.enabled);
+    println!(
+        "decide:         {}",
+        match rule.decide {
+            crate::rules::RuleDecision::Approve => "approve",
+            crate::rules::RuleDecision::Deny => "deny",
+        }
+    );
+    println!("wrap:           {}", rule.r#match.wrap);
+    if let Some(p) = &rule.r#match.argv {
+        println!("argv match:     {}", p.as_str());
+    }
+    if let Some(p) = &rule.r#match.ancestor {
+        println!("ancestor match: {}", p.as_str());
+    }
+    if let Some(p) = &rule.r#match.cwd {
+        println!("cwd match:      {}", p.as_str());
+    }
+    if !rule.trained_secrets.is_empty() {
+        let names: Vec<_> = rule.trained_secrets.iter().cloned().collect();
+        println!("trained on:     {}", names.join(", "));
+    }
+    if let Some(msg) = &rule.deny_message {
+        println!("deny message:   {msg}");
+    }
+    if rule.created_at_unix > 0 {
+        println!("created at:     {} (unix)", rule.created_at_unix);
+    }
+    Ok(0)
+}
+
+/// `secreq rules enable|disable <target>`. Idempotent — flipping a
+/// bit that's already in the requested state succeeds silently.
+pub fn rules_set_enabled(target: &str, enabled: bool) -> Result<i32> {
+    let rules = daemon_client::list_rules().context("could not reach the consent daemon")?;
+    let rule = find_rule(&rules, target)?;
+    let id = rule.id.clone();
+    daemon_client::set_rule_enabled(&id, enabled)
+        .context("could not update the rule via the daemon")?;
+    println!(
+        "rule '{}' ({}) is now {}",
+        rule.name,
+        rule.id,
+        if enabled { "enabled" } else { "disabled" }
+    );
+    Ok(0)
+}
+
+/// `secreq rules rm <target>`.
+pub fn rules_rm(target: &str) -> Result<i32> {
+    let rules = daemon_client::list_rules().context("could not reach the consent daemon")?;
+    let rule = find_rule(&rules, target)?;
+    let id = rule.id.clone();
+    let name = rule.name.clone();
+    daemon_client::delete_rule(&id).context("could not delete the rule via the daemon")?;
+    println!("deleted rule '{name}' ({id})");
+    Ok(0)
+}
+
+/// Resolve a user-supplied id-or-name to exactly one rule. Errors
+/// with the candidate list on ambiguity so the user can disambiguate
+/// by id.
+fn find_rule<'a>(rules: &'a [crate::rules::Rule], target: &str) -> Result<&'a crate::rules::Rule> {
+    if let Some(by_id) = rules.iter().find(|r| r.id == target) {
+        return Ok(by_id);
+    }
+    let by_name: Vec<&crate::rules::Rule> = rules.iter().filter(|r| r.name == target).collect();
+    match by_name.len() {
+        0 => anyhow::bail!("no rule with id or name `{target}`"),
+        1 => Ok(by_name[0]),
+        _ => {
+            let ids = by_name
+                .iter()
+                .map(|r| r.id.clone())
+                .collect::<Vec<_>>()
+                .join(", ");
+            anyhow::bail!("multiple rules named `{target}`; disambiguate by id: {ids}")
+        }
+    }
+}
+
 /// `secreq daemon stop` — tell the running daemon to exit. The daemon's
 /// approvals cache lives in memory only, so this is also how you clear
 /// any "approve all" decisions you made earlier — the next wrap
@@ -460,6 +585,107 @@ pub fn daemon_stop(force: bool) -> Result<i32> {
         false => {
             eprintln!("secreq: no daemon was running (approvals cache already clear).");
             Ok(0)
+        }
+    }
+}
+
+/// How many trailing lines of the existing log to print before
+/// following, matching the familiar `tail -f` default feel (but a touch
+/// larger — daemon lines are terse and a session's worth of context is
+/// useful when you've just attached).
+const TAIL_INITIAL_LINES: usize = 50;
+
+/// Poll cadence for the log follower. The log is low-volume (a handful
+/// of lines per consent flow, one resource sample per minute), so a
+/// fifth-of-a-second poll feels live without busy-spinning.
+const TAIL_POLL_INTERVAL: Duration = Duration::from_millis(200);
+
+/// How long to wait for the log file to appear after spawning a fresh
+/// daemon before giving up. The daemon writes its first line within
+/// milliseconds of starting.
+const TAIL_OPEN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// `secreq daemon` (the default action) — ensure a daemon is running in
+/// the background (spawning a detached one if needed), then tail its
+/// persistent log until interrupted. `secreq daemon --fg` runs the
+/// daemon in the foreground instead (handled in the CLI dispatch).
+pub fn daemon_tail() -> Result<i32> {
+    daemon_client::ensure_daemon_running()
+        .context("could not start or reach the consent daemon")?;
+    let path = crate::daemon::log::log_path()?;
+    eprintln!(
+        "secreq: daemon running; tailing {} (Ctrl-C to stop)",
+        path.display()
+    );
+    tail_follow(&path)
+}
+
+/// `secreq daemon log-path` — print the persistent daemon log path and
+/// exit. Scripts use this to locate the log without knowing the XDG
+/// layout; it never starts a daemon.
+pub fn daemon_log_path() -> Result<i32> {
+    println!("{}", crate::daemon::log::log_path()?.display());
+    Ok(0)
+}
+
+/// Print the tail of `path` then follow appended lines, `tail -f`-style.
+/// Diverges until the process is interrupted (Ctrl-C); only an IO error
+/// returns. Relies on the log sink writing whole lines atomically, so
+/// every chunk we read ends on a line (and UTF-8) boundary.
+fn tail_follow(path: &Path) -> Result<i32> {
+    let mut file = open_log_with_retry(path)?;
+
+    // Print the last `TAIL_INITIAL_LINES` lines of existing content.
+    let mut existing = String::new();
+    file.read_to_string(&mut existing)
+        .with_context(|| format!("read daemon log {}", path.display()))?;
+    let mut stdout = std::io::stdout();
+    let lines: Vec<&str> = existing.lines().collect();
+    let start = lines.len().saturating_sub(TAIL_INITIAL_LINES);
+    for line in &lines[start..] {
+        let _ = writeln!(stdout, "{line}");
+    }
+    let _ = stdout.flush();
+
+    // Follow appends. `pos` tracks how far we've consumed; a shrink
+    // means the file was truncated/replaced, so we restart from the top.
+    let mut pos = file
+        .stream_position()
+        .with_context(|| format!("seek daemon log {}", path.display()))?;
+    loop {
+        sleep(TAIL_POLL_INTERVAL);
+        let len = std::fs::metadata(path)
+            .with_context(|| format!("stat daemon log {}", path.display()))?
+            .len();
+        if len < pos {
+            pos = 0;
+        }
+        if len > pos {
+            file.seek(SeekFrom::Start(pos))
+                .with_context(|| format!("seek daemon log {}", path.display()))?;
+            let mut chunk = String::new();
+            let read = file
+                .read_to_string(&mut chunk)
+                .with_context(|| format!("read daemon log {}", path.display()))?;
+            let _ = stdout.write_all(chunk.as_bytes());
+            let _ = stdout.flush();
+            pos += read as u64;
+        }
+    }
+}
+
+/// Open the log file, retrying briefly: a daemon we just spawned may not
+/// have created it yet.
+fn open_log_with_retry(path: &Path) -> Result<File> {
+    let deadline = Instant::now() + TAIL_OPEN_TIMEOUT;
+    loop {
+        match File::open(path) {
+            Ok(file) => return Ok(file),
+            Err(_) if Instant::now() < deadline => sleep(Duration::from_millis(50)),
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("open daemon log {}", path.display()));
+            }
         }
     }
 }

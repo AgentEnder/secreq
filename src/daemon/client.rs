@@ -35,13 +35,21 @@ const SPAWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// What the daemon's reply means to the calling wrap-and-run.
 ///
-/// On `Approve`/`ApproveRemember`, `secrets` carries the env-var values
-/// the daemon resolved on our behalf — the client should inject them
-/// directly without re-running providers.
+/// On `Approve`/`ApproveRemember`/`ApproveAuto`, `secrets` carries the
+/// env-var values the daemon resolved on our behalf — the client
+/// should inject them directly without re-running providers.
+///
+/// `rule_id` / `rule_name` are `Some` when a matching auto-rule fired,
+/// so the wrap client can write a precise audit row and (on
+/// `DenyAuto`) print the rule's configured `deny_message` to stderr
+/// before exiting 1.
 #[derive(Debug)]
 pub struct ConsentOutcome {
     pub decision: Decision,
     pub secrets: HashMap<String, String>,
+    pub rule_id: Option<String>,
+    pub rule_name: Option<String>,
+    pub deny_message: Option<String>,
 }
 
 impl ConsentOutcome {
@@ -49,6 +57,9 @@ impl ConsentOutcome {
         ConsentOutcome {
             decision: Decision::Deny,
             secrets: HashMap::new(),
+            rule_id: None,
+            rule_name: None,
+            deny_message: None,
         }
     }
 }
@@ -71,41 +82,157 @@ pub fn request_consent(ask: Ask) -> Result<ConsentOutcome> {
     let socket = server::default_socket_path()?;
     let stream = connect_or_spawn(&socket)?;
     match send_and_recv(stream, ClientMsg::Ask(ask))? {
-        DaemonMsg::Decision { decision, secrets } => Ok(ConsentOutcome { decision, secrets }),
+        DaemonMsg::Decision {
+            decision,
+            secrets,
+            rule_id,
+            rule_name,
+            deny_message,
+        } => Ok(ConsentOutcome {
+            decision,
+            secrets,
+            rule_id,
+            rule_name,
+            deny_message,
+        }),
         DaemonMsg::Err { message } => {
             bail!("daemon could not resolve secrets: {message}")
         }
         DaemonMsg::Ok => bail!("daemon replied Ok to an Ask (expected Decision)"),
+        DaemonMsg::WindowOpened { .. } => {
+            bail!("daemon replied WindowOpened to an Ask (expected Decision)")
+        }
+        DaemonMsg::ConsentUpdate { .. }
+        | DaemonMsg::ConsentExitPlease
+        | DaemonMsg::AutoDenyToast { .. } => {
+            bail!("daemon sent a consent-window streaming message on a one-shot Ask connection")
+        }
+        DaemonMsg::RulesList { .. } => {
+            bail!("daemon replied RulesList to an Ask (expected Decision)")
+        }
     }
 }
 
 /// Ask the daemon to show its window. Used by `secreq pending`. Auto-
 /// spawns the daemon if it isn't running; the window will auto-hide
 /// once the queue empties.
+///
+/// The daemon's `ShowWindow` handler kills any existing consent-window
+/// child and spawns a fresh one. A brand-new process gets foreground
+/// focus at launch on macOS, which is the only way around macOS 14+
+/// suspending the run loops of background, occluded apps (which makes
+/// in-process focus-raise APIs no-ops).
 pub fn show_window() -> Result<()> {
     if daemon_disabled() {
         bail!("{NO_DAEMON_ENV} is set; cannot open the consent window. Unset it and try again.");
     }
     let socket = server::default_socket_path()?;
     let stream = connect_or_spawn(&socket)?;
-    let _ = send_and_recv(stream, ClientMsg::ShowWindow)?;
-    Ok(())
+    expect_window_opened(send_and_recv(stream, ClientMsg::ShowWindow)?)
+}
+
+/// Ensure a daemon is running, auto-spawning a detached one if not, and
+/// return once its socket is connectable. Used by bare `secreq daemon`
+/// before it starts tailing the log. Sends a `Ping` (rather than just
+/// dropping the connection) so the daemon doesn't log a spurious
+/// "connected, sent nothing" line.
+pub fn ensure_daemon_running() -> Result<()> {
+    if daemon_disabled() {
+        bail!(
+            "{NO_DAEMON_ENV} is set; refusing to start the consent daemon. Unset it and try again."
+        );
+    }
+    let socket = server::default_socket_path()?;
+    let stream = connect_or_spawn(&socket)?;
+    match send_and_recv(stream, ClientMsg::Ping)? {
+        DaemonMsg::Ok => Ok(()),
+        DaemonMsg::Err { message } => bail!("daemon error on ping: {message}"),
+        other => bail!("unexpected reply to Ping: {other:?}"),
+    }
 }
 
 /// Ask the daemon to open the window in viewer mode — pinned so the
 /// auto-hide doesn't fire while the user browses the audit log. Used
 /// by `secreq view`. Auto-spawns the daemon if it isn't running.
 ///
-/// The pin clears on any hide (user-initiated close, idle exit, etc.),
-/// so this doesn't change behaviour for unrelated callers.
+/// Same kill-and-respawn flow as [`show_window`]; the difference is
+/// the daemon sets `viewer_mode` so the window doesn't auto-close
+/// when the queue is empty.
 pub fn show_viewer() -> Result<()> {
     if daemon_disabled() {
         bail!("{NO_DAEMON_ENV} is set; cannot open the consent window. Unset it and try again.");
     }
     let socket = server::default_socket_path()?;
     let stream = connect_or_spawn(&socket)?;
-    let _ = send_and_recv(stream, ClientMsg::ShowViewer)?;
-    Ok(())
+    expect_window_opened(send_and_recv(stream, ClientMsg::ShowViewer)?)
+}
+
+/// Type-check the daemon's reply to `ShowWindow` / `ShowViewer`.
+/// We don't currently use the returned `child_pid` (the kill+respawn
+/// flow makes it stale immediately) but the reply shape encodes the
+/// daemon's confirmation that it accepted the request.
+fn expect_window_opened(reply: DaemonMsg) -> Result<()> {
+    match reply {
+        DaemonMsg::WindowOpened { .. } | DaemonMsg::Ok => Ok(()),
+        DaemonMsg::Err { message } => bail!("daemon error: {message}"),
+        DaemonMsg::Decision { .. } => bail!("unexpected Decision reply to ShowWindow/ShowViewer"),
+        DaemonMsg::ConsentUpdate { .. }
+        | DaemonMsg::ConsentExitPlease
+        | DaemonMsg::AutoDenyToast { .. } => {
+            bail!("daemon sent a consent-window streaming message on a one-shot reply")
+        }
+        DaemonMsg::RulesList { .. } => {
+            bail!("unexpected RulesList reply to ShowWindow/ShowViewer")
+        }
+    }
+}
+
+/// `secreq rules list/show`: fetch the current ruleset. Auto-spawns
+/// the daemon if it isn't running so headless management works the
+/// same way as wrap invocation.
+pub fn list_rules() -> Result<Vec<crate::rules::Rule>> {
+    if daemon_disabled() {
+        bail!("{NO_DAEMON_ENV} is set; cannot reach the daemon. Unset it and try again.");
+    }
+    let socket = server::default_socket_path()?;
+    let stream = connect_or_spawn(&socket)?;
+    match send_and_recv(stream, ClientMsg::ListRules)? {
+        DaemonMsg::RulesList { rules } => Ok(rules),
+        DaemonMsg::Err { message } => bail!("daemon error: {message}"),
+        other => bail!("unexpected reply to ListRules: {other:?}"),
+    }
+}
+
+/// `secreq rules enable/disable`: flip the bit and persist.
+pub fn set_rule_enabled(id: &str, enabled: bool) -> Result<()> {
+    if daemon_disabled() {
+        bail!("{NO_DAEMON_ENV} is set; cannot reach the daemon. Unset it and try again.");
+    }
+    let socket = server::default_socket_path()?;
+    let stream = connect_or_spawn(&socket)?;
+    let msg = ClientMsg::SetRuleEnabled {
+        id: id.to_owned(),
+        enabled,
+    };
+    match send_and_recv(stream, msg)? {
+        DaemonMsg::Ok => Ok(()),
+        DaemonMsg::Err { message } => bail!("daemon error: {message}"),
+        other => bail!("unexpected reply to SetRuleEnabled: {other:?}"),
+    }
+}
+
+/// `secreq rules rm`: delete and persist.
+pub fn delete_rule(id: &str) -> Result<()> {
+    if daemon_disabled() {
+        bail!("{NO_DAEMON_ENV} is set; cannot reach the daemon. Unset it and try again.");
+    }
+    let socket = server::default_socket_path()?;
+    let stream = connect_or_spawn(&socket)?;
+    match send_and_recv(stream, ClientMsg::DeleteRule { id: id.to_owned() })? {
+        DaemonMsg::Ok => Ok(()),
+        DaemonMsg::Err { message } => bail!("daemon error: {message}"),
+        other => bail!("unexpected reply to DeleteRule: {other:?}"),
+    }
 }
 
 /// Tell a running daemon to exit. Used by `secreq daemon stop`, which is
@@ -125,6 +252,17 @@ pub fn stop_daemon() -> Result<bool> {
         DaemonMsg::Ok => Ok(true),
         DaemonMsg::Err { message } => bail!("daemon refused shutdown: {message}"),
         DaemonMsg::Decision { .. } => bail!("daemon replied Decision to Shutdown (expected Ok)"),
+        DaemonMsg::WindowOpened { .. } => {
+            bail!("daemon replied WindowOpened to Shutdown (expected Ok)")
+        }
+        DaemonMsg::ConsentUpdate { .. }
+        | DaemonMsg::ConsentExitPlease
+        | DaemonMsg::AutoDenyToast { .. } => {
+            bail!("daemon sent a consent-window streaming message on a Shutdown reply")
+        }
+        DaemonMsg::RulesList { .. } => {
+            bail!("daemon replied RulesList to Shutdown (expected Ok)")
+        }
     }
 }
 
@@ -304,13 +442,19 @@ fn connect_or_spawn(socket: &Path) -> Result<UnixStream> {
     )
 }
 
-/// Re-exec ourselves with the `daemon` subcommand. We trust
+/// Re-exec ourselves with the `daemon --fg` subcommand. We trust
 /// `current_exe()` because the shim found us on PATH; if that's wrong,
 /// the daemon would have been wrong too.
+///
+/// `--fg` is load-bearing: bare `secreq daemon` now means "ensure a
+/// background daemon and tail its log," so spawning that form would
+/// recursively launch tailers instead of an actual daemon. `--fg`
+/// pins the real foreground daemon (which we detach via null stdio).
 fn spawn_daemon() -> Result<Child> {
     let exe = std::env::current_exe().context("current_exe for daemon spawn")?;
     Command::new(exe)
         .arg("daemon")
+        .arg("--fg")
         // Detach stdio so the daemon doesn't write to the client's tty
         // (a wrapped TUI is touchy about that).
         .stdin(std::process::Stdio::null())

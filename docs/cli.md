@@ -125,16 +125,29 @@ created (empty object) if it doesn't exist yet.
 ### `daemon`
 
 ```
-secreq daemon
+secreq daemon              # ensure a daemon is running, then tail its log
+secreq daemon --fg         # run the daemon in the foreground in this process
 secreq daemon stop [--force | -f]
+secreq daemon log-path     # print the persistent log file path
 ```
 
-Run the consent daemon. You don't usually invoke this directly — the
-first wrap-and-run that finds no live daemon will auto-spawn one. It
-exits after 30 minutes of empty queue.
+Bare `secreq daemon` ensures a daemon is running in the background
+(spawning a detached one if none is live), then **tails its persistent
+log** (`<state_dir>/daemon.log`) until you Ctrl-C — handy for watching
+the consent flow and the periodic CPU/memory samples live. It prints
+the last 50 lines of existing log, then follows new ones.
 
-If a daemon is already running, this exits 0 silently (a fcntl-locked
-pidfile enforces singleton-per-user).
+`secreq daemon --fg` runs the daemon in the foreground in the current
+process — the historical behavior, and the form a wrap auto-spawns
+(detached) when it finds no live daemon. The daemon exits after 30
+minutes of empty queue. Singleton-per-user is enforced by an
+fcntl-locked pidfile, so a second foreground daemon exits 0 silently.
+
+`secreq daemon log-path` prints the absolute path of the persistent log
+and exits without starting a daemon. The log is newline-delimited JSON
+(one object per line: `ts_unix`, `t_mono_s`, `pid`, `level`, `tag`,
+`msg`, plus `cpu_pct` / `rss_bytes` / `uptime_s` on `tag:"resource"`
+sample lines) — pipe it through `jq` to filter.
 
 `secreq daemon stop` tells a running daemon to exit cleanly. Since the
 approvals cache lives in the daemon's memory only, this is also how
@@ -224,7 +237,7 @@ shim at `<shim_dir>/<BINARY>` is a 5-line POSIX script that execs
 |---|---|
 | `SHELL` | `init` reads this to choose which shell config to edit. |
 | `XDG_CONFIG_HOME` | Config discovery. Falls back to `~/.config`. |
-| `XDG_STATE_HOME` | Audit log lives here (`secreq/audit.log`). Falls back to `~/.local/state`. The approvals cache is in-memory only — `secreq daemon stop` clears it. |
+| `XDG_STATE_HOME` | Audit log (`secreq/audit.log`) and the daemon's persistent log (`secreq/daemon.log`, see `secreq daemon log-path`) live here. Falls back to `~/.local/state`. The approvals cache is in-memory only — `secreq daemon stop` clears it. |
 | `XDG_RUNTIME_DIR` | Consent daemon socket + pidfile. Falls back to `$TMPDIR/secreq-<uid>`. |
 | `EDITOR` / `VISUAL` | Used by `secreq edit`. |
 | `DISPLAY` / `WAYLAND_DISPLAY` | Linux/BSD: when neither is set, `secreq` fails closed instead of spawning a daemon that can't render. |

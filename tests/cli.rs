@@ -503,3 +503,28 @@ fn init_writes_config_with_shim_dir() {
         );
     }
 }
+
+#[test]
+fn daemon_log_path_prints_state_dir_path_without_spawning() {
+    let (dir, _config) = sandbox();
+    // `daemon log-path` is pure: it prints the path and never starts a
+    // daemon (so it's safe even with the daemon disabled).
+    let out = run_secreq(dir.path(), &["daemon", "log-path"]);
+    assert!(
+        out.status.success(),
+        "log-path should exit 0: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let printed = String::from_utf8_lossy(&out.stdout);
+    let expected = dir.path().join("state/secreq/daemon.log");
+    assert_eq!(
+        printed.trim(),
+        expected.to_str().unwrap(),
+        "log-path should print <XDG_STATE_HOME>/secreq/daemon.log"
+    );
+    // It must not have created the file or a daemon socket — pure print.
+    assert!(
+        !expected.exists(),
+        "log-path must not create the log file"
+    );
+}

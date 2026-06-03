@@ -2,18 +2,34 @@
 //!
 //! ## Why
 //!
-//! When the user grants "Approve all from Superset.app", every wrap
-//! Superset descendants ask for in the next N minutes should resolve
-//! without re-running the provider. The persistent approvals cache says
-//! "yes you can have this," but the **value** still costs a `op read`
-//! per ask — which on 1Password means a biometric prompt per call. This
-//! module sits between "user said yes" and "ship value to the waiter"
+//! Once a wrap has been authorized to read a secret — whether by an
+//! explicit user click or by an auto-rule firing — every subsequent
+//! authorized ask for the same secret should resolve without
+//! re-running the provider. The authorization layer says "yes you can
+//! have this," but the **value** still costs an `op read` per ask —
+//! which on 1Password means a biometric prompt per call. This module
+//! sits between "authorization granted" and "ship value to the waiter"
 //! so a cached value short-circuits the provider invocation entirely.
+//!
+//! ## Scoping
+//!
+//! Entries key on `(wrap, provider, locator)`. The asking process's
+//! pid / parent / ancestor chain doesn't factor in: the resolved
+//! secret value is a function of `(provider, locator)`, not of who's
+//! asking. Authorization (the approvals cache for interactive grants,
+//! the rules evaluator for auto-decisions) is the gate that decides
+//! *whether* a lookup happens; once we're past that gate, any further
+//! ask the gate would also pass should reuse the cached value.
+//!
+//! Including `wrap` in the key keeps the cache scoped to a single
+//! wrap's secret set, so e.g. two wraps that happen to reference the
+//! same `op://Personal/GitHub/token` still get distinct cache slots —
+//! defense-in-depth against a future change that would let one wrap's
+//! cached value be served to another wrap that lacked authorization.
 //!
 //! ## Threat model
 //!
-//! The daemon holds these values in RAM for as long as their TTL. A
-//! plaintext map there would mean:
+//! The daemon holds these values in RAM. A plaintext map would mean:
 //! - A coredump exposes the values verbatim.
 //! - Swap-out of cold pages writes them to disk.
 //! - Memory-scraping tools (lldb, /proc/<pid>/mem) read them straight off.
@@ -23,19 +39,13 @@
 //! from a daemon-startup master key plus the cache key fields:
 //!
 //! ```text
-//!   entry_key = blake3::keyed_hash(master_key, encode(scope_pid,
-//!                                                     scope_start_time,
+//!   entry_key = blake3::keyed_hash(master_key, encode(wrap,
 //!                                                     provider,
 //!                                                     locator))
 //! ```
 //!
 //! Properties this gives us:
 //!
-//! - **Process-scoped**: a cached entry can only be decrypted with the
-//!   key derived from the *same* `(scope_pid, scope_start_time)` it was
-//!   inserted under. Different parent processes get distinct keys for
-//!   the same secret, so cross-process value reuse is impossible without
-//!   walking the approval chain.
 //! - **Per-entry isolation**: leaking one entry's derived key doesn't
 //!   let an attacker decrypt others. The master key is never written to
 //!   disk; on idle-exit it goes away with the daemon process.
@@ -47,29 +57,39 @@
 //! there too. But it materially raises the bar over a plaintext
 //! `HashMap<String, String>`: it kills coredump / swap leakage and
 //! makes naive memory grepping miss.
+//!
+//! ## Lifetime
+//!
+//! Entries live as long as the daemon. There is intentionally **no
+//! TTL** — the approvals cache (which keys on `(wrap, ppid,
+//! parent_start_time)`) is what controls whether a future ask can
+//! ride a remembered approval, and *it* lives for the daemon's
+//! lifetime. Capping the secret cache shorter than the approvals
+//! cache produced a UX bug: an approved-and-remembered wrap that
+//! went idle for longer than the secret-cache TTL would re-trigger
+//! the provider (and 1Password's biometric prompt) even though the
+//! user thought they'd already approved this. Tying the two
+//! lifetimes together means "I approved this once" really does mean
+//! "no more prompts (biometric or otherwise) for this approval."
+//!
+//! Trade-off: a secret rotated upstream is served from cache until
+//! the daemon restarts. `secreq daemon stop` is the canonical reset.
 
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
 
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use rand::RngCore;
 use zeroize::Zeroizing;
 
-/// How long a cached secret is reused before we re-fetch from the
-/// provider. Pinned shortish so a rotated secret upstream doesn't get
-/// served from cache forever. The approvals cache (which says whether
-/// to even *try* to resolve) has its own lifetime — the parent process's.
-pub const CACHE_TTL: Duration = Duration::from_secs(5 * 60);
-
-/// Identifies a cache slot. Same shape as the approvals cache key plus
-/// the secret identity, so values cached under "Approve all from
-/// Superset" come back when a different Superset descendant asks for
-/// the same `(provider, locator)` pair.
+/// Identifies a cache slot. Keyed on the wrap plus the secret
+/// identity, so any authorized ask for the same `(wrap, provider,
+/// locator)` triple — regardless of which process is asking — reuses
+/// the cached value. See the module docstring for why the asking
+/// process's pid is intentionally absent.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CacheKey {
-    pub scope_pid: u32,
-    pub scope_start_time: u64,
+    pub wrap: String,
     pub provider: String,
     pub locator: String,
 }
@@ -79,9 +99,11 @@ impl CacheKey {
     /// the keyed hash. Length-prefix everything so two distinct key
     /// fields can't smush into a single ambiguous byte string.
     fn to_kdf_bytes(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(4 + 8 + 4 + self.provider.len() + 4 + self.locator.len());
-        buf.extend_from_slice(&self.scope_pid.to_be_bytes());
-        buf.extend_from_slice(&self.scope_start_time.to_be_bytes());
+        let mut buf = Vec::with_capacity(
+            4 + self.wrap.len() + 4 + self.provider.len() + 4 + self.locator.len(),
+        );
+        buf.extend_from_slice(&(self.wrap.len() as u32).to_be_bytes());
+        buf.extend_from_slice(self.wrap.as_bytes());
         buf.extend_from_slice(&(self.provider.len() as u32).to_be_bytes());
         buf.extend_from_slice(self.provider.as_bytes());
         buf.extend_from_slice(&(self.locator.len() as u32).to_be_bytes());
@@ -93,7 +115,6 @@ impl CacheKey {
 struct Entry {
     ciphertext: Vec<u8>,
     nonce: [u8; 12],
-    expires_at: Instant,
 }
 
 pub struct SecretCache {
@@ -134,21 +155,16 @@ impl SecretCache {
                 Entry {
                     ciphertext: ct,
                     nonce: nonce_bytes,
-                    expires_at: Instant::now() + CACHE_TTL,
                 },
             );
         }
     }
 
     /// Look up a cached value, returning the decrypted plaintext if
-    /// present and unexpired. Returns `None` for misses, expired
-    /// entries, or AEAD failures (which shouldn't happen but failing
-    /// closed is safer than panicking).
+    /// present. Returns `None` for misses or AEAD failures (which
+    /// shouldn't happen but failing closed is safer than panicking).
     pub fn get(&self, key: &CacheKey) -> Option<Zeroizing<String>> {
         let entry = self.entries.get(key)?;
-        if Instant::now() >= entry.expires_at {
-            return None;
-        }
         let entry_key = self.derive_key(key);
         let cipher = ChaCha20Poly1305::new(Key::from_slice(&entry_key));
         let nonce = Nonce::from_slice(&entry.nonce);
@@ -158,12 +174,6 @@ impl SecretCache {
         // String::from_utf8 and zeroize the intermediate.
         let utf8 = String::from_utf8(plaintext).ok()?;
         Some(Zeroizing::new(utf8))
-    }
-
-    /// Drop entries past their TTL. Cheap; called opportunistically.
-    pub fn evict_expired(&mut self) {
-        let now = Instant::now();
-        self.entries.retain(|_, e| e.expires_at > now);
     }
 
     pub fn len(&self) -> usize {
@@ -206,10 +216,9 @@ impl std::fmt::Debug for SecretCache {
 mod tests {
     use super::*;
 
-    fn key(scope_pid: u32, scope_start: u64, provider: &str, locator: &str) -> CacheKey {
+    fn key(wrap: &str, provider: &str, locator: &str) -> CacheKey {
         CacheKey {
-            scope_pid,
-            scope_start_time: scope_start,
+            wrap: wrap.to_owned(),
             provider: provider.to_owned(),
             locator: locator.to_owned(),
         }
@@ -218,21 +227,35 @@ mod tests {
     #[test]
     fn put_get_roundtrips_the_value() {
         let mut cache = SecretCache::new();
-        let k = key(7926, 1_000, "op", "Personal/GitHub/token");
+        let k = key("gh", "op", "Personal/GitHub/token");
         cache.put(k.clone(), "ghp_secret_value");
         let got = cache.get(&k).expect("hit");
         assert_eq!(&*got, "ghp_secret_value");
     }
 
     #[test]
-    fn different_scope_does_not_decrypt_to_the_same_value() {
-        // A cache entry under one scope can't be retrieved by another
-        // scope — the derived encryption keys differ.
+    fn different_wrap_does_not_decrypt_to_the_same_value() {
+        // Cache entries are wrap-scoped: two wraps referencing the
+        // same (provider, locator) get distinct slots and distinct
+        // derived keys. Defense-in-depth so one wrap's cached value
+        // never serves a lookup against a different wrap.
         let mut cache = SecretCache::new();
-        cache.put(key(7926, 1_000, "op", "x"), "alpha");
-        // Same provider/locator, different scope: distinct cache slot,
-        // distinct derived key. Miss.
-        assert!(cache.get(&key(7927, 1_000, "op", "x")).is_none());
+        cache.put(key("gh", "op", "x"), "alpha");
+        assert!(cache.get(&key("aws", "op", "x")).is_none());
+    }
+
+    #[test]
+    fn same_wrap_hits_regardless_of_caller_process() {
+        // The whole point of the parent-pid-free key: a value cached
+        // by one ask is retrievable by any future authorized ask for
+        // the same wrap, no matter who's asking.
+        let mut cache = SecretCache::new();
+        let k = key("gh", "op", "Personal/GitHub/token");
+        cache.put(k.clone(), "ghp_secret_value");
+        // A second lookup against an identically-shaped key hits.
+        let k2 = key("gh", "op", "Personal/GitHub/token");
+        let got = cache.get(&k2).expect("hit");
+        assert_eq!(&*got, "ghp_secret_value");
     }
 
     #[test]
@@ -240,7 +263,7 @@ mod tests {
         // The whole point of encrypting at rest in memory: an attacker
         // grepping the process memory for "hunter2" must not find it.
         let mut cache = SecretCache::new();
-        let k = key(7926, 1_000, "op", "passwd");
+        let k = key("gh", "op", "passwd");
         cache.put(k.clone(), "hunter2");
         let entry = cache.entries.get(&k).expect("stored");
         // ciphertext + 16-byte AEAD tag should not contain the
@@ -259,7 +282,7 @@ mod tests {
         // AEAD authentication: a single bit-flip should fail the tag
         // check and return None — not yield wrong plaintext.
         let mut cache = SecretCache::new();
-        let k = key(7926, 1_000, "op", "x");
+        let k = key("gh", "op", "x");
         cache.put(k.clone(), "secret");
         let entry = cache.entries.get_mut(&k).expect("stored");
         entry.ciphertext[0] ^= 0x01;
@@ -267,28 +290,16 @@ mod tests {
     }
 
     #[test]
-    fn expired_entries_are_not_returned() {
+    fn entries_survive_indefinitely_after_put() {
+        // The cache has no TTL — entries must live for the daemon's
+        // lifetime so a remembered approval never silently re-triggers
+        // the provider (and biometric prompt) on the next ask.
         let mut cache = SecretCache::new();
-        let k = key(7926, 1_000, "op", "x");
+        let k = key("gh", "op", "x");
         cache.put(k.clone(), "v");
-        // Backdate the expiry — TTL is 5 minutes and we don't want to
-        // sleep that long in a test.
-        cache.entries.get_mut(&k).unwrap().expires_at = Instant::now() - Duration::from_secs(1);
-        assert!(cache.get(&k).is_none());
-    }
-
-    #[test]
-    fn evict_expired_drops_stale_entries() {
-        let mut cache = SecretCache::new();
-        let live = key(1, 0, "op", "live");
-        let dead = key(2, 0, "op", "dead");
-        cache.put(live.clone(), "v1");
-        cache.put(dead.clone(), "v2");
-        cache.entries.get_mut(&dead).unwrap().expires_at = Instant::now() - Duration::from_secs(1);
-        cache.evict_expired();
-        assert!(cache.get(&live).is_some());
-        assert!(cache.get(&dead).is_none());
-        assert_eq!(cache.len(), 1);
+        // Two get()s back-to-back without any time-travel: both hit.
+        assert_eq!(&*cache.get(&k).expect("hit 1"), "v");
+        assert_eq!(&*cache.get(&k).expect("hit 2"), "v");
     }
 
     #[test]
@@ -301,13 +312,17 @@ mod tests {
 
     #[test]
     fn kdf_encoding_distinguishes_field_boundaries() {
-        // Length-prefixed encoding so e.g. ("op", "/foo") doesn't
-        // collide with ("op/", "foo") at the hash input level. Test by
-        // checking the encoded bytes differ; the derived encryption
-        // key is just blake3 of these bytes, so distinct inputs ⇒
-        // distinct keys ⇒ different ciphertexts.
-        let a = key(1, 0, "op", "/foo").to_kdf_bytes();
-        let b = key(1, 0, "op/", "foo").to_kdf_bytes();
+        // Length-prefixed encoding so e.g. ("gh", "op", "/foo") doesn't
+        // collide with ("gh", "op/", "foo") at the hash input level.
+        // Test by checking the encoded bytes differ; the derived
+        // encryption key is just blake3 of these bytes, so distinct
+        // inputs ⇒ distinct keys ⇒ different ciphertexts.
+        let a = key("gh", "op", "/foo").to_kdf_bytes();
+        let b = key("gh", "op/", "foo").to_kdf_bytes();
         assert_ne!(a, b);
+        // And the wrap/provider boundary, too.
+        let c = key("gh", "op", "x").to_kdf_bytes();
+        let d = key("ghop", "", "x").to_kdf_bytes();
+        assert_ne!(c, d);
     }
 }

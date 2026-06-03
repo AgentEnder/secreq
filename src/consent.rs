@@ -27,20 +27,47 @@ pub enum Decision {
     /// parent skip the prompt for as long as the daemon (and that parent
     /// process) lives.
     ApproveRemember,
+    /// Released without prompting the user — the daemon's approvals
+    /// cache had a matching `(wrap, scope)` entry from a prior
+    /// `ApproveRemember`. The user never saw a window for this ask;
+    /// it's distinguished from `Approve` so the audit log can show
+    /// "the user wasn't asked again" vs. "the user was asked and
+    /// said yes."
+    ApproveCached,
+    /// Released by a matching auto-approve rule from
+    /// [`crate::rules`]. Unlike `ApproveRemember` / `ApproveCached`,
+    /// the authorization is **persisted** — it survives daemon
+    /// restarts via the rules file. Audit rows for this variant
+    /// carry the firing rule's id so the user can trace which rule
+    /// fired.
+    ApproveAuto,
     /// Do not release; the run is aborted.
     Deny,
+    /// Denied by a matching auto-deny rule. The wrap client surfaces
+    /// the rule's configured `deny_message` (if any) to stderr before
+    /// exiting 1.
+    DenyAuto,
 }
 
 impl Decision {
     pub fn approved(self) -> bool {
-        matches!(self, Decision::Approve | Decision::ApproveRemember)
+        matches!(
+            self,
+            Decision::Approve
+                | Decision::ApproveRemember
+                | Decision::ApproveCached
+                | Decision::ApproveAuto
+        )
     }
 
     pub fn as_str(self) -> &'static str {
         match self {
             Decision::Approve => "approve",
             Decision::ApproveRemember => "approve+remember",
+            Decision::ApproveCached => "approve+cached",
+            Decision::ApproveAuto => "approve+auto",
             Decision::Deny => "deny",
+            Decision::DenyAuto => "deny+auto",
         }
     }
 }
@@ -75,13 +102,19 @@ mod tests {
     fn decision_str() {
         assert_eq!(Decision::Approve.as_str(), "approve");
         assert_eq!(Decision::ApproveRemember.as_str(), "approve+remember");
+        assert_eq!(Decision::ApproveCached.as_str(), "approve+cached");
+        assert_eq!(Decision::ApproveAuto.as_str(), "approve+auto");
         assert_eq!(Decision::Deny.as_str(), "deny");
+        assert_eq!(Decision::DenyAuto.as_str(), "deny+auto");
     }
 
     #[test]
     fn decision_approved() {
         assert!(Decision::Approve.approved());
         assert!(Decision::ApproveRemember.approved());
+        assert!(Decision::ApproveCached.approved());
+        assert!(Decision::ApproveAuto.approved());
         assert!(!Decision::Deny.approved());
+        assert!(!Decision::DenyAuto.approved());
     }
 }
