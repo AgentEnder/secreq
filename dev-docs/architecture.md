@@ -77,7 +77,7 @@ src/
 
 A long-running per-user process owns the consent queue, the approvals
 cache, and the GUI. Started on-demand by the first client that finds no
-live socket, exits after 30 minutes of empty queue.
+live socket, exits after 2 hours of empty queue.
 
 ### Why a daemon
 
@@ -138,10 +138,16 @@ timeout.
 
 ### Idle exit
 
-The egui update loop checks `state.last_activity.elapsed()` every ~500ms.
-When the queue has been empty for 30 minutes, it sends
-`ViewportCommand::Close` and the main thread returns from
-`run_native`. The socket file is cleaned up on drop.
+The headless daemon main loop wakes once per second (`MAIN_LOOP_TICK`).
+On each tick, if there's no attached consent window
+(`consent_subscriber_count() == 0`) AND there's been no activity for the
+idle timeout (`last_activity().elapsed() >= 2 hours`), it calls
+`guard.request_shutdown()`. That flips an atomic shutdown flag, which the
+main `while` loop observes and breaks out of, returning from `run`. The
+socket file is cleaned up on drop. An attached consent window suppresses
+the timeout entirely: while one is subscribed, every tick calls
+`touch()` to reset the idle clock, so leaving the window open never
+trips idle-exit.
 
 ### What crosses the daemon socket
 
@@ -266,7 +272,7 @@ exits, every entry is gone.
 `secreq daemon stop` is the supported way to clear the cache — it
 sends a `Shutdown` message over the socket, the daemon exits, and the
 next wrap invocation auto-spawns a fresh one with an empty list. Idle
-exit (30 min of empty queue + no activity) achieves the same thing
+exit (2 hours of empty queue + no activity) achieves the same thing
 without user action.
 
 The cache is **daemon-owned** at runtime. Clients never see it directly;

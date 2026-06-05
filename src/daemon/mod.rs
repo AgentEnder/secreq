@@ -44,12 +44,12 @@ use anyhow::{Context, Result};
 /// continuously suppresses the timeout via the keepalive in the
 /// daemon's main loop, so leaving `secreq view` open for hours
 /// won't trigger an exit.
-const IDLE_EXIT_SECS: u64 = 30 * 60;
+const IDLE_EXIT_SECS: u64 = 2 * 60 * 60;
 
 /// Cadence at which the main loop wakes to (a) check the shutdown
 /// flag, (b) refresh the UI-attached keepalive, (c) evaluate
 /// idle-exit, and (d) evaluate the auto-hide grace for the consent
-/// window. One-second granularity is fine for a 30-minute timeout —
+/// window. One-second granularity is fine for a 2-hour timeout —
 /// finer granularity just burns CPU on a sleeping daemon.
 const MAIN_LOOP_TICK: Duration = Duration::from_secs(1);
 

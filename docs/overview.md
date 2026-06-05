@@ -92,7 +92,7 @@ provenance-aware consent**. Nobody else covers all three.
 - **Not a long-lived secret broker.** There *is* a consent daemon, but it
   only ever gates access — it never persists secret values to disk, and
   the approvals cache lives in its memory only (`secreq daemon stop`
-  clears it; so does walking away for 30 minutes — the daemon idle-exits
+  clears it; so does walking away for 2 hours — the daemon idle-exits
   when nothing's in the queue). Each wrap run still re-fetches values
   from the underlying provider; the daemon coalesces parallel asks so a
   burst of N invocations triggers one biometric, not N.

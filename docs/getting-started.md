@@ -128,7 +128,7 @@ covers.
 ## 5. Things to know
 
 - **The consent daemon stays alive** between invocations. It exits
-  after 30 minutes of empty queue, or when you run `secreq daemon
+  after 2 hours of empty queue, or when you run `secreq daemon
   stop`. Stopping it also clears every "Approve all" you've given (the
   approvals cache is in-memory only).
 - **Pass-through is safe.** If you've blanket-aliased your shim dir

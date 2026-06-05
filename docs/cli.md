@@ -139,8 +139,8 @@ the last 50 lines of existing log, then follows new ones.
 
 `secreq daemon --fg` runs the daemon in the foreground in the current
 process — the historical behavior, and the form a wrap auto-spawns
-(detached) when it finds no live daemon. The daemon exits after 30
-minutes of empty queue. Singleton-per-user is enforced by an
+(detached) when it finds no live daemon. The daemon exits after 2
+hours of empty queue. Singleton-per-user is enforced by an
 fcntl-locked pidfile, so a second foreground daemon exits 0 silently.
 
 `secreq daemon log-path` prints the absolute path of the persistent log
