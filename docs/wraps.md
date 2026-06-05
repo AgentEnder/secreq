@@ -67,9 +67,46 @@ gh: {
 | Setting | Type | Meaning |
 |---|---|---|
 | `$reason` | string | Rationale shown in the consent prompt for context. |
-| `env` | object (required) | Environment variables to inject. Each value is a `secret://provider/locator` reference (full ref only — bare locators aren't supported here, unlike the old manifest model). |
+| `env` | object (optional) | Environment variables to inject. Each value is a `secret://provider/locator` reference (full ref only — bare locators aren't supported here, unlike the old manifest model). Omit (or leave empty) to make a [gate-only wrap](#gate-only-wraps). |
 
-`env` must be non-empty: a wrap with zero env vars has nothing to wrap.
+### Gate-only wraps
+
+A wrap with no `env` is a **gate-only wrap**: invoking the binary still
+requires consent through the daemon, but nothing is resolved or
+injected. Use it to gate a tool that manages its own credentials and has
+no secret for `secreq` to pass — `op` (the 1Password CLI) is the
+canonical case:
+
+```json5
+op: {
+  $reason: "1Password vault access",
+}
+```
+
+Now every `op` invocation (`op read …`, `op item get …`, …) pauses for a
+consent prompt that shows the full command, the working directory, and
+the caller process tree — the "why am I getting this request?" context
+the tool's own prompt usually omits. The consent card displays a
+**"Gate only — no secrets injected"** marker in place of the secret
+rows. Create one non-interactively with:
+
+```sh
+secreq wrap op --reason "1Password vault access"
+```
+
+(`secreq wrap op` with no `--env` and no terminal creates a gate; in an
+interactive terminal it offers a "Gate only (no secrets)" choice.)
+
+Gate-only wraps participate in [auto-rules](./consent-window.md) like any
+other wrap — e.g. auto-approve `op read op://Work/*` while still
+prompting for everything else.
+
+**Wrapping a provider CLI is safe.** If you gate `op` *and* also use it as
+a `secret://op/...` provider for other wraps, secreq won't double-prompt:
+when it resolves a secret it runs the provider with an internal marker
+(`SECREQ_RESOLVING`) that makes the wrapped `op` pass straight through.
+Only the `op` calls *you* (or your tools) make are gated; the ones secreq
+makes to fetch values for another wrap are not.
 
 There is **no TTL setting**. Cache lifetime is bounded by the lifetime
 of your parent process *and* the daemon process (see "How approval is

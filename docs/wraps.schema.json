@@ -131,7 +131,7 @@
     },
     "Wrap": {
       "additionalProperties": false,
-      "description": "One per-binary wrap. `env` is required; everything else is metadata.",
+      "description": "One per-binary wrap. `env` is optional: a wrap with no env entries is *gate-only* — consent is required before the binary runs, but nothing is injected (used to gate tools like `op` that have no secret to pass). Everything else is metadata.",
       "properties": {
         "$description": {
           "description": "Optional free-form description (currently unused at runtime; kept for parity with future tooling).",
@@ -147,14 +147,10 @@
             "pattern": "^secret://[^/]+/.+$",
             "type": "string"
           },
-          "description": "Environment variables to inject. Each value is a `secret://provider/locator` reference; resolution happens at invocation time.",
-          "minProperties": 1,
+          "description": "Environment variables to inject. Each value is a `secret://provider/locator` reference; resolution happens at invocation time. Omit (or leave empty) for a gate-only wrap.",
           "type": "object"
         }
       },
-      "required": [
-        "env"
-      ],
       "type": "object"
     }
   },

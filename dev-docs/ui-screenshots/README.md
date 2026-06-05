@@ -38,6 +38,7 @@ serialised across fixtures.
 | `18-rules-tab-suggestions-by-recency.png` | `rules_tab_suggestions_by_recency` | Suggestions section with the sort toggle flipped to `Recent`. Two clusters where count and recency disagree (5× `gh` ~5 days ago vs. 3× `aws` today): the fresher lower-count cluster is promoted to the top, demonstrating the toggle's alternate state. |
 | `19-rules-tab-by-recency.png` | `rules_tab_by_recency` | Rules list with the row sort toggle flipped to `Recent`. Two rules where count and recency disagree (12 auto-fires ~5 days ago vs. 2 auto-fires today): the recently-fired lower-count rule is promoted above the high-count one. |
 | `20-rules-tab-rules-and-suggestions.png` | `rules_tab_rules_and_suggestions` | Both sections at once: the configured "Your rules" list (with usage footnotes + sort toggle) on top, the "Suggested rules" section beneath it. Documents the ordering (saved rules first, proposals second) and that both sections carry a header. |
+| `21-gate-only-pending.png` | `gate_only_pending` | A gate-only wrap (`op`, no secrets to inject) in the Pending tab. The card headlines the command (`op read op://…` — the "why am I getting this?" context) and renders the muted "Gate only — no secrets injected" marker in place of the secret rows. |
 
 ## How a fixture is shaped
 

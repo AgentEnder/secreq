@@ -66,6 +66,7 @@ src/
 │ 6. if denied → exit 1                                                     │
 │ 7. resolve env: for each entry, retrieve via provider                     │
 │      auto-batches when ≥2 entries share a batch-capable provider          │
+│      (no-op for a gate-only wrap — empty env, nothing to resolve)         │
 │ 8. find real binary: scan PATH skipping shim_dir (avoid recursion)       │
 │ 9. exec::run with the real binary, args, env overrides, secrets list     │
 │       PTY (interactive) or piped; output masked unless --raw              │
@@ -226,6 +227,24 @@ Without this, our shim recurses: `secreq gh` finds `<shim_dir>/gh`, execs
 it, which calls `secreq gh` again. The `skip` argument is mandatory; the
 test `wrap_run_injects_env_and_masks_output…` exercises this.
 
+### Resolution doesn't re-gate a wrapped provider CLI
+
+If a binary is both **wrapped** *and* used as a `secret://` provider — the
+canonical case is `op`, gated as a [gate-only wrap](#wraps-config) yet
+named in `secret://op/...` references — then resolving another wrap's
+secret would PATH-resolve `op` to our shim and pop a *second* consent
+prompt (and, under `--yes`, hang on a prompt the caller never asked for).
+
+`provider::{retrieve, retrieve_batch, store}` set `SECREQ_RESOLVING=1`
+(`crate::RESOLVING_ENV`) on every subprocess they spawn. `wrap_run`
+checks for it up front and passes straight through to the real binary —
+no consent, no injection. The marker is scoped to secreq's own
+resolution subprocess, so a wrapped *script* that calls `op` itself still
+gates normally; only the internal `op read` secreq fires is skipped. It's
+not a security boundary (any same-user process could set it, same model
+as `SECREQ_NO_DAEMON`), just a recursion guard. Exercised by
+`resolving_env_bypasses_the_gate_for_a_wrapped_provider`.
+
 ### Fail-closed at every boundary
 
 | Boundary | Failure mode |
@@ -319,6 +338,15 @@ because the on-disk shape has *dynamic keys*: arbitrary binary names + a
 reserved `providers` key + `$`-prefixed metadata. A fixed `Deserialize`
 target can't express "any key except these"; walking a `Value` and
 validating field-by-field can, with much better error messages.
+
+A `Wrap` with an empty `env` is a **gate-only wrap**: it routes the
+binary through the consent daemon but injects nothing. The whole pipeline
+above degrades to a no-op at the resolution steps (empty secrets list →
+no provider invocation, no masking), so gate-only support lives entirely
+at the input edges — the parser accepts empty `env`, the schema drops its
+`required`/`minProperties` constraints, and the consent card renders a
+"Gate only" marker instead of secret rows. `op` (1Password CLI) is the
+motivating case: no secret to pass, but you still want a consent gate.
 
 ### Built-in providers
 

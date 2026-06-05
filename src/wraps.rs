@@ -72,6 +72,10 @@ pub struct Wrap {
     /// is a `secret://provider/locator` reference string; resolution is
     /// deferred to run-time (so an unreachable provider doesn't break
     /// config loading).
+    ///
+    /// **Empty means gate-only:** a wrap with no env entries still routes
+    /// the binary through the consent daemon, but injects nothing. Used to
+    /// gate tools (e.g. `op`) that have no secret to pass.
     pub env: BTreeMap<String, String>,
 }
 
@@ -189,9 +193,10 @@ fn parse_wrap(name: &str, value: &Value, source: &str) -> Result<Wrap> {
         }
     }
 
-    if wrap.env.is_empty() {
-        bail!("{source}: wrap `{name}` declares no env vars");
-    }
+    // An empty `env` is legal: a wrap with no secrets is a *gate-only*
+    // wrap — consent is still required before the binary runs, but
+    // nothing is injected. This is how you gate a tool like `op` that has
+    // no secret to pass through.
     Ok(wrap)
 }
 
@@ -306,9 +311,25 @@ mod tests {
     }
 
     #[test]
-    fn rejects_empty_env() {
-        let err = WrapsConfig::parse(r#"{ gh: { env: {} } }"#, "t").unwrap_err();
-        assert!(err.to_string().contains("declares no env vars"));
+    fn parses_a_gate_only_wrap_with_no_env() {
+        // A wrap with no `env` key is a *gate-only* wrap: consent is
+        // required but nothing is injected. This is how you gate a tool
+        // like `op` that has no secret to pass.
+        let c =
+            WrapsConfig::parse(r#"{ op: { $reason: "1Password vault access" } }"#, "t").unwrap();
+        let w = c.wrap("op").unwrap();
+        assert_eq!(w.name, "op");
+        assert_eq!(w.reason.as_deref(), Some("1Password vault access"));
+        assert!(w.env.is_empty(), "gate-only wrap has no env");
+    }
+
+    #[test]
+    fn parses_a_gate_only_wrap_with_empty_env() {
+        // An explicit `env: {}` means the same thing as omitting `env`.
+        let c = WrapsConfig::parse(r#"{ op: { env: {} } }"#, "t").unwrap();
+        let w = c.wrap("op").unwrap();
+        assert!(w.env.is_empty());
+        assert_eq!(w.reason, None);
     }
 
     #[test]

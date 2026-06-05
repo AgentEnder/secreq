@@ -171,8 +171,7 @@ fn rule_match_schema() -> Value {
 fn wrap_schema() -> Value {
     json!({
         "type": "object",
-        "description": "One per-binary wrap. `env` is required; everything else is metadata.",
-        "required": ["env"],
+        "description": "One per-binary wrap. `env` is optional: a wrap with no env entries is *gate-only* — consent is required before the binary runs, but nothing is injected (used to gate tools like `op` that have no secret to pass). Everything else is metadata.",
         "properties": {
             "$reason": {
                 "type": "string",
@@ -184,13 +183,12 @@ fn wrap_schema() -> Value {
             },
             "env": {
                 "type": "object",
-                "description": "Environment variables to inject. Each value is a `secret://provider/locator` reference; resolution happens at invocation time.",
+                "description": "Environment variables to inject. Each value is a `secret://provider/locator` reference; resolution happens at invocation time. Omit (or leave empty) for a gate-only wrap.",
                 "additionalProperties": {
                     "type": "string",
                     "pattern": "^secret://[^/]+/.+$",
                     "description": "A `secret://provider/locator` reference."
-                },
-                "minProperties": 1
+                }
             }
         },
         "additionalProperties": false

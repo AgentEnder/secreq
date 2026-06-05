@@ -3285,12 +3285,15 @@ fn render_wrap_card_body(
     let (text, color) = format_audit_line(&summary, now_unix());
     ui.label(egui::RichText::new(text).size(11.0).italics().color(color));
 
-    // ── Secret list ──
+    // ── Secret list (or the gate-only marker when there's nothing to
+    // inject — the prompt is purely a consent gate, e.g. for `op`) ──
     if !row.representative.secrets.is_empty() {
         ui.add_space(6.0);
         for s in &row.representative.secrets {
             render_card_secret(ui, s);
         }
+    } else {
+        render_card_gate_only(ui);
     }
 
     // ── cwd line ──
@@ -3353,6 +3356,24 @@ fn render_card_secret(ui: &mut egui::Ui, s: &SecretAsk) {
             );
         });
     }
+}
+
+/// Marker shown in place of the secret list for a *gate-only* wrap — one
+/// with no secrets to inject. The request is a pure consent gate (e.g.
+/// `op`), so we say so explicitly rather than render an empty gap the
+/// user might read as "secrets failed to load".
+fn render_card_gate_only(ui: &mut egui::Ui) {
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.add_space(2.0);
+        ui.label(egui::RichText::new("●").size(7.0).color(COLOR_MUTED));
+        ui.label(
+            egui::RichText::new("Gate only — no secrets injected")
+                .size(11.5)
+                .italics()
+                .color(COLOR_MUTED),
+        );
+    });
 }
 
 /// One-line summary derived from `audit.log` history for this wrap +

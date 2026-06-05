@@ -355,6 +355,25 @@ fn single_pending() {
 
 #[test]
 #[ignore = "screenshot harness"]
+fn gate_only_pending() {
+    // A *gate-only* wrap: `op` has no secret to inject, so the request
+    // exists purely to require consent before the command runs. The card
+    // shows the command + caller chain (the "why am I getting this?"
+    // context) and the "Gate only — no secrets injected" marker in place
+    // of the secret list.
+    render_fixture("21-gate-only-pending", vec![], |state| {
+        vec![submit(
+            state,
+            "op",
+            vec!["op", "read", "op://Personal/AWS/credential"],
+            vec![caller(7926, "zsh", 1_700_000_000)],
+            vec![],
+        )]
+    });
+}
+
+#[test]
+#[ignore = "screenshot harness"]
 fn nested_tree() {
     // Two child shells under one Superset.app root — the load-bearing
     // case for the "Approve all from Superset" decision.

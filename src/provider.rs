@@ -54,13 +54,20 @@ pub fn retrieve(provider: &Provider, locator: &str) -> Result<RetrieveOutcome> {
         .split_first()
         .context("provider retrieve template is empty")?;
 
-    let output = Command::new(program).args(args).output().map_err(|e| {
-        anyhow::anyhow!(
-            "provider `{}`: failed to run `{}`: {e} (is it installed and on PATH?)",
-            provider.name,
-            program
-        )
-    })?;
+    let output = Command::new(program)
+        .args(args)
+        // Mark this as an internal secreq resolution so a wrapped provider
+        // CLI (e.g. `op`) passes through instead of re-gating. See
+        // `crate::RESOLVING_ENV`.
+        .env(crate::RESOLVING_ENV, "1")
+        .output()
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "provider `{}`: failed to run `{}`: {e} (is it installed and on PATH?)",
+                provider.name,
+                program
+            )
+        })?;
 
     if output.status.success() {
         let value = strip_one_trailing_newline(output.stdout);
@@ -141,7 +148,9 @@ pub fn retrieve_batch(
     cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        // Internal resolution marker — see `crate::RESOLVING_ENV`.
+        .env(crate::RESOLVING_ENV, "1");
     // Layer synthetic env on top of the inherited environment.
     for (name, locator) in requests {
         let val = cap.env_value_template.replace("{locator}", locator);
@@ -240,6 +249,8 @@ pub fn store(
 
     let mut cmd = Command::new(program);
     cmd.args(args);
+    // Internal resolution marker — see `crate::RESOLVING_ENV`.
+    cmd.env(crate::RESOLVING_ENV, "1");
     if cap.value_mode == ValueMode::Stdin {
         cmd.stdin(Stdio::piped());
     } else {
@@ -406,6 +417,18 @@ mod tests {
         let p = retrieve_only_provider(&["printf", "%s", "{locator}"]);
         match retrieve(&p, "s3cr3t").unwrap() {
             RetrieveOutcome::Found(v) => assert_eq!(v.expose(), "s3cr3t"),
+            RetrieveOutcome::NotFound { .. } => panic!("expected Found"),
+        }
+    }
+
+    #[test]
+    fn retrieve_sets_the_recursion_guard_env_on_the_child() {
+        // The provider subprocess must run with SECREQ_RESOLVING set so a
+        // wrapped provider CLI (e.g. `op`) passes through instead of
+        // re-gating. We prove it by having the "provider" echo the var.
+        let p = retrieve_only_provider(&["sh", "-c", "printf %s \"$SECREQ_RESOLVING\""]);
+        match retrieve(&p, "ignored").unwrap() {
+            RetrieveOutcome::Found(v) => assert_eq!(v.expose(), "1"),
             RetrieveOutcome::NotFound { .. } => panic!("expected Found"),
         }
     }

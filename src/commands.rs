@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
-use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
+use std::io::{IsTerminal as _, Read as _, Seek as _, SeekFrom, Write as _};
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -53,6 +53,18 @@ pub fn wrap_run(
     config_path: Option<&Path>,
 ) -> Result<i32> {
     let config = load_config_or_default(config_path)?;
+
+    // Recursion guard: if we're already inside secreq's own secret
+    // resolution (the daemon — or a `--yes` run — is invoking a provider's
+    // retrieve command, and that provider's CLI happens to be wrapped),
+    // don't gate. Without this, resolving a `secret://op/...` reference for
+    // one wrap would PATH-resolve `op` to our shim and pop a *second*
+    // consent prompt for `op`. We pass straight through to the real binary.
+    // See `crate::RESOLVING_ENV`.
+    if std::env::var_os(crate::RESOLVING_ENV).is_some() {
+        return passthrough_unwrapped(binary, args, config.shim_dir.as_deref());
+    }
+
     let Some(wrap) = config.wraps.get(binary).cloned() else {
         return passthrough_unwrapped(binary, args, config.shim_dir.as_deref());
     };
@@ -304,25 +316,32 @@ pub fn wrap(args: WrapArgs, config_path: Option<&Path>) -> Result<i32> {
         .clone()
         .context("no $shim_dir configured; run `secreq init` first")?;
 
-    // Interactive flow gets a banner; non-interactive (all flags supplied)
-    // stays quiet so it composes cleanly with scripts.
-    let interactive = args.envs.is_empty();
+    // Interactive flow gets a banner; non-interactive (flags supplied, or
+    // no terminal to prompt on) stays quiet so it composes cleanly with
+    // scripts.
+    let interactive = args.envs.is_empty() && std::io::stdin().is_terminal();
     if interactive {
         cliclack::intro(format!("Wrap `{}`", args.binary))?;
     }
 
-    // Build the env map.
-    let env: BTreeMap<String, String> = if interactive {
-        prompt::interactive_wrap_envs(&config.providers)?
-    } else {
+    // Build the env map. Three paths:
+    //  - `--env` flags supplied → parse them (non-interactive).
+    //  - interactive terminal   → ask gate-only vs inject-secrets.
+    //  - no flags, no terminal  → gate-only. There's nothing to inject and
+    //    nothing to prompt on, so absence of `--env` means "just gate it".
+    // An empty env map is a *gate-only* wrap: consent is still required,
+    // but nothing is resolved or injected. Used to gate tools like `op`.
+    let env: BTreeMap<String, String> = if !args.envs.is_empty() {
         parse_env_assignments(&args.envs)?
+    } else if interactive {
+        if prompt::wrap_is_gate_only()? {
+            BTreeMap::new()
+        } else {
+            prompt::interactive_wrap_envs(&config.providers)?
+        }
+    } else {
+        BTreeMap::new()
     };
-    if env.is_empty() {
-        bail!(
-            "wrap `{}` would have no env vars; nothing to do",
-            args.binary
-        );
-    }
 
     let reason = args.reason.or_else(|| {
         if interactive {
@@ -346,15 +365,22 @@ pub fn wrap(args: WrapArgs, config_path: Option<&Path>) -> Result<i32> {
     // Drop the shim.
     let shim_path = shim::install(&shim_dir, &args.binary)?;
 
+    // `config.wraps[binary]` is the wrap we just inserted; an empty env
+    // means we created a gate-only wrap.
+    let kind = if config.wraps[&args.binary].env.is_empty() {
+        " (gate-only — consent required, nothing injected)"
+    } else {
+        ""
+    };
     let summary = format!(
         "config: {}\n  shim: {}",
         config_path.display(),
         shim_path.display()
     );
     if interactive {
-        cliclack::outro(format!("Wrapped `{}`.\n  {summary}", args.binary))?;
+        cliclack::outro(format!("Wrapped `{}`{kind}.\n  {summary}", args.binary))?;
     } else {
-        println!("Wrapped `{}`.\n  {summary}", args.binary);
+        println!("Wrapped `{}`{kind}.\n  {summary}", args.binary);
     }
 
     if !path_setup::path_includes(&shim_dir) {
@@ -683,8 +709,7 @@ fn open_log_with_retry(path: &Path) -> Result<File> {
             Ok(file) => return Ok(file),
             Err(_) if Instant::now() < deadline => sleep(Duration::from_millis(50)),
             Err(err) => {
-                return Err(err)
-                    .with_context(|| format!("open daemon log {}", path.display()));
+                return Err(err).with_context(|| format!("open daemon log {}", path.display()));
             }
         }
     }
@@ -1243,6 +1268,27 @@ mod prompt {
             .initial_value(true)
             .interact()
             .context("interactive confirm failed (need a real terminal)")
+    }
+
+    /// Ask whether this wrap should inject secrets or just gate the
+    /// command. A gate-only wrap (no env) still routes the binary through
+    /// the consent daemon but injects nothing — the model for tools like
+    /// `op` that have no secret to pass.
+    pub(super) fn wrap_is_gate_only() -> Result<bool> {
+        let choice: String = cliclack::select("What should this wrap do?")
+            .item(
+                "secrets".to_owned(),
+                "Inject secrets",
+                "resolve secret:// references into env vars",
+            )
+            .item(
+                "gate".to_owned(),
+                "Gate only (no secrets)",
+                "just require consent before the command runs",
+            )
+            .interact()
+            .context("interactive selection failed")?;
+        Ok(choice == "gate")
     }
 
     /// Drive the interactive `secreq wrap` env-collection loop: pick a

@@ -293,6 +293,141 @@ fn wrap_records_config_and_drops_shim() {
 }
 
 #[test]
+fn wrap_with_no_env_creates_a_gate_only_wrap() {
+    // `secreq wrap op` with no `--env` and no terminal (the test harness
+    // has no TTY) creates a gate-only wrap: consent is required, nothing
+    // is injected. This is how you gate a tool like `op`.
+    let (dir, config) = sandbox();
+    let shim_dir = dir.path().join("shims");
+    fs::create_dir_all(&shim_dir).unwrap();
+    write_config(
+        &config,
+        &format!(r#"{{ $shim_dir: "{}" }}"#, shim_dir.display()),
+    );
+
+    let out = run_secreq(
+        dir.path(),
+        &["wrap", "--reason", "1Password vault access", "op"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("gate-only"), "got: {stdout}");
+
+    // Config has the wrap with an empty env (gate-only) and the reason.
+    let body = fs::read_to_string(&config).unwrap();
+    assert!(body.contains(r#""op""#));
+    assert!(body.contains("1Password vault access"));
+    // No secret references made it in.
+    assert!(!body.contains("secret://"), "got: {body}");
+
+    // The config round-trips and `check` is happy with a gate-only wrap.
+    let check = run_secreq(dir.path(), &["check"]);
+    assert!(
+        check.status.success(),
+        "check stderr: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    // Shim exists with our sentinel.
+    let shim = shim_dir.join("op");
+    assert!(shim.is_file());
+    let shim_body = fs::read_to_string(&shim).unwrap();
+    assert!(shim_body.contains("exec secreq op"));
+}
+
+#[test]
+fn gate_only_wrap_denies_without_terminal_or_yes() {
+    // Running a gated `op` with no consent path available (SECREQ_NO_DAEMON
+    // + no --yes) must fail closed: exit 1, and `op` itself must not run.
+    let (dir, config) = sandbox();
+    let bin_dir = dir.path().join("realbin");
+    let shim_dir = dir.path().join("shims");
+    fs::create_dir_all(&bin_dir).unwrap();
+    // A fake `op` that announces itself if it ever runs.
+    let op_path = bin_dir.join("op");
+    fs::write(&op_path, "#!/bin/sh\necho \"op-ran args=$*\"\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(&op_path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&op_path, perms).unwrap();
+
+    write_config(
+        &config,
+        &format!(
+            r#"{{ $shim_dir: "{}", op: {{ $reason: "1Password vault access" }} }}"#,
+            shim_dir.display()
+        ),
+    );
+    let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
+
+    let out = Command::new(bin())
+        .args(["op", "read", "op://Personal/AWS/credential"])
+        .env("XDG_CONFIG_HOME", dir.path().join("config"))
+        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("PATH", &path)
+        .env("SECREQ_NO_DAEMON", "1")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!stdout.contains("op-ran"), "op must not have run: {stdout}");
+}
+
+#[test]
+fn resolving_env_bypasses_the_gate_for_a_wrapped_provider() {
+    // When secreq resolves a `secret://op/...` ref it spawns the provider
+    // CLI with SECREQ_RESOLVING=1. If `op` is itself wrapped, that
+    // invocation must pass through — NOT pop a consent prompt. We simulate
+    // the inner call: set SECREQ_RESOLVING and run the gated `op`. Even with
+    // no consent path (SECREQ_NO_DAEMON, no --yes), it should run the real
+    // `op` and exit 0.
+    let (dir, config) = sandbox();
+    let bin_dir = dir.path().join("realbin");
+    let shim_dir = dir.path().join("shims");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let op_path = bin_dir.join("op");
+    fs::write(&op_path, "#!/bin/sh\necho \"op-ran args=$*\"\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(&op_path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&op_path, perms).unwrap();
+
+    write_config(
+        &config,
+        &format!(
+            r#"{{ $shim_dir: "{}", op: {{ $reason: "1Password vault access" }} }}"#,
+            shim_dir.display()
+        ),
+    );
+    let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
+
+    let out = Command::new(bin())
+        .args(["op", "read", "op://Personal/AWS/credential"])
+        .env("XDG_CONFIG_HOME", dir.path().join("config"))
+        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("PATH", &path)
+        .env("SECREQ_NO_DAEMON", "1")
+        // The marker secreq sets on a provider's retrieve subprocess.
+        .env("SECREQ_RESOLVING", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "expected pass-through exit 0; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("op-ran args=read op://Personal/AWS/credential"),
+        "op should have run with forwarded args; got: {stdout}"
+    );
+}
+
+#[test]
 fn unwrap_removes_config_and_shim() {
     let (dir, config) = sandbox();
     let shim_dir = dir.path().join("shims");
@@ -523,8 +658,5 @@ fn daemon_log_path_prints_state_dir_path_without_spawning() {
         "log-path should print <XDG_STATE_HOME>/secreq/daemon.log"
     );
     // It must not have created the file or a daemon socket — pure print.
-    assert!(
-        !expected.exists(),
-        "log-path must not create the log file"
-    );
+    assert!(!expected.exists(), "log-path must not create the log file");
 }
