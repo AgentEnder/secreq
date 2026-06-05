@@ -276,6 +276,19 @@ pub struct WireSnapshot {
     pub rules: Vec<Rule>,
 }
 
+/// Lifecycle state of a row the consent window renders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum RowStatus {
+    /// Queued and awaiting a user decision — Approve/Deny buttons shown.
+    #[default]
+    Awaiting,
+    /// Already authorized (manual approve, approvals-cache hit, or
+    /// auto-rule), with a provider call (and possibly a biometric
+    /// prompt) in flight on a cold cache. Rendered as a read-only
+    /// "Resolving…" card so the prompt keeps its provenance on screen.
+    Resolving,
+}
+
 /// Wire-form `QueueRow`. `first_seen_secs_ago` is daemon-local elapsed
 /// seconds since the entry was queued; the child uses it as a fixed
 /// offset for "N s ago" labels (re-elapsed against its own clock).
@@ -285,4 +298,9 @@ pub struct WireQueueRow {
     pub representative: Ask,
     pub waiter_count: usize,
     pub first_seen_secs_ago: u64,
+    /// Awaiting (queued) vs Resolving (approved, value in flight).
+    /// `#[serde(default)]` so an older child decoding a newer daemon's
+    /// snapshot treats unknown rows as the common Awaiting case.
+    #[serde(default)]
+    pub status: RowStatus,
 }

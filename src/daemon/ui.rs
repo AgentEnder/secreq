@@ -43,7 +43,7 @@ use crate::consent::Decision;
 use crate::recommendations::{self, Suggestion, SuggestionDecision, SuggestionSort};
 use crate::rules::{Pattern, Rule, RuleDecision, RuleMatch};
 
-use super::proto::{Caller, DedupeKey, SecretAsk};
+use super::proto::{Caller, DedupeKey, RowStatus, SecretAsk};
 use super::state::{ApprovalScope, QueueRow, QueueSnapshot, SharedState};
 
 /// How often the UI re-reads the audit log to refresh the per-wrap history
@@ -156,6 +156,11 @@ pub struct PendingAction {
     pub scope: ApprovalScope,
 }
 
+/// How long the "a new ask just arrived" highlight takes to fade from
+/// peak back to rest. Long enough to catch the eye after the badge
+/// count ticks up, short enough not to linger while the user triages.
+const PENDING_PULSE_SECS: f32 = 1.1;
+
 /// State that lives across the lifetime of one consent-window
 /// **session** (open → close), and persists into the next session.
 /// The consent-window child process owns one of these; the
@@ -202,6 +207,17 @@ pub struct ConsentWindowState {
     /// keypress's effect across the render boundary because focus
     /// only takes hold during the actual widget pass.
     audit_search_focus_pending: bool,
+    /// Pending-queue dedupe keys observed on the previous frame. `None`
+    /// until the first observation so a freshly-opened window — which
+    /// already lands on Pending showing the initial asks — doesn't fire
+    /// the new-ask highlight on its very first frame. Diffed every frame
+    /// by [`observe_pending`] to spot genuinely-new asks.
+    seen_pending: Option<HashSet<DedupeKey>>,
+    /// Intensity (0.0 = rest, 1.0 = peak) of the "a new ask arrived"
+    /// highlight on the title-bar count badge and the Pending tab. Set
+    /// to 1.0 when a new ask lands while the window is focused; wound
+    /// back to 0 over [`PENDING_PULSE_SECS`] by the child's frame loop.
+    pending_pulse: f32,
 }
 
 impl ConsentWindowState {
@@ -217,7 +233,65 @@ impl ConsentWindowState {
             rule_sort: RuleSort::default(),
             audit_search: String::new(),
             audit_search_focus_pending: false,
+            seen_pending: None,
+            pending_pulse: 0.0,
         }
+    }
+
+    /// Reconcile the live pending queue against what we saw last frame
+    /// and react to genuinely-new asks. Called once per frame, before
+    /// the chrome is painted.
+    ///
+    /// - **Focused** — the user is looking at the window — flash the
+    ///   count badge and the Pending tab instead of yanking them off
+    ///   whatever tab they're on. Draws the eye without stealing context.
+    /// - **Unfocused** — the window is backgrounded (or about to be
+    ///   raised for this ask) — pin the active tab to Pending so the
+    ///   surface they see when it comes forward is the fresh request,
+    ///   not a stale Rules/Audit view.
+    ///
+    /// The first observation never fires: a freshly-spawned window is
+    /// already on Pending, so its initial asks aren't "new".
+    pub fn observe_pending(&mut self, snapshot: &QueueSnapshot, focused: bool) {
+        let current: HashSet<DedupeKey> = snapshot.entries.iter().map(|r| r.key.clone()).collect();
+        self.react_to_pending(current, focused);
+    }
+
+    /// Core of [`observe_pending`], split out so the new-ask reaction can
+    /// be unit-tested without constructing a full [`QueueSnapshot`].
+    fn react_to_pending(&mut self, current: HashSet<DedupeKey>, focused: bool) {
+        let has_new = match &self.seen_pending {
+            None => false,
+            Some(prev) => current.iter().any(|k| !prev.contains(k)),
+        };
+        self.seen_pending = Some(current);
+        if !has_new {
+            return;
+        }
+        if focused {
+            self.pending_pulse = 1.0;
+        } else {
+            self.current_tab = Tab::Pending;
+        }
+    }
+
+    /// Advance the new-ask highlight toward rest by `dt` seconds. Returns
+    /// `true` while the flash is still animating (so the caller keeps
+    /// requesting repaints) and `false` once it has settled.
+    pub fn decay_pending_pulse(&mut self, dt: f32) -> bool {
+        if self.pending_pulse <= 0.0 {
+            return false;
+        }
+        self.pending_pulse = (self.pending_pulse - dt / PENDING_PULSE_SECS).max(0.0);
+        self.pending_pulse > 0.0
+    }
+
+    /// Pin the new-ask highlight intensity directly. Used by the
+    /// screenshot harness to capture the peak-flash visual
+    /// deterministically; production drives this through
+    /// [`observe_pending`] + [`decay_pending_pulse`].
+    pub fn set_pending_pulse(&mut self, intensity: f32) {
+        self.pending_pulse = intensity.clamp(0.0, 1.0);
     }
 
     /// Switch to the Rules tab in list mode. Clears any open form so
@@ -738,6 +812,13 @@ pub fn render_consent_panel(
     }
     window_state.last_viewer_mode = viewer_mode;
 
+    // React to a newly-arrived ask: flash the badge + Pending tab when
+    // focused (don't yank the user's tab), or pin the active tab to
+    // Pending when backgrounded so the raised window opens on the fresh
+    // request. The decay back to rest happens in the child's frame loop.
+    let focused = ctx.input(|i| i.focused);
+    window_state.observe_pending(snapshot, focused);
+
     window_state.audit.refresh_if_stale();
     let tree = build_tree(snapshot);
 
@@ -776,8 +857,9 @@ pub fn render_consent_panel(
         top: WINDOW_INSET_Y,
         bottom: WINDOW_INSET_Y,
     };
-    paint_title_bar(ui, &tree, viewer_mode);
+    paint_title_bar(ui, &tree, viewer_mode, window_state.pending_pulse);
     let audit_len = window_state.audit.entries.len();
+    let pending_pulse = window_state.pending_pulse;
     egui::Frame::NONE.inner_margin(body_inset).show(ui, |ui| {
         render_tab_bar(
             ui,
@@ -785,6 +867,7 @@ pub fn render_consent_panel(
             &tree,
             audit_len,
             rules.len(),
+            pending_pulse,
         );
         ui.add_space(14.0);
         match window_state.current_tab {
@@ -1006,12 +1089,33 @@ fn collect_subtree_actions(
 ) {
     let scope = tree.nodes[node_idx].scope();
     walk_subtree(tree, node_idx, |row| {
+        // Resolving rows are already authorized — a decision on them is
+        // a no-op in `State::resolve` (the key isn't in the queue), but
+        // skip them so a mixed "Approve all" only touches awaiting rows.
+        if row.status == RowStatus::Resolving {
+            return;
+        }
         out.push(PendingAction {
             key: row.key.clone(),
             decision,
             scope,
         });
     });
+}
+
+/// True if a node's subtree contains rows and *all* of them are
+/// resolving — used to drop the node-level Approve/Deny buttons, which
+/// would otherwise offer a decision on something already authorized.
+fn subtree_all_resolving(tree: &ProcessTree, node_idx: usize) -> bool {
+    let mut any = false;
+    let mut all = true;
+    walk_subtree(tree, node_idx, |row| {
+        any = true;
+        if row.status != RowStatus::Resolving {
+            all = false;
+        }
+    });
+    any && all
 }
 
 fn walk_subtree<F: FnMut(&QueueRow)>(tree: &ProcessTree, node_idx: usize, mut f: F) {
@@ -1049,7 +1153,7 @@ fn count_leaf_rows(tree: &ProcessTree, node_idx: usize) -> usize {
 /// - Right-aligned count badge — a rounded `COLOR_ACCENT_SOFT` pill
 ///   with a small accent dot + plain-English count. Hidden when the
 ///   queue is empty so the chrome reads calm in the no-news state.
-fn paint_title_bar(ui: &mut egui::Ui, tree: &ProcessTree, viewer_mode: bool) {
+fn paint_title_bar(ui: &mut egui::Ui, tree: &ProcessTree, viewer_mode: bool, pulse: f32) {
     let pending = tree.total_leaf_rows();
     let process_count = tree.roots.len();
 
@@ -1113,7 +1217,7 @@ fn paint_title_bar(ui: &mut egui::Ui, tree: &ProcessTree, viewer_mode: bool) {
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if pending > 0 {
-                    paint_count_badge(ui, pending, process_count);
+                    paint_count_badge(ui, pending, process_count, pulse);
                 }
             });
         },
@@ -1184,26 +1288,42 @@ fn paint_search_glyph(ui: &mut egui::Ui, color: egui::Color32) {
     painter.line_segment([handle_start, handle_end], stroke);
 }
 
-fn paint_count_badge(ui: &mut egui::Ui, pending: usize, process_count: usize) {
+/// Linear interpolate between two colours, component-wise on the
+/// straight (un-premultiplied) channels. `t` is clamped to `0..=1`, and
+/// `t == 0` returns `a` byte-for-byte — which is what keeps the resting
+/// (`pulse == 0`) chrome pixel-identical to before the highlight existed.
+fn lerp_color(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    egui::Color32::from_rgba_unmultiplied(
+        mix(a.r(), b.r()),
+        mix(a.g(), b.g()),
+        mix(a.b(), b.b()),
+        mix(a.a(), b.a()),
+    )
+}
+
+/// `pulse` (0.0 = rest, 1.0 = peak) flashes the badge when a new ask just
+/// arrived: the soft pill fills to solid accent with near-white text, then
+/// the child's frame loop decays it back to rest.
+fn paint_count_badge(ui: &mut egui::Ui, pending: usize, process_count: usize, pulse: f32) {
     let label = if process_count > 1 {
         format!("{pending} pending · {process_count} apps")
     } else {
         format!("{pending} pending")
     };
+    let fill = lerp_color(COLOR_ACCENT_SOFT, COLOR_ACCENT, pulse);
+    let stroke = lerp_color(COLOR_ACCENT, COLOR_TEXT, pulse * 0.5);
+    let text = lerp_color(COLOR_ACCENT, COLOR_TEXT, pulse);
     egui::Frame::new()
-        .fill(COLOR_ACCENT_SOFT)
+        .fill(fill)
         .corner_radius(egui::CornerRadius::same(10))
         .inner_margin(egui::Margin::symmetric(10, 5))
-        .stroke(egui::Stroke::new(1.0, COLOR_ACCENT))
+        .stroke(egui::Stroke::new(1.0, stroke))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("●").size(8.0).color(COLOR_ACCENT));
-                ui.label(
-                    egui::RichText::new(label)
-                        .size(11.0)
-                        .strong()
-                        .color(COLOR_ACCENT),
-                );
+                ui.label(egui::RichText::new("●").size(8.0).color(text));
+                ui.label(egui::RichText::new(label).size(11.0).strong().color(text));
             });
         });
 }
@@ -1214,6 +1334,7 @@ fn render_tab_bar(
     tree: &ProcessTree,
     audit_count: usize,
     rule_count: usize,
+    pending_pulse: f32,
 ) {
     let pending = tree.total_leaf_rows();
     ui.horizontal(|ui| {
@@ -1222,16 +1343,22 @@ fn render_tab_bar(
         } else {
             "Pending".to_owned()
         };
-        render_tab(ui, &pending_label, *current == Tab::Pending, || {
-            *current = Tab::Pending;
-        });
+        render_tab(
+            ui,
+            &pending_label,
+            *current == Tab::Pending,
+            pending_pulse,
+            || {
+                *current = Tab::Pending;
+            },
+        );
         ui.add_space(6.0);
         let rules_label = if rule_count > 0 {
             format!("Rules  {rule_count}")
         } else {
             "Rules".to_owned()
         };
-        render_tab(ui, &rules_label, *current == Tab::Rules, || {
+        render_tab(ui, &rules_label, *current == Tab::Rules, 0.0, || {
             *current = Tab::Rules;
         });
         ui.add_space(6.0);
@@ -1240,7 +1367,7 @@ fn render_tab_bar(
         } else {
             "Audit log".to_owned()
         };
-        render_tab(ui, &audit_label, *current == Tab::Audit, || {
+        render_tab(ui, &audit_label, *current == Tab::Audit, 0.0, || {
             *current = Tab::Audit;
         });
     });
@@ -1251,11 +1378,24 @@ fn render_tab_bar(
 /// Both are clickable. Cheaper-looking than egui's stock
 /// `selectable_label` pill, and reads as a proper top-of-page tab bar
 /// rather than two adjacent buttons.
-fn render_tab(ui: &mut egui::Ui, label: &str, active: bool, mut on_click: impl FnMut()) {
+///
+/// `highlight` (0.0 = none) flashes an *inactive* tab toward the active
+/// look — used by the Pending tab when a new ask arrives while the user
+/// is on another tab. At `0.0` the inactive colours are unchanged.
+fn render_tab(
+    ui: &mut egui::Ui,
+    label: &str,
+    active: bool,
+    highlight: f32,
+    mut on_click: impl FnMut(),
+) {
     let (text_color, underline_color) = if active {
         (egui::Color32::from_gray(235), COLOR_ACCENT)
     } else {
-        (COLOR_MUTED, egui::Color32::TRANSPARENT)
+        (
+            lerp_color(COLOR_MUTED, COLOR_ACCENT, highlight),
+            lerp_color(egui::Color32::TRANSPARENT, COLOR_ACCENT, highlight),
+        )
     };
     let text = egui::RichText::new(label)
         .size(13.0)
@@ -3119,6 +3259,12 @@ fn render_node_header(
         }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // A node whose whole subtree is resolving has nothing to
+            // decide — drop the Approve all / Deny all buttons so the
+            // header reads as status, not a prompt.
+            if subtree_all_resolving(tree, node_idx) {
+                return;
+            }
             let deny_label = if is_top_root && depth == 0 {
                 "Deny all  Esc"
             } else {
@@ -3251,20 +3397,31 @@ fn render_wrap_card_body(
         }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if small_button(ui, "Deny", ButtonRole::Deny).clicked() {
-                actions.push(PendingAction {
-                    key: row.key.clone(),
-                    decision: Decision::Deny,
-                    scope,
-                });
-            }
-            ui.add_space(4.0);
-            if small_button(ui, "Approve", ButtonRole::Approve).clicked() {
-                actions.push(PendingAction {
-                    key: row.key.clone(),
-                    decision: Decision::Approve,
-                    scope,
-                });
+            match row.status {
+                RowStatus::Resolving => {
+                    // Already authorized; the provider call (and any
+                    // biometric prompt) is in flight. Read-only — no
+                    // Approve/Deny — so the card is purely provenance
+                    // for the prompt the user is being asked to satisfy.
+                    paint_pill(ui, "Resolving…", COLOR_ACCENT, COLOR_ACCENT_SOFT);
+                }
+                RowStatus::Awaiting => {
+                    if small_button(ui, "Deny", ButtonRole::Deny).clicked() {
+                        actions.push(PendingAction {
+                            key: row.key.clone(),
+                            decision: Decision::Deny,
+                            scope,
+                        });
+                    }
+                    ui.add_space(4.0);
+                    if small_button(ui, "Approve", ButtonRole::Approve).clicked() {
+                        actions.push(PendingAction {
+                            key: row.key.clone(),
+                            decision: Decision::Approve,
+                            scope,
+                        });
+                    }
+                }
             }
             ui.add_space(10.0);
             ui.label(
@@ -3748,6 +3905,7 @@ mod tests {
             },
             waiter_count: 1,
             first_seen: Instant::now() - Duration::from_secs(secs_ago),
+            status: RowStatus::Awaiting,
         }
     }
 
@@ -3758,6 +3916,76 @@ mod tests {
             command: name.to_owned(),
             start_time,
         }
+    }
+
+    // ── new-ask highlight (observe_pending / decay) ──────────────
+
+    fn snap(rows: Vec<QueueRow>) -> QueueSnapshot {
+        QueueSnapshot { entries: rows }
+    }
+
+    fn one_ask() -> QueueSnapshot {
+        snap(vec![mk_row("gh", 1, 1, 1, vec![caller(1, "zsh", 1)])])
+    }
+
+    fn two_asks() -> QueueSnapshot {
+        snap(vec![
+            mk_row("gh", 1, 1, 1, vec![caller(1, "zsh", 1)]),
+            mk_row("aws", 2, 2, 1, vec![caller(2, "zsh", 2)]),
+        ])
+    }
+
+    #[test]
+    fn first_pending_observation_does_not_flash() {
+        // A freshly-opened window already shows Pending with its initial
+        // asks — those aren't "new", so the very first frame is silent.
+        let mut ws = ConsentWindowState::new();
+        ws.observe_pending(&one_ask(), true);
+        assert_eq!(ws.pending_pulse, 0.0);
+        assert_eq!(ws.current_tab, Tab::Pending);
+    }
+
+    #[test]
+    fn new_ask_while_focused_flashes_without_switching_tab() {
+        let mut ws = ConsentWindowState::new();
+        ws.focus_audit_tab();
+        ws.observe_pending(&one_ask(), true); // baseline
+        assert_eq!(ws.pending_pulse, 0.0);
+
+        ws.observe_pending(&two_asks(), true); // a genuinely-new ask
+        assert_eq!(ws.pending_pulse, 1.0);
+        assert_eq!(ws.current_tab, Tab::Audit); // not yanked away
+    }
+
+    #[test]
+    fn new_ask_while_unfocused_switches_to_pending() {
+        let mut ws = ConsentWindowState::new();
+        ws.focus_audit_tab();
+        ws.observe_pending(&one_ask(), false); // baseline
+        ws.observe_pending(&two_asks(), false);
+        assert_eq!(ws.current_tab, Tab::Pending);
+        assert_eq!(ws.pending_pulse, 0.0); // no flash when unfocused
+    }
+
+    #[test]
+    fn unchanged_pending_set_does_not_reflash() {
+        let mut ws = ConsentWindowState::new();
+        ws.observe_pending(&one_ask(), true);
+        ws.observe_pending(&one_ask(), true);
+        assert_eq!(ws.pending_pulse, 0.0);
+    }
+
+    #[test]
+    fn decay_winds_the_pulse_down_to_zero() {
+        let mut ws = ConsentWindowState::new();
+        ws.set_pending_pulse(1.0);
+        assert!(ws.decay_pending_pulse(PENDING_PULSE_SECS / 2.0));
+        assert!(ws.pending_pulse > 0.0 && ws.pending_pulse < 1.0);
+        // Overshoot the remaining time → clamps to 0 and reports settled.
+        assert!(!ws.decay_pending_pulse(PENDING_PULSE_SECS));
+        assert_eq!(ws.pending_pulse, 0.0);
+        // Already at rest → no-op, still settled.
+        assert!(!ws.decay_pending_pulse(0.1));
     }
 
     #[test]

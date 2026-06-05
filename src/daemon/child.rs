@@ -339,6 +339,7 @@ impl eframe::App for ConsentChildApp {
                     first_seen: now
                         .checked_sub(Duration::from_secs(r.first_seen_secs_ago))
                         .unwrap_or(now),
+                    status: r.status,
                 })
                 .collect(),
         };
@@ -401,6 +402,15 @@ impl eframe::App for ConsentChildApp {
             if let Err(err) = send_msg(&self.writer, &msg) {
                 super::log::log_at("child", format_args!("RuleAction send failed: {err}"));
             }
+        }
+
+        // Advance the "a new ask just arrived" highlight toward rest and
+        // keep painting at full rate while it's animating, so the badge +
+        // Pending-tab flash is smooth rather than stepping at the 100 ms
+        // idle cadence below.
+        let dt = ctx.input(|i| i.stable_dt);
+        if self.window_state.decay_pending_pulse(dt) {
+            ctx.request_repaint();
         }
 
         // Gentle ongoing repaint so "Ns ago" labels tick AND so we

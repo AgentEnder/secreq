@@ -114,6 +114,34 @@ fn submit(
     rx
 }
 
+/// Inject a *resolving* card: an ask that has already been authorized
+/// (auto-rule, approvals-cache, or a manual approve) and whose secret
+/// is being fetched, with a provider biometric prompt potentially in
+/// flight. Drives the read-only "Resolving…" card. No waiter channel —
+/// in production this path resolves off the queue, not through it.
+fn pending(
+    state: &SharedState,
+    wrap: &str,
+    command: Vec<&str>,
+    callers: Vec<Caller>,
+    secrets: Vec<SecretAsk>,
+) {
+    let dedupe_key = DedupeKey {
+        wrap: wrap.to_owned(),
+        ppid: callers.first().map(|c| c.pid).unwrap_or(0),
+        parent_start_time: callers.first().map(|c| c.start_time).unwrap_or(0),
+    };
+    let ask = Ask {
+        command: command.into_iter().map(String::from).collect(),
+        cwd: "/Users/example/project".to_owned(),
+        callers,
+        secrets,
+        providers: HashMap::new(),
+        dedupe_key,
+    };
+    state.lock().unwrap().begin_pending(ask);
+}
+
 fn audit_line(
     secs_ago: u64,
     wrap: &str,
@@ -369,6 +397,34 @@ fn gate_only_pending() {
             vec![caller(7926, "zsh", 1_700_000_000)],
             vec![],
         )]
+    });
+}
+
+#[test]
+#[ignore = "screenshot harness"]
+fn pending_resolving() {
+    // An auto-approved (or approvals-cached) ask whose secret isn't yet
+    // cached: the provider is being invoked — a biometric prompt may be
+    // up — so the card renders read-only as "Resolving…". This is the
+    // surface that gives that prompt its provenance instead of letting
+    // it pop over an empty window. Node-level Approve/Deny buttons are
+    // suppressed because there's nothing left to decide.
+    render_fixture("23-pending-resolving", vec![], |state| {
+        pending(
+            state,
+            "gh",
+            vec!["gh", "pr", "view", "42"],
+            vec![
+                caller(7926, "zsh", 1_700_000_000),
+                caller(2831, "Cursor.app", 1_650_000_000),
+            ],
+            vec![secret(
+                "GITHUB_TOKEN",
+                "op",
+                "op://Personal/GitHub/credential",
+            )],
+        );
+        Vec::new()
     });
 }
 
@@ -1262,6 +1318,59 @@ fn auto_deny_toast_on_pending() {
                 state,
                 "gh",
                 vec!["gh", "api", "/repos"],
+                vec![caller(7926, "zsh", 1_700_000_000)],
+                vec![secret(
+                    "GITHUB_TOKEN",
+                    "op",
+                    "op://Personal/GitHub/credential",
+                )],
+            )]
+        },
+    );
+}
+
+#[test]
+#[ignore = "screenshot harness"]
+fn pending_arrival_highlight() {
+    // A new ask landed while the user was reading the Audit tab and the
+    // window was focused — so instead of yanking them to Pending, the
+    // title-bar count badge and the Pending tab flash to pull their eye.
+    // Captured at peak intensity (pulse = 1.0); in production the child's
+    // frame loop decays it back to rest over ~1s. The Audit tab stays
+    // active underneath, demonstrating that the user's context is kept.
+    let audit = vec![
+        audit_line_traced(
+            60 * 3,
+            "gh",
+            &["pr", "view", "9421"],
+            &[(52310, "zsh", "-zsh")],
+            &["GITHUB_TOKEN"],
+            "approve+remember",
+        ),
+        audit_line_traced(
+            60 * 15,
+            "aws",
+            &["s3", "ls", "s3://prod-backups/"],
+            &[(52312, "zsh", "-zsh")],
+            &["AWS_ACCESS_KEY_ID"],
+            "approve",
+        ),
+    ];
+    render_fixture_with_extras(
+        "22-pending-arrival-highlight",
+        audit,
+        FixtureExtras {
+            window_state: Some(Box::new(|ws| {
+                ws.focus_audit_tab();
+                ws.set_pending_pulse(1.0);
+            })),
+            ..FixtureExtras::default()
+        },
+        |state| {
+            vec![submit(
+                state,
+                "gh",
+                vec!["gh", "auth", "refresh"],
                 vec![caller(7926, "zsh", 1_700_000_000)],
                 vec![secret(
                     "GITHUB_TOKEN",

@@ -236,10 +236,14 @@ fn handle_consent_window_connection(
                     pid: scope_pid,
                     start_time: scope_start_time,
                 };
-                state
+                // `resolve` hands a clone of `state` to its off-thread
+                // resolver so it can clear the "Resolving…" card when
+                // the value lands; lock a separate handle to call it.
+                let handle = state.clone();
+                handle
                     .lock()
                     .expect("state mutex")
-                    .resolve(&key, decision, scope);
+                    .resolve(&key, decision, scope, &state);
             }
             ClientMsg::ConsentWindowDetach => {
                 super::log::log_at("server", format_args!("← ConsentWindowDetach"));
@@ -474,12 +478,24 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
 }
 
 fn handle_ask(ask: Ask, state: SharedState) -> DaemonMsg {
-    // Fast-path: parent-keyed approval cache hit. Take the lock briefly,
-    // resolve (one provider invocation, the win we want even on cache
-    // hits), release. We don't enqueue: the UI has nothing to show.
+    // Fast-path: parent-keyed approval cache hit. Take the lock briefly
+    // to check authorization, then *release it* before resolving — the
+    // provider call (and any biometric prompt) must not hold the state
+    // mutex, or the consent-window child couldn't attach to show the
+    // "Resolving…" card. We don't enqueue: there's no decision to make.
     {
         let guard = state.lock().expect("state mutex");
-        if let Some(reply) = guard.try_cache_hit(&ask) {
+        if guard.has_cached_approval(&ask) {
+            let cache = guard.secret_cache_arc();
+            let in_flight = guard.in_flight_arc();
+            drop(guard);
+            let reply = resolve_approved_with_pending(
+                &ask,
+                crate::consent::Decision::ApproveCached,
+                cache,
+                in_flight,
+                &state,
+            );
             return waiter_reply_to_daemon_msg(reply);
         }
     }
@@ -639,8 +655,16 @@ fn handle_rule_hit(
             // provider. The `in_flight` map further coalesces concurrent
             // first-time asks (parallel `gh pr view` bursts) so the
             // provider is invoked exactly once per key even when N
-            // siblings race the empty cache.
-            let reply = super::state::resolve_for_ask(&ask, cache, in_flight);
+            // siblings race the empty cache. On a cold cache this raises
+            // the consent window with a "Resolving…" card so the
+            // biometric prompt has its provenance on screen.
+            let reply = resolve_approved_with_pending(
+                &ask,
+                crate::consent::Decision::ApproveAuto,
+                cache,
+                in_flight,
+                &state,
+            );
             match reply {
                 WaiterReply::Decision { secrets, .. } => DaemonMsg::Decision {
                     decision: crate::consent::Decision::ApproveAuto,
@@ -653,6 +677,56 @@ fn handle_rule_hit(
             }
         }
     }
+}
+
+/// Resolve an already-authorized ask on the calling connection thread,
+/// surfacing a "Resolving…" card while the work is in flight.
+///
+/// Used by the two no-prompt approval paths (approvals-cache hit and
+/// auto-rule approve). When the secret cache is **cold** — a provider
+/// call, and possibly a biometric prompt, is imminent — it raises the
+/// consent window and shows the ask as resolving so the prompt keeps
+/// its provenance on screen, then clears the card once the value lands.
+/// The state lock is **not** held across `resolve_for_ask`, so the
+/// consent-window child can attach and render while the prompt is up.
+///
+/// `decision` is the approval flavour to stamp on the reply
+/// (`ApproveCached` or `ApproveAuto`) so the audit log distinguishes
+/// the path.
+fn resolve_approved_with_pending(
+    ask: &Ask,
+    decision: crate::consent::Decision,
+    cache: std::sync::Arc<std::sync::Mutex<super::cache::SecretCache>>,
+    in_flight: std::sync::Arc<super::in_flight::InFlightMap>,
+    state: &SharedState,
+) -> WaiterReply {
+    let cold = !super::state::ask_fully_cached(ask, &cache);
+    if cold {
+        state
+            .lock()
+            .expect("state mutex")
+            .begin_pending(ask.clone());
+        if let Err(err) = super::ensure_consent_window(state) {
+            super::log::log_at(
+                "server",
+                format_args!("ensure_consent_window (resolving card) failed: {err:#}"),
+            );
+        }
+    }
+    let reply = super::state::resolve_for_ask(ask, cache, in_flight).map_decision(|d| {
+        if d == crate::consent::Decision::Approve {
+            decision
+        } else {
+            d
+        }
+    });
+    if cold {
+        state
+            .lock()
+            .expect("state mutex")
+            .end_pending(&ask.dedupe_key);
+    }
+    reply
 }
 
 fn waiter_reply_to_daemon_msg(reply: WaiterReply) -> DaemonMsg {

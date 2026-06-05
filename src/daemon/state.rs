@@ -28,7 +28,7 @@ use crate::rules::{self, EvalCtx, Rule, RuleHit};
 
 use super::cache::{CacheKey, SecretCache};
 use super::in_flight::{Acquired, InFlightGuard, InFlightMap};
-use super::proto::{Ask, DedupeKey, WireProvider};
+use super::proto::{Ask, DedupeKey, RowStatus, WireProvider};
 
 /// One coalesced queue entry. Multiple clients with the same dedupe key
 /// share a single entry; resolving it sends the same outcome to every
@@ -81,11 +81,29 @@ pub struct QueueRow {
     pub representative: Ask,
     pub waiter_count: usize,
     pub first_seen: Instant,
+    /// Awaiting a decision, or already approved with resolution in
+    /// flight. Resolving rows render read-only (no Approve/Deny).
+    pub status: RowStatus,
+}
+
+/// An approved ask whose secrets are being resolved off the queue. We
+/// keep it visible as a "Resolving…" card so a biometric prompt the
+/// provider fires (on a cold cache) has its provenance on screen
+/// instead of popping over an empty window.
+struct PendingEntry {
+    representative: Ask,
+    /// When resolution began — drives the card's "Ns ago" label.
+    since: Instant,
 }
 
 /// Daemon state. Wrap in `Arc<Mutex<_>>` for sharing.
 pub struct State {
     queue: HashMap<DedupeKey, QueueEntry>,
+    /// Asks that have been authorized and are now resolving off the
+    /// queue (provider call / biometric in flight). Rendered as
+    /// read-only "Resolving…" cards. Keyed by dedupe key so sibling
+    /// auto-approved asks coalesce into one card.
+    pending: HashMap<DedupeKey, PendingEntry>,
     /// "Approve all from X" decisions for the daemon's lifetime. No disk
     /// backing — `secreq daemon stop` is the canonical reset.
     approvals: Vec<ApprovalEntry>,
@@ -172,6 +190,7 @@ impl Default for State {
     fn default() -> Self {
         State {
             queue: HashMap::new(),
+            pending: HashMap::new(),
             approvals: Vec::new(),
             secret_cache: Arc::new(Mutex::new(SecretCache::new())),
             in_flight: InFlightMap::new(),
@@ -461,7 +480,11 @@ impl State {
     /// crossed the empty/non-empty boundary. Idempotent: re-calling
     /// while the state hasn't changed leaves the timestamp alone.
     fn refresh_queue_empty_since(&mut self) {
-        if self.queue.is_empty() {
+        // "Empty" for auto-hide purposes means nothing for the user to
+        // look at — neither awaiting nor resolving cards. A resolving
+        // card must keep the window up (and the grace clock unstarted)
+        // until its biometric prompt clears.
+        if self.queue.is_empty() && self.pending.is_empty() {
             if self.queue_empty_since.is_none() {
                 self.queue_empty_since = Some(Instant::now());
             }
@@ -497,7 +520,8 @@ impl State {
     /// True iff there's something for the user to see *and* nobody is
     /// already there to see it.
     pub fn needs_consent_window(&self) -> bool {
-        (!self.queue.is_empty() || self.viewer_mode) && self.consent_subscribers.is_empty()
+        (!self.queue.is_empty() || !self.pending.is_empty() || self.viewer_mode)
+            && self.consent_subscribers.is_empty()
     }
 
     /// Push the current snapshot to every attached consent window.
@@ -524,7 +548,15 @@ impl State {
                 representative: e.representative.clone(),
                 waiter_count: e.waiter_count(),
                 first_seen_secs_ago: now.saturating_duration_since(e.first_seen).as_secs(),
+                status: RowStatus::Awaiting,
             })
+            .chain(self.pending.values().map(|p| super::proto::WireQueueRow {
+                key: p.representative.dedupe_key.clone(),
+                representative: p.representative.clone(),
+                waiter_count: 0,
+                first_seen_secs_ago: now.saturating_duration_since(p.since).as_secs(),
+                status: RowStatus::Resolving,
+            }))
             .collect();
         super::proto::WireSnapshot {
             queue,
@@ -533,43 +565,44 @@ impl State {
         }
     }
 
-    /// Try to short-circuit an ask from the approvals cache. Returns
-    /// the resolved-secret reply if the user previously approved at any
-    /// level of the caller chain; the caller should *not* enqueue.
-    ///
-    /// The flow:
-    /// 1. Walk the caller chain looking for an approval (direct parent
-    ///    first, then each ancestor outwards).
-    /// 2. If found, use that scope to look up each secret in the
-    ///    encrypted in-memory cache.
-    /// 3. Any cache misses get resolved via the provider, and the
-    ///    fresh values are stored in the cache under this scope for
-    ///    future asks from descendants of the same scope.
-    pub fn try_cache_hit(&self, ask: &Ask) -> Option<WaiterReply> {
-        // Authorization gate: only short-circuit the prompt if some
-        // ancestor in the caller chain has a remembered approval for
-        // this wrap. The matched scope itself isn't used downstream —
-        // the secret cache keys on `(wrap, provider, locator)`, not on
-        // which parent process happened to be approved.
-        approval_scope_for(&self.approvals, ask)?;
-        // The approvals cache had a hit — the user is never prompted.
-        // Rewrite the reply's decision to `ApproveCached` so the audit
-        // log distinguishes "we used a remembered approval" from "the
-        // user just clicked Approve". The encrypted-secret cache may or
-        // may not also hit (it usually does, since `ApproveRemember`
-        // populates it during the original resolve); either way the
-        // *approval* was cached and that's what the audit pill reports.
-        Some(
-            resolve_for_ask(ask, self.secret_cache.clone(), self.in_flight.clone()).map_decision(
-                |d| {
-                    if d == Decision::Approve {
-                        Decision::ApproveCached
-                    } else {
-                        d
-                    }
-                },
-            ),
-        )
+    /// True if some ancestor in the caller chain has a remembered
+    /// approval for this wrap — i.e. the ask can be short-circuited
+    /// without prompting. The matched scope itself isn't used
+    /// downstream (the secret cache keys on `(wrap, provider, locator)`,
+    /// not on which parent was approved), so we return a bool. The
+    /// caller resolves via [`resolve_approved_with_pending`] so the
+    /// provider call runs *without* the state lock held — and shows a
+    /// "Resolving…" card if the secret cache is cold.
+    pub fn has_cached_approval(&self, ask: &Ask) -> bool {
+        approval_scope_for(&self.approvals, ask).is_some()
+    }
+
+    /// Mark an authorized ask as resolving: show a read-only card in
+    /// the consent window while its provider call (and any biometric
+    /// prompt) runs. Idempotent per dedupe key so a burst of sibling
+    /// auto-approved asks coalesces into one card. Keeps the window up
+    /// and the auto-hide clock unstarted until [`end_pending`].
+    pub fn begin_pending(&mut self, ask: Ask) {
+        self.last_activity = Instant::now();
+        self.queue_empty_since = None;
+        self.pending
+            .entry(ask.dedupe_key.clone())
+            .or_insert_with(|| PendingEntry {
+                representative: ask,
+                since: Instant::now(),
+            });
+        self.show_window();
+        self.broadcast_consent_update();
+    }
+
+    /// Clear a resolving card once its secrets have landed (or failed).
+    /// No-op if the key was already cleared by a coalesced sibling.
+    pub fn end_pending(&mut self, key: &DedupeKey) {
+        if self.pending.remove(key).is_some() {
+            self.last_activity = Instant::now();
+            self.broadcast_consent_update();
+            self.refresh_queue_empty_since();
+        }
     }
 
     /// Add a waiter for `key`, either folding into an existing queue entry
@@ -615,7 +648,21 @@ impl State {
     /// What happens on a spawned worker thread (no mutex held):
     /// - For approve, run `resolve_for_ask` (which may shell out to
     ///   `op read` and friends) and broadcast the result to waiters.
-    pub fn resolve(&mut self, key: &DedupeKey, decision: Decision, scope: ApprovalScope) {
+    ///
+    /// On an approved ask with a **cold** secret cache, the entry is
+    /// moved into `pending` (a "Resolving…" card) rather than dropped,
+    /// so the biometric prompt the provider fires has its provenance on
+    /// screen; the worker clears the card via `shared` once the value
+    /// lands. `shared` is the daemon's own `Arc<Mutex<State>>` — the
+    /// sole caller already holds it, so we take it explicitly rather
+    /// than keep a self-referential handle.
+    pub fn resolve(
+        &mut self,
+        key: &DedupeKey,
+        decision: Decision,
+        scope: ApprovalScope,
+        shared: &SharedState,
+    ) {
         self.last_activity = Instant::now();
         let Some(entry) = self.queue.remove(key) else {
             self.broadcast_consent_update();
@@ -634,11 +681,26 @@ impl State {
             }
         }
 
+        // Cold cache → a provider call (and maybe a biometric) is
+        // imminent. Keep the card on screen as "Resolving…" so the
+        // prompt isn't orphaned; the worker clears it when done.
+        let cold =
+            decision.approved() && !ask_fully_cached(&entry.representative, &self.secret_cache);
+        if cold {
+            self.pending.insert(
+                key.clone(),
+                PendingEntry {
+                    representative: entry.representative.clone(),
+                    since: Instant::now(),
+                },
+            );
+        }
+
         self.broadcast_consent_update();
         // Queue may have just emptied — set the timestamp so the
-        // auto-hide grace period starts counting. Main loop reads
-        // this each tick and broadcasts `ConsentExitPlease` once the
-        // grace elapses.
+        // auto-hide grace period starts counting (suppressed while a
+        // resolving card is up). Main loop reads this each tick and
+        // broadcasts `ConsentExitPlease` once the grace elapses.
         self.refresh_queue_empty_since();
 
         if decision.approved() {
@@ -648,6 +710,8 @@ impl State {
             // socket connection threads parked on the channel.
             let cache = self.secret_cache.clone();
             let in_flight = self.in_flight.clone();
+            let shared = shared.clone();
+            let key = key.clone();
             std::thread::spawn(move || {
                 let reply =
                     resolve_for_ask(&entry.representative, cache, in_flight).map_decision(|d| {
@@ -659,6 +723,15 @@ impl State {
                     });
                 for w in &entry.waiters {
                     let _ = w.send(reply.clone());
+                }
+                // Clear the "Resolving…" card now that the value is
+                // cached (or the resolve failed). Skipped when warm
+                // (no card was shown). Best-effort: a daemon mid-
+                // shutdown may have poisoned/dropped the mutex.
+                if cold {
+                    if let Ok(mut guard) = shared.lock() {
+                        guard.end_pending(&key);
+                    }
                 }
             });
         } else {
@@ -682,7 +755,15 @@ impl State {
                 representative: e.representative.clone(),
                 waiter_count: e.waiter_count(),
                 first_seen: e.first_seen,
+                status: RowStatus::Awaiting,
             })
+            .chain(self.pending.values().map(|p| QueueRow {
+                key: p.representative.dedupe_key.clone(),
+                representative: p.representative.clone(),
+                waiter_count: 0,
+                first_seen: p.since,
+                status: RowStatus::Resolving,
+            }))
             .collect();
         entries.sort_by_key(|r| r.first_seen);
         QueueSnapshot { entries }
@@ -754,8 +835,8 @@ impl State {
     /// **Why reload-in-place rather than restart-on-change?** The
     /// original design used a daemon shutdown to ensure the in-memory
     /// approvals cache was also cleared when policy changed. But the
-    /// approvals cache is checked *before* rules evaluate (in
-    /// `try_cache_hit`), so a rule edit doesn't actually invalidate
+    /// approvals cache is checked *before* rules evaluate (via
+    /// `has_cached_approval`), so a rule edit doesn't actually invalidate
     /// past approvals — past approvals are tied to a specific `(wrap,
     /// pid, start_time)` and remain semantically valid. The explicit
     /// revoke primitive (`secreq daemon stop`) stays as the way to
@@ -910,7 +991,7 @@ impl State {
 }
 
 impl WaiterReply {
-    fn map_decision<F: FnOnce(Decision) -> Decision>(self, f: F) -> WaiterReply {
+    pub(super) fn map_decision<F: FnOnce(Decision) -> Decision>(self, f: F) -> WaiterReply {
         match self {
             WaiterReply::Decision { decision, secrets } => WaiterReply::Decision {
                 decision: f(decision),
@@ -1003,13 +1084,31 @@ fn has_entry(approvals: &[ApprovalEntry], wrap: &str, scope: ApprovalScope) -> b
 ///    guard; waiters wake, re-check the cache, and reply.
 ///
 /// Callers are responsible for authorization — this function never
-/// gates a lookup. Both the interactive path (`try_cache_hit` after
-/// `approval_scope_for` matches) and the auto-rule path (`handle_rule_hit`
-/// after the rule fires) call in only once they've confirmed the ask is
-/// allowed.
+/// gates a lookup. The approvals-cache path (`has_cached_approval`
+/// matched), the manual-approve path (`State::resolve`), and the
+/// auto-rule path (`handle_rule_hit` after the rule fires) all call in
+/// only once they've confirmed the ask is allowed.
 ///
 /// Running off-thread, so blocking on `op read` etc. is fine here.
 ///
+/// True if every secret the ask needs is already in the cache — i.e.
+/// resolving it will invoke no provider and so trigger no biometric
+/// prompt. Vacuously true for a gate-only ask (no secrets). Used to
+/// decide whether a "Resolving…" card is worth showing: if the value
+/// is already cached, resolution is instant and silent.
+pub(super) fn ask_fully_cached(ask: &Ask, cache: &Arc<Mutex<SecretCache>>) -> bool {
+    let guard = cache.lock().expect("secret cache mutex");
+    ask.secrets.iter().all(|s| {
+        guard
+            .get(&CacheKey {
+                wrap: ask.dedupe_key.wrap.clone(),
+                provider: s.provider.clone(),
+                locator: s.locator.clone(),
+            })
+            .is_some()
+    })
+}
+
 /// `pub(super)` so the auto-rule path in `server.rs` can call this
 /// directly — auto-decisions bypass the queue, so they don't go
 /// through `State::resolve`.
@@ -1279,14 +1378,13 @@ mod tests {
     }
 
     #[test]
-    fn try_cache_hit_returns_approve_cached_so_audit_log_can_distinguish() {
-        // A remembered approval (in `state.approvals`) plus an ask
-        // whose direct parent matches the scope should short-circuit
-        // the prompt. The reply must carry `ApproveCached`, not
-        // `Approve`, so the audit-log writer downstream can render
-        // "the user wasn't asked again" rather than implying a fresh
-        // user click. (Previously both paths returned `Approve` and
-        // the audit log couldn't tell the difference.)
+    fn has_cached_approval_matches_a_remembered_scope() {
+        // A remembered approval (in `state.approvals`) whose scope
+        // matches the ask's direct parent should short-circuit the
+        // prompt. The server then resolves via
+        // `resolve_approved_with_pending`, which stamps `ApproveCached`
+        // (not `Approve`) so the audit-log writer can render "the user
+        // wasn't asked again" rather than implying a fresh click.
         let mut state = State::new();
         state.approvals.push(ApprovalEntry {
             wrap: "gh".into(),
@@ -1294,13 +1392,14 @@ mod tests {
             parent_start_time: 1_700_000_000,
         });
         let ask = mk_ask("gh", vec![(7926, 1_700_000_000)]);
-        let reply = state.try_cache_hit(&ask).expect("approval hit");
-        match reply {
-            WaiterReply::Decision { decision, .. } => {
-                assert_eq!(decision, Decision::ApproveCached);
-            }
-            WaiterReply::Err { message } => panic!("unexpected err reply: {message}"),
-        }
+        assert!(state.has_cached_approval(&ask), "matching scope hits");
+
+        // A different parent identity is not authorized.
+        let other = mk_ask("gh", vec![(9999, 1_700_000_000)]);
+        assert!(
+            !state.has_cached_approval(&other),
+            "non-matching scope misses"
+        );
     }
 
     // ── Auto-rules path ───────────────────────────────────────────────
