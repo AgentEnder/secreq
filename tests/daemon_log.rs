@@ -39,7 +39,10 @@ fn sample_resources_writes_a_structured_resource_line() {
     assert_eq!(resource_line["level"], "metric");
     assert_eq!(resource_line["pid"], std::process::id());
     assert!(
-        resource_line["rss_bytes"].as_u64().expect("rss_bytes is u64") > 0,
+        resource_line["rss_bytes"]
+            .as_u64()
+            .expect("rss_bytes is u64")
+            > 0,
         "a live process must report non-zero RSS: {resource_line}"
     );
     assert!(resource_line["cpu_pct"].as_f64().expect("cpu_pct is f64") >= 0.0);
