@@ -76,6 +76,20 @@ fn caller_chain_from_pid_with_limit(
     walk(&sys, start, my_exe.as_deref(), max_chain, max_walk)
 }
 
+const TRANSPORT_FRAMES: &[&str] = &["ssh", "scp", "sftp", "ssh-agent"];
+
+/// Pick the meaningful ancestor a SIGN approval should be scoped to.
+/// The connecting peer is almost always `ssh` (spawned fresh per git op),
+/// so caching on it gives no reuse. Skip transport frames to anchor on
+/// the real initiator (git / shell / IDE). Falls through to the last
+/// frame if the whole chain is transport.
+pub fn select_anchor(chain: &[Caller]) -> Option<&Caller> {
+    chain
+        .iter()
+        .find(|c| !TRANSPORT_FRAMES.contains(&c.name.as_str()))
+        .or_else(|| chain.last())
+}
+
 /// A `System` refreshed with the command line and executable path of every
 /// process — the data the caller chain renders.
 fn refreshed_system() -> System {
@@ -187,6 +201,32 @@ mod tests {
             explicit.iter().map(|c| c.pid).collect::<Vec<_>>(),
             implicit.iter().map(|c| c.pid).collect::<Vec<_>>(),
         );
+    }
+
+    #[test]
+    fn anchor_skips_transport_frames() {
+        let chain = vec![
+            mk_caller(10, "ssh", Some("/usr/bin/ssh")),
+            mk_caller(11, "git", Some("/usr/bin/git")),
+            mk_caller(12, "zsh", Some("/bin/zsh")),
+        ];
+        let anchor = select_anchor(&chain).unwrap();
+        assert_eq!(anchor.name, "git"); // ssh skipped, git is the real actor
+    }
+
+    #[test]
+    fn anchor_skips_consecutive_transport_then_falls_through() {
+        let chain = vec![
+            mk_caller(10, "ssh", None),
+            mk_caller(11, "scp", None),
+            mk_caller(12, "bash", Some("/bin/bash")),
+        ];
+        assert_eq!(select_anchor(&chain).unwrap().name, "bash");
+    }
+
+    #[test]
+    fn anchor_is_none_for_empty_chain() {
+        assert!(select_anchor(&[]).is_none());
     }
 
     #[test]
