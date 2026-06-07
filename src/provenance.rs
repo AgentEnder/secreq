@@ -43,6 +43,42 @@ pub fn caller_chain() -> Vec<Caller> {
 }
 
 fn caller_chain_with_limit(max_chain: usize, max_walk: usize) -> Vec<Caller> {
+    let sys = refreshed_system();
+    let Ok(self_pid) = sysinfo::get_current_pid() else {
+        return Vec::new();
+    };
+    let my_exe = std::env::current_exe().ok();
+
+    // Start at our parent; the chain is the callers above us.
+    let start = sys.process(self_pid).and_then(|p| p.parent());
+    walk(&sys, start, my_exe.as_deref(), max_chain, max_walk)
+}
+
+/// Walk the ancestry of `seed_pid` (its parent and up), newest first,
+/// excluding secreq self-frames. `seed_pid` itself is the requester and
+/// is NOT included — we report who is *behind* it. Used by the SSH agent,
+/// where the requester is the socket peer rather than our own parent.
+pub fn caller_chain_from_pid(seed_pid: u32) -> Vec<Caller> {
+    caller_chain_from_pid_with_limit(seed_pid, 16, 256)
+}
+
+fn caller_chain_from_pid_with_limit(
+    seed_pid: u32,
+    max_chain: usize,
+    max_walk: usize,
+) -> Vec<Caller> {
+    let sys = refreshed_system();
+    let my_exe = std::env::current_exe().ok();
+    let seed = sysinfo::Pid::from_u32(seed_pid);
+    // Start at the seed's parent so the seed itself (the requester) is
+    // never included; we report who is behind it.
+    let start = sys.process(seed).and_then(|p| p.parent());
+    walk(&sys, start, my_exe.as_deref(), max_chain, max_walk)
+}
+
+/// A `System` refreshed with the command line and executable path of every
+/// process — the data the caller chain renders.
+fn refreshed_system() -> System {
     let mut sys = System::new();
     sys.refresh_processes_specifics(
         ProcessesToUpdate::All,
@@ -51,15 +87,22 @@ fn caller_chain_with_limit(max_chain: usize, max_walk: usize) -> Vec<Caller> {
             .with_cmd(UpdateKind::Always)
             .with_exe(UpdateKind::Always),
     );
+    sys
+}
 
+/// Walk upward from `start` (already the first ancestor to consider),
+/// newest first, collecting non-self frames until `max_chain` useful
+/// entries or `max_walk` raw steps. Shared by `caller_chain` and
+/// `caller_chain_from_pid`.
+fn walk(
+    sys: &System,
+    start: Option<sysinfo::Pid>,
+    my_exe: Option<&Path>,
+    max_chain: usize,
+    max_walk: usize,
+) -> Vec<Caller> {
     let mut chain = Vec::new();
-    let Ok(self_pid) = sysinfo::get_current_pid() else {
-        return chain;
-    };
-    let my_exe = std::env::current_exe().ok();
-
-    // Start at our parent; the chain is the callers above us.
-    let mut current = sys.process(self_pid).and_then(|p| p.parent());
+    let mut current = start;
     let mut walked = 0usize;
     while let Some(pid) = current {
         if walked >= max_walk || chain.len() >= max_chain {
@@ -78,7 +121,7 @@ fn caller_chain_with_limit(max_chain: usize, max_walk: usize) -> Vec<Caller> {
         // `max_chain`. Crucial for deeply-recursive wraps where 15+
         // `secreq gh` PTY masters sit between the wrap and the real
         // ancestor we want to anchor approvals on.
-        if !is_self_frame(&caller, my_exe.as_deref()) {
+        if !is_self_frame(&caller, my_exe) {
             chain.push(caller);
         }
         current = proc.parent();
@@ -130,6 +173,20 @@ mod tests {
         let me = std::process::id();
         assert!(!chain.is_empty(), "expected at least one ancestor");
         assert!(chain.iter().all(|c| c.pid != me));
+    }
+
+    #[test]
+    fn chain_from_pid_starts_above_the_given_pid_and_excludes_self_frames() {
+        // Our own parent chain, requested explicitly, equals caller_chain().
+        let me = std::process::id();
+        let explicit = caller_chain_from_pid(me);
+        let implicit = caller_chain();
+        // Both anchor on our parent; neither contains our own pid.
+        assert!(explicit.iter().all(|c| c.pid != me));
+        assert_eq!(
+            explicit.iter().map(|c| c.pid).collect::<Vec<_>>(),
+            implicit.iter().map(|c| c.pid).collect::<Vec<_>>(),
+        );
     }
 
     #[test]
