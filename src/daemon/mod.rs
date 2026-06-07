@@ -24,6 +24,7 @@ pub mod child;
 pub mod client;
 pub mod in_flight;
 pub mod log;
+pub mod peercred;
 pub mod proto;
 pub mod server;
 pub mod state;
