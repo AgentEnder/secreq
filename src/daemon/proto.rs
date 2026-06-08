@@ -46,6 +46,15 @@ pub enum ClientMsg {
     ShowViewer,
     /// "Are you alive?" Used by the auto-spawn poll loop. Replies with `Ok`.
     Ping,
+    /// "What build are you?" Version handshake the CLI sends right after
+    /// connecting to an *already-running* daemon. The daemon replies with
+    /// [`DaemonMsg::Hello`] carrying its compile-time [`crate::BUILD_ID`].
+    /// The CLI compares it against its own; a mismatch means the installed
+    /// binary was updated under a stale daemon, so the CLI restarts it.
+    /// Carries the CLI's own build id purely so the daemon can log the
+    /// mismatch from its side (it doesn't act on it — the CLI drives the
+    /// restart).
+    Hello { build_id: String },
     /// "Exit cleanly." Used by `secreq daemon stop` to forget the
     /// in-memory approvals cache (and free the singleton pidfile lock).
     /// Replies with `Ok` immediately; the actual exit happens shortly
@@ -255,6 +264,10 @@ pub enum DaemonMsg {
     },
     /// Generic acknowledgement (Ping / ConsentWindowDetach / Shutdown).
     Ok,
+    /// Reply to [`ClientMsg::Hello`]: the daemon's compile-time
+    /// [`crate::BUILD_ID`]. The CLI compares it to its own to decide
+    /// whether the running daemon is stale and should be restarted.
+    Hello { build_id: String },
     /// Reply to `ShowWindow` / `ShowViewer`. Carries the consent-window
     /// child's pid if one is already attached, so the CLI can call
     /// `NSRunningApplication.activate(...)` on it. `None` means the

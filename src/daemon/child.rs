@@ -239,6 +239,7 @@ fn spawn_reader(
                         wake(&egui_ctx);
                     }
                     DaemonMsg::Ok
+                    | DaemonMsg::Hello { .. }
                     | DaemonMsg::WindowOpened { .. }
                     | DaemonMsg::Decision { .. }
                     | DaemonMsg::Err { .. }

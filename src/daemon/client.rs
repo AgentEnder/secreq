@@ -33,6 +33,13 @@ pub const NO_DAEMON_ENV: &str = "SECREQ_NO_DAEMON";
 /// budget on cold-start (egui can take a moment to initialize).
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long the client waits for a stale daemon to release its singleton
+/// pidfile lock after being asked to shut down, before force-killing it.
+/// The graceful path is near-instant (the daemon's main loop ticks every
+/// second and exits on the shutdown flag); this budget covers a wedged or
+/// busy daemon.
+const RESTART_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// What the daemon's reply means to the calling wrap-and-run.
 ///
 /// On `Approve`/`ApproveRemember`/`ApproveAuto`, `secrets` carries the
@@ -110,6 +117,7 @@ pub fn request_consent(ask: Ask) -> Result<ConsentOutcome> {
         DaemonMsg::RulesList { .. } => {
             bail!("daemon replied RulesList to an Ask (expected Decision)")
         }
+        DaemonMsg::Hello { .. } => bail!("daemon replied Hello to an Ask (expected Decision)"),
     }
 }
 
@@ -184,6 +192,7 @@ fn expect_window_opened(reply: DaemonMsg) -> Result<()> {
         DaemonMsg::RulesList { .. } => {
             bail!("unexpected RulesList reply to ShowWindow/ShowViewer")
         }
+        DaemonMsg::Hello { .. } => bail!("unexpected Hello reply to ShowWindow/ShowViewer"),
     }
 }
 
@@ -263,6 +272,7 @@ pub fn stop_daemon() -> Result<bool> {
         DaemonMsg::RulesList { .. } => {
             bail!("daemon replied RulesList to Shutdown (expected Ok)")
         }
+        DaemonMsg::Hello { .. } => bail!("daemon replied Hello to Shutdown (expected Ok)"),
     }
 }
 
@@ -411,11 +421,41 @@ pub(crate) fn graphical_environment_available() -> bool {
 
 fn connect_or_spawn(socket: &Path) -> Result<UnixStream> {
     // Optimistic connect first — the common case is the daemon is already
-    // running.
-    if let Ok(stream) = UnixStream::connect(socket) {
-        return Ok(stream);
+    // running. Before using it, verify it's the same build as this CLI:
+    // the daemon is long-lived, so an installed-binary update leaves a
+    // newer CLI talking to a stale daemon (which is how the SSH-agent and
+    // pending-badge features could silently fail to appear). A mismatch
+    // gets the stale daemon restarted.
+    if UnixStream::connect(socket).is_ok() {
+        match daemon_build_id(socket) {
+            Some(id) if id == crate::BUILD_ID => {
+                // Current build — open a fresh connection for the real
+                // request (the handshake consumed the probe connection).
+                if let Ok(stream) = UnixStream::connect(socket) {
+                    return Ok(stream);
+                }
+                // Raced away between probe and reconnect; fall through to
+                // spawn a new one below.
+            }
+            Some(stale) => {
+                // Stale build: restart it, then fall through to spawn a
+                // fresh, current daemon.
+                restart_stale_daemon(socket, &stale)?;
+            }
+            None => {
+                // The daemon predates the `Hello` handshake (the first
+                // upgrade to a version-checking build, or a transient
+                // probe failure). We can't verify it, so use it as-is —
+                // this is the one time a manual `secreq daemon stop` is
+                // still needed to pick up the new binary.
+                if let Ok(stream) = UnixStream::connect(socket) {
+                    return Ok(stream);
+                }
+            }
+        }
     }
-    // No live daemon. Spawn one and poll for the socket. Keep the child
+    // No live daemon (or we just restarted a stale one). Spawn one and poll
+    // for the socket. Keep the child
     // handle so we can detect early-exit (e.g. egui failing to init in a
     // headless environment) and bail without waiting the full timeout.
     let mut child = spawn_daemon().context("auto-spawn secreq daemon")?;
@@ -440,6 +480,62 @@ fn connect_or_spawn(socket: &Path) -> Result<UnixStream> {
         SPAWN_TIMEOUT,
         socket.display()
     )
+}
+
+/// Probe a running daemon's build id via the `Hello` handshake.
+///
+/// Returns `Some(id)` for a daemon that answers the handshake, `None`
+/// when it can't be established — either the daemon predates the
+/// handshake (it fails to parse the unknown `Hello` message and closes
+/// the connection without a reply) or a transient I/O error. `None` is
+/// deliberately conservative: the caller treats it as "use the daemon
+/// as-is" rather than restarting on a guess.
+fn daemon_build_id(socket: &Path) -> Option<String> {
+    let stream = UnixStream::connect(socket).ok()?;
+    let hello = ClientMsg::Hello {
+        build_id: crate::BUILD_ID.to_owned(),
+    };
+    match send_and_recv(stream, hello) {
+        Ok(DaemonMsg::Hello { build_id }) => Some(build_id),
+        _ => None,
+    }
+}
+
+/// Restart a daemon whose build differs from this CLI's. Asks it to exit
+/// cleanly, waits for it to release the singleton pidfile lock (so the
+/// caller's subsequent spawn wins the lock rather than exiting 0 because
+/// the stale daemon still holds it), and force-kills it if it overstays
+/// [`RESTART_TIMEOUT`]. The caller spawns the replacement afterward.
+fn restart_stale_daemon(socket: &Path, stale_id: &str) -> Result<()> {
+    eprintln!(
+        "secreq: consent daemon is build {stale_id}, this CLI is {}; restarting the daemon",
+        crate::BUILD_ID
+    );
+    // Best-effort graceful shutdown.
+    if let Ok(stream) = UnixStream::connect(socket) {
+        let _ = send_and_recv(stream, ClientMsg::Shutdown);
+    }
+    // Wait for the old daemon to fully exit: both the socket must stop
+    // accepting AND the pidfile flock must be free. The flock is the
+    // load-bearing one — a fresh daemon that finds the lock held just
+    // exits 0, which would silently leave the stale daemon in charge.
+    let pidfile = server::pidfile_path()?;
+    let deadline = Instant::now() + RESTART_TIMEOUT;
+    let mut backoff = Duration::from_millis(20);
+    while Instant::now() < deadline {
+        let lock_free = matches!(probe_pidfile_lock(&pidfile), Ok(LockState::Free));
+        let socket_dead = UnixStream::connect(socket).is_err();
+        if lock_free && socket_dead {
+            return Ok(());
+        }
+        sleep(backoff);
+        backoff = (backoff * 2).min(Duration::from_millis(200));
+    }
+    // Overstayed (an old build ignoring Shutdown, or a wedged daemon).
+    // Force it so the replacement spawn isn't blocked on a held lock.
+    eprintln!("secreq: stale daemon didn't exit in time; force-stopping it");
+    let _ = force_stop_daemon();
+    Ok(())
 }
 
 /// Re-exec ourselves with the `daemon --fg` subcommand. We trust
@@ -482,6 +578,19 @@ fn send_and_recv(stream: UnixStream, msg: ClientMsg) -> Result<DaemonMsg> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_id_is_stamped_at_compile_time() {
+        // build.rs must populate SECREQ_BUILD_ID. The '+' separates the
+        // git-sha part from the build timestamp; its presence confirms the
+        // composition rather than an empty/placeholder value.
+        assert!(!crate::BUILD_ID.is_empty(), "BUILD_ID must not be empty");
+        assert!(
+            crate::BUILD_ID.contains('+'),
+            "BUILD_ID should carry a build timestamp: {}",
+            crate::BUILD_ID
+        );
+    }
 
     #[test]
     fn probe_pidfile_lock_reports_free_for_missing_pidfile() {

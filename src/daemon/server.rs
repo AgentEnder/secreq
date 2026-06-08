@@ -353,6 +353,7 @@ fn handle_consent_window_connection(
 fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
     let tag = match &msg {
         ClientMsg::Ping => "Ping",
+        ClientMsg::Hello { .. } => "Hello",
         ClientMsg::ShowWindow => "ShowWindow",
         ClientMsg::ShowViewer => "ShowViewer",
         ClientMsg::Ask(_) => "Ask",
@@ -377,6 +378,24 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
         ClientMsg::Ping => {
             state.lock().expect("state mutex").touch();
             DaemonMsg::Ok
+        }
+        ClientMsg::Hello { build_id } => {
+            // Version handshake. If the CLI is a different build than us,
+            // log it (the CLI drives the actual restart) and don't touch
+            // the idle clock — a stale daemon being probed for replacement
+            // shouldn't extend its own life.
+            if build_id != crate::BUILD_ID {
+                super::log::log_at(
+                    "server",
+                    format_args!(
+                        "Hello from CLI build {build_id}; daemon is {} — CLI will restart us",
+                        crate::BUILD_ID
+                    ),
+                );
+            }
+            DaemonMsg::Hello {
+                build_id: crate::BUILD_ID.to_owned(),
+            }
         }
         ClientMsg::ShowWindow => {
             let mut guard = state.lock().expect("state mutex");
@@ -474,6 +493,7 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
     };
     let reply_tag = match &reply {
         DaemonMsg::Ok => "Ok",
+        DaemonMsg::Hello { .. } => "Hello",
         DaemonMsg::WindowOpened { child_pid } => match child_pid {
             Some(_) => "WindowOpened(existing)",
             None => "WindowOpened(spawning)",
@@ -857,6 +877,25 @@ mod tests {
         for _ in 0..10_000 {
             write_reply(&mut writer, &reply)
                 .expect("writing to a killed client must not be a daemon error");
+        }
+    }
+
+    #[test]
+    fn hello_handshake_reports_the_daemons_own_build_id() {
+        // The version handshake must echo *this* binary's BUILD_ID
+        // regardless of what the CLI sent, so the CLI can compare and
+        // decide whether to restart a stale daemon.
+        use std::sync::{Arc, Mutex};
+        let state: SharedState = Arc::new(Mutex::new(super::super::state::State::new()));
+        let reply = handle_message(
+            ClientMsg::Hello {
+                build_id: "some-other-build +123".to_owned(),
+            },
+            state,
+        );
+        match reply {
+            DaemonMsg::Hello { build_id } => assert_eq!(build_id, crate::BUILD_ID),
+            other => panic!("expected Hello reply, got {other:?}"),
         }
     }
 

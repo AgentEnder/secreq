@@ -29,6 +29,15 @@
 /// same trust model as [`daemon::client::NO_DAEMON_ENV`].
 pub const RESOLVING_ENV: &str = "SECREQ_RESOLVING";
 
+/// Build identity stamped at compile time by `build.rs`:
+/// `<git-short-sha>[-dirty] +<build-unix-seconds>`. The daemon reports it
+/// over the `Hello` handshake and the CLI compares it against its own; a
+/// mismatch means the installed binary was updated under a running daemon,
+/// so the CLI restarts the daemon (see [`daemon::client`]'s connect path).
+/// It is a *freshness* token, not a semver — any rebuild that changes the
+/// binary changes the id.
+pub const BUILD_ID: &str = env!("SECREQ_BUILD_ID");
+
 pub mod audit;
 pub mod cli;
 pub mod commands;
