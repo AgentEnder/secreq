@@ -40,6 +40,11 @@ pub fn wraps_schema() -> Value {
                 "type": "object",
                 "description": "Provider scheme definitions. Built-in providers (`op`, `keychain` on macOS, `lastpass` / `pass` on Unix) are available without an explicit entry; entries here override or add new schemes.",
                 "additionalProperties": { "$ref": "#/definitions/Provider" }
+            },
+            "ssh": {
+                "type": "object",
+                "description": "SSH identities served by the consent-gated SSH agent, keyed by identity name. Each identity stores its public key inline (not secret) so the agent can answer REQUEST_IDENTITIES without a resolve; the private key is a `secret://` reference resolved only at SIGN time.",
+                "additionalProperties": { "$ref": "#/definitions/SshIdentity" }
             }
         },
         "patternProperties": {
@@ -51,7 +56,8 @@ pub fn wraps_schema() -> Value {
             "Provider":        provider_schema(),
             "StoreCapability": store_capability_schema(),
             "FieldSpec":       field_spec_schema(),
-            "BatchRetrieve":   batch_retrieve_schema()
+            "BatchRetrieve":   batch_retrieve_schema(),
+            "SshIdentity":     ssh_identity_schema()
         }
     })
 }
@@ -189,6 +195,30 @@ fn wrap_schema() -> Value {
                     "pattern": "^secret://[^/]+/.+$",
                     "description": "A `secret://provider/locator` reference."
                 }
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn ssh_identity_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "One SSH identity served by the agent. `public_key` is the inline OpenSSH public key (not secret); `private_key` is a `secret://provider/locator` reference resolved only at SIGN time.",
+        "required": ["public_key", "private_key"],
+        "properties": {
+            "$reason": {
+                "type": "string",
+                "description": "Rationale shown in the consent prompt when this identity is used to sign."
+            },
+            "public_key": {
+                "type": "string",
+                "description": "Inline OpenSSH public key (`ssh-ed25519 AAAA… comment`). Answered to REQUEST_IDENTITIES without a resolve."
+            },
+            "private_key": {
+                "type": "string",
+                "pattern": "^secret://[^/]+/.+$",
+                "description": "A `secret://provider/locator` reference to the private key, resolved only at SIGN time."
             }
         },
         "additionalProperties": false

@@ -95,6 +95,30 @@
       },
       "type": "object"
     },
+    "SshIdentity": {
+      "additionalProperties": false,
+      "description": "One SSH identity served by the agent. `public_key` is the inline OpenSSH public key (not secret); `private_key` is a `secret://provider/locator` reference resolved only at SIGN time.",
+      "properties": {
+        "$reason": {
+          "description": "Rationale shown in the consent prompt when this identity is used to sign.",
+          "type": "string"
+        },
+        "private_key": {
+          "description": "A `secret://provider/locator` reference to the private key, resolved only at SIGN time.",
+          "pattern": "^secret://[^/]+/.+$",
+          "type": "string"
+        },
+        "public_key": {
+          "description": "Inline OpenSSH public key (`ssh-ed25519 AAAA… comment`). Answered to REQUEST_IDENTITIES without a resolve.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "public_key",
+        "private_key"
+      ],
+      "type": "object"
+    },
     "StoreCapability": {
       "additionalProperties": false,
       "description": "How this provider persists a new value (currently exposed via custom CLIs the user may write that drive `secreq` programmatically — the public `secreq` CLI no longer exposes a `store` verb).",
@@ -174,6 +198,13 @@
         "$ref": "#/definitions/Provider"
       },
       "description": "Provider scheme definitions. Built-in providers (`op`, `keychain` on macOS, `lastpass` / `pass` on Unix) are available without an explicit entry; entries here override or add new schemes.",
+      "type": "object"
+    },
+    "ssh": {
+      "additionalProperties": {
+        "$ref": "#/definitions/SshIdentity"
+      },
+      "description": "SSH identities served by the consent-gated SSH agent, keyed by identity name. Each identity stores its public key inline (not secret) so the agent can answer REQUEST_IDENTITIES without a resolve; the private key is a `secret://` reference resolved only at SIGN time.",
       "type": "object"
     }
   },
