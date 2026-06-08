@@ -74,6 +74,26 @@ const AUTO_HIDE_GRACE: Duration = Duration::from_secs(2);
 /// reports the daemon's mean CPU across each minute.
 const RESOURCE_SAMPLE_INTERVAL: Duration = Duration::from_secs(60);
 
+/// Decide whether the headless daemon should idle-exit on this tick.
+///
+/// The base idle condition is the same as it ever was: the pending
+/// queue is empty (`queue_empty`) AND no activity has happened for
+/// longer than [`IDLE_EXIT_SECS`] (`idle_elapsed`). But when the SSH
+/// agent is enabled, `SSH_AUTH_SOCK` points at the daemon's
+/// `agent.sock`; an idle-exit would yank that socket out from under
+/// every SSH client, so we never idle-exit in that mode regardless of
+/// how long the queue has sat empty.
+///
+/// `ssh_agent_enabled` is fixed for the daemon's lifetime — the config
+/// is loaded exactly once at startup (see [`run`]), so capturing it as
+/// a single bool there is sufficient.
+fn should_idle_exit(queue_empty: bool, idle_elapsed: bool, ssh_agent_enabled: bool) -> bool {
+    if ssh_agent_enabled {
+        return false;
+    }
+    queue_empty && idle_elapsed
+}
+
 /// Run as the daemon. Blocks until `ClientMsg::Shutdown` arrives or
 /// SIGTERM. There's no GUI on this thread.
 pub fn run() -> Result<i32> {
@@ -140,6 +160,14 @@ pub fn run() -> Result<i32> {
         None => None,
     };
 
+    // Whether the SSH agent is serving on `agent.sock`. Fixed for the
+    // daemon's lifetime — the config is loaded exactly once above, so a
+    // single bool captured here is sufficient. When set, the idle-exit
+    // path is suppressed so `SSH_AUTH_SOCK` (which points at the agent
+    // socket) never goes stale under a running SSH client. See
+    // `should_idle_exit`.
+    let ssh_agent_enabled = _agent_listener.is_some();
+
     log::log(format_args!(
         "daemon ready; entering main loop (idle exit after {}s, resource sampling every {}s)",
         IDLE_EXIT_SECS,
@@ -201,7 +229,11 @@ pub fn run() -> Result<i32> {
                 ));
                 guard.broadcast_consent_exit_please();
             }
-        } else if guard.last_activity().elapsed() >= idle_timeout {
+        } else if should_idle_exit(
+            guard.queue_is_empty(),
+            guard.last_activity().elapsed() >= idle_timeout,
+            ssh_agent_enabled,
+        ) {
             log::log(format_args!(
                 "no activity for {}s and no UI attached; initiating idle-exit",
                 IDLE_EXIT_SECS
@@ -315,4 +347,26 @@ fn acquire_pidfile_lock(path: &PathBuf) -> Result<Option<PidGuard>> {
         _file: file,
         path: path.clone(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_idle_exit;
+
+    #[test]
+    fn idle_exit_disabled_when_ssh_agent_enabled() {
+        // Otherwise-idle daemon (empty queue, timeout elapsed) must
+        // NOT exit while the SSH agent is enabled — `SSH_AUTH_SOCK`
+        // depends on the daemon's `agent.sock` staying alive.
+        assert!(!should_idle_exit(true, true, true));
+    }
+
+    #[test]
+    fn wrap_only_idle_behavior_preserved() {
+        // With no SSH identities the existing behavior is unchanged:
+        // exit only when the queue is empty AND the timeout elapsed.
+        assert!(should_idle_exit(true, true, false));
+        assert!(!should_idle_exit(false, true, false));
+        assert!(!should_idle_exit(true, false, false));
+    }
 }
