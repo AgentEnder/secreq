@@ -24,6 +24,13 @@ use anyhow::{Context, Result};
 use super::ssh_proto::{self, AgentRequest};
 use crate::wraps::SshIdentity;
 
+/// Upper bound on a single agent frame's payload length. Mirrors OpenSSH's
+/// `AGENT_MAX_MSGLEN` (256 KiB) from `authfd.h`: the agent protocol never
+/// carries a legitimate message this large, so a bigger length prefix is a
+/// buggy/hostile client. We reject it before allocating so an untrusted
+/// wire value can't drive an arbitrary allocation in the long-lived daemon.
+const MAX_AGENT_MSG_LEN: usize = 256 * 1024;
+
 /// One configured identity prepared for `REQUEST_IDENTITIES`: the raw SSH
 /// wire key blob plus the comment. Derived once from the inline
 /// `public_key` string so listing never parses keys per-connection and
@@ -211,6 +218,14 @@ fn read_frame(stream: &mut UnixStream) -> Result<Option<Vec<u8>>> {
         ReadOutcome::Filled => {}
     }
     let payload_len = u32::from_be_bytes(len_buf) as usize;
+    // `payload_len` is untrusted wire input. Reject an over-cap length
+    // before sizing or reading any body bytes so a buggy/hostile client
+    // can't drive a huge allocation in the long-lived daemon.
+    if payload_len > MAX_AGENT_MSG_LEN {
+        return Err(anyhow::anyhow!(
+            "agent frame payload length {payload_len} exceeds cap of {MAX_AGENT_MSG_LEN} bytes"
+        ));
+    }
     let mut frame = Vec::with_capacity(4 + payload_len);
     frame.extend_from_slice(&len_buf);
     frame.resize(4 + payload_len, 0);
@@ -248,4 +263,52 @@ fn read_exact_or_eof(stream: &mut UnixStream, buf: &mut [u8]) -> Result<ReadOutc
         }
     }
     Ok(ReadOutcome::Filled)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An oversized length prefix must be rejected by the guard *before*
+    /// `read_frame` tries to allocate or read a body that large. Writing
+    /// just the 4-byte prefix is enough: without the guard, `read_frame`
+    /// would size a buffer for the bogus length and then block in
+    /// `read_exact` waiting for body bytes that never come.
+    #[test]
+    fn read_frame_rejects_oversized_length() {
+        let (mut client, mut server) = UnixStream::pair().expect("create UnixStream pair");
+        let oversized = (MAX_AGENT_MSG_LEN + 1) as u32;
+        client
+            .write_all(&oversized.to_be_bytes())
+            .expect("write oversized length prefix");
+        // Drop the client so any (incorrect) attempt to read a body sees EOF
+        // rather than blocking forever; the guard should fire first anyway.
+        drop(client);
+
+        let result = read_frame(&mut server);
+        let err = result.expect_err("expected Err for over-cap length");
+        // The error must come from the size guard (which cites the cap),
+        // not from an incidental truncated-body read after EOF — that
+        // proves the guard fires before any body read/allocation.
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains(&MAX_AGENT_MSG_LEN.to_string()),
+            "error should cite the cap, got: {msg}"
+        );
+    }
+
+    /// A normal small frame still round-trips: the returned bytes are the
+    /// full frame (length prefix included), byte-for-byte.
+    #[test]
+    fn read_frame_reads_small_frame() {
+        let (mut client, mut server) = UnixStream::pair().expect("create UnixStream pair");
+        let input = [0u8, 0, 0, 1, 11];
+        client.write_all(&input).expect("write small frame");
+        drop(client);
+
+        let frame = read_frame(&mut server)
+            .expect("read_frame ok")
+            .expect("frame present");
+        assert_eq!(frame, input);
+    }
 }
