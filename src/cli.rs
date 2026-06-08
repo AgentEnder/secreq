@@ -117,6 +117,19 @@ enum Command {
         force: bool,
     },
 
+    /// Prove the agent can sign with a configured SSH identity. Connects to
+    /// the agent socket, lists identities, then asks the agent to sign a fixed
+    /// test message with the key and verifies the returned signature against
+    /// its public half — exercising the real consent → resolve → sign path.
+    /// With no `<name>`, tests every configured identity. Signing is a real
+    /// sign, so it may prompt for consent (and a biometric). Exits 0 only if
+    /// every tested identity verifies.
+    SshTest {
+        /// The identity name to test (the key under the `ssh` block). Omit to
+        /// test every configured identity.
+        name: Option<String>,
+    },
+
     /// Validate the config.
     Check,
 
@@ -290,6 +303,7 @@ pub fn run() -> i32 {
             cli.yes,
             config,
         ),
+        Some(Command::SshTest { name }) => commands::ssh_test(name, config),
         Some(Command::Unwrap { binary }) => commands::unwrap_cmd(&binary, config),
         Some(Command::Wraps) => commands::wraps_list(config),
         Some(Command::Check) => commands::check(config),

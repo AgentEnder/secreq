@@ -48,6 +48,31 @@ pub fn sign(private_key_pem: &str, data: &[u8], flags: u32) -> Result<Vec<u8>> {
     Ok(blob)
 }
 
+/// Verify an agent-protocol signature `sig_blob` (the `string algorithm` +
+/// `string blob` wire encoding carried inside an `SSH_AGENT_SIGN_RESPONSE`)
+/// against `data` and the public half of the key, given as an OpenSSH
+/// public-key line (`ssh-ed25519 AAAA… comment`).
+///
+/// Returns `Ok(true)` when the signature verifies, `Ok(false)` when it
+/// decodes but doesn't match, and `Err` when the public key or the signature
+/// blob can't be parsed. This is the verifier a remote peer / `ssh-keygen`
+/// would run — the self-test uses it to prove the agent's signature is real.
+pub fn verify(public_key_openssh: &str, data: &[u8], sig_blob: &[u8]) -> Result<bool> {
+    use rsa::signature::Verifier;
+    use ssh_encoding::Decode;
+    use ssh_key::PublicKey;
+
+    let public_key = PublicKey::from_openssh(public_key_openssh)
+        .context("parsing the OpenSSH public key for signature verification")?;
+    let mut reader: &[u8] = sig_blob;
+    let signature =
+        Signature::decode(&mut reader).context("decoding the SSH agent signature blob")?;
+    // `PublicKey` has an inherent `verify(namespace, msg, &SshSig)` for the
+    // namespaced ssh-keygen format; we want the `signature::Verifier` impl for
+    // the agent-protocol `Signature`, so call the trait method explicitly.
+    Ok(Verifier::verify(&public_key, data, &signature).is_ok())
+}
+
 /// Map the SIGN_REQUEST flags to an RSA hash algorithm. `ssh` always sets
 /// one of the SHA2 flags for RSA keys; if neither is set we default to
 /// SHA-256 rather than the deprecated SHA-1 `ssh-rsa`.
@@ -248,6 +273,51 @@ UmZO5k6cb+1m7BZBAAAAD3NlY3JlcS1yc2EtdGVzdAECAw==
             Algorithm::Ecdsa {
                 curve: EcdsaCurve::NistP256
             }
+        );
+    }
+
+    #[test]
+    fn verify_accepts_a_genuine_ed25519_signature() {
+        let pem = pem_for(Algorithm::Ed25519);
+        let key = PrivateKey::from_openssh(&pem).unwrap();
+        let public_openssh = key.public_key().to_openssh().unwrap();
+        let data = b"secreq ssh agent self-test";
+        let blob = sign(&pem, data, 0).unwrap();
+        assert!(verify(&public_openssh, data, &blob).unwrap());
+    }
+
+    #[test]
+    fn verify_accepts_a_genuine_rsa_signature() {
+        let key = PrivateKey::from_openssh(RSA_TEST_KEY).unwrap();
+        let public_openssh = key.public_key().to_openssh().unwrap();
+        let data = b"secreq ssh agent self-test";
+        let blob = sign(RSA_TEST_KEY, data, SSH_AGENT_RSA_SHA2_256).unwrap();
+        assert!(verify(&public_openssh, data, &blob).unwrap());
+    }
+
+    #[test]
+    fn verify_rejects_a_signature_over_tampered_data() {
+        let pem = pem_for(Algorithm::Ed25519);
+        let key = PrivateKey::from_openssh(&pem).unwrap();
+        let public_openssh = key.public_key().to_openssh().unwrap();
+        let blob = sign(&pem, b"the original message", 0).unwrap();
+        // Same key, same valid signature blob, but verified against different
+        // bytes than were signed → must not verify.
+        assert!(!verify(&public_openssh, b"a different message", &blob).unwrap());
+    }
+
+    #[test]
+    fn verify_errors_on_an_undecodable_signature_blob() {
+        let pem = pem_for(Algorithm::Ed25519);
+        let public_openssh = PrivateKey::from_openssh(&pem)
+            .unwrap()
+            .public_key()
+            .to_openssh()
+            .unwrap();
+        let err = verify(&public_openssh, b"data", b"not a signature blob").unwrap_err();
+        assert!(
+            err.to_string().contains("signature blob"),
+            "error should mention the signature blob, got: {err}"
         );
     }
 

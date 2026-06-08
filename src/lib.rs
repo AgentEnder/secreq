@@ -57,6 +57,7 @@ pub mod rules;
 pub mod schema;
 pub mod secret;
 pub mod shim;
+pub mod ssh_selftest;
 pub mod ssh_setup;
 pub mod ssh_sign;
 pub mod wraps;

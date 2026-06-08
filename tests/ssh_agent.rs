@@ -146,7 +146,7 @@ fn lists_configured_identities_without_resolving() {
 /// file, so resolve is real but deterministic and offline.
 fn signing_context_with_seeded_approval(
     key_dir: &std::path::Path,
-) -> (SignContext, PublicKey, Vec<u8>) {
+) -> (SignContext, PublicKey, Vec<u8>, SshIdentity) {
     // Generate a real ed25519 key; write its PEM where the fake provider can
     // `cat` it, and use its public half as the configured identity.
     let private = PrivateKey::random(&mut rand::rngs::OsRng, ssh_key::Algorithm::Ed25519)
@@ -173,16 +173,14 @@ fn signing_context_with_seeded_approval(
         },
     );
 
+    let identity = SshIdentity {
+        reason: Some("git pushes".to_owned()),
+        public_key: public_openssh,
+        private_key: Reference::parse(&format!("secret://file/{}", pem_path.to_string_lossy()))
+            .expect("parse reference"),
+    };
     let mut ssh: BTreeMap<String, SshIdentity> = BTreeMap::new();
-    ssh.insert(
-        "github".to_owned(),
-        SshIdentity {
-            reason: Some("git pushes".to_owned()),
-            public_key: public_openssh,
-            private_key: Reference::parse(&format!("secret://file/{}", pem_path.to_string_lossy()))
-                .expect("parse reference"),
-        },
-    );
+    ssh.insert("github".to_owned(), identity.clone());
 
     let identities = ssh_agent::prepare_identities(&ssh);
     assert_eq!(identities.len(), 1);
@@ -209,13 +207,13 @@ fn signing_context_with_seeded_approval(
         providers: Arc::new(providers),
         state: Some(state),
     };
-    (ctx, public_key, blob)
+    (ctx, public_key, blob, identity)
 }
 
 #[test]
 fn signs_for_seeded_approval_and_signature_verifies() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (ctx, public_key, blob) = signing_context_with_seeded_approval(dir.path());
+    let (ctx, public_key, blob, _identity) = signing_context_with_seeded_approval(dir.path());
 
     let sock_dir = tempfile::tempdir().expect("sock tempdir");
     let sock_path = sock_dir.path().join("agent.sock");
@@ -257,7 +255,7 @@ fn signs_for_seeded_approval_and_signature_verifies() {
 #[test]
 fn unknown_key_blob_answers_failure() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (ctx, _public_key, _blob) = signing_context_with_seeded_approval(dir.path());
+    let (ctx, _public_key, _blob, _identity) = signing_context_with_seeded_approval(dir.path());
 
     let sock_dir = tempfile::tempdir().expect("sock tempdir");
     let sock_path = sock_dir.path().join("agent.sock");
@@ -277,4 +275,67 @@ fn unknown_key_blob_answers_failure() {
     );
 
     drop(client);
+}
+
+/// The library self-test against an in-process agent with a correctly-seeded
+/// approval: `listed` and `verified` are both true and `run` returns promptly.
+///
+/// The seeded anchor is computed from THIS test process's own caller chain
+/// (the agent reads the peer pid off the socket, which is us), so the SIGN is
+/// a guaranteed approval-cache HIT — no consent prompt, no blocking wait, no
+/// hang. The `set_read_timeout` inside `run` is a belt-and-suspenders backstop;
+/// a correct cache hit never reaches it.
+#[test]
+fn ssh_selftest_run_lists_and_verifies_on_cache_hit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (ctx, _public_key, _blob, identity) = signing_context_with_seeded_approval(dir.path());
+
+    let sock_dir = tempfile::tempdir().expect("sock tempdir");
+    let sock_path = sock_dir.path().join("agent.sock");
+    let listener = UnixListener::bind(&sock_path).expect("bind agent socket");
+    thread::spawn(move || ssh_agent::serve_on(listener, ctx));
+
+    let result = secreq::ssh_selftest::run(&sock_path, &identity, "github")
+        .expect("self-test runs against the in-process agent");
+
+    assert!(result.listed, "the agent should list the seeded identity");
+    assert!(
+        result.verified,
+        "the agent's signature should verify against the public key"
+    );
+    assert_eq!(result.key_id, "github");
+}
+
+/// A self-test whose identity carries a public key the agent doesn't hold:
+/// the agent answers SSH_AGENT_FAILURE on the SIGN_REQUEST, and `run`
+/// surfaces that as an error (never a hang). Listing also won't include the
+/// unknown key, but the SIGN failure is the load-bearing assertion.
+#[test]
+fn ssh_selftest_run_errors_when_agent_does_not_hold_the_key() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (ctx, _public_key, _blob, _identity) = signing_context_with_seeded_approval(dir.path());
+
+    let sock_dir = tempfile::tempdir().expect("sock tempdir");
+    let sock_path = sock_dir.path().join("agent.sock");
+    let listener = UnixListener::bind(&sock_path).expect("bind agent socket");
+    thread::spawn(move || ssh_agent::serve_on(listener, ctx));
+
+    // A real, well-formed ed25519 key the agent was never configured with.
+    let stranger = PrivateKey::random(&mut rand::rngs::OsRng, ssh_key::Algorithm::Ed25519)
+        .expect("generate stranger key");
+    let unknown = SshIdentity {
+        reason: None,
+        public_key: stranger
+            .public_key()
+            .to_openssh()
+            .expect("encode public openssh"),
+        private_key: Reference::parse("secret://file/does-not-matter").expect("parse reference"),
+    };
+
+    let err = secreq::ssh_selftest::run(&sock_path, &unknown, "stranger")
+        .expect_err("agent must refuse to sign with a key it doesn't hold");
+    assert!(
+        err.to_string().contains("refused to sign"),
+        "error should explain the agent refused, got: {err}"
+    );
 }

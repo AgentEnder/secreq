@@ -630,6 +630,69 @@ fn ssh_add_core(args: SshAddArgs, config_path: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
+/// `secreq ssh-test [<name>]` — prove the agent can sign with a configured
+/// identity. Connects to the agent socket, lists identities, asks the agent to
+/// sign a fixed test message with the key, and verifies the returned signature
+/// against the key's public half. With no `<name>`, tests every configured
+/// identity.
+///
+/// Signing is a *real* sign: if the daemon has no cached approval for this
+/// caller it will prompt for consent (and may ask for a biometric), so running
+/// the test can pop the consent window. Returns `Ok(0)` only if every tested
+/// identity verified; any failure (or no identities) returns a non-zero code.
+pub fn ssh_test(name: Option<String>, config_path: Option<&Path>) -> Result<i32> {
+    let config = load_config_or_default(config_path)?;
+
+    if config.ssh.is_empty() {
+        bail!("no SSH identities configured; add one with `secreq ssh-add <name>` first");
+    }
+
+    // Resolve the identities to test: the named one, or all of them.
+    let to_test: Vec<(String, wraps::SshIdentity)> = match name {
+        Some(name) => {
+            let identity = config.ssh.get(&name).cloned().with_context(|| {
+                format!("no SSH identity named `{name}` in the config; `secreq wraps` lists them")
+            })?;
+            vec![(name, identity)]
+        }
+        None => config
+            .ssh
+            .iter()
+            .map(|(name, identity)| (name.clone(), identity.clone()))
+            .collect(),
+    };
+
+    let agent_sock = crate::daemon::ssh_agent::default_agent_socket_path()
+        .context("determining the agent socket path")?;
+
+    println!("Signing may prompt for consent — answer the prompt if one appears.\n");
+
+    let mut all_ok = true;
+    for (name, identity) in to_test {
+        match crate::ssh_selftest::run(&agent_sock, &identity, &name) {
+            Ok(result) if result.listed && result.verified => {
+                println!("✓ {name}: agent signed and the signature verifies");
+            }
+            Ok(result) if !result.listed => {
+                all_ok = false;
+                println!(
+                    "✗ {name}: the agent didn't list this key — is the config the daemon loaded current? (restart with `secreq daemon stop`)"
+                );
+            }
+            Ok(_) => {
+                all_ok = false;
+                println!("✗ {name}: the agent signed but the signature did not verify");
+            }
+            Err(err) => {
+                all_ok = false;
+                println!("✗ {name}: {err:#}");
+            }
+        }
+    }
+
+    Ok(if all_ok { 0 } else { 1 })
+}
+
 /// Resolve a `--public-key` argument to a validated OpenSSH public-key line.
 /// A path to an existing file is read (a `.pub` file is one line); otherwise
 /// a value starting with a known OpenSSH key-type prefix is treated as a
