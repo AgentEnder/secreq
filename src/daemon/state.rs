@@ -1362,6 +1362,7 @@ mod tests {
             secrets: vec![],
             providers: HashMap::new(),
             dedupe_key,
+            ssh: None,
         }
     }
 
@@ -1534,6 +1535,7 @@ mod tests {
                 ppid: 0,
                 parent_start_time: 0,
             },
+            ssh: None,
         }
     }
 
@@ -1665,6 +1667,7 @@ mod tests {
                 ppid: 0,
                 parent_start_time: 0,
             },
+            ssh: None,
         };
 
         let state = State::new();

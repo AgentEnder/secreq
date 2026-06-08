@@ -147,6 +147,39 @@ pub struct Ask {
     /// Coalescing key: parallel asks with the same key fold into one queue
     /// entry. Today: `(wrap_name, ppid, parent_start_time)`.
     pub dedupe_key: DedupeKey,
+    /// `Some` when this ask is an SSH-agent sign request rather than a wrap
+    /// run. The consent UI renders an SSH variant (key identity + SHA256
+    /// fingerprint, no "secrets to inject" list) when this is set; wrap asks
+    /// leave it `None`. `#[serde(default)]` keeps the streaming attach
+    /// protocol back-compatible — an older child decoding a newer daemon's
+    /// snapshot, or vice versa, simply sees `None` and renders the wrap
+    /// layout. This is the consent-window attach protocol (daemon ↔ child),
+    /// not the `wraps.json5` config schema.
+    #[serde(default)]
+    pub ssh: Option<SshAskInfo>,
+}
+
+/// SSH-specific metadata carried on an [`Ask`] so the consent window can
+/// render a sign request distinctly. Holds only display addresses — the
+/// identity name and the public key's SHA256 fingerprint — never the
+/// private key or any secret value. The SSH path resolves the private key
+/// in-process after consent (see `daemon::ssh_agent`), so nothing secret
+/// rides this struct or the wire.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SshAskInfo {
+    /// The configured identity name (`ssh.<key_id>`), shown as the request's
+    /// identity label.
+    pub key_id: String,
+    /// The public key's SHA256 fingerprint, e.g.
+    /// `SHA256:Nh0Me49Zh9fDw/VYUfq43IJmI1T+XrjiYONPND8GzaM` — what
+    /// `ssh-add -l` prints, so the user can match it against a key they know.
+    pub fingerprint: String,
+    /// The identity's configured `$reason`, shown in the prompt to explain
+    /// what the key is for (e.g. "git pushes"). `None` when the identity has
+    /// no reason set. Lives here rather than on a `SecretAsk` because SSH
+    /// signs carry no secrets to inject.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]

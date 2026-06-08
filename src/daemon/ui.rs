@@ -43,7 +43,7 @@ use crate::consent::Decision;
 use crate::recommendations::{self, Suggestion, SuggestionDecision, SuggestionSort};
 use crate::rules::{Pattern, Rule, RuleDecision, RuleMatch};
 
-use super::proto::{Caller, DedupeKey, RowStatus, SecretAsk};
+use super::proto::{Caller, DedupeKey, RowStatus, SecretAsk, SshAskInfo};
 use super::state::{ApprovalScope, QueueRow, QueueSnapshot, SharedState};
 
 /// How often the UI re-reads the audit log to refresh the per-wrap history
@@ -3374,6 +3374,13 @@ fn render_wrap_card_body(
     actions: &mut Vec<PendingAction>,
     audit: &AuditCache,
 ) {
+    // SSH sign asks render a distinct card — a key identity + fingerprint
+    // instead of a wrap command + secret list. The approve/deny/remember
+    // buttons and the provenance tree are identical; only the body differs.
+    if let Some(ssh) = &row.representative.ssh {
+        render_ssh_card_body(ui, row, ssh, scope, actions);
+        return;
+    }
     // ── Card header row: command + actions ──
     ui.horizontal(|ui| {
         let cmd = row.representative.command.join(" ");
@@ -3465,6 +3472,124 @@ fn render_wrap_card_body(
         if cwd_shown.len() < row.representative.cwd.len() {
             resp.on_hover_text(&row.representative.cwd);
         }
+    }
+}
+
+/// Render the body of an SSH-sign consent card. Distinct from a wrap card:
+/// the request is for a *key*, not a command, so we show
+///
+/// 1. an **"SSH key request"** label + the identity name (`ssh.<key_id>`)
+///    in the header, with the same Approve / Deny / Resolving controls a
+///    wrap card carries (so the decision semantics are identical);
+/// 2. the key's **SHA256 fingerprint** in a monospace footnote (what
+///    `ssh-add -l` prints — lets the user match it to a key they know);
+/// 3. the configured **`$reason`**, if present, in the italic footnote tier;
+/// 4. **no** "secrets to be injected" list and **no** "gate only" marker —
+///    an SSH sign releases a signature, never an env var, so neither is
+///    meaningful here.
+///
+/// The caller chain / provenance is rendered by the surrounding process
+/// tree exactly as for a wrap, so it isn't repeated in the card body.
+fn render_ssh_card_body(
+    ui: &mut egui::Ui,
+    row: &QueueRow,
+    ssh: &SshAskInfo,
+    scope: ApprovalScope,
+    actions: &mut Vec<PendingAction>,
+) {
+    // ── Header row: "SSH key request" + identity, then actions ──
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new("SSH key request")
+                .font(egui::FontId::proportional(13.5))
+                .strong()
+                .color(COLOR_TEXT),
+        );
+        ui.add_space(6.0);
+        ui.label(
+            egui::RichText::new(&ssh.key_id)
+                .font(egui::FontId::monospace(12.5))
+                .color(COLOR_ACCENT),
+        );
+        if row.waiter_count > 1 {
+            paint_pill(
+                ui,
+                &format!("×{} waiting", row.waiter_count),
+                COLOR_ACCENT,
+                COLOR_ACCENT_SOFT,
+            );
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            match row.status {
+                RowStatus::Resolving => {
+                    paint_pill(ui, "Signing…", COLOR_ACCENT, COLOR_ACCENT_SOFT);
+                }
+                RowStatus::Awaiting => {
+                    if small_button(ui, "Deny", ButtonRole::Deny).clicked() {
+                        actions.push(PendingAction {
+                            key: row.key.clone(),
+                            decision: Decision::Deny,
+                            scope,
+                        });
+                    }
+                    ui.add_space(4.0);
+                    if small_button(ui, "Approve", ButtonRole::Approve).clicked() {
+                        actions.push(PendingAction {
+                            key: row.key.clone(),
+                            decision: Decision::Approve,
+                            scope,
+                        });
+                    }
+                }
+            }
+            ui.add_space(10.0);
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} ago",
+                    humanize_duration(row.first_seen.elapsed())
+                ))
+                .size(11.0)
+                .color(COLOR_FOOTNOTE),
+            );
+        });
+    });
+
+    // ── Fingerprint row ──
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.add_space(2.0);
+        ui.label(
+            egui::RichText::new("\u{25cf}")
+                .size(7.0)
+                .color(COLOR_ACCENT),
+        );
+        ui.label(
+            egui::RichText::new("sign with")
+                .size(11.0)
+                .color(COLOR_MUTED),
+        );
+        let fp_shown = truncate_for_display(&ssh.fingerprint, 60);
+        let resp = ui.label(
+            egui::RichText::new(&fp_shown)
+                .font(egui::FontId::monospace(11.5))
+                .color(COLOR_TEXT),
+        );
+        if fp_shown.len() < ssh.fingerprint.len() {
+            resp.on_hover_text(&ssh.fingerprint);
+        }
+    });
+
+    // ── Reason (optional) ──
+    if let Some(reason) = ssh.reason.as_deref().filter(|r| !r.is_empty()) {
+        ui.horizontal(|ui| {
+            ui.add_space(18.0);
+            ui.label(
+                egui::RichText::new(reason)
+                    .size(11.0)
+                    .italics()
+                    .color(COLOR_FOOTNOTE),
+            );
+        });
     }
 }
 
@@ -3902,6 +4027,7 @@ mod tests {
                     ppid,
                     parent_start_time: start,
                 },
+                ssh: None,
             },
             waiter_count: 1,
             first_seen: Instant::now() - Duration::from_secs(secs_ago),

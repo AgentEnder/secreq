@@ -35,7 +35,7 @@ use egui::Vec2;
 use egui_kittest::Harness;
 
 use secreq::audit::AuditEntry;
-use secreq::daemon::proto::{Ask, Caller, DedupeKey, SecretAsk};
+use secreq::daemon::proto::{Ask, Caller, DedupeKey, SecretAsk, SshAskInfo};
 use secreq::daemon::state::{SharedState, State};
 use secreq::daemon::ui::{
     render_consent_panel, AutoDenyToastView, ConsentWindowState, RuleAction, RuleSort,
@@ -108,6 +108,46 @@ fn submit(
         secrets,
         providers: HashMap::new(),
         dedupe_key,
+        ssh: None,
+    };
+    let (tx, rx) = mpsc::channel();
+    state.lock().unwrap().submit_ask(ask, tx);
+    rx
+}
+
+/// Submit an SSH-sign ask — the in-process consent prompt the SSH agent
+/// raises on a cache-miss SIGN_REQUEST. Mirrors the daemon's `sign_ask`:
+/// the `wrap` is `ssh:<key_id>`, the command is the synthetic
+/// `ssh-sign <key_id>` label, there are no secrets to inject, and the
+/// `ssh` marker carries the identity name + SHA256 fingerprint the UI
+/// renders. `reason` populates the SecretAsk-less ask's display reason via
+/// the `ssh` variant's renderer.
+fn submit_ssh(
+    state: &SharedState,
+    key_id: &str,
+    fingerprint: &str,
+    reason: Option<&str>,
+    callers: Vec<Caller>,
+) -> mpsc::Receiver<secreq::daemon::state::WaiterReply> {
+    let dedupe_key = DedupeKey {
+        wrap: format!("ssh:{key_id}"),
+        ppid: callers.first().map(|c| c.pid).unwrap_or(0),
+        parent_start_time: callers.first().map(|c| c.start_time).unwrap_or(0),
+    };
+    let ask = Ask {
+        command: vec![format!("ssh-sign {key_id}")],
+        // SSH signs have no requesting cwd — the peer is a socket
+        // connection, not a wrapped exec — so leave it empty.
+        cwd: String::new(),
+        callers,
+        secrets: vec![],
+        providers: HashMap::new(),
+        dedupe_key,
+        ssh: Some(SshAskInfo {
+            key_id: key_id.to_owned(),
+            fingerprint: fingerprint.to_owned(),
+            reason: reason.map(str::to_owned),
+        }),
     };
     let (tx, rx) = mpsc::channel();
     state.lock().unwrap().submit_ask(ask, tx);
@@ -138,6 +178,7 @@ fn pending(
         secrets,
         providers: HashMap::new(),
         dedupe_key,
+        ssh: None,
     };
     state.lock().unwrap().begin_pending(ask);
 }
@@ -425,6 +466,29 @@ fn pending_resolving() {
             )],
         );
         Vec::new()
+    });
+}
+
+#[test]
+#[ignore = "screenshot harness"]
+fn ssh_sign_pending() {
+    // The SSH-agent sign prompt: `git push` over SSH triggered a
+    // SIGN_REQUEST the daemon couldn't serve from cache, so it raised a
+    // consent prompt. The card reads "SSH key request" with the identity
+    // name + SHA256 fingerprint and the configured `$reason`, and shows the
+    // caller chain (git under the shell). No secret list — an SSH sign
+    // releases a signature, not an env var.
+    render_fixture("24-ssh-sign-pending", vec![], |state| {
+        vec![submit_ssh(
+            state,
+            "github",
+            "SHA256:Nh0Me49Zh9fDw/VYUfq43IJmI1T+XrjiYONPND8GzaM",
+            Some("git pushes to github.com"),
+            vec![
+                caller(8120, "git", 1_700_002_000),
+                caller(7926, "zsh", 1_700_000_000),
+            ],
+        )]
     });
 }
 

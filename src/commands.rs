@@ -977,6 +977,9 @@ fn obtain_wrap_consent(
             ppid: parent.pid,
             parent_start_time: parent.start_time,
         },
+        // Wrap runs are never SSH sign asks; only the in-process SSH agent
+        // path sets this.
+        ssh: None,
     };
 
     daemon_client::request_consent(ask).context("daemon consent request failed")

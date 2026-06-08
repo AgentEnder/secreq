@@ -31,7 +31,7 @@ use std::time::SystemTime;
 use anyhow::{Context, Result};
 use zeroize::Zeroizing;
 
-use super::proto::{Ask, Caller, DedupeKey};
+use super::proto::{Ask, Caller, DedupeKey, SshAskInfo};
 use super::ssh_proto::{self, AgentRequest};
 use super::state::{SharedState, WaiterReply};
 use crate::consent::{Decision, SshApprovalEntry};
@@ -68,6 +68,11 @@ pub struct PreparedIdentity {
     pub blob: Vec<u8>,
     /// The public key's comment (shown by `ssh-add -l`).
     pub comment: String,
+    /// The public key's SHA256 fingerprint string (e.g.
+    /// `SHA256:Nh0Me49Zh9fDw/…`). Computed once here so the consent prompt
+    /// can show the user a stable, recognizable key identifier without the
+    /// SIGN handler re-parsing the key per request.
+    pub fingerprint: String,
     /// The config identity name (`ssh.<key_id>`), used as the cache key and
     /// the audit/consent label.
     pub key_id: String,
@@ -112,6 +117,7 @@ pub fn prepare_identities(ssh: &BTreeMap<String, SshIdentity>) -> Vec<PreparedId
                 Ok(blob) => prepared.push(PreparedIdentity {
                     blob,
                     comment: public_key.comment().to_owned(),
+                    fingerprint: public_key.fingerprint(ssh_key::HashAlg::Sha256).to_string(),
                     key_id: name.clone(),
                     reference: identity.private_key.clone(),
                     reason: identity.reason.clone(),
@@ -538,6 +544,15 @@ fn sign_ask(
             ppid: anchor_pid,
             parent_start_time: anchor_start_time,
         },
+        // Mark this ask as an SSH sign so the consent window renders the
+        // SSH variant (identity + fingerprint, no secret list) rather than
+        // the wrap layout. Carries no secret material — only the display
+        // identity and the public-key fingerprint.
+        ssh: Some(SshAskInfo {
+            key_id: identity.key_id.clone(),
+            fingerprint: identity.fingerprint.clone(),
+            reason: identity.reason.clone(),
+        }),
     }
 }
 
@@ -685,6 +700,7 @@ mod tests {
         let identity = PreparedIdentity {
             blob: vec![1, 2, 3],
             comment: "test key".to_owned(),
+            fingerprint: "SHA256:testfingerprint".to_owned(),
             key_id: "ssh.test".to_owned(),
             reference: crate::reference::Reference {
                 provider: "env".to_owned(),
