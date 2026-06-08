@@ -21,7 +21,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Result;
 
-use crate::consent::{ApprovalEntry, Decision};
+use crate::consent::{ApprovalEntry, Decision, SshApprovalEntry};
 use crate::manifest::{BatchRetrieve, Manifest, Provider};
 use crate::resolve::{self, ResolutionPlan, SecretRequest, Source};
 use crate::rules::{self, EvalCtx, Rule, RuleHit};
@@ -107,6 +107,13 @@ pub struct State {
     /// "Approve all from X" decisions for the daemon's lifetime. No disk
     /// backing — `secreq daemon stop` is the canonical reset.
     approvals: Vec<ApprovalEntry>,
+    /// Remembered SSH sign approvals. Parallel to `approvals` but each
+    /// entry carries a wall-clock `expires_at`: an SSH anchor (shell /
+    /// IDE / git session) can live for hours, so a SIGN approval is
+    /// time-bounded rather than tied to anchor lifetime alone. See
+    /// [`SshApprovalEntry`] for the rationale behind the TTL divergence.
+    /// No disk backing — same `secreq daemon stop` reset as `approvals`.
+    ssh_approvals: Vec<SshApprovalEntry>,
     /// Encrypted in-memory cache of resolved secret values.
     secret_cache: Arc<Mutex<SecretCache>>,
     /// Singleflight coordinator. Ensures concurrent asks for the same
@@ -192,6 +199,7 @@ impl Default for State {
             queue: HashMap::new(),
             pending: HashMap::new(),
             approvals: Vec::new(),
+            ssh_approvals: Vec::new(),
             secret_cache: Arc::new(Mutex::new(SecretCache::new())),
             in_flight: InFlightMap::new(),
             last_activity: Instant::now(),
@@ -575,6 +583,57 @@ impl State {
     /// "Resolving…" card if the secret cache is cold.
     pub fn has_cached_approval(&self, ask: &Ask) -> bool {
         approval_scope_for(&self.approvals, ask).is_some()
+    }
+
+    // ── SSH sign approval cache ──────────────────────────────────────
+    //
+    // The SSH analogue of the wrap approvals cache above. Same in-memory,
+    // no-disk-backing model — but each entry carries a wall-clock TTL (see
+    // [`SshApprovalEntry`]). The wrap cache reads no clock (the parent
+    // process's lifetime is its natural expiry); the SSH cache does, so its
+    // lookup is split into a public `has_ssh_approval` that reads
+    // `SystemTime::now()` and a private `has_ssh_approval_at(now)` that
+    // takes the clock explicitly — the latter is what the unit test drives.
+
+    /// True if a non-expired SSH approval matches `(key_id, anchor_pid,
+    /// anchor_start_time)` as of *now*. Prunes expired entries on access.
+    /// Reads the wall clock; see [`State::has_ssh_approval_at`] for the
+    /// clock-injectable form the tests use.
+    pub fn has_ssh_approval(
+        &mut self,
+        key_id: &str,
+        anchor_pid: u32,
+        anchor_start_time: u64,
+    ) -> bool {
+        self.has_ssh_approval_at(key_id, anchor_pid, anchor_start_time, now_unix_secs())
+    }
+
+    /// Clock-injectable core of [`State::has_ssh_approval`]. Prunes every
+    /// entry that has expired as of `now`, then reports whether any
+    /// surviving entry matches the anchor + key.
+    fn has_ssh_approval_at(
+        &mut self,
+        key_id: &str,
+        anchor_pid: u32,
+        anchor_start_time: u64,
+        now: u64,
+    ) -> bool {
+        self.ssh_approvals.retain(|e| now < e.expires_at);
+        self.ssh_approvals
+            .iter()
+            .any(|e| e.matches(key_id, anchor_pid, anchor_start_time, now))
+    }
+
+    /// Remember an SSH sign approval. Mirrors the `ApproveRemember` insert
+    /// in [`State::resolve`]: dedupes on the full entry so re-approving the
+    /// same anchor+key just refreshes nothing (the caller supplies the
+    /// fresh `expires_at`, so a re-approval with a later expiry is a
+    /// distinct entry and both coexist harmlessly — the latest one wins on
+    /// lookup).
+    pub fn remember_ssh_approval(&mut self, entry: SshApprovalEntry) {
+        if !self.ssh_approvals.contains(&entry) {
+            self.ssh_approvals.push(entry);
+        }
     }
 
     /// Mark an authorized ask as resolving: show a read-only card in
@@ -1059,6 +1118,16 @@ pub fn approval_scope_for(approvals: &[ApprovalEntry], ask: &Ask) -> Option<Appr
     None
 }
 
+/// Current Unix time in whole seconds. Used by the public SSH-approval
+/// lookup; the clock-injectable `*_at` form takes `now` directly so tests
+/// never touch the real clock.
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 fn has_entry(approvals: &[ApprovalEntry], wrap: &str, scope: ApprovalScope) -> bool {
     approvals
         .iter()
@@ -1294,6 +1363,28 @@ mod tests {
             providers: HashMap::new(),
             dedupe_key,
         }
+    }
+
+    #[test]
+    fn ssh_approval_insert_hit_then_expiry_miss() {
+        let mut state = State::new();
+        state.remember_ssh_approval(SshApprovalEntry {
+            key_id: "github".into(),
+            anchor_pid: 99,
+            anchor_start_time: 1_700_000_000,
+            expires_at: 5000,
+        });
+
+        // Inside the window, matching anchor + key: hit. `now` is passed
+        // explicitly so the test never reads the real clock.
+        assert!(state.has_ssh_approval_at("github", 99, 1_700_000_000, /*now=*/ 4999));
+        // Wrong anchor pid: miss even before expiry.
+        assert!(!state.has_ssh_approval_at("github", 100, 1_700_000_000, 4999));
+        // Past expiry: miss. This also prunes the entry.
+        assert!(!state.has_ssh_approval_at("github", 99, 1_700_000_000, 5001));
+        // The expired entry was pruned on the last access, so even a
+        // pre-expiry `now` no longer hits.
+        assert!(!state.has_ssh_approval_at("github", 99, 1_700_000_000, 4999));
     }
 
     #[test]
