@@ -311,20 +311,111 @@ pub fn ssh_setup(
     Ok(0)
 }
 
-/// The shared SSH-agent wiring flow, used by both `secreq ssh-setup` and the
-/// optional step inside `secreq init`.
+/// `secreq ssh-setup` — a guided three-step onboarding flow:
 ///
-/// - Resolves the agent socket path the block should point at.
-/// - Loads the wraps config best-effort and warns when no `ssh` identities
-///   are configured yet (setup still wires the agent — it just has nothing
-///   to serve until an `ssh` block exists).
-/// - Picks the method (interactive `select` when `method` is `None`).
-/// - `undo` strips the managed block; otherwise we show the block, confirm
-///   (unless `assume_yes`), and apply it.
+/// 1. **Identity** — ensure the config declares at least one `ssh` identity
+///    (offer `ssh-add`'s interactive flow when there are none).
+/// 2. **Auto-start** — offer to install the login service so the agent socket
+///    is always live (the SSH agent is useless if the daemon isn't running).
+/// 3. **Client wiring** — point SSH clients at the agent socket (the original
+///    method-select + plan/confirm/apply block).
+///
+/// Used by both `secreq ssh-setup` and the optional step inside `secreq init`.
+///
+/// ## Scripted vs. guided
+///
+/// When `assume_yes` is set AND an explicit `--method` was passed
+/// (`method.is_some()`), the caller wants a non-interactive, scripted
+/// client-wiring run: we do ONLY step 3 and never prompt for identity or
+/// auto-start. This preserves `ssh-setup --yes --method ssh-config` for
+/// scripts and tests. Otherwise (no `--method`, or interactive), we run the
+/// full guided flow.
+///
+/// `--undo` also strips only the client-wiring block — it never removes
+/// identities or the login service. Run `secreq ssh-add --force`/`secreq
+/// daemon install --undo` to reverse those steps individually.
+///
+/// Steps 1 and 2 are best-effort: a failure or a decline there is surfaced as
+/// a warning and does NOT abort step 3. A normal completion returns `Ok(())`.
+fn ssh_setup_core(
+    method: Option<ssh_setup::Method>,
+    undo: bool,
+    assume_yes: bool,
+    config_path: Option<&Path>,
+) -> Result<()> {
+    // Scripted path: `--yes` + explicit `--method` means "just wire the
+    // client, don't prompt for identity/autostart". This is the deterministic
+    // path scripts and tests rely on.
+    let scripted = assume_yes && method.is_some();
+
+    if !scripted && !undo {
+        // Step 1: identity. Non-fatal — warn and continue on any error.
+        if let Err(err) = ssh_setup_identity_step(config_path) {
+            cliclack::log::warning(format!(
+                "skipped the identity step: {err:#}. Add one later with `secreq ssh-add`."
+            ))?;
+        }
+        // Step 2: auto-start. Non-fatal — warn and continue on any error.
+        if let Err(err) = ssh_setup_autostart_step(assume_yes) {
+            cliclack::log::warning(format!(
+                "skipped the auto-start step: {err:#}. Install it later with `secreq daemon install`."
+            ))?;
+        }
+    }
+
+    // Step 3: client wiring (the original flow). Always runs.
+    ssh_setup_wiring_step(method, undo, assume_yes, config_path)
+}
+
+/// Step 1 of `ssh-setup`: make sure an `ssh` identity is declared. With none
+/// configured, offer the interactive `ssh-add` flow; with some, list them and
+/// offer to add another. Continues either way.
+fn ssh_setup_identity_step(config_path: Option<&Path>) -> Result<()> {
+    let config = load_config_or_default(config_path)?;
+    if config.ssh.is_empty() {
+        cliclack::log::warning(
+            "No SSH identities configured yet — the agent has nothing to serve until you add one.",
+        )?;
+        if prompt::confirm_default_yes("Add an SSH identity now?")? {
+            ssh_add_core(SshAddArgs::default(), config_path)?;
+        }
+    } else {
+        let names = config.ssh.keys().cloned().collect::<Vec<_>>().join(", ");
+        cliclack::log::info(format!("Configured SSH identities: {names}."))?;
+        if cliclack::confirm("Add another identity?")
+            .initial_value(false)
+            .interact()
+            .context("interactive confirm failed (need a real terminal)")?
+        {
+            ssh_add_core(SshAddArgs::default(), config_path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Step 2 of `ssh-setup`: ensure the login service is installed so the agent
+/// socket is always live. Already installed → just report it; otherwise offer
+/// to install it (respecting `assume_yes` for the install confirm).
+fn ssh_setup_autostart_step(assume_yes: bool) -> Result<()> {
+    let platform = autostart::current_platform();
+    let home = dirs::home_dir().context("could not determine $HOME")?;
+    let service_file = autostart::service_file_path(&home, platform);
+    if service_file.exists() {
+        cliclack::log::success("Login service already installed.")?;
+        return Ok(());
+    }
+    if prompt::confirm_default_yes("Install the login service so the agent is always running?")? {
+        daemon_install_core(false, assume_yes)?;
+    }
+    Ok(())
+}
+
+/// Step 3 of `ssh-setup`: the client-wiring block — resolve the agent socket,
+/// pick the method, then plan/confirm/apply (or `--undo` strips it).
 ///
 /// `assume_yes` skips the confirmation prompt so the command can run without
 /// a terminal (and so tests can drive it deterministically).
-fn ssh_setup_core(
+fn ssh_setup_wiring_step(
     method: Option<ssh_setup::Method>,
     undo: bool,
     assume_yes: bool,
@@ -413,7 +504,7 @@ fn ssh_setup_core(
     ssh_setup::apply(&plan)?;
     cliclack::log::success(format!("wrote {}.", plan.config_file.display()))?;
     cliclack::log::info(
-        "secreq must be running as your SSH agent (it auto-starts); new shells / SSH sessions will pick this up — restart your shell or run `exec $SHELL`.",
+        "secreq's daemon must be running to serve keys — step 2 (or `secreq daemon install`) sets it to start at login. New shells / SSH sessions pick up the socket; restart your shell or run `exec $SHELL`.",
     )?;
     cliclack::log::info(
         "Each identity's `private_key` reference must resolve to an OpenSSH private key, e.g. `op read \"op://Vault/My Key/private key\"`.",
@@ -446,6 +537,17 @@ pub struct SshAddArgs {
 /// resolved interactively, with 1Password `op` discovery when it's on PATH.
 pub fn ssh_add(args: SshAddArgs, assume_yes: bool, config_path: Option<&Path>) -> Result<i32> {
     let _ = assume_yes;
+    ssh_add_core(args, config_path)?;
+    Ok(0)
+}
+
+/// The reusable body of `secreq ssh-add`, shared with the `ssh-setup`
+/// orchestrator's identity step. Returns `Ok(())` after writing the identity;
+/// the standalone command wraps it to produce an exit code.
+///
+/// When `args.name` is empty the name is prompted for interactively — that's
+/// the path the orchestrator takes (it has no name to preset).
+fn ssh_add_core(args: SshAddArgs, config_path: Option<&Path>) -> Result<()> {
     let config_path = resolve_config_path(config_path)?;
     let mut config = if config_path.is_file() {
         WrapsConfig::load(&config_path)?
@@ -453,11 +555,16 @@ pub fn ssh_add(args: SshAddArgs, assume_yes: bool, config_path: Option<&Path>) -
         WrapsConfig::default()
     };
 
-    if config.ssh.contains_key(&args.name) && !args.force {
-        bail!(
-            "identity `{}` already exists; use --force to overwrite",
-            args.name
-        );
+    // The CLI supplies the name as a positional; the orchestrator leaves it
+    // empty so we prompt for it here.
+    let name = if args.name.is_empty() {
+        prompt::ssh_identity_name()?
+    } else {
+        args.name.clone()
+    };
+
+    if config.ssh.contains_key(&name) && !args.force {
+        bail!("identity `{name}` already exists; use --force to overwrite");
     }
 
     // Non-interactive iff both key pieces are on the command line. Tracked so
@@ -508,17 +615,19 @@ pub fn ssh_add(args: SshAddArgs, assume_yes: bool, config_path: Option<&Path>) -
         public_key,
         private_key,
     };
-    config.ssh.insert(args.name.clone(), identity);
+    config.ssh.insert(name.clone(), identity);
 
     write_config(&config_path, &config)?;
 
-    println!("Added SSH identity `{}`.", args.name);
+    println!("Added SSH identity `{name}`.");
     println!("  config: {}", config_path.display());
     println!(
         "  Ensure the private_key reference resolves to an OpenSSH private key, e.g. `op read \"op://Vault/My Key/private key\"`."
     );
-    println!("  Next: `secreq ssh-setup` to wire SSH clients and enable autostart.");
-    Ok(0)
+    println!(
+        "  secreq's daemon must be running to serve this key — run `secreq daemon install` to start it at login (or wire it via `secreq ssh-setup`)."
+    );
+    Ok(())
 }
 
 /// Resolve a `--public-key` argument to a validated OpenSSH public-key line.
@@ -1061,6 +1170,14 @@ pub fn daemon_log_path() -> Result<i32> {
 /// Linux box without a user bus), we still report the file was written and how
 /// to load it by hand rather than hard-failing.
 pub fn daemon_install(undo: bool, assume_yes: bool) -> Result<i32> {
+    daemon_install_core(undo, assume_yes)?;
+    Ok(0)
+}
+
+/// The reusable body of `secreq daemon install`, shared with the `ssh-setup`
+/// orchestrator's auto-start step. Returns `Ok(())` once the service file is
+/// written (or undone); the standalone command wraps it for an exit code.
+fn daemon_install_core(undo: bool, assume_yes: bool) -> Result<()> {
     let platform = autostart::current_platform();
     let home = dirs::home_dir().context("could not determine $HOME")?;
     let service_file = autostart::service_file_path(&home, platform);
@@ -1080,7 +1197,7 @@ pub fn daemon_install(undo: bool, assume_yes: bool) -> Result<i32> {
             cliclack::log::info("No secreq login service found — nothing to remove.")?;
         }
         cliclack::outro("Done.")?;
-        return Ok(0);
+        return Ok(());
     }
 
     let exe = std::env::current_exe().context("could not determine the secreq executable path")?;
@@ -1109,7 +1226,7 @@ pub fn daemon_install(undo: bool, assume_yes: bool) -> Result<i32> {
     if !proceed {
         cliclack::log::info("Skipped — no files changed.")?;
         cliclack::outro("Done.")?;
-        return Ok(0);
+        return Ok(());
     }
 
     let changed = autostart::apply(&plan)?;
@@ -1154,7 +1271,7 @@ pub fn daemon_install(undo: bool, assume_yes: bool) -> Result<i32> {
     }
 
     cliclack::outro("Done.")?;
-    Ok(0)
+    Ok(())
 }
 
 /// Print the tail of `path` then follow appended lines, `tail -f`-style.
@@ -1792,6 +1909,23 @@ mod prompt {
         } else {
             Ok(Some(value))
         }
+    }
+
+    /// Prompt for the identity name (the key under the `ssh` block). Used by
+    /// the `ssh-setup` orchestrator's identity step, which has no preset name.
+    pub(super) fn ssh_identity_name() -> Result<String> {
+        cliclack::input("Identity name (the key under the `ssh` block)")
+            .placeholder("e.g. github")
+            .validate(|s: &String| {
+                if s.trim().is_empty() {
+                    Err("name can't be empty")
+                } else {
+                    Ok(())
+                }
+            })
+            .interact()
+            .context("interactive input failed (need a real terminal)")
+            .map(|s: String| s.trim().to_owned())
     }
 
     /// Prompt for a `secret://provider/locator` reference (the manual

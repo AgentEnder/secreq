@@ -769,6 +769,54 @@ fn ssh_setup_shell_rc_writes_ssh_auth_sock_block() {
     );
 }
 
+#[test]
+fn ssh_setup_scripted_does_only_client_wiring() {
+    // `--yes --method ssh-config` is the scripted path: it must write ONLY the
+    // client-wiring block, never prompting for (or creating) an identity or
+    // the login service.
+    let (dir, _config) = sandbox();
+    let home = dir.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+
+    let out = run_ssh_setup(
+        dir.path(),
+        &home,
+        "",
+        &["ssh-setup", "--method", "ssh-config", "--yes"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The client-wiring block was written.
+    let ssh_config = home.join(".ssh/config");
+    assert!(ssh_config.is_file(), "~/.ssh/config should exist");
+    assert!(fs::read_to_string(&ssh_config)
+        .unwrap()
+        .contains("# >>> secreq managed SSH agent"));
+
+    // No login service was installed (macOS LaunchAgents / Linux systemd user).
+    let launchd = home.join("Library/LaunchAgents/com.secreq.daemon.plist");
+    let systemd = home.join(".config/systemd/user/secreq.service");
+    assert!(
+        !launchd.exists() && !systemd.exists(),
+        "scripted path must not install the login service"
+    );
+
+    // No ssh identity was written: the config either doesn't exist or has no
+    // `ssh` block.
+    let config_file = dir.path().join("config/secreq/wraps.json5");
+    if config_file.exists() {
+        let body = fs::read_to_string(&config_file).unwrap();
+        assert!(
+            !body.contains("\"ssh\""),
+            "scripted path must not write an ssh identity: {body}"
+        );
+    }
+}
+
 // ── ssh-add ───────────────────────────────────────────────────────────────
 
 /// A real (throwaway) ed25519 public key line for the ssh-add tests. Used as
