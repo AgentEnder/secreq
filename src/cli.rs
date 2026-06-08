@@ -209,6 +209,15 @@ enum DaemonAction {
     /// Print the path of the daemon's persistent log file and exit.
     /// Does not start a daemon.
     LogPath,
+    /// Install a per-user login service that runs the daemon at login and
+    /// keeps it alive (launchd LaunchAgent on macOS, systemd `--user` unit
+    /// on Linux). This is what keeps the SSH agent socket live for incoming
+    /// connections. `--undo` unloads and removes the service.
+    Install {
+        /// Unload and remove the login service instead of installing it.
+        #[arg(long)]
+        undo: bool,
+    },
 }
 
 /// Parse args, dispatch, return the process exit code.
@@ -253,6 +262,10 @@ pub fn run() -> i32 {
             action: Some(DaemonAction::LogPath),
             ..
         }) => commands::daemon_log_path(),
+        Some(Command::Daemon {
+            action: Some(DaemonAction::Install { undo }),
+            ..
+        }) => commands::daemon_install(undo, cli.yes),
         Some(Command::Pending) => commands::pending(),
         Some(Command::View) => commands::view(),
         Some(Command::Rules { action }) => match action {

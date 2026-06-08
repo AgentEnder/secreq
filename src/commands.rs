@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 
 use crate::audit::{self, AuditEntry};
+use crate::autostart;
 use crate::consent::Decision;
 use crate::daemon::client as daemon_client;
 use crate::daemon::proto;
@@ -789,6 +790,116 @@ pub fn daemon_tail() -> Result<i32> {
 /// layout; it never starts a daemon.
 pub fn daemon_log_path() -> Result<i32> {
     println!("{}", crate::daemon::log::log_path()?.display());
+    Ok(0)
+}
+
+/// `secreq daemon install` — install (or `--undo`) a per-user login service
+/// that runs `secreq daemon --fg` at login and keeps it alive.
+///
+/// WHY: the SSH agent socket only exists while the daemon runs. Wraps
+/// auto-spawn the daemon on demand, but an incoming SSH connection has nothing
+/// to spawn it — so `SSH_AUTH_SOCK` points at a dead socket unless the daemon
+/// already happens to be up. A login service keeps it live.
+///
+/// Writing the service file is pure ([`autostart::plan`]/[`autostart::apply`]);
+/// loading it shells out to `launchctl`/`systemctl`
+/// ([`autostart::load_service`]). If the load step fails (e.g. a headless
+/// Linux box without a user bus), we still report the file was written and how
+/// to load it by hand rather than hard-failing.
+pub fn daemon_install(undo: bool, assume_yes: bool) -> Result<i32> {
+    let platform = autostart::current_platform();
+    let home = dirs::home_dir().context("could not determine $HOME")?;
+    let service_file = autostart::service_file_path(&home, platform);
+
+    if undo {
+        cliclack::intro("secreq daemon install --undo")?;
+        // Best-effort unload first; an unloaded-already service isn't an error
+        // we should stop on.
+        if let Err(err) = autostart::unload_service(platform, &service_file) {
+            cliclack::log::warning(format!(
+                "couldn't unload the service (it may not have been loaded): {err:#}"
+            ))?;
+        }
+        if autostart::remove(&home, platform)? {
+            cliclack::log::success(format!("Removed {}.", service_file.display()))?;
+        } else {
+            cliclack::log::info("No secreq login service found — nothing to remove.")?;
+        }
+        cliclack::outro("Done.")?;
+        return Ok(0);
+    }
+
+    let exe = std::env::current_exe().context("could not determine the secreq executable path")?;
+    // Canonicalize when we can so the service points at a stable path (resolves
+    // symlinks like a homebrew shim); fall back to the raw path otherwise.
+    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+    let log_path = crate::daemon::log::log_path()?;
+
+    let plan = autostart::plan(&home, platform, &exe, &log_path)?;
+
+    cliclack::intro("secreq daemon install")?;
+    cliclack::note(
+        format!(
+            "I'll write this login service to {}:",
+            plan.service_file.display()
+        ),
+        &plan.contents,
+    )?;
+    if plan.already_installed {
+        cliclack::log::info(
+            "A service file already exists; it'll be rewritten (the exe path may have changed).",
+        )?;
+    }
+
+    let proceed = assume_yes || prompt::confirm_default_yes("Write and load it?")?;
+    if !proceed {
+        cliclack::log::info("Skipped — no files changed.")?;
+        cliclack::outro("Done.")?;
+        return Ok(0);
+    }
+
+    let changed = autostart::apply(&plan)?;
+    if changed {
+        cliclack::log::success(format!("wrote {}.", plan.service_file.display()))?;
+    } else {
+        cliclack::log::info(format!(
+            "{} was already up to date.",
+            plan.service_file.display()
+        ))?;
+    }
+
+    match autostart::load_service(platform, &plan.service_file) {
+        Ok(()) => {
+            cliclack::log::success(
+                "Loaded the login service — the daemon is running now and will start at login.",
+            )?;
+            let hint = match platform {
+                autostart::Platform::Macos => "launchctl list | grep secreq",
+                autostart::Platform::Linux => "systemctl --user status secreq",
+            };
+            cliclack::log::info(format!("Check status with: {hint}"))?;
+        }
+        Err(err) => {
+            // Don't hard-fail after writing — the file is in place; tell the
+            // user how to load it manually.
+            cliclack::log::warning(format!("couldn't load the service automatically: {err:#}"))?;
+            let manual = match platform {
+                autostart::Platform::Macos => format!(
+                    "launchctl bootstrap gui/$(id -u) {}",
+                    plan.service_file.display()
+                ),
+                autostart::Platform::Linux => {
+                    "systemctl --user daemon-reload && systemctl --user enable --now secreq.service"
+                        .to_owned()
+                }
+            };
+            cliclack::log::info(format!(
+                "The file is written; load it by hand with:\n  {manual}"
+            ))?;
+        }
+    }
+
+    cliclack::outro("Done.")?;
     Ok(0)
 }
 

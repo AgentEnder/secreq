@@ -39,6 +39,7 @@ pub const RESOLVING_ENV: &str = "SECREQ_RESOLVING";
 pub const BUILD_ID: &str = env!("SECREQ_BUILD_ID");
 
 pub mod audit;
+pub mod autostart;
 pub mod cli;
 pub mod commands;
 pub mod consent;
