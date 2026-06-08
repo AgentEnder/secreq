@@ -797,6 +797,19 @@ fn ssh_setup_scripted_does_only_client_wiring() {
         .unwrap()
         .contains("# >>> secreq managed SSH agent"));
 
+    // The scripted path must not offer or perform the self-test (no prompt, no
+    // real sign) — it stays deterministic and returns promptly.
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !combined.contains("Test that the agent can sign")
+            && !combined.contains("Signing may prompt"),
+        "scripted ssh-setup must not offer the self-test: {combined}"
+    );
+
     // No login service was installed (macOS LaunchAgents / Linux systemd user).
     let launchd = home.join("Library/LaunchAgents/com.secreq.daemon.plist");
     let systemd = home.join(".config/systemd/user/secreq.service");
@@ -868,6 +881,21 @@ fn ssh_add_writes_identity_with_explicit_flags() {
         check.status.success(),
         "check stderr: {}",
         String::from_utf8_lossy(&check.stderr)
+    );
+
+    // The fully non-interactive path (both key flags supplied) must NOT offer
+    // the self-test — it never prompts and never performs a real sign, so it
+    // returns promptly and can't hang against a (non-existent) live socket.
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !combined.contains("Test that the agent can sign")
+            && !combined.contains("real signature")
+            && !combined.contains("Signing may prompt"),
+        "scripted ssh-add must not offer the self-test: {combined}"
     );
 }
 

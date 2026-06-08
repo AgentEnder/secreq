@@ -200,6 +200,29 @@ agent (or any other agent). Pick one. Running both means SSH talks to
 whichever it finds first, and you lose secreq's consent gating for keys
 the other agent answers.
 
+### Verify it works
+
+```sh
+secreq ssh-test            # test every configured identity
+secreq ssh-test github     # test just one
+```
+
+`ssh-test` proves the wiring end to end: it connects to the agent socket,
+asks the agent to sign a fixed test message with the key, and verifies the
+returned signature against the key's public half — the same
+consent → resolve → sign path a real `git push` takes. A passing run prints
+`✓ <name>: agent signed; signature verifies`.
+
+Because it performs a **real** signature, it needs the daemon running (it
+talks to the live socket) and **may prompt for consent** the first time
+(answer the prompt if the window appears). If the socket is unreachable, the
+daemon probably isn't running yet — `secreq daemon install` sets it to start
+at login.
+
+You don't have to run it by hand: both `secreq ssh-setup` (the guided flow)
+and `secreq ssh-add` offer to run the self-test for you right after they wire
+things up.
+
 ## Behavior
 
 - **First sign prompts.** The first signature per anchor opens the consent

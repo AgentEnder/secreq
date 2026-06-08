@@ -364,7 +364,50 @@ fn ssh_setup_core(
     }
 
     // Step 3: client wiring (the original flow). Always runs.
-    ssh_setup_wiring_step(method, undo, assume_yes, config_path)
+    ssh_setup_wiring_step(method, undo, assume_yes, config_path)?;
+
+    // Optional post-step (guided, non-scripted, non-undo): offer to prove the
+    // agent can actually sign. Non-fatal — a decline or failure never changes
+    // the exit status.
+    if !scripted && !undo {
+        if let Err(err) = ssh_setup_self_test_step(config_path) {
+            cliclack::log::warning(format!(
+                "skipped the self-test: {err:#}. Run `secreq ssh-test` later to verify signing."
+            ))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Optional final step of the guided `ssh-setup`: offer to self-test one
+/// configured identity (prove the agent can sign). With one identity it tests
+/// that one; with several it asks which. Skipped when no identities are
+/// configured. Always non-fatal — `offer_self_test` swallows its own errors.
+fn ssh_setup_self_test_step(config_path: Option<&Path>) -> Result<()> {
+    let config = load_config_or_default(config_path)?;
+    let names: Vec<String> = config.ssh.keys().cloned().collect();
+    if names.is_empty() {
+        return Ok(());
+    }
+    if !prompt::confirm_default_yes("Test that the agent can sign now?")? {
+        return Ok(());
+    }
+
+    let chosen = if names.len() == 1 {
+        names[0].clone()
+    } else {
+        let mut select = cliclack::select::<String>("Which identity should I test?");
+        for name in &names {
+            select = select.item(name.clone(), name.as_str(), "");
+        }
+        select
+            .interact()
+            .context("interactive selection failed (need a real terminal)")?
+    };
+
+    offer_self_test(&chosen, config_path);
+    Ok(())
 }
 
 /// Step 1 of `ssh-setup`: make sure an `ssh` identity is declared. With none
@@ -627,6 +670,20 @@ fn ssh_add_core(args: SshAddArgs, config_path: Option<&Path>) -> Result<()> {
     println!(
         "  secreq's daemon must be running to serve this key — run `secreq daemon install` to start it at login (or wire it via `secreq ssh-setup`)."
     );
+
+    // Optional post-step (interactive path only): offer to prove the agent can
+    // actually sign with the key we just added. The fully non-interactive path
+    // (`--public-key` + `--private-key`) never prompts or signs, so scripts
+    // stay deterministic. A declined or failing self-test is non-fatal.
+    if !non_interactive
+        && prompt::confirm_default_yes(&format!(
+            "Test that the agent can sign with `{name}` now? (this performs a real signature and may prompt for approval)"
+        ))
+        .unwrap_or(false)
+    {
+        offer_self_test(&name, Some(&config_path));
+    }
+
     Ok(())
 }
 
@@ -669,28 +726,87 @@ pub fn ssh_test(name: Option<String>, config_path: Option<&Path>) -> Result<i32>
 
     let mut all_ok = true;
     for (name, identity) in to_test {
-        match crate::ssh_selftest::run(&agent_sock, &identity, &name) {
-            Ok(result) if result.listed && result.verified => {
-                println!("✓ {name}: agent signed and the signature verifies");
-            }
-            Ok(result) if !result.listed => {
-                all_ok = false;
-                println!(
-                    "✗ {name}: the agent didn't list this key — is the config the daemon loaded current? (restart with `secreq daemon stop`)"
-                );
-            }
-            Ok(_) => {
-                all_ok = false;
-                println!("✗ {name}: the agent signed but the signature did not verify");
-            }
-            Err(err) => {
-                all_ok = false;
-                println!("✗ {name}: {err:#}");
-            }
-        }
+        let result = crate::ssh_selftest::run(&agent_sock, &identity, &name);
+        all_ok &= print_self_test_result(&name, &result);
     }
 
     Ok(if all_ok { 0 } else { 1 })
+}
+
+/// Print a single identity's self-test outcome as a `✓`/`✗` line and report
+/// whether it passed. Shared by `secreq ssh-test` and the optional post-step
+/// after `ssh-add`/`ssh-setup` so both render the same per-identity result.
+fn print_self_test_result(name: &str, result: &Result<crate::ssh_selftest::SelfTest>) -> bool {
+    match result {
+        Ok(test) if test.listed && test.verified => {
+            println!("✓ {name}: agent signed; signature verifies");
+            true
+        }
+        Ok(test) if !test.listed => {
+            println!(
+                "✗ {name}: the agent didn't list this key — is the config the daemon loaded current? (restart with `secreq daemon stop`)"
+            );
+            false
+        }
+        Ok(_) => {
+            println!("✗ {name}: the agent signed but the signature did not verify");
+            false
+        }
+        Err(err) => {
+            println!("✗ {name}: {err:#}");
+            false
+        }
+    }
+}
+
+/// Offer the self-test as a NON-FATAL post-step after `ssh-add`/`ssh-setup`.
+///
+/// Resolves the agent socket, loads the identity by `key_id`, runs the
+/// self-test, and prints the same `✓`/`✗` line as `secreq ssh-test`. Failure
+/// is never fatal: an unreachable socket is reported as a friendly hint (the
+/// daemon is probably not running yet), and a refused/unverified sign is a
+/// warning. The caller's exit status is unaffected either way.
+fn offer_self_test(key_id: &str, config_path: Option<&Path>) {
+    let identity = match load_config_or_default(config_path) {
+        Ok(config) => match config.ssh.get(key_id).cloned() {
+            Some(identity) => identity,
+            None => {
+                // The identity we just wrote is somehow gone — warn, don't fail.
+                let _ = cliclack::log::warning(format!(
+                    "couldn't find `{key_id}` in the config to self-test; skipping."
+                ));
+                return;
+            }
+        },
+        Err(err) => {
+            let _ =
+                cliclack::log::warning(format!("couldn't read the config to self-test: {err:#}"));
+            return;
+        }
+    };
+
+    let agent_sock = match crate::daemon::ssh_agent::default_agent_socket_path() {
+        Ok(path) => path,
+        Err(err) => {
+            let _ = cliclack::log::warning(format!(
+                "couldn't determine the agent socket to self-test: {err:#}"
+            ));
+            return;
+        }
+    };
+
+    println!("Signing may prompt for consent — answer the prompt if one appears.");
+    let result = crate::ssh_selftest::run(&agent_sock, &identity, key_id);
+    if result.is_err() && !agent_sock.exists() {
+        // The socket isn't there at all: the daemon almost certainly isn't
+        // running yet (the most common case right after onboarding). Give a
+        // friendly hint rather than an alarming ✗.
+        let _ = cliclack::log::info(format!(
+            "couldn't reach the agent yet — make sure the daemon is running (`secreq daemon install`), then `secreq ssh-test {key_id}`."
+        ));
+        return;
+    }
+    print_self_test_result(key_id, &result);
 }
 
 /// Resolve a `--public-key` argument to a validated OpenSSH public-key line.

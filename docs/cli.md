@@ -72,6 +72,10 @@ reference, and the public key if you didn't supply one, are derived from
 it) when `op` is on `PATH`, otherwise a manual prompt. You can also
 hand-edit the `ssh` block directly. See [`ssh-agent.md`](./ssh-agent.md).
 
+On the interactive path (not the fully non-interactive `--public-key` +
+`--private-key` run), `ssh-add` offers to run `ssh-test` for the new
+identity once it's written, so you can confirm the agent can sign with it.
+
 ### `ssh-setup`
 
 ```
@@ -98,6 +102,27 @@ confirm prompt (use `--yes` to skip it). Idempotent: re-running detects
 the sentinel and skips the write. See [`ssh-agent.md`](./ssh-agent.md)
 for the full onboarding, the two wiring methods, and the key-custody
 tradeoff.
+
+The guided (non-scripted) flow ends by offering to run `ssh-test` so you
+can confirm the agent can actually sign before you walk away.
+
+### `ssh-test`
+
+```
+secreq ssh-test [<NAME>]
+```
+
+Proves the agent can sign. Connects to the agent socket, asks it to sign a
+fixed test message with the configured key, and verifies the returned
+signature against the key's public half — exercising the real
+consent → resolve → sign path. With a `<NAME>` it tests that one identity;
+with none, it tests every configured identity.
+
+This performs a **real** signature, so it needs the daemon running and **may
+prompt for consent** the first time (answer the prompt if the window
+appears). Exit code 0 only if every tested identity signed and verified;
+any failure (or no identities configured) returns non-zero. See
+[`ssh-agent.md`](./ssh-agent.md).
 
 ### `wrap`
 
