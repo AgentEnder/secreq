@@ -61,6 +61,11 @@ multi-secret invocation), `keychain` (macOS), `lastpass`, `pass` (Unix).
 - **Multi-provider output masking.** Any value resolved through any
   provider gets redacted on the wrapped binary's stdout/stderr. `--raw`
   opts out for `pbcopy`-style flows.
+- **Provenance-aware SSH agent.** Point `SSH_AUTH_SOCK` at secreq and each
+  key signature is gated by the same consent prompt — you see who's asking
+  before `git push` signs. The private key is resolved from your provider,
+  used in-process, and zeroized (a key-custody downgrade vs. 1Password's
+  sealed agent — see [`docs/ssh-agent.md`](./docs/ssh-agent.md)).
 
 ## Documentation
 
@@ -73,6 +78,7 @@ End-user docs live in [`docs/`](./docs/):
 | [`docs/cli.md`](./docs/cli.md) | Every subcommand, every flag, the wrap-and-run flow |
 | [`docs/wraps.md`](./docs/wraps.md) | Authoring `wraps.json5` |
 | [`docs/providers.md`](./docs/providers.md) | Provider model + built-ins |
+| [`docs/ssh-agent.md`](./docs/ssh-agent.md) | The provenance-aware SSH agent: config, setup, the key-custody tradeoff |
 | [`docs/consent-window.md`](./docs/consent-window.md) | The daemon UI: pending tree, audit log, audit JSONL format |
 | [`docs/wraps.schema.json`](./docs/wraps.schema.json) | JSON Schema (point your editor at it) |
 

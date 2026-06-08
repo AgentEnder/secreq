@@ -275,6 +275,32 @@ pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Re
     config.shim_dir = Some(shim_dir.clone());
     write_config(&config_path, &config)?;
 
+    // 5. SSH agent hint. secreq doubles as a provenance-aware SSH agent
+    // when the config has an `ssh` block. Tell the user how to point SSH
+    // clients at the agent socket. When identities are already configured
+    // we show the full setup; otherwise a one-liner pointer to the docs so
+    // they know the capability exists.
+    if let Ok(agent_socket) = crate::daemon::server::default_agent_socket_path() {
+        let socket = agent_socket.display();
+        if config.ssh.is_empty() {
+            cliclack::log::info(format!(
+                "secreq can also act as your SSH agent (provenance-aware key signing). \
+                 Add an `ssh` block to your config and point SSH clients at the agent \
+                 socket ({socket}). See docs/ssh-agent.md."
+            ))?;
+        } else {
+            cliclack::note(
+                "secreq is also your SSH agent. Point SSH clients at its socket — \
+                 don't ALSO point them at 1Password's agent (secreq is the agent now \
+                 and resolves keys via the provider):",
+                format!(
+                    "# shell rc:\nexport SSH_AUTH_SOCK=\"{socket}\"\n\n\
+                     # or ~/.ssh/config:\nHost *\n    IdentityAgent \"{socket}\""
+                ),
+            )?;
+        }
+    }
+
     cliclack::outro(format!(
         "Wrote {}.  Next: `secreq wrap <binary>`, e.g. `secreq wrap gh`.",
         config_path.display()

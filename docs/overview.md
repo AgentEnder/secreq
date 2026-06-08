@@ -11,6 +11,11 @@ a masking filter so any secret that leaks to stdout/stderr is redacted.
 Think of it as **1Password Shell Plugins, but generic** — bring your own
 store(s), with provenance-aware consent before any release.
 
+It also doubles as a **provenance-aware SSH agent**: point your SSH
+clients at it and every key signature is gated by the same consent
+ceremony, showing who's asking before the key is used. See
+[`ssh-agent.md`](./ssh-agent.md).
+
 ## What problem it solves
 
 Every other tool in the adjacent space:
@@ -85,6 +90,8 @@ provenance-aware consent**. Nobody else covers all three.
 | **Masking** | A streaming, byte-exact redactor that scrubs any resolved value from the child's output. |
 | **Pass-through** | `secreq <bin>` for a binary with no wrap entry just execs the binary unchanged. Lets you blanket-shim safely. |
 | **`retrieve_batch`** | A provider's optional multi-resolve mode (`op run -- printenv` for `op`). N secrets, one biometric. |
+| **SSH agent** | A second daemon socket speaking the SSH agent protocol. Gates each key signature on consent, then resolves the private key from a provider and signs in-process. See [`ssh-agent.md`](./ssh-agent.md). |
+| **SSH approval TTL** | The SSH-only approval cache is clock-bounded (~5 min per anchor), unlike the wrap cache which lives as long as the parent process. |
 
 ## What it is *not*
 
@@ -101,6 +108,11 @@ provenance-aware consent**. Nobody else covers all three.
 - **Not a `.env` migrator.** The pre-pivot `import` command went away — if
   you have `.env` secrets you want to move into providers, do it manually
   (or wait for varlock's import path).
+- **Not a hardware-sealed SSH agent.** The SSH agent gates and audits key
+  use, but it resolves the private key into the daemon's memory to sign
+  (then zeroizes it). It does *not* keep the key hardware-sealed the way
+  1Password's agent does. See the trust note below and
+  [`ssh-agent.md`](./ssh-agent.md).
 
 ## Trust and threat model (short version)
 
@@ -112,8 +124,17 @@ provenance-aware consent**. Nobody else covers all three.
 - Mitigations: PTY/piped output masking, zeroizing in-process memory,
   audit log of every grant (names only, never values), provenance-aware
   consent, pid-recycle-safe cache.
-- See [`../dev-docs/architecture.md`](../dev-docs/architecture.md) for
-  the technical details.
+- **SSH agent — key custody is downgraded.** Unlike 1Password's sealed
+  agent (the key never leaves 1Password), secreq resolves the private key
+  into the daemon's RAM to sign, then zeroizes it. You gain provenance-aware
+  consent and one agent across providers; you give up hardware sealing.
+  Keys you need hardware-sealed should stay on 1Password's agent.
+- **SSH approval has a TTL.** The SSH sign approval cache is clock-bounded
+  (~5 min per anchor) — the only clock-based expiry in the approvals model.
+  Wrap approvals have no TTL; they live as long as the parent process.
+- See [`ssh-agent.md`](./ssh-agent.md) for the SSH agent in detail, and
+  [`../dev-docs/architecture.md`](../dev-docs/architecture.md) for the
+  technical details.
 
 ## Next step
 

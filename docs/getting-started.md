@@ -148,6 +148,15 @@ covers.
   it when you actually want the resolved value to reach stdout (e.g.
   `secreq --raw gh auth token | pbcopy`).
 
+## SSH keys, too
+
+`secreq` can also act as your **SSH agent**, gating each key signature on
+the same consent ceremony. Add an `ssh` block to your config, point
+`SSH_AUTH_SOCK` at secreq's agent socket (`secreq init` prints the path),
+and `git push` prompts you with the caller chain before signing. See
+[`ssh-agent.md`](./ssh-agent.md) — including the key-custody tradeoff vs.
+1Password's sealed agent.
+
 ## What to read next
 
 - [`cli.md`](./cli.md) — every subcommand and flag in detail.
@@ -155,5 +164,6 @@ covers.
   consent cache scope, examples.
 - [`providers.md`](./providers.md) — the provider model, built-ins,
   defining your own.
+- [`ssh-agent.md`](./ssh-agent.md) — the provenance-aware SSH agent.
 - [`overview.md`](./overview.md) — the design rationale and mental
   model.
