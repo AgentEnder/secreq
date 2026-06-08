@@ -6,9 +6,10 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::commands::{self, WrapArgs, WrapRunOpts};
+use crate::ssh_setup;
 
 /// `op run`, but for every secret store you own — per-binary CLI wrapping
 /// with provenance-aware consent.
@@ -75,6 +76,22 @@ enum Command {
     /// List configured wraps.
     Wraps,
 
+    /// Wire SSH clients at secreq's agent socket by writing a managed
+    /// block to `~/.ssh/config` (`IdentityAgent`) or your shell rc
+    /// (`SSH_AUTH_SOCK`). Pick the method with `--method`, or get an
+    /// interactive prompt when it's omitted. `--undo` strips the block
+    /// back out.
+    SshSetup {
+        /// Which file to wire: `ssh-config` (`~/.ssh/config`
+        /// `IdentityAgent`) or `shell-rc` (`SSH_AUTH_SOCK` export).
+        /// Omit to choose interactively.
+        #[arg(long, value_enum)]
+        method: Option<SshMethod>,
+        /// Remove the managed block instead of adding it.
+        #[arg(long)]
+        undo: bool,
+    },
+
     /// Validate the config.
     Check,
 
@@ -140,6 +157,25 @@ enum Command {
     External(Vec<String>),
 }
 
+/// Which config file `secreq ssh-setup` should wire the agent into. Mirrors
+/// [`ssh_setup::Method`] as a clap `ValueEnum` so it parses `--method`.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum SshMethod {
+    /// `~/.ssh/config` with a `Host * / IdentityAgent` stanza.
+    SshConfig,
+    /// The shell rc file with an `SSH_AUTH_SOCK` export.
+    ShellRc,
+}
+
+impl From<SshMethod> for ssh_setup::Method {
+    fn from(m: SshMethod) -> Self {
+        match m {
+            SshMethod::SshConfig => ssh_setup::Method::SshConfig,
+            SshMethod::ShellRc => ssh_setup::Method::ShellRc,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum RulesAction {
     /// One-line listing of every rule with its decide direction and
@@ -194,6 +230,9 @@ pub fn run() -> i32 {
             },
             config,
         ),
+        Some(Command::SshSetup { method, undo }) => {
+            commands::ssh_setup(method.map(ssh_setup::Method::from), undo, cli.yes, config)
+        }
         Some(Command::Unwrap { binary }) => commands::unwrap_cmd(&binary, config),
         Some(Command::Wraps) => commands::wraps_list(config),
         Some(Command::Check) => commands::check(config),

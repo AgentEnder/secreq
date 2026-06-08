@@ -639,6 +639,136 @@ fn init_writes_config_with_shim_dir() {
     }
 }
 
+// ── ssh-setup ─────────────────────────────────────────────────────────────
+
+/// Run `secreq` with a sandboxed `$HOME` (and `$XDG_RUNTIME_DIR`) so
+/// `ssh-setup` writes into the tempdir, never the developer's real home.
+/// `shell` sets `$SHELL` (pass `""` to leave it unset, going through the
+/// `Unknown` shell path).
+fn run_ssh_setup(dir: &Path, home: &Path, shell: &str, args: &[&str]) -> std::process::Output {
+    let mut cmd = Command::new(bin());
+    cmd.args(args)
+        .env("HOME", home)
+        .env("XDG_CONFIG_HOME", dir.join("config"))
+        .env("XDG_STATE_HOME", dir.join("state"))
+        .env("XDG_RUNTIME_DIR", dir.join("run"))
+        .env_remove("SECREQ_CONSENT_SOCK")
+        .env("SECREQ_NO_DAEMON", "1")
+        .stdin(std::process::Stdio::null());
+    if shell.is_empty() {
+        cmd.env_remove("SHELL");
+    } else {
+        cmd.env("SHELL", shell);
+    }
+    cmd.output().unwrap()
+}
+
+#[test]
+fn ssh_setup_ssh_config_writes_identityagent_block_0600() {
+    use std::os::unix::fs::PermissionsExt;
+    let (dir, _config) = sandbox();
+    let home = dir.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+
+    // `--yes` skips the confirm prompt so the command runs without a TTY.
+    let out = run_ssh_setup(
+        dir.path(),
+        &home,
+        "",
+        &["ssh-setup", "--method", "ssh-config", "--yes"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let ssh_config = home.join(".ssh/config");
+    assert!(ssh_config.is_file(), "~/.ssh/config should exist");
+    let body = fs::read_to_string(&ssh_config).unwrap();
+    assert!(
+        body.contains("IdentityAgent"),
+        "should wire IdentityAgent: {body}"
+    );
+    assert!(
+        body.contains("# >>> secreq managed SSH agent"),
+        "should carry the begin sentinel: {body}"
+    );
+    let mode = fs::metadata(&ssh_config).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "~/.ssh/config must be 0600");
+}
+
+#[test]
+fn ssh_setup_undo_removes_the_ssh_config_block() {
+    let (dir, _config) = sandbox();
+    let home = dir.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+
+    // First write the block.
+    let out = run_ssh_setup(
+        dir.path(),
+        &home,
+        "",
+        &["ssh-setup", "--method", "ssh-config", "--yes"],
+    );
+    assert!(out.status.success());
+    let ssh_config = home.join(".ssh/config");
+    assert!(fs::read_to_string(&ssh_config)
+        .unwrap()
+        .contains("# >>> secreq managed SSH agent"));
+
+    // Then undo it.
+    let out = run_ssh_setup(
+        dir.path(),
+        &home,
+        "",
+        &["ssh-setup", "--method", "ssh-config", "--undo"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let body = fs::read_to_string(&ssh_config).unwrap();
+    assert!(
+        !body.contains("# >>> secreq managed SSH agent"),
+        "sentinel should be gone after --undo: {body}"
+    );
+    assert!(!body.contains("IdentityAgent"));
+}
+
+#[test]
+fn ssh_setup_shell_rc_writes_ssh_auth_sock_block() {
+    let (dir, _config) = sandbox();
+    let home = dir.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+
+    // SHELL=zsh → the block lands in ~/.zshrc.
+    let out = run_ssh_setup(
+        dir.path(),
+        &home,
+        "/bin/zsh",
+        &["ssh-setup", "--method", "shell-rc", "--yes"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let zshrc = home.join(".zshrc");
+    assert!(zshrc.is_file(), "~/.zshrc should be created");
+    let body = fs::read_to_string(&zshrc).unwrap();
+    assert!(
+        body.contains("export SSH_AUTH_SOCK="),
+        "should export SSH_AUTH_SOCK: {body}"
+    );
+    assert!(
+        body.contains("# >>> secreq managed SSH agent"),
+        "should carry the begin sentinel: {body}"
+    );
+}
+
 #[test]
 fn daemon_log_path_prints_state_dir_path_without_spawning() {
     let (dir, _config) = sandbox();

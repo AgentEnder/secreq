@@ -26,6 +26,7 @@ use crate::reference::Reference;
 use crate::resolve::{self, SecretRequest, Source};
 use crate::secret::SecretValue;
 use crate::shim;
+use crate::ssh_setup;
 use crate::wraps::{self, Wrap, WrapsConfig};
 
 // ── Public entry points ───────────────────────────────────────────────────
@@ -275,29 +276,17 @@ pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Re
     config.shim_dir = Some(shim_dir.clone());
     write_config(&config_path, &config)?;
 
-    // 5. SSH agent hint. secreq doubles as a provenance-aware SSH agent
-    // when the config has an `ssh` block. Tell the user how to point SSH
-    // clients at the agent socket. When identities are already configured
-    // we show the full setup; otherwise a one-liner pointer to the docs so
-    // they know the capability exists.
-    if let Ok(agent_socket) = crate::daemon::server::default_agent_socket_path() {
-        let socket = agent_socket.display();
-        if config.ssh.is_empty() {
-            cliclack::log::info(format!(
-                "secreq can also act as your SSH agent (provenance-aware key signing). \
-                 Add an `ssh` block to your config and point SSH clients at the agent \
-                 socket ({socket}). See docs/ssh-agent.md."
+    // 5. Offer SSH-agent setup. secreq doubles as a provenance-aware SSH
+    // agent when the config has an `ssh` block; wiring SSH clients at its
+    // socket is the same plan/confirm/apply flow as `secreq ssh-setup`, so
+    // we share `ssh_setup_core`. Entirely optional and non-fatal: declining
+    // (or any failure, including a non-terminal `interact`) must not fail
+    // `init`.
+    if prompt::confirm_default_yes("Also set up secreq as your SSH agent?").unwrap_or(false) {
+        if let Err(err) = ssh_setup_core(None, false, false, Some(&config_path)) {
+            cliclack::log::warning(format!(
+                "skipped SSH-agent setup: {err:#}. Run `secreq ssh-setup` later to wire it."
             ))?;
-        } else {
-            cliclack::note(
-                "secreq is also your SSH agent. Point SSH clients at its socket — \
-                 don't ALSO point them at 1Password's agent (secreq is the agent now \
-                 and resolves keys via the provider):",
-                format!(
-                    "# shell rc:\nexport SSH_AUTH_SOCK=\"{socket}\"\n\n\
-                     # or ~/.ssh/config:\nHost *\n    IdentityAgent \"{socket}\""
-                ),
-            )?;
         }
     }
 
@@ -306,6 +295,129 @@ pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Re
         config_path.display()
     ))?;
     Ok(0)
+}
+
+/// `secreq ssh-setup` — wire SSH clients at secreq's agent socket (or, with
+/// `--undo`, strip the managed block back out). Thin wrapper over
+/// [`ssh_setup_core`], which `init` shares.
+pub fn ssh_setup(
+    method: Option<ssh_setup::Method>,
+    undo: bool,
+    assume_yes: bool,
+    config_path: Option<&Path>,
+) -> Result<i32> {
+    ssh_setup_core(method, undo, assume_yes, config_path)?;
+    Ok(0)
+}
+
+/// The shared SSH-agent wiring flow, used by both `secreq ssh-setup` and the
+/// optional step inside `secreq init`.
+///
+/// - Resolves the agent socket path the block should point at.
+/// - Loads the wraps config best-effort and warns when no `ssh` identities
+///   are configured yet (setup still wires the agent — it just has nothing
+///   to serve until an `ssh` block exists).
+/// - Picks the method (interactive `select` when `method` is `None`).
+/// - `undo` strips the managed block; otherwise we show the block, confirm
+///   (unless `assume_yes`), and apply it.
+///
+/// `assume_yes` skips the confirmation prompt so the command can run without
+/// a terminal (and so tests can drive it deterministically).
+fn ssh_setup_core(
+    method: Option<ssh_setup::Method>,
+    undo: bool,
+    assume_yes: bool,
+    config_path: Option<&Path>,
+) -> Result<()> {
+    let agent_sock = crate::daemon::ssh_agent::default_agent_socket_path()
+        .context("could not determine the secreq SSH agent socket path")?;
+
+    // Load the config best-effort: a missing/broken config shouldn't block
+    // wiring the agent — but if it loads and has no `ssh` identities, warn
+    // that there's nothing to serve yet.
+    match load_config_or_default(config_path) {
+        Ok(config) if config.ssh.is_empty() => {
+            cliclack::log::warning(
+                "No SSH identities configured yet — setup will still wire the agent, but add an `ssh` block to wraps.json5 for it to serve keys.",
+            )?;
+        }
+        Ok(_) => {}
+        Err(err) => {
+            cliclack::log::warning(format!(
+                "couldn't read your config ({err:#}); wiring the agent anyway."
+            ))?;
+        }
+    }
+
+    // Pick the method: explicit `--method`, else an interactive select.
+    let method = match method {
+        Some(m) => m,
+        None => {
+            let choice: String = cliclack::select("How should SSH find the secreq agent?")
+                .item(
+                    "ssh-config".to_owned(),
+                    "Modify ~/.ssh/config (IdentityAgent)",
+                    "a Host * stanza pointing at the agent socket",
+                )
+                .item(
+                    "shell-rc".to_owned(),
+                    "Modify your shell rc (SSH_AUTH_SOCK)",
+                    "export SSH_AUTH_SOCK for new shells",
+                )
+                .interact()
+                .context("interactive selection failed (need a real terminal)")?;
+            if choice == "shell-rc" {
+                ssh_setup::Method::ShellRc
+            } else {
+                ssh_setup::Method::SshConfig
+            }
+        }
+    };
+
+    let home = dirs::home_dir().context("could not determine $HOME")?;
+    let shell = path_setup::detect_shell();
+
+    if undo {
+        if ssh_setup::remove(&home, method, shell)? {
+            cliclack::log::success("Removed the secreq SSH-agent block.")?;
+        } else {
+            cliclack::log::info("No secreq SSH-agent block found — nothing to remove.")?;
+        }
+        return Ok(());
+    }
+
+    let plan = ssh_setup::plan(&home, method, shell, &agent_sock)?;
+    if plan.already_configured {
+        cliclack::log::success(format!(
+            "{} already wires the secreq SSH agent; nothing to do.",
+            plan.config_file.display()
+        ))?;
+        return Ok(());
+    }
+
+    cliclack::note(
+        format!("I'll write this to {}:", plan.config_file.display()),
+        &plan.block,
+    )?;
+    if let Some(caveat) = &plan.caveat {
+        cliclack::log::warning(caveat)?;
+    }
+
+    let proceed = assume_yes || prompt::confirm_default_yes("Write it?")?;
+    if !proceed {
+        cliclack::log::info("Skipped — no files changed.")?;
+        return Ok(());
+    }
+
+    ssh_setup::apply(&plan)?;
+    cliclack::log::success(format!("wrote {}.", plan.config_file.display()))?;
+    cliclack::log::info(
+        "secreq must be running as your SSH agent (it auto-starts); new shells / SSH sessions will pick this up — restart your shell or run `exec $SHELL`.",
+    )?;
+    cliclack::log::info(
+        "Each identity's `private_key` reference must resolve to an OpenSSH private key, e.g. `op read \"op://Vault/My Key/private key\"`.",
+    )?;
+    Ok(())
 }
 
 /// Args for `secreq wrap`.
