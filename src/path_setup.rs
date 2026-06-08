@@ -164,7 +164,7 @@ pub fn apply(plan: &Plan) -> Result<bool> {
     Ok(true)
 }
 
-fn shell_config_path(home: &Path, shell: &Shell) -> Option<PathBuf> {
+pub(crate) fn shell_config_path(home: &Path, shell: &Shell) -> Option<PathBuf> {
     match shell {
         // .zshrc runs AFTER .zprofile, where `brew shellenv` typically
         // prepends /opt/homebrew/bin. Our block needs to run last so our
@@ -180,7 +180,7 @@ fn shell_config_path(home: &Path, shell: &Shell) -> Option<PathBuf> {
     }
 }
 
-fn caveat_for(shell: &Shell) -> Option<String> {
+pub(crate) fn caveat_for(shell: &Shell) -> Option<String> {
     match shell {
         Shell::Zsh => Some(
             "zsh note: writing to .zshrc (which runs after .zprofile, where homebrew lives) \
