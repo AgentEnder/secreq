@@ -151,7 +151,7 @@ where
 
 /// Encode a `SSH_AGENT_SIGN_RESPONSE`: a single `string signature`.
 ///
-/// `signature_blob` is the Task-6 signature wire blob (itself the
+/// `signature_blob` is the in-process SSH signature wire blob (itself the
 /// `string algorithm` + `string blob` structure); here it is wrapped as
 /// one SSH string in the response payload.
 pub fn encode_sign_response(signature_blob: &[u8]) -> Vec<u8> {

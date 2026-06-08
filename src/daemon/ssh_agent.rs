@@ -489,8 +489,8 @@ fn decide_sign_on_miss(
     }
 
     // Miss → enqueue an Ask and park on the reply channel. Build the Ask so
-    // the consent UI (Task 11) and the audit row (Task 12) have the
-    // identity, the caller chain, and the anchor scope to render.
+    // the consent UI and the audit row have the identity, the caller chain,
+    // and the anchor scope to render.
     let ask = sign_ask(identity, anchor_pid, anchor_start_time, chain);
     let (tx, rx) = mpsc::channel();
     {

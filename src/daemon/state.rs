@@ -729,7 +729,11 @@ impl State {
             return;
         };
 
-        if decision == Decision::ApproveRemember {
+        // SSH asks track their "remember" approval separately via
+        // `SshApprovalEntry` (keyed on the anchor, inserted on the SSH
+        // path); the wrap approvals cache is never read for them, so
+        // skip the insert to avoid polluting it with dead entries.
+        if decision == Decision::ApproveRemember && entry.representative.ssh.is_none() {
             let new = ApprovalEntry {
                 wrap: key.wrap.clone(),
                 ppid: scope.pid,
@@ -1339,7 +1343,7 @@ fn build_manifest(providers: &HashMap<String, WireProvider>) -> Manifest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::proto::{Caller, DedupeKey};
+    use crate::daemon::proto::{Caller, DedupeKey, SshAskInfo};
 
     fn mk_ask(wrap: &str, callers: Vec<(u32, u64)>) -> Ask {
         let dedupe_key = DedupeKey {
@@ -1386,6 +1390,56 @@ mod tests {
         // The expired entry was pruned on the last access, so even a
         // pre-expiry `now` no longer hits.
         assert!(!state.has_ssh_approval_at("github", 99, 1_700_000_000, 4999));
+    }
+
+    #[test]
+    fn resolve_ssh_ask_remember_does_not_write_wrap_cache_but_normal_ask_does() {
+        // SSH approvals are remembered via `SshApprovalEntry` (keyed on
+        // the anchor), so resolving an SSH ask with ApproveRemember must
+        // NOT add anything to the wrap approvals cache — that entry would
+        // be dead data. A normal wrap ask, by contrast, still populates it.
+        use std::sync::mpsc;
+
+        let shared: SharedState = Arc::new(Mutex::new(State::new()));
+        let scope = ApprovalScope {
+            pid: 4242,
+            start_time: 1_700_000_000,
+        };
+
+        // SSH ask: carries an `SshAskInfo` marker, no secrets.
+        let mut ssh_ask = mk_ask("ssh:github", vec![(4242, 1_700_000_000)]);
+        ssh_ask.ssh = Some(SshAskInfo {
+            key_id: "github".into(),
+            fingerprint: "SHA256:deadbeef".into(),
+            reason: None,
+        });
+        let ssh_key = ssh_ask.dedupe_key.clone();
+        let (tx, _rx) = mpsc::channel();
+        {
+            let mut guard = shared.lock().expect("state mutex");
+            guard.submit_ask(ssh_ask, tx);
+            guard.resolve(&ssh_key, Decision::ApproveRemember, scope, &shared);
+            assert!(
+                guard.approvals.is_empty(),
+                "an SSH ask must not write the wrap approvals cache"
+            );
+        }
+
+        // Normal wrap ask: no `ssh` marker → the wrap cache IS populated.
+        let wrap_ask = mk_ask("gh", vec![(4242, 1_700_000_000)]);
+        let wrap_key = wrap_ask.dedupe_key.clone();
+        let (tx, _rx) = mpsc::channel();
+        {
+            let mut guard = shared.lock().expect("state mutex");
+            guard.submit_ask(wrap_ask, tx);
+            guard.resolve(&wrap_key, Decision::ApproveRemember, scope, &shared);
+            assert_eq!(
+                guard.approvals.len(),
+                1,
+                "a normal wrap ask must still populate the wrap approvals cache"
+            );
+            assert_eq!(guard.approvals[0].wrap, "gh");
+        }
     }
 
     #[test]

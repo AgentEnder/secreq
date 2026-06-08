@@ -1,10 +1,10 @@
 //! Integration tests for the SSH agent listener.
 //!
-//! Task 9 (listing): bind a socket and answer `REQUEST_IDENTITIES` with the
+//! Listing: bind a socket and answer `REQUEST_IDENTITIES` with the
 //! configured public keys, WITHOUT resolving any private key (no provider
 //! call, no consent).
 //!
-//! Task 10 (gated SIGN): with the SSH approval cache pre-seeded (so the
+//! Gated SIGN: with the SSH approval cache pre-seeded (so the
 //! consent prompt is skipped), drive a `SIGN_REQUEST` over the socket and
 //! assert the returned signature verifies against the public key. Also
 //! assert an unknown key blob answers `SSH_AGENT_FAILURE`.
