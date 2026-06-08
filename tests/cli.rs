@@ -769,6 +769,147 @@ fn ssh_setup_shell_rc_writes_ssh_auth_sock_block() {
     );
 }
 
+// ── ssh-add ───────────────────────────────────────────────────────────────
+
+/// A real (throwaway) ed25519 public key line for the ssh-add tests. Used as
+/// both a literal and the contents of a `.pub` file.
+const TEST_ED25519_PUB: &str =
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFxM1DmY0MNYQSHCQECYWC1Rqdom+nv5d1rCDKSm+nEn secreq-test@example";
+
+#[test]
+fn ssh_add_writes_identity_with_explicit_flags() {
+    let (dir, config) = sandbox();
+    let pub_path = dir.path().join("id_ed25519.pub");
+    fs::write(&pub_path, format!("{TEST_ED25519_PUB}\n")).unwrap();
+
+    let out = run_secreq(
+        dir.path(),
+        &[
+            "ssh-add",
+            "github",
+            "--public-key",
+            pub_path.to_str().unwrap(),
+            "--private-key",
+            "secret://op/Private/GitHub/private key",
+            "--reason",
+            "git",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The written config must re-parse and carry the identity exactly.
+    let body = fs::read_to_string(&config).unwrap();
+    assert!(body.contains(r#""github""#), "got: {body}");
+    assert!(
+        body.contains(TEST_ED25519_PUB),
+        "public_key missing: {body}"
+    );
+    assert!(
+        body.contains("secret://op/Private/GitHub/private key"),
+        "private_key ref missing: {body}"
+    );
+    assert!(body.contains(r#""git""#), "reason missing: {body}");
+
+    // And `secreq check` is happy with the resulting config (it round-trips).
+    let check = run_secreq(dir.path(), &["check"]);
+    assert!(
+        check.status.success(),
+        "check stderr: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+}
+
+#[test]
+fn ssh_add_rejects_duplicate_without_force() {
+    let (dir, config) = sandbox();
+
+    let add = |reason: &str| {
+        run_secreq(
+            dir.path(),
+            &[
+                "ssh-add",
+                "github",
+                "--public-key",
+                TEST_ED25519_PUB,
+                "--private-key",
+                "secret://op/Private/GitHub/private key",
+                "--reason",
+                reason,
+            ],
+        )
+    };
+
+    // First add succeeds (literal public key).
+    let first = add("first");
+    assert!(
+        first.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+
+    // Second add of the same name without --force errors.
+    let dup = add("second");
+    assert_eq!(dup.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&dup.stderr).contains("already exists"),
+        "stderr: {}",
+        String::from_utf8_lossy(&dup.stderr)
+    );
+
+    // --force overwrites (reason changes to the new value).
+    let forced = run_secreq(
+        dir.path(),
+        &[
+            "ssh-add",
+            "github",
+            "--public-key",
+            TEST_ED25519_PUB,
+            "--private-key",
+            "secret://op/Private/GitHub/private key",
+            "--reason",
+            "overwritten",
+            "--force",
+        ],
+    );
+    assert!(
+        forced.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&forced.stderr)
+    );
+    let body = fs::read_to_string(&config).unwrap();
+    assert!(body.contains(r#""overwritten""#), "got: {body}");
+    assert!(
+        !body.contains(r#""first""#),
+        "old reason should be gone: {body}"
+    );
+}
+
+#[test]
+fn ssh_add_rejects_invalid_public_key() {
+    let (dir, _config) = sandbox();
+    let out = run_secreq(
+        dir.path(),
+        &[
+            "ssh-add",
+            "github",
+            "--public-key",
+            "not a key",
+            "--private-key",
+            "secret://op/Private/GitHub/private key",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("neither an existing file") || stderr.contains("OpenSSH public key"),
+        "stderr: {stderr}"
+    );
+}
+
 #[test]
 fn daemon_log_path_prints_state_dir_path_without_spawning() {
     let (dir, _config) = sandbox();

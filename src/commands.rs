@@ -421,6 +421,260 @@ fn ssh_setup_core(
     Ok(())
 }
 
+/// Args for `secreq ssh-add`.
+#[derive(Debug, Clone, Default)]
+pub struct SshAddArgs {
+    /// The identity name (the key under the `ssh` block).
+    pub name: String,
+    /// The public key: a path to a `.pub` file or a literal OpenSSH line.
+    pub public_key: Option<String>,
+    /// The private key reference, `secret://provider/locator`.
+    pub private_key: Option<String>,
+    /// Reason shown in the consent prompt at sign time.
+    pub reason: Option<String>,
+    /// Overwrite an existing identity of the same name.
+    pub force: bool,
+}
+
+/// `secreq ssh-add <name>` — declare an SSH identity in `wraps.json5` so the
+/// agent serves it. Mirrors [`wrap`]: load → build → insert → `write_config`.
+///
+/// The public key is stored inline (it isn't secret); the private key is a
+/// `secret://provider/locator` reference resolved only at sign time. When
+/// `--public-key` and `--private-key` are both supplied the command runs with
+/// no prompts (so scripts/tests work); otherwise the missing pieces are
+/// resolved interactively, with 1Password `op` discovery when it's on PATH.
+pub fn ssh_add(args: SshAddArgs, assume_yes: bool, config_path: Option<&Path>) -> Result<i32> {
+    let _ = assume_yes;
+    let config_path = resolve_config_path(config_path)?;
+    let mut config = if config_path.is_file() {
+        WrapsConfig::load(&config_path)?
+    } else {
+        WrapsConfig::default()
+    };
+
+    if config.ssh.contains_key(&args.name) && !args.force {
+        bail!(
+            "identity `{}` already exists; use --force to overwrite",
+            args.name
+        );
+    }
+
+    // Non-interactive iff both key pieces are on the command line. Tracked so
+    // the op-discovery / manual prompts never fire on the scripted path.
+    let non_interactive = args.public_key.is_some() && args.private_key.is_some();
+
+    // Resolve the public key up front when supplied; otherwise leave it to be
+    // filled by op discovery or a manual prompt below.
+    let mut public_key: Option<String> = match &args.public_key {
+        Some(raw) => Some(resolve_public_key(raw)?),
+        None => None,
+    };
+
+    // Resolve the private-key reference.
+    let private_key: Reference = match &args.private_key {
+        Some(raw) => Reference::parse(raw).with_context(|| {
+            format!("`{raw}` is not a valid `secret://provider/locator` reference")
+        })?,
+        None => {
+            // Try op-assisted discovery (best-effort); on any failure fall
+            // through to the manual prompt. When op supplies a public key and
+            // none was given on the command line, capture it too.
+            match op_assisted_identity(public_key.is_none())? {
+                Some(found) => {
+                    if public_key.is_none() {
+                        public_key = found.public_key;
+                    }
+                    found.private_key
+                }
+                None => prompt::ssh_private_key_reference()?,
+            }
+        }
+    };
+
+    // Fill any still-missing public key via an interactive prompt.
+    let public_key = match public_key {
+        Some(pk) => pk,
+        None => {
+            if non_interactive {
+                bail!("no public key supplied");
+            }
+            prompt::ssh_public_key()?
+        }
+    };
+
+    let identity = wraps::SshIdentity {
+        reason: args.reason,
+        public_key,
+        private_key,
+    };
+    config.ssh.insert(args.name.clone(), identity);
+
+    write_config(&config_path, &config)?;
+
+    println!("Added SSH identity `{}`.", args.name);
+    println!("  config: {}", config_path.display());
+    println!(
+        "  Ensure the private_key reference resolves to an OpenSSH private key, e.g. `op read \"op://Vault/My Key/private key\"`."
+    );
+    println!("  Next: `secreq ssh-setup` to wire SSH clients and enable autostart.");
+    Ok(0)
+}
+
+/// Resolve a `--public-key` argument to a validated OpenSSH public-key line.
+/// A path to an existing file is read (a `.pub` file is one line); otherwise
+/// a value starting with a known OpenSSH key-type prefix is treated as a
+/// literal. Anything else, or a value that doesn't parse, is an error.
+fn resolve_public_key(raw: &str) -> Result<String> {
+    let candidate = Path::new(raw);
+    let text = if candidate.is_file() {
+        std::fs::read_to_string(candidate)
+            .with_context(|| format!("could not read public key file {raw}"))?
+    } else if is_openssh_public_key_literal(raw) {
+        raw.to_owned()
+    } else {
+        bail!(
+            "`{raw}` is neither an existing file nor an OpenSSH public key (expected an `ssh-…`/`ecdsa-…`/`sk-…` line)"
+        );
+    };
+    validate_openssh_public_key(text.trim())
+}
+
+/// True if `s` looks like an inline OpenSSH public key (by key-type prefix).
+fn is_openssh_public_key_literal(s: &str) -> bool {
+    const PREFIXES: [&str; 4] = ["ssh-", "ecdsa-", "sk-ssh-", "sk-ecdsa-"];
+    PREFIXES.iter().any(|p| s.starts_with(p))
+}
+
+/// Parse `line` as an OpenSSH public key to validate it, returning the
+/// trimmed line on success.
+fn validate_openssh_public_key(line: &str) -> Result<String> {
+    ssh_key::PublicKey::from_openssh(line)
+        .with_context(|| "not a valid OpenSSH public key (expected `ssh-… AAAA… [comment]`)")?;
+    Ok(line.to_owned())
+}
+
+/// What op discovery yields: the private-key reference and, optionally, the
+/// public key fetched alongside it.
+struct OpIdentity {
+    private_key: Reference,
+    public_key: Option<String>,
+}
+
+/// Best-effort 1Password (`op`) discovery of an SSH-Key item. Returns `None`
+/// (never an error) when op is missing, errors, returns no items, or the user
+/// can't be prompted — the caller falls back to a manual prompt. When
+/// `want_public_key` is set, also fetches the item's public key.
+fn op_assisted_identity(want_public_key: bool) -> Result<Option<OpIdentity>> {
+    if !which_on_path("op") {
+        return Ok(None);
+    }
+
+    let items = match op_list_ssh_keys() {
+        Some(items) if !items.is_empty() => items,
+        _ => {
+            cliclack::log::info(
+                "1Password `op` found no SSH-Key items (or couldn't list them); entering the reference manually.",
+            )
+            .ok();
+            return Ok(None);
+        }
+    };
+
+    let mut select = cliclack::select::<usize>("Pick the 1Password SSH key to serve");
+    for (idx, item) in items.iter().enumerate() {
+        select = select.item(idx, item.title.as_str(), item.vault.as_str());
+    }
+    let chosen = match select.interact() {
+        Ok(idx) => &items[idx],
+        Err(_) => {
+            cliclack::log::info("No selection made; entering the reference manually.").ok();
+            return Ok(None);
+        }
+    };
+
+    let private_key = match Reference::parse(&format!(
+        "secret://op/{}/{}/private key",
+        chosen.vault, chosen.title
+    )) {
+        Some(reference) => reference,
+        None => return Ok(None),
+    };
+
+    let public_key = if want_public_key {
+        match op_read(&format!(
+            "op://{}/{}/public key",
+            chosen.vault, chosen.title
+        )) {
+            Some(raw) => match validate_openssh_public_key(raw.trim()) {
+                Ok(pk) => Some(pk),
+                Err(err) => {
+                    cliclack::log::warning(format!(
+                        "op returned a public key that didn't parse ({err:#}); you'll be prompted for it."
+                    ))
+                    .ok();
+                    None
+                }
+            },
+            None => None,
+        }
+    } else {
+        None
+    };
+
+    Ok(Some(OpIdentity {
+        private_key,
+        public_key,
+    }))
+}
+
+/// One 1Password SSH-Key item, as surfaced by `op item list`.
+struct OpItem {
+    title: String,
+    vault: String,
+}
+
+/// Run `op item list --categories "SSH Key" --format json` and parse out the
+/// title + vault of each item. Returns `None` on any failure.
+fn op_list_ssh_keys() -> Option<Vec<OpItem>> {
+    let output = Command::new("op")
+        .args([
+            "item",
+            "list",
+            "--categories",
+            "SSH Key",
+            "--format",
+            "json",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    let array = value.as_array()?;
+    let mut items = Vec::with_capacity(array.len());
+    for entry in array {
+        let title = entry.get("title")?.as_str()?.to_owned();
+        let vault = entry
+            .get("vault")
+            .and_then(|v| v.get("name"))
+            .and_then(|n| n.as_str())?
+            .to_owned();
+        items.push(OpItem { title, vault });
+    }
+    Some(items)
+}
+
+/// Run `op read <uri>` and return its trimmed stdout, or `None` on failure.
+fn op_read(uri: &str) -> Option<String> {
+    let output = Command::new("op").args(["read", uri]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8(output.stdout).ok()?.trim().to_owned())
+}
+
 /// Args for `secreq wrap`.
 #[derive(Debug, Clone, Default)]
 pub struct WrapArgs {
@@ -1538,6 +1792,31 @@ mod prompt {
         } else {
             Ok(Some(value))
         }
+    }
+
+    /// Prompt for a `secret://provider/locator` reference (the manual
+    /// fallback when op discovery is unavailable or declined). Validates the
+    /// input parses before returning.
+    pub(super) fn ssh_private_key_reference() -> Result<Reference> {
+        let raw: String = cliclack::input("Private key reference (secret://provider/locator)")
+            .placeholder("secret://op/Private/GitHub/private key")
+            .validate(|s: &String| match Reference::parse(s) {
+                Some(_) => Ok(()),
+                None => Err("must be a `secret://provider/locator` reference"),
+            })
+            .interact()
+            .context("interactive input failed (need a real terminal)")?;
+        Reference::parse(&raw).context("internal: validated reference failed to re-parse")
+    }
+
+    /// Prompt for an inline OpenSSH public key (path or pasted line), then
+    /// validate it parses.
+    pub(super) fn ssh_public_key() -> Result<String> {
+        let raw: String = cliclack::input("Public key (path to a .pub file, or the ssh-… line)")
+            .placeholder("ssh-ed25519 AAAA… me@host")
+            .interact()
+            .context("interactive input failed (need a real terminal)")?;
+        super::resolve_public_key(raw.trim())
     }
 
     pub(super) fn confirm_default_yes(prompt: &str) -> Result<bool> {

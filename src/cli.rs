@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::commands::{self, WrapArgs, WrapRunOpts};
+use crate::commands::{self, SshAddArgs, WrapArgs, WrapRunOpts};
 use crate::ssh_setup;
 
 /// `op run`, but for every secret store you own — per-binary CLI wrapping
@@ -90,6 +90,31 @@ enum Command {
         /// Remove the managed block instead of adding it.
         #[arg(long)]
         undo: bool,
+    },
+
+    /// Add (or overwrite) an SSH identity in `wraps.json5`. The agent serves
+    /// this identity once the daemon is running. The public key is stored
+    /// inline; the private key is a `secret://provider/locator` reference
+    /// resolved only at sign time. Omit `--public-key`/`--private-key` to
+    /// resolve them interactively (with 1Password `op` discovery when on
+    /// PATH). Pass both for a fully non-interactive run.
+    SshAdd {
+        /// The identity name (the key under the `ssh` block), e.g. `github`.
+        name: String,
+        /// The OpenSSH public key: a path to a `.pub` file, or the literal
+        /// `ssh-… / ecdsa-… / sk-…` line. Prompted for if omitted.
+        #[arg(long, value_name = "PATH-OR-LITERAL")]
+        public_key: Option<String>,
+        /// The private key reference, `secret://provider/locator`. Prompted
+        /// for (with `op` discovery) if omitted.
+        #[arg(long, value_name = "secret://…")]
+        private_key: Option<String>,
+        /// Reason shown in the consent prompt when this identity signs.
+        #[arg(long)]
+        reason: Option<String>,
+        /// Overwrite an existing identity of the same name.
+        #[arg(long)]
+        force: bool,
     },
 
     /// Validate the config.
@@ -242,6 +267,23 @@ pub fn run() -> i32 {
         Some(Command::SshSetup { method, undo }) => {
             commands::ssh_setup(method.map(ssh_setup::Method::from), undo, cli.yes, config)
         }
+        Some(Command::SshAdd {
+            name,
+            public_key,
+            private_key,
+            reason,
+            force,
+        }) => commands::ssh_add(
+            SshAddArgs {
+                name,
+                public_key,
+                private_key,
+                reason,
+                force,
+            },
+            cli.yes,
+            config,
+        ),
         Some(Command::Unwrap { binary }) => commands::unwrap_cmd(&binary, config),
         Some(Command::Wraps) => commands::wraps_list(config),
         Some(Command::Check) => commands::check(config),
