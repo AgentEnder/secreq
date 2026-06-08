@@ -63,14 +63,57 @@ works — listing never resolves the reference.
 
 ## Set up your SSH client
 
-Point your SSH client's `SSH_AUTH_SOCK` at the secreq agent socket. The
-path is per-user and platform-dependent:
+Your SSH client needs to know where secreq's agent socket lives. The
+socket path is per-user and platform-dependent:
 
 - **macOS:** `~/Library/Caches/secreq/agent.sock`
 - **Linux/BSD:** `$XDG_RUNTIME_DIR/secreq/agent.sock` (e.g.
   `/run/user/1000/secreq/agent.sock`)
 
-`secreq init` prints the exact path for your machine. Use one of:
+Let secreq wire it for you:
+
+```sh
+secreq ssh-setup
+```
+
+This resolves the socket path for your machine, asks which method to
+use, shows you the exact block it will write, and applies it after you
+confirm. The block is bracketed by sentinel comments, so the command is
+**idempotent** (re-running is a no-op) and **reversible**:
+
+```sh
+secreq ssh-setup --undo
+```
+
+`secreq init` also offers this step after it sets up your PATH.
+
+### Pick a method
+
+`ssh-setup` supports two methods. Omit `--method` for an interactive
+prompt, or name one directly:
+
+```sh
+secreq ssh-setup --method ssh-config   # ~/.ssh/config IdentityAgent
+secreq ssh-setup --method shell-rc     # SSH_AUTH_SOCK export
+```
+
+- **`ssh-config`** prepends a `Host *` / `IdentityAgent` stanza to
+  `~/.ssh/config`. Scoped to SSH only — it doesn't touch other clients'
+  environments. (It's prepended because ssh applies the *first*
+  `IdentityAgent` it finds for a host.) secreq creates `~/.ssh` as
+  `0700` and keeps the config `0600`, which ssh requires.
+- **`shell-rc`** appends an `SSH_AUTH_SOCK` export to your shell rc
+  (`~/.zshrc`, `~/.bashrc`, fish `conf.d`, …). Affects *every* SSH
+  client launched from that shell, not just `ssh`.
+
+After it writes, restart your shell (`exec $SHELL`) or open a new SSH
+session so the change takes effect. secreq itself runs as the agent and
+auto-starts, so there's nothing else to launch.
+
+### Or add it by hand
+
+If you'd rather not let secreq edit your dotfiles, write one of these
+yourself (substitute the socket path for your platform):
 
 ```sh
 # shell rc (~/.zshrc, ~/.bashrc, …)

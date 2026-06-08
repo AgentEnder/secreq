@@ -44,6 +44,30 @@ Idempotent: re-running detects the sentinel and skips the append.
 The PATH-config edit is shown to you in full and gated by a y/N prompt;
 nothing touches your dotfiles without explicit confirmation.
 
+`init` also offers to run the SSH-agent wiring step (see `ssh-setup`)
+once PATH is sorted.
+
+### `ssh-setup`
+
+```
+secreq ssh-setup [--method ssh-config|shell-rc] [--undo]
+```
+
+Wires your SSH clients at secreq's agent socket by writing a
+sentinel-bracketed managed block to a config file.
+
+| Flag | Meaning |
+|---|---|
+| `--method ssh-config` | Prepend a `Host *` / `IdentityAgent` stanza to `~/.ssh/config` (scoped to SSH). |
+| `--method shell-rc` | Append an `SSH_AUTH_SOCK` export to your shell rc (affects every SSH client in that shell). |
+| `--undo` | Remove the managed block instead of writing it. |
+
+Omit `--method` to choose interactively. The block is shown to you in
+full and gated by a confirm prompt (use `--yes` to skip it). Idempotent:
+re-running detects the sentinel and skips the write. See
+[`ssh-agent.md`](./ssh-agent.md) for the two methods and the key-custody
+tradeoff.
+
 ### `wrap`
 
 ```
