@@ -1,24 +1,36 @@
-//! Integration test for the SSH agent listener (Task 9): bind a socket and
-//! answer `REQUEST_IDENTITIES` with the configured public keys, WITHOUT
-//! resolving any private key (no provider call, no consent).
+//! Integration tests for the SSH agent listener.
 //!
-//! The test drives the agent purely over its Unix socket — the
-//! `ssh-add -l` exchange, but hand-rolled so it doesn't depend on a real
-//! `ssh` binary. It exercises the testable entry point
-//! `ssh_agent::serve_on(listener, identities)` directly rather than
-//! spawning the whole daemon.
+//! Task 9 (listing): bind a socket and answer `REQUEST_IDENTITIES` with the
+//! configured public keys, WITHOUT resolving any private key (no provider
+//! call, no consent).
+//!
+//! Task 10 (gated SIGN): with the SSH approval cache pre-seeded (so the
+//! consent prompt is skipped), drive a `SIGN_REQUEST` over the socket and
+//! assert the returned signature verifies against the public key. Also
+//! assert an unknown key blob answers `SSH_AGENT_FAILURE`.
+//!
+//! The tests drive the agent purely over its Unix socket — the
+//! `ssh-add -l` / sign exchange, hand-rolled so they don't depend on a real
+//! `ssh` binary. They exercise the testable entry point
+//! `ssh_agent::serve_on(listener, ctx)` directly rather than spawning the
+//! whole daemon.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
-use secreq::daemon::ssh_agent;
-use secreq::daemon::ssh_proto::{self, SSH_AGENT_IDENTITIES_ANSWER};
+use secreq::consent::SshApprovalEntry;
+use secreq::daemon::ssh_agent::{self, SignContext};
+use secreq::daemon::ssh_proto::{self, SSH_AGENT_FAILURE, SSH_AGENT_IDENTITIES_ANSWER};
+use secreq::daemon::state::State;
+use secreq::manifest::Provider;
 use secreq::reference::Reference;
 use secreq::wraps::SshIdentity;
 
-use ssh_encoding::Decode;
+use ssh_encoding::{Decode, Encode};
+use ssh_key::{LineEnding, PrivateKey, PublicKey};
 
 /// A real OpenSSH ed25519 public key (generated once for this test). The
 /// private half is irrelevant: listing never resolves a private key.
@@ -38,6 +50,20 @@ fn read_frame(stream: &mut UnixStream) -> Vec<u8> {
     frame
 }
 
+/// Encode a `SSH_AGENTC_SIGN_REQUEST` frame:
+/// `[u32 len][type=13][string key_blob][string data][u32 flags]`.
+fn encode_sign_request(key_blob: &[u8], data: &[u8], flags: u32) -> Vec<u8> {
+    let mut payload = vec![ssh_proto::SSH_AGENTC_SIGN_REQUEST];
+    key_blob.encode(&mut payload).unwrap();
+    data.encode(&mut payload).unwrap();
+    flags.encode(&mut payload).unwrap();
+    let len = payload.len() as u32;
+    let mut out = Vec::with_capacity(4 + payload.len());
+    out.extend_from_slice(&len.to_be_bytes());
+    out.extend_from_slice(&payload);
+    out
+}
+
 #[test]
 fn lists_configured_identities_without_resolving() {
     // One identity whose private_key reference is deliberately bogus: if
@@ -54,26 +80,31 @@ fn lists_configured_identities_without_resolving() {
         },
     );
 
-    // Prepare the (blob, comment) list once, exactly as the daemon does.
+    // Prepare the identities once, exactly as the daemon does.
     let identities = ssh_agent::prepare_identities(&ssh);
     assert_eq!(identities.len(), 1, "one identity prepared");
 
     // The expected wire blob + comment, derived independently from the
     // same public-key string.
-    let expected_key = ssh_key::PublicKey::from_openssh(TEST_PUBLIC_KEY).unwrap();
+    let expected_key = PublicKey::from_openssh(TEST_PUBLIC_KEY).unwrap();
     let expected_blob = expected_key.to_bytes().unwrap();
     let expected_comment = expected_key.comment().to_owned();
     assert_eq!(expected_comment, "secreq-test@example");
 
+    let ctx = SignContext {
+        identities: Arc::new(identities),
+        providers: Arc::new(BTreeMap::new()),
+        state: None,
+    };
+
     // Bind the agent on a tempdir path and serve on a background thread.
     // The serve thread owns the listener; it blocks in `accept()` between
-    // connections. We don't join it (there's no clean cross-thread way to
-    // unblock a blocking `accept`) — it's a daemon-style loop that the test
-    // process reaps on exit. The tempdir drop removes the socket file.
+    // connections. We don't join it — it's a daemon-style loop that the
+    // test process reaps on exit. The tempdir drop removes the socket file.
     let dir = tempfile::tempdir().expect("tempdir");
     let sock_path = dir.path().join("agent.sock");
     let listener = UnixListener::bind(&sock_path).expect("bind agent socket");
-    thread::spawn(move || ssh_agent::serve_on(listener, identities));
+    thread::spawn(move || ssh_agent::serve_on(listener, ctx));
 
     // Connect and send REQUEST_IDENTITIES: [u32 len=1][type=11].
     let mut client = UnixStream::connect(&sock_path).expect("connect");
@@ -100,5 +131,150 @@ fn lists_configured_identities_without_resolving() {
     assert_eq!(comment, "secreq-test@example", "comment matches");
 
     // Drop the client; the per-connection handler sees EOF and exits.
+    drop(client);
+}
+
+/// Build a `SignContext` wired to real `State` whose SSH approval cache is
+/// pre-seeded for the anchor the SIGN handler will compute. The peer of the
+/// test's connection is the test process itself, so the anchor is whatever
+/// `select_anchor(caller_chain_from_pid(our_pid))` yields — we compute it
+/// the same way and seed an approval that never expires within the test.
+///
+/// Returns the context plus the configured public key (for verification)
+/// and the raw wire blob (for the SIGN_REQUEST key_blob). A file-based fake
+/// provider (`cat <path>`) returns the exact OpenSSH PEM written to a temp
+/// file, so resolve is real but deterministic and offline.
+fn signing_context_with_seeded_approval(
+    key_dir: &std::path::Path,
+) -> (SignContext, PublicKey, Vec<u8>) {
+    // Generate a real ed25519 key; write its PEM where the fake provider can
+    // `cat` it, and use its public half as the configured identity.
+    let private = PrivateKey::random(&mut rand::rngs::OsRng, ssh_key::Algorithm::Ed25519)
+        .expect("generate test key");
+    let pem = private
+        .to_openssh(LineEnding::LF)
+        .expect("encode openssh pem")
+        .to_string();
+    let pem_path = key_dir.join("github.key");
+    std::fs::write(&pem_path, &pem).expect("write key pem");
+    let public_key = private.public_key().clone();
+    let public_openssh = public_key.to_openssh().expect("encode public openssh");
+
+    // Provider whose `retrieve` is `cat <locator>` — the locator is the PEM
+    // file path, so the resolved value is the exact PEM bytes.
+    let mut providers: BTreeMap<String, Provider> = BTreeMap::new();
+    providers.insert(
+        "file".to_owned(),
+        Provider {
+            name: "file".to_owned(),
+            retrieve: vec!["cat".to_owned(), "{locator}".to_owned()],
+            store: None,
+            retrieve_batch: None,
+        },
+    );
+
+    let mut ssh: BTreeMap<String, SshIdentity> = BTreeMap::new();
+    ssh.insert(
+        "github".to_owned(),
+        SshIdentity {
+            reason: Some("git pushes".to_owned()),
+            public_key: public_openssh,
+            private_key: Reference::parse(&format!("secret://file/{}", pem_path.to_string_lossy()))
+                .expect("parse reference"),
+        },
+    );
+
+    let identities = ssh_agent::prepare_identities(&ssh);
+    assert_eq!(identities.len(), 1);
+    let blob = identities[0].blob.clone();
+
+    // Compute the anchor exactly as the SIGN handler will, then seed an
+    // approval for it that won't expire during the test.
+    let chain = secreq::provenance::caller_chain_from_pid(std::process::id());
+    let anchor = secreq::provenance::select_anchor(&chain).expect("an anchor in the test's chain");
+    let far_future = u64::MAX;
+    let state = Arc::new(Mutex::new(State::new()));
+    state
+        .lock()
+        .unwrap()
+        .remember_ssh_approval(SshApprovalEntry {
+            key_id: "github".to_owned(),
+            anchor_pid: anchor.pid,
+            anchor_start_time: anchor.start_time,
+            expires_at: far_future,
+        });
+
+    let ctx = SignContext {
+        identities: Arc::new(identities),
+        providers: Arc::new(providers),
+        state: Some(state),
+    };
+    (ctx, public_key, blob)
+}
+
+#[test]
+fn signs_for_seeded_approval_and_signature_verifies() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (ctx, public_key, blob) = signing_context_with_seeded_approval(dir.path());
+
+    let sock_dir = tempfile::tempdir().expect("sock tempdir");
+    let sock_path = sock_dir.path().join("agent.sock");
+    let listener = UnixListener::bind(&sock_path).expect("bind agent socket");
+    thread::spawn(move || ssh_agent::serve_on(listener, ctx));
+
+    let mut client = UnixStream::connect(&sock_path).expect("connect");
+    let data = b"challenge bytes from the remote peer";
+    client
+        .write_all(&encode_sign_request(&blob, data, 0))
+        .expect("send sign request");
+
+    let frame = read_frame(&mut client);
+    let payload = &frame[4..];
+    assert_eq!(
+        payload[0],
+        ssh_proto::SSH_AGENT_SIGN_RESPONSE,
+        "reply is SIGN_RESPONSE (got type {})",
+        payload[0]
+    );
+
+    // Body is a single `string signature`; the signature is itself the
+    // `string algorithm` + `string blob` wire encoding.
+    let mut reader = &payload[1..];
+    let sig_blob = Vec::<u8>::decode(&mut reader).expect("decode signature string");
+    assert!(reader.is_empty(), "no trailing bytes after signature");
+
+    // The returned signature must verify against the configured public key.
+    use ssh_key::Signature;
+    let mut sig_reader: &[u8] = &sig_blob;
+    let signature = Signature::decode(&mut sig_reader).expect("decode signature");
+    use rsa::signature::Verifier;
+    Verifier::verify(&public_key, data, &signature)
+        .expect("signature verifies against the public key");
+
+    drop(client);
+}
+
+#[test]
+fn unknown_key_blob_answers_failure() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (ctx, _public_key, _blob) = signing_context_with_seeded_approval(dir.path());
+
+    let sock_dir = tempfile::tempdir().expect("sock tempdir");
+    let sock_path = sock_dir.path().join("agent.sock");
+    let listener = UnixListener::bind(&sock_path).expect("bind agent socket");
+    thread::spawn(move || ssh_agent::serve_on(listener, ctx));
+
+    let mut client = UnixStream::connect(&sock_path).expect("connect");
+    // A key blob we don't hold.
+    client
+        .write_all(&encode_sign_request(b"not-a-configured-key", b"data", 0))
+        .expect("send sign request");
+
+    let frame = read_frame(&mut client);
+    assert_eq!(
+        frame[4], SSH_AGENT_FAILURE,
+        "unknown key blob must answer SSH_AGENT_FAILURE"
+    );
+
     drop(client);
 }

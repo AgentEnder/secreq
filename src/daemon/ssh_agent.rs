@@ -6,22 +6,36 @@
 //! it. The wire format is the SSH agent protocol (see
 //! [`super::ssh_proto`]), NOT the daemon's JSON control protocol.
 //!
-//! **This task (9) implements listing only.** `REQUEST_IDENTITIES` answers
-//! with the configured public keys, parsed once from the inline
-//! `public_key` strings in `wraps.json5` — **no provider resolve, no
-//! consent**. A `SIGN_REQUEST` currently answers `SSH_AGENT_FAILURE`; the
-//! gated sign flow lands in Task 10 and will extend [`handle_request`].
+//! `REQUEST_IDENTITIES` answers with the configured public keys, parsed
+//! once from the inline `public_key` strings in `wraps.json5` — **no
+//! provider resolve, no consent.**
+//!
+//! `SIGN_REQUEST` is the gated path: derive the connecting peer pid from
+//! socket peer-credentials, walk that pid's ancestry to an anchor, gate on
+//! the SSH approval cache + (on a miss) interactive consent, then resolve
+//! the private key fresh through the provider, sign in-process, zeroize the
+//! key material, and return only the signature. The approval cache caches
+//! the *decision* (skip the prompt), never the key material — every sign
+//! resolves the key fresh and drops it.
 
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
+use std::time::SystemTime;
 
 use anyhow::{Context, Result};
+use zeroize::Zeroizing;
 
+use super::proto::{Ask, Caller, DedupeKey};
 use super::ssh_proto::{self, AgentRequest};
+use super::state::{SharedState, WaiterReply};
+use crate::consent::{Decision, SshApprovalEntry};
+use crate::manifest::Provider;
 use crate::wraps::SshIdentity;
 
 /// Upper bound on a single agent frame's payload length. Mirrors OpenSSH's
@@ -31,11 +45,50 @@ use crate::wraps::SshIdentity;
 /// wire value can't drive an arbitrary allocation in the long-lived daemon.
 const MAX_AGENT_MSG_LEN: usize = 256 * 1024;
 
-/// One configured identity prepared for `REQUEST_IDENTITIES`: the raw SSH
-/// wire key blob plus the comment. Derived once from the inline
-/// `public_key` string so listing never parses keys per-connection and
-/// never touches a provider.
-pub type PreparedIdentity = (Vec<u8>, String);
+/// Default lifetime of an SSH sign approval when the user chooses
+/// "remember". An anchor (shell / IDE / git session) can live for hours, so
+/// a SIGN approval is time-bounded rather than tied to the anchor's
+/// lifetime alone. There is no per-identity TTL knob in `wraps.json5`
+/// today, so this constant is the single source of truth.
+const SSH_APPROVAL_TTL_SECS: u64 = 300;
+
+/// One configured identity prepared for `REQUEST_IDENTITIES` *and* the
+/// SIGN path. The public-key blob + comment answer the listing; the
+/// `key_id`, `reference`, and `reason` are what the SIGN handler needs to
+/// map a wire blob back to its config entry, scope the approval cache, and
+/// resolve the private key.
+///
+/// Derived once, up front, from the inline `public_key` string so the
+/// per-connection listing path never parses keys per-connection and never
+/// touches a provider.
+#[derive(Debug, Clone)]
+pub struct PreparedIdentity {
+    /// Raw SSH wire public-key blob — what `SSH_AGENT_IDENTITIES_ANSWER`
+    /// carries and what a `SIGN_REQUEST`'s `key_blob` is matched against.
+    pub blob: Vec<u8>,
+    /// The public key's comment (shown by `ssh-add -l`).
+    pub comment: String,
+    /// The config identity name (`ssh.<key_id>`), used as the cache key and
+    /// the audit/consent label.
+    pub key_id: String,
+    /// `secret://provider/locator` reference to the private key, resolved
+    /// fresh at every SIGN and never cached.
+    pub reference: crate::reference::Reference,
+    /// `$reason` from the config, shown in the consent prompt.
+    pub reason: Option<String>,
+}
+
+/// Everything the per-connection SIGN handler needs that isn't on the wire:
+/// the prepared identities, the provider definitions used to resolve a
+/// private key, and the shared daemon state (consent queue + approval
+/// cache). `state` is `None` only for the listing-only test path; the
+/// production daemon always supplies it.
+#[derive(Clone)]
+pub struct SignContext {
+    pub identities: Arc<Vec<PreparedIdentity>>,
+    pub providers: Arc<BTreeMap<String, Provider>>,
+    pub state: Option<SharedState>,
+}
 
 /// Stable per-user agent socket path. Lives alongside the control socket
 /// (`consent.sock`) in [`super::server::socket_dir`] so both sockets share
@@ -45,10 +98,8 @@ pub fn default_agent_socket_path() -> Result<PathBuf> {
 }
 
 /// Parse each identity's inline `public_key` string into its raw SSH wire
-/// blob + comment, **once**, up front. The blob is what
-/// `SSH_AGENT_IDENTITIES_ANSWER` carries; deriving it here means the
-/// per-connection listing path never parses keys and never resolves the
-/// private key reference.
+/// blob + comment, **once**, up front, carrying the key id / private-key
+/// reference / reason alongside so the SIGN handler has the full identity.
 ///
 /// An unparseable `public_key` is skipped with a daemon-log warning rather
 /// than failing the whole agent — one malformed entry shouldn't hide every
@@ -58,7 +109,13 @@ pub fn prepare_identities(ssh: &BTreeMap<String, SshIdentity>) -> Vec<PreparedId
     for (name, identity) in ssh {
         match ssh_key::PublicKey::from_openssh(&identity.public_key) {
             Ok(public_key) => match public_key.to_bytes() {
-                Ok(blob) => prepared.push((blob, public_key.comment().to_owned())),
+                Ok(blob) => prepared.push(PreparedIdentity {
+                    blob,
+                    comment: public_key.comment().to_owned(),
+                    key_id: name.clone(),
+                    reference: identity.private_key.clone(),
+                    reason: identity.reason.clone(),
+                }),
                 Err(err) => super::log::log_at(
                     "ssh-agent",
                     format_args!("identity {name:?}: cannot serialize public key blob: {err}"),
@@ -81,6 +138,8 @@ pub fn prepare_identities(ssh: &BTreeMap<String, SshIdentity>) -> Vec<PreparedId
 pub fn start(
     socket_path: PathBuf,
     ssh: &BTreeMap<String, SshIdentity>,
+    providers: BTreeMap<String, Provider>,
+    state: SharedState,
 ) -> Result<Option<UnixListener>> {
     if ssh.is_empty() {
         return Ok(None);
@@ -109,10 +168,16 @@ pub fn start(
         ),
     );
 
+    let ctx = SignContext {
+        identities: Arc::new(identities),
+        providers: Arc::new(providers),
+        state: Some(state),
+    };
+
     let listener_clone = listener.try_clone().context("clone agent listener")?;
     thread::Builder::new()
         .name("secreqd-ssh-agent".to_owned())
-        .spawn(move || serve_on(listener_clone, identities))
+        .spawn(move || serve_on(listener_clone, ctx))
         .context("spawn ssh-agent accept thread")?;
 
     Ok(Some(listener))
@@ -121,23 +186,19 @@ pub fn start(
 /// Accept loop for the agent socket: one thread per connection.
 ///
 /// This is the testable entry point — a test can bind a `UnixListener` on
-/// a tempdir path and call `serve_on` directly with a synthetic identity
-/// list, without spawning the whole daemon. Task 10 will extend the
-/// per-connection [`handle_connection`] / [`handle_request`] with the SIGN
-/// path; its signature already carries the identities the SIGN handler
-/// needs to map a key blob back to a config entry.
-pub fn serve_on(listener: UnixListener, identities: Vec<PreparedIdentity>) {
-    let identities = std::sync::Arc::new(identities);
+/// a tempdir path and call `serve_on` directly with a synthetic
+/// [`SignContext`], without spawning the whole daemon.
+pub fn serve_on(listener: UnixListener, ctx: SignContext) {
     for incoming in listener.incoming() {
         let stream = match incoming {
             Ok(s) => s,
             Err(_) => break, // Listener closed or unrecoverable accept error.
         };
-        let identities = identities.clone();
+        let ctx = ctx.clone();
         thread::Builder::new()
             .name("secreqd-ssh-conn".to_owned())
             .spawn(move || {
-                if let Err(err) = handle_connection(stream, &identities) {
+                if let Err(err) = handle_connection(stream, &ctx) {
                     super::log::log_at("ssh-agent", format_args!("connection error: {err:#}"));
                 }
             })
@@ -149,10 +210,14 @@ pub fn serve_on(listener: UnixListener, identities: Vec<PreparedIdentity>) {
 /// answering each in turn. SSH clients keep the socket open and pipeline
 /// requests (e.g. `ssh-add -l` then a sign), so we loop rather than
 /// handling a single message.
-fn handle_connection(mut stream: UnixStream, identities: &[PreparedIdentity]) -> Result<()> {
+fn handle_connection(mut stream: UnixStream, ctx: &SignContext) -> Result<()> {
+    // The connecting peer's pid is read once per connection. The SSH client
+    // keeps the socket open across a listing + a sign, so the peer is stable
+    // for the connection's lifetime.
+    let peer_pid = super::peercred::peer_pid(&stream);
     while let Some(frame) = read_frame(&mut stream)? {
         let reply = match ssh_proto::parse_request(&frame) {
-            Ok(request) => handle_request(request, identities),
+            Ok(request) => handle_request(request, ctx, peer_pid),
             // A malformed frame is the client's fault, not ours. Answer
             // FAILURE so a confused client gets a defined response rather
             // than a dropped connection.
@@ -172,30 +237,30 @@ fn handle_connection(mut stream: UnixStream, identities: &[PreparedIdentity]) ->
 /// Map one parsed request to its reply bytes.
 ///
 /// `REQUEST_IDENTITIES` lists the prepared public keys with no resolve and
-/// no consent. `SIGN_REQUEST` and unsupported types answer
-/// `SSH_AGENT_FAILURE` for now.
-fn handle_request(request: AgentRequest, identities: &[PreparedIdentity]) -> Vec<u8> {
+/// no consent. `SIGN_REQUEST` runs the gated sign flow. Unsupported types
+/// answer `SSH_AGENT_FAILURE`.
+fn handle_request(request: AgentRequest, ctx: &SignContext, peer_pid: Option<u32>) -> Vec<u8> {
     match request {
         AgentRequest::RequestIdentities => {
             super::log::log_at(
                 "ssh-agent",
                 format_args!(
                     "← REQUEST_IDENTITIES; answering {} key(s)",
-                    identities.len()
+                    ctx.identities.len()
                 ),
             );
-            ssh_proto::encode_identities_answer(identities)
+            let listing: Vec<(&[u8], &str)> = ctx
+                .identities
+                .iter()
+                .map(|id| (id.blob.as_slice(), id.comment.as_str()))
+                .collect();
+            ssh_proto::encode_identities_answer(&listing)
         }
-        // Task 10: gated sign — peer pid → provenance → consent → resolve
-        // → sign. Until then a sign request gets a defined failure so
-        // clients fall back gracefully rather than hang.
-        AgentRequest::Sign { .. } => {
-            super::log::log_at(
-                "ssh-agent",
-                format_args!("← SIGN_REQUEST (not yet implemented); answering FAILURE"),
-            );
-            ssh_proto::encode_failure()
-        }
+        AgentRequest::Sign {
+            key_blob,
+            data,
+            flags,
+        } => handle_sign(ctx, peer_pid, &key_blob, &data, flags),
         AgentRequest::Unsupported(msg_type) => {
             super::log::log_at(
                 "ssh-agent",
@@ -204,6 +269,289 @@ fn handle_request(request: AgentRequest, identities: &[PreparedIdentity]) -> Vec
             ssh_proto::encode_failure()
         }
     }
+}
+
+/// The gated SIGN flow: peer → provenance → consent → resolve → sign.
+///
+/// Fail-closed at every uncertainty: if we can't determine the peer pid,
+/// can't anchor the caller chain, don't recognize the key, can't reach the
+/// consent machinery, the user denies, or the resolve/sign fails, we answer
+/// `SSH_AGENT_FAILURE` and release nothing.
+fn handle_sign(
+    ctx: &SignContext,
+    peer_pid: Option<u32>,
+    key_blob: &[u8],
+    data: &[u8],
+    flags: u32,
+) -> Vec<u8> {
+    // 1. Map the requested key blob to a configured identity. Unknown keys
+    //    fail closed (the client asked us to sign with a key we don't hold).
+    let Some(identity) = ctx.identities.iter().find(|id| id.blob == key_blob) else {
+        super::log::log_at(
+            "ssh-agent",
+            format_args!("← SIGN_REQUEST for an unknown key blob; answering FAILURE"),
+        );
+        return ssh_proto::encode_failure();
+    };
+
+    // 2. Determine the connecting peer and its anchor. Either being
+    //    unavailable means we can't attribute the request, so fail closed.
+    let Some(peer_pid) = peer_pid else {
+        super::log::log_at(
+            "ssh-agent",
+            format_args!(
+                "← SIGN_REQUEST for {:?} but peer pid is unknown; answering FAILURE",
+                identity.key_id
+            ),
+        );
+        return ssh_proto::encode_failure();
+    };
+    let chain = crate::provenance::caller_chain_from_pid(peer_pid);
+    let Some(anchor) = crate::provenance::select_anchor(&chain) else {
+        super::log::log_at(
+            "ssh-agent",
+            format_args!(
+                "← SIGN_REQUEST for {:?} (peer pid {peer_pid}) but no anchor in caller chain; answering FAILURE",
+                identity.key_id
+            ),
+        );
+        return ssh_proto::encode_failure();
+    };
+    let anchor_pid = anchor.pid;
+    let anchor_start_time = anchor.start_time;
+
+    // The production daemon always supplies state; the listing-only test
+    // path doesn't. With no state there is no consent machinery, so fail
+    // closed rather than signing unconditionally.
+    let Some(state) = ctx.state.as_ref() else {
+        super::log::log_at(
+            "ssh-agent",
+            format_args!("← SIGN_REQUEST but no consent state wired; answering FAILURE"),
+        );
+        return ssh_proto::encode_failure();
+    };
+
+    // 3. Decide whether to sign: approval-cache hit (skip the prompt) or
+    //    interactive consent. The lock is held only for the cache check and
+    //    the queue submission, never across the (blocking) consent wait.
+    let decision = match decide_sign(state, identity, anchor_pid, anchor_start_time, &chain) {
+        Some(d) if d.approved() => d,
+        Some(_) => {
+            // Task 12: audit deny.
+            super::log::log_at(
+                "ssh-agent",
+                format_args!(
+                    "← SIGN_REQUEST for {:?} denied; answering FAILURE",
+                    identity.key_id
+                ),
+            );
+            return ssh_proto::encode_failure();
+        }
+        None => {
+            // Consent unavailable / the waiter channel dropped — fail closed.
+            super::log::log_at(
+                "ssh-agent",
+                format_args!(
+                    "← SIGN_REQUEST for {:?}: consent unavailable; answering FAILURE",
+                    identity.key_id
+                ),
+            );
+            return ssh_proto::encode_failure();
+        }
+    };
+
+    // 4. On "remember", insert a TTL-bounded approval scoped to the anchor.
+    if decision == Decision::ApproveRemember {
+        let expires_at = now_unix_secs().saturating_add(SSH_APPROVAL_TTL_SECS);
+        state
+            .lock()
+            .expect("state mutex")
+            .remember_ssh_approval(SshApprovalEntry {
+                key_id: identity.key_id.clone(),
+                anchor_pid,
+                anchor_start_time,
+                expires_at,
+            });
+    }
+
+    // 5. Resolve the private key FRESH, sign, and zeroize. The key material
+    //    is never cached or held across requests.
+    match resolve_and_sign(&ctx.providers, identity, data, flags) {
+        Ok(sig_blob) => {
+            // Task 12: audit approve (decision = `decision`).
+            super::log::log_at(
+                "ssh-agent",
+                format_args!(
+                    "← SIGN_REQUEST for {:?} ({}); signed {} byte challenge",
+                    identity.key_id,
+                    decision.as_str(),
+                    data.len()
+                ),
+            );
+            ssh_proto::encode_sign_response(&sig_blob)
+        }
+        Err(err) => {
+            super::log::log_at(
+                "ssh-agent",
+                format_args!(
+                    "← SIGN_REQUEST for {:?}: resolve/sign failed ({err:#}); answering FAILURE",
+                    identity.key_id
+                ),
+            );
+            ssh_proto::encode_failure()
+        }
+    }
+}
+
+/// Decide whether to sign for `identity` from `anchor`. Returns the approval
+/// flavour (`ApproveCached` on a cache hit, or whatever the user chose) or
+/// `Deny` on refusal; `None` means the consent machinery was unreachable
+/// (caller fails closed).
+///
+/// **Lock discipline:** the state mutex is taken only for the cache check
+/// and the queue submission. The blocking wait on the user's decision parks
+/// on an `mpsc::Receiver` with **no lock held**, mirroring `server.rs`'s
+/// `handle_ask` so the consent-window child can attach and render while the
+/// prompt is up.
+fn decide_sign(
+    state: &SharedState,
+    identity: &PreparedIdentity,
+    anchor_pid: u32,
+    anchor_start_time: u64,
+    chain: &[crate::provenance::Caller],
+) -> Option<Decision> {
+    // Cache check — lock held only for the lookup.
+    {
+        let mut guard = state.lock().expect("state mutex");
+        if guard.has_ssh_approval(&identity.key_id, anchor_pid, anchor_start_time) {
+            // Task 12: audit cached.
+            return Some(Decision::ApproveCached);
+        }
+    }
+
+    // Miss → enqueue an Ask and park on the reply channel. Build the Ask so
+    // the consent UI (Task 11) and the audit row (Task 12) have the
+    // identity, the caller chain, and the anchor scope to render.
+    let ask = sign_ask(identity, anchor_pid, anchor_start_time, chain);
+    let (tx, rx) = mpsc::channel();
+    {
+        let mut guard = state.lock().expect("state mutex");
+        guard.submit_ask(ask, tx);
+    }
+    // Raise the consent window so the user can decide. Best-effort: a
+    // failure here just means the window doesn't pop, and the wait below
+    // will block until the user acts through some other attached window or
+    // the daemon shuts down.
+    if let Err(err) = super::ensure_consent_window(state) {
+        super::log::log_at(
+            "ssh-agent",
+            format_args!("ensure_consent_window (ssh sign) failed: {err:#}"),
+        );
+    }
+
+    match rx.recv() {
+        Ok(WaiterReply::Decision { decision, .. }) => Some(decision),
+        // A resolve error on the wrap path can't happen here (the sign ask
+        // carries no secrets for the daemon to resolve — we resolve the key
+        // ourselves, fresh), but treat any Err as fail-closed.
+        Ok(WaiterReply::Err { .. }) => None,
+        Err(_) => None,
+    }
+}
+
+/// Build the in-process consent [`Ask`] for an SSH sign. Carries **no
+/// secrets** for the daemon to resolve — the SSH path resolves the private
+/// key itself, fresh, after the decision (so the key is never cached in the
+/// daemon's secret cache). The ask exists only to drive the consent prompt
+/// and coalesce repeated signs from the same anchor into one queue entry.
+fn sign_ask(
+    identity: &PreparedIdentity,
+    anchor_pid: u32,
+    anchor_start_time: u64,
+    chain: &[crate::provenance::Caller],
+) -> Ask {
+    let wrap = format!("ssh:{}", identity.key_id);
+    Ask {
+        command: vec![format!("ssh-sign {}", identity.key_id)],
+        cwd: String::new(),
+        callers: chain
+            .iter()
+            .map(|c| Caller {
+                pid: c.pid,
+                name: c.name.clone(),
+                command: c.command.clone(),
+                start_time: c.start_time,
+            })
+            .collect(),
+        // No SecretAsk: the daemon resolves nothing for an SSH sign.
+        secrets: Vec::new(),
+        providers: std::collections::HashMap::new(),
+        dedupe_key: DedupeKey {
+            wrap,
+            ppid: anchor_pid,
+            parent_start_time: anchor_start_time,
+        },
+    }
+}
+
+/// Resolve the identity's private-key reference fresh and sign `data`.
+///
+/// The PEM is held in a [`Zeroizing`] string and scrubbed when this
+/// function returns; it is never written to the daemon's secret cache. The
+/// resolved [`crate::secret::SecretValue`] is itself zeroizing-on-drop, so
+/// the only copy that outlives the resolve is the `Zeroizing` PEM we sign
+/// from and immediately drop.
+fn resolve_and_sign(
+    providers: &BTreeMap<String, Provider>,
+    identity: &PreparedIdentity,
+    data: &[u8],
+    flags: u32,
+) -> Result<Vec<u8>> {
+    use crate::manifest::Manifest;
+    use crate::resolve::{self, ResolutionPlan, SecretRequest, Source};
+
+    let manifest = Manifest {
+        groups: BTreeMap::new(),
+        providers: providers.clone(),
+    };
+    let plan = ResolutionPlan {
+        requests: vec![SecretRequest {
+            name: identity.key_id.clone(),
+            provider: identity.reference.provider.clone(),
+            locator: identity.reference.locator.clone(),
+            group: None,
+            reason: identity.reason.clone(),
+            description: None,
+            default: None,
+            source: Source::Eager,
+        }],
+    };
+
+    let resolved = resolve::resolve_all(&manifest, &plan).with_context(|| {
+        format!(
+            "resolving private key for ssh identity {:?}",
+            identity.key_id
+        )
+    })?;
+    let secret = resolved
+        .into_iter()
+        .next()
+        .with_context(|| format!("provider returned no value for {:?}", identity.key_id))?;
+
+    // Copy the exposed PEM into a zeroizing buffer so it scrubs when this
+    // scope ends, then sign from it. `secret` (also zeroizing) drops at the
+    // end of the function. Neither copy is cached.
+    let pem = Zeroizing::new(secret.value.expose().to_owned());
+    crate::ssh_sign::sign(&pem, data, flags).context("signing the SSH challenge")
+}
+
+/// Current Unix time in whole seconds, for stamping `expires_at` on a
+/// remembered SSH approval.
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// Read one complete `[u32 length][payload]` agent frame off `stream`,

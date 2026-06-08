@@ -55,11 +55,17 @@ pub fn start(socket_path: PathBuf, state: SharedState) -> Result<UnixListener> {
 /// protocol on `agent.sock` rather than the JSON control protocol. Returns
 /// `Ok(None)` when no identities are configured — no agent socket exists
 /// in that case.
+///
+/// `providers` and `state` are threaded through to the SIGN handler: the
+/// providers resolve the private key fresh at sign time; the shared state
+/// drives the consent prompt + SSH approval cache.
 pub fn start_ssh_agent(
     socket_path: PathBuf,
     ssh: &std::collections::BTreeMap<String, crate::wraps::SshIdentity>,
+    providers: std::collections::BTreeMap<String, crate::manifest::Provider>,
+    state: SharedState,
 ) -> Result<Option<UnixListener>> {
-    super::ssh_agent::start(socket_path, ssh)
+    super::ssh_agent::start(socket_path, ssh, providers, state)
 }
 
 fn accept_loop(listener: UnixListener, state: SharedState) {

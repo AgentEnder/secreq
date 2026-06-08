@@ -114,10 +114,20 @@ pub fn run() -> Result<i32> {
     // control socket and existing wrap flow are unaffected.
     let _agent_listener = match crate::wraps::default_config_path() {
         Some(config_path) => match crate::wraps::WrapsConfig::load(&config_path) {
-            Ok(config) if !config.ssh.is_empty() => {
+            Ok(mut config) if !config.ssh.is_empty() => {
+                // Overlay built-in providers so a private-key reference can
+                // name a built-in scheme (e.g. `secret://op/...`) without an
+                // explicit `providers` block — same resolution surface the
+                // wrap path gets via `load_config_or_default`.
+                config.merge_builtin_providers();
                 let agent_socket = server::default_agent_socket_path()?;
-                server::start_ssh_agent(agent_socket, &config.ssh)
-                    .context("start ssh agent listener")?
+                server::start_ssh_agent(
+                    agent_socket,
+                    &config.ssh,
+                    config.providers.clone(),
+                    state.clone(),
+                )
+                .context("start ssh agent listener")?
             }
             Ok(_) => None,
             Err(err) => {
