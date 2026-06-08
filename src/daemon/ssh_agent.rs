@@ -420,13 +420,60 @@ fn decide_sign(
     anchor_start_time: u64,
     chain: &[crate::provenance::Caller],
 ) -> Option<Decision> {
-    // Cache check — lock held only for the lookup.
+    // Cache check — lock held only for the lookup. A cached approval needs no
+    // UI, so this path is unaffected by whether a display is available; it
+    // works headless.
     {
         let mut guard = state.lock().expect("state mutex");
         if guard.has_ssh_approval(&identity.key_id, anchor_pid, anchor_start_time) {
             // Task 12: audit cached.
             return Some(Decision::ApproveCached);
         }
+    }
+
+    // Cache miss → interactive consent is required, which needs a window to
+    // render. Pass the real gui-availability bool into the miss handler so it
+    // can fail closed in a headless environment instead of blocking forever.
+    decide_sign_on_miss(
+        state,
+        identity,
+        anchor_pid,
+        anchor_start_time,
+        chain,
+        super::client::graphical_environment_available(),
+    )
+}
+
+/// The consent-miss half of [`decide_sign`], split out so the headless
+/// fail-closed guard can be unit-tested without racy process-global env
+/// mutation: the test calls this with `gui_available = false` and asserts the
+/// early `None` return happens **before** any `Ask` is submitted or any
+/// blocking wait begins (see `consent_miss_without_gui_fails_closed`).
+///
+/// `gui_available` is the *only* new input; `decide_sign` always passes the
+/// real [`super::client::graphical_environment_available`] result, so
+/// production behaviour is unchanged for the display-present case.
+fn decide_sign_on_miss(
+    state: &SharedState,
+    identity: &PreparedIdentity,
+    anchor_pid: u32,
+    anchor_start_time: u64,
+    chain: &[crate::provenance::Caller],
+    gui_available: bool,
+) -> Option<Decision> {
+    // No display → the consent window can never render, so `rx.recv()` below
+    // would block indefinitely and hang `ssh`/`git`. Fail closed before we
+    // touch state or enqueue anything. (A cached approval already returned
+    // above, so headless cached signs still work.)
+    if !gui_available {
+        super::log::log_at(
+            "ssh-agent",
+            format_args!(
+                "← SIGN_REQUEST for {:?}: consent needed but no graphical environment; failing closed",
+                identity.key_id
+            ),
+        );
+        return None;
     }
 
     // Miss → enqueue an Ask and park on the reply channel. Build the Ask so
@@ -616,6 +663,56 @@ fn read_exact_or_eof(stream: &mut UnixStream, buf: &mut [u8]) -> Result<ReadOutc
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    use crate::daemon::state::State;
+
+    /// On a consent-cache miss with no graphical environment available,
+    /// `decide_sign_on_miss` must fail closed (`None`) **without** enqueuing an
+    /// Ask or reaching the blocking `rx.recv()`. This is the headless
+    /// hang-prevention guard.
+    ///
+    /// The test exercises the guard rather than asserting a tautology: it
+    /// passes a real empty [`State`] and checks two observable effects of the
+    /// early return — (1) the returned decision is `None`, and (2) the queue is
+    /// still empty afterward, proving no `submit_ask` ran. If the guard were
+    /// missing, the call would push an Ask onto the queue and then park on
+    /// `rx.recv()` with no sender ever replying, hanging this test forever — so
+    /// a passing, non-hanging run is itself evidence the early return fired.
+    #[test]
+    fn consent_miss_without_gui_fails_closed() {
+        let state: SharedState = Arc::new(Mutex::new(State::new()));
+        let identity = PreparedIdentity {
+            blob: vec![1, 2, 3],
+            comment: "test key".to_owned(),
+            key_id: "ssh.test".to_owned(),
+            reference: crate::reference::Reference {
+                provider: "env".to_owned(),
+                locator: "SSH_KEY".to_owned(),
+            },
+            reason: None,
+        };
+        let chain: Vec<crate::provenance::Caller> = Vec::new();
+
+        let decision = decide_sign_on_miss(
+            &state, &identity, /* anchor_pid */ 4242, /* anchor_start_time */ 1, &chain,
+            /* gui_available */ false,
+        );
+
+        assert!(
+            decision.is_none(),
+            "headless consent miss must fail closed (None)"
+        );
+        assert!(
+            state
+                .lock()
+                .expect("state mutex")
+                .snapshot()
+                .entries
+                .is_empty(),
+            "no Ask should be enqueued when failing closed without a GUI"
+        );
+    }
 
     /// An oversized length prefix must be rejected by the guard *before*
     /// `read_frame` tries to allocate or read a body that large. Writing

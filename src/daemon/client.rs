@@ -400,7 +400,7 @@ fn daemon_disabled() -> bool {
 /// On Linux/BSD we look for `$DISPLAY` (X11) or `$WAYLAND_DISPLAY`. Missing
 /// both is a strong signal for "headless" — auto-spawning a daemon that
 /// will crash on `winit` init wastes the spawn timeout and surprises CI.
-fn graphical_environment_available() -> bool {
+pub(crate) fn graphical_environment_available() -> bool {
     if cfg!(target_os = "macos") {
         return true;
     }
