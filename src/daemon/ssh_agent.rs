@@ -507,6 +507,15 @@ fn decide_sign_on_miss(
             format_args!("ensure_consent_window (ssh sign) failed: {err:#}"),
         );
     }
+    // Also raise the always-on-top "N pending" badge — a sign request
+    // can hang `git push` just as easily as a wrap, and the badge is the
+    // safety net against a forgotten window. Idempotent.
+    if let Err(err) = super::ensure_badge_window(state) {
+        super::log::log_at(
+            "ssh-agent",
+            format_args!("ensure_badge_window (ssh sign) failed: {err:#}"),
+        );
+    }
 
     match rx.recv() {
         Ok(WaiterReply::Decision { decision, .. }) => Some(decision),

@@ -93,6 +93,30 @@ pub enum ClientMsg {
     },
     /// "I'm closing cleanly." Daemon removes me from its subscriber list.
     ConsentWindowDetach,
+
+    // ── Streaming protocol for the pending-badge child process ──
+    //
+    // The badge is a second, much smaller always-on-top child the
+    // daemon spawns while requests are pending — a "N pending" pill
+    // floating over other apps so a backgrounded consent window can't
+    // be forgotten with processes still hung on a decision. Unlike the
+    // consent window it never restarts-to-raise and never reports
+    // focus; it just subscribes to the same snapshot stream (reusing
+    // `DaemonMsg::ConsentUpdate`, counting `RowStatus::Awaiting` rows)
+    // and exits on `DaemonMsg::ConsentExitPlease` when the queue drains.
+    /// "I'm the pending-badge child process; subscribe me to snapshot
+    /// updates." Daemon registers the badge as a separate subscriber
+    /// kind and replies with an immediate `ConsentUpdate`.
+    BadgeWindowAttach { pid: u32 },
+    /// "I'm closing cleanly." Daemon removes me from its badge
+    /// subscriber list.
+    BadgeWindowDetach,
+    /// "The user clicked the badge — bring the consent window
+    /// forward." The daemon ensures a consent-window child exists and
+    /// raises it (the same kill-and-respawn foreground path a new ask
+    /// or `secreq pending` takes). The badge itself never opens the
+    /// consent UI — it only asks the daemon to.
+    RaiseConsentRequested,
     /// "My OS focus state just changed." Sent by the consent-window
     /// child whenever `egui::InputState.focused` transitions; lets the
     /// daemon distinguish "UI is alive AND in front" from "UI is alive

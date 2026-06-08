@@ -128,6 +128,13 @@ enum Command {
     #[command(hide = true)]
     ConsentWindow,
 
+    /// Internal: run the always-on-top pending-requests badge child.
+    /// The daemon spawns one of these whenever requests are awaiting a
+    /// decision, so a backgrounded consent window can't be forgotten.
+    /// Not meant to be invoked by users directly.
+    #[command(hide = true)]
+    PendingBadge,
+
     /// Anything else: the binary to wrap-and-run.
     #[command(external_subcommand)]
     External(Vec<String>),
@@ -217,6 +224,7 @@ pub fn run() -> i32 {
             Some(RulesAction::Rm { target }) => commands::rules_rm(&target),
         },
         Some(Command::ConsentWindow) => crate::daemon::child::run(),
+        Some(Command::PendingBadge) => crate::daemon::badge::run(),
         Some(Command::External(parts)) => {
             let (binary, args) = parts.split_first().expect("external subcommand has a name");
             commands::wrap_run(

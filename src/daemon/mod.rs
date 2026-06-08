@@ -19,6 +19,7 @@
 //! lifecycle bug in eframe's glow + wgpu backends. A short-lived child
 //! per session is a real foreground app the OS understands.
 
+pub mod badge;
 pub mod cache;
 pub mod child;
 pub mod client;
@@ -244,6 +245,33 @@ pub fn run() -> Result<i32> {
             // is the canonical "shut everything down" call).
             guard.request_shutdown();
         }
+
+        // Pending-badge lifecycle — independent of the consent window.
+        // The badge floats "N pending" over other apps while asks await
+        // a decision, so a backgrounded or closed consent window can't
+        // be forgotten with processes still hung. It vanishes the moment
+        // the queue drains, and is re-spawned here if it ever crashes
+        // while asks remain. Done as a separate block (not folded into
+        // the consent if/else above) precisely because the badge must
+        // outlive a closed consent window.
+        let ensure_badge = if guard.queue_is_empty() {
+            if guard.badge_subscriber_count() > 0 {
+                log::log_at("badge", format_args!("queue drained; dismissing badge"));
+                guard.broadcast_badge_exit_please();
+            }
+            false
+        } else {
+            guard.needs_badge_window() && !guard.badge_spawn_in_flight()
+        };
+        drop(guard);
+        if ensure_badge {
+            if let Err(err) = ensure_badge_window(&state) {
+                log::log_at(
+                    "badge",
+                    format_args!("main-loop ensure_badge_window failed: {err:#}"),
+                );
+            }
+        }
     }
 
     log::log(format_args!("shutdown flag observed; cleaning up"));
@@ -252,10 +280,13 @@ pub fn run() -> Result<i32> {
     // `request_shutdown` already broadcast `ConsentExitPlease` to it
     // — but only if it was attached at that moment. Re-broadcast here
     // to catch any child that attached between the request and now.
-    state
-        .lock()
-        .expect("state mutex")
-        .broadcast_consent_exit_please();
+    {
+        let mut guard = state.lock().expect("state mutex");
+        guard.broadcast_consent_exit_please();
+        // Same for any badge child that attached between the shutdown
+        // request and now.
+        guard.broadcast_badge_exit_please();
+    }
     let _ = std::fs::remove_file(&socket_path);
     log::log(format_args!("daemon exiting cleanly"));
     Ok(0)
@@ -301,6 +332,45 @@ pub fn ensure_consent_window(state: &state::SharedState) -> Result<()> {
         .stderr(std::process::Stdio::inherit())
         .spawn()
         .context("spawn consent-window child")?;
+    Ok(())
+}
+
+/// Spawn a `secreq pending-badge` child if one is needed (queue
+/// non-empty) and none is attached or mid-spawn. The badge is the
+/// always-on-top "N pending" pill that floats over other apps so a
+/// backgrounded consent window can't be forgotten with processes still
+/// hung on a decision.
+///
+/// Called both at submit time (so the badge appears immediately on the
+/// first pending ask) and from the daemon's main loop (so a crashed
+/// badge is re-spawned while the queue is still non-empty). The
+/// `needs_badge_window` / `badge_spawn_in_flight` guards make repeated
+/// calls idempotent.
+pub fn ensure_badge_window(state: &state::SharedState) -> Result<()> {
+    let mut guard = state.lock().expect("state mutex");
+    if !guard.needs_badge_window() {
+        return Ok(());
+    }
+    if guard.badge_spawn_in_flight() {
+        return Ok(());
+    }
+    let exe = std::env::current_exe().context("locate current executable")?;
+    log::log_at(
+        "spawn",
+        format_args!(
+            "spawning pending-badge child: {} pending-badge",
+            exe.display()
+        ),
+    );
+    guard.mark_badge_spawn_in_flight();
+    drop(guard);
+    std::process::Command::new(exe)
+        .arg("pending-badge")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .context("spawn pending-badge child")?;
     Ok(())
 }
 

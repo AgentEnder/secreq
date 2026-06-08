@@ -157,6 +157,25 @@ pub struct State {
     /// children. Cleared when the first child attaches OR after a
     /// timeout (so a failed spawn doesn't permanently block).
     consent_spawn_in_flight_since: Option<Instant>,
+
+    // ── Pending-badge streaming subscribers ───────────────────────
+    //
+    // The always-on-top "N pending" badge child(ren). A separate list
+    // from `consent_subscribers` because the badge has a deliberately
+    // different lifecycle: it persists while the queue is non-empty
+    // (even when the consent window is closed/backgrounded — that's the
+    // whole point), never restarts-to-raise, and never reports focus.
+    // Keeping it parallel means none of the consent-window focus /
+    // restart / auto-hide logic accidentally tears the badge down.
+    badge_subscribers: Vec<BadgeSubscriber>,
+    /// Monotonic ID source for badge subscribers. Independent of the
+    /// consent counter so the two ID spaces stay grep-distinguishable.
+    badge_next_subscriber_id: u64,
+    /// Spawn-debounce for the badge child, mirroring
+    /// `consent_spawn_in_flight_since`: set between `Command::spawn`
+    /// and the child's `BadgeWindowAttach` so a burst of asks doesn't
+    /// launch N badges. Cleared on attach or after `CONSENT_SPAWN_TIMEOUT`.
+    badge_spawn_in_flight_since: Option<Instant>,
     /// `true` between `initiate_consent_restart()` and the moment the
     /// dying child's detach is processed. Tells the detach handler
     /// "this isn't a user-initiated close — preserve viewer_mode and
@@ -209,6 +228,9 @@ impl Default for State {
             consent_subscribers: Vec::new(),
             consent_next_subscriber_id: 1,
             consent_spawn_in_flight_since: None,
+            badge_subscribers: Vec::new(),
+            badge_next_subscriber_id: 1,
+            badge_spawn_in_flight_since: None,
             consent_restart_pending: false,
             // Queue starts empty; record the moment so the auto-hide
             // logic has a stable "started counting" anchor.
@@ -242,6 +264,14 @@ struct ConsentSubscriber {
     /// the child overwrites this whenever the OS reports a focus change
     /// via `ClientMsg::ConsentWindowFocus`.
     focused: bool,
+}
+
+/// One attached pending-badge child. Deliberately leaner than
+/// [`ConsentSubscriber`]: the badge never reports focus and never
+/// restarts, so it carries only the streaming sender and a detach ID.
+struct BadgeSubscriber {
+    id: u64,
+    tx: mpsc::Sender<super::proto::DaemonMsg>,
 }
 
 impl State {
@@ -296,6 +326,9 @@ impl State {
         // Tell every consent-window child to close so they don't
         // outlive the daemon.
         self.broadcast(super::proto::DaemonMsg::ConsentExitPlease);
+        // Same for the badge child(ren) — it reuses `ConsentExitPlease`
+        // as its "please exit" signal.
+        self.broadcast_badge(super::proto::DaemonMsg::ConsentExitPlease);
     }
 
     // ── Consent-window subscriber API ────────────────────────────
@@ -426,6 +459,91 @@ impl State {
         self.consent_subscribers.len()
     }
 
+    // ── Pending-badge subscriber API ─────────────────────────────
+
+    /// Register a pending-badge child. Returns its detach ID and the
+    /// initial snapshot to ship immediately so it can paint frame 1
+    /// without a round-trip. Mirrors [`attach_consent_window`] but with
+    /// no focus state and no foreground intent — the badge is never the
+    /// thing the user is "in".
+    pub fn attach_badge_window(
+        &mut self,
+        sender: mpsc::Sender<super::proto::DaemonMsg>,
+    ) -> (u64, super::proto::WireSnapshot) {
+        let id = self.badge_next_subscriber_id;
+        self.badge_next_subscriber_id = id.wrapping_add(1);
+        self.badge_spawn_in_flight_since = None;
+        self.badge_subscribers
+            .push(BadgeSubscriber { id, tx: sender });
+        super::log::log_at(
+            "state",
+            format_args!(
+                "badge window attached (id={id}, subscribers={})",
+                self.badge_subscribers.len()
+            ),
+        );
+        (id, self.snapshot_for_wire())
+    }
+
+    /// Remove a badge subscriber by ID. Called by the badge streaming
+    /// connection handler when its read loop exits — same detach-order
+    /// contract as [`detach_consent_window`].
+    pub fn detach_badge_window(&mut self, id: u64) {
+        let before = self.badge_subscribers.len();
+        self.badge_subscribers.retain(|s| s.id != id);
+        let after = self.badge_subscribers.len();
+        super::log::log_at(
+            "state",
+            format_args!("badge window detached (id={id}, subscribers {before}→{after})"),
+        );
+    }
+
+    /// Number of currently-attached badge children.
+    pub fn badge_subscriber_count(&self) -> usize {
+        self.badge_subscribers.len()
+    }
+
+    /// Should the daemon ensure a pending-badge child is running? True
+    /// iff there's at least one ask awaiting a decision and no badge is
+    /// already up. Resolving (already-approved) cards don't count — the
+    /// badge surfaces *undecided* requests, the ones a process is hung
+    /// on, not work that's merely finishing.
+    pub fn needs_badge_window(&self) -> bool {
+        !self.queue.is_empty() && self.badge_subscribers.is_empty()
+    }
+
+    /// True if a badge `Command::spawn` is in flight and we shouldn't
+    /// start another. Stale entries auto-clear after
+    /// [`CONSENT_SPAWN_TIMEOUT`] (shared constant — the spawn race is
+    /// identical to the consent window's).
+    pub fn badge_spawn_in_flight(&mut self) -> bool {
+        if let Some(at) = self.badge_spawn_in_flight_since {
+            if at.elapsed() < CONSENT_SPAWN_TIMEOUT {
+                return true;
+            }
+            self.badge_spawn_in_flight_since = None;
+        }
+        false
+    }
+
+    /// Record that a badge `Command::spawn` has just been kicked off.
+    pub fn mark_badge_spawn_in_flight(&mut self) {
+        self.badge_spawn_in_flight_since = Some(Instant::now());
+    }
+
+    /// Tell every attached badge child to exit. Sent when the queue
+    /// drains — the badge has nothing left to count, so it should
+    /// vanish. No-op if no badge is attached. Unlike
+    /// [`broadcast_consent_exit_please`] this doesn't touch
+    /// `queue_empty_since`: the badge has no auto-hide grace period, it
+    /// just goes the moment the last awaiting ask resolves.
+    pub fn broadcast_badge_exit_please(&mut self) {
+        if self.badge_subscribers.is_empty() {
+            return;
+        }
+        self.broadcast_badge(super::proto::DaemonMsg::ConsentExitPlease);
+    }
+
     /// Record a focus-state update for one attached child. Called by
     /// the streaming connection handler when a `ConsentWindowFocus`
     /// arrives. Unknown IDs are ignored — the subscriber may have
@@ -537,11 +655,22 @@ impl State {
     /// pruned out.
     pub fn broadcast_consent_update(&mut self) {
         let snapshot = self.snapshot_for_wire();
-        self.broadcast(super::proto::DaemonMsg::ConsentUpdate { snapshot });
+        let msg = super::proto::DaemonMsg::ConsentUpdate { snapshot };
+        // Same snapshot feeds both surfaces: the consent window renders
+        // the full queue; the badge just counts `Awaiting` rows.
+        self.broadcast(msg.clone());
+        self.broadcast_badge(msg);
     }
 
     fn broadcast(&mut self, msg: super::proto::DaemonMsg) {
         self.consent_subscribers
+            .retain(|s| s.tx.send(msg.clone()).is_ok());
+    }
+
+    /// Push `msg` to every attached badge child, pruning senders whose
+    /// receiver has dropped (badge exited / crashed).
+    fn broadcast_badge(&mut self, msg: super::proto::DaemonMsg) {
+        self.badge_subscribers
             .retain(|s| s.tx.send(msg.clone()).is_ok());
     }
 
@@ -1440,6 +1569,83 @@ mod tests {
             );
             assert_eq!(guard.approvals[0].wrap, "gh");
         }
+    }
+
+    #[test]
+    fn badge_window_lifecycle_tracks_the_awaiting_queue() {
+        use std::sync::mpsc;
+
+        let shared: SharedState = Arc::new(Mutex::new(State::new()));
+
+        // Empty queue: no badge needed, none attached.
+        {
+            let guard = shared.lock().expect("state mutex");
+            assert!(!guard.needs_badge_window());
+            assert_eq!(guard.badge_subscriber_count(), 0);
+        }
+
+        // An ask awaiting a decision → a badge is needed (but not yet up).
+        let ask = mk_ask("gh", vec![(100, 1_700_000_000)]);
+        let key = ask.dedupe_key.clone();
+        let (tx, _rx) = mpsc::channel();
+        shared.lock().expect("state mutex").submit_ask(ask, tx);
+        assert!(shared.lock().unwrap().needs_badge_window());
+
+        // Attach a badge → it's up now, so we don't need to spawn another.
+        let (btx, brx) = mpsc::channel();
+        let id = {
+            let mut guard = shared.lock().expect("state mutex");
+            let (id, _snap) = guard.attach_badge_window(btx);
+            assert_eq!(guard.badge_subscriber_count(), 1);
+            assert!(!guard.needs_badge_window());
+            id
+        };
+        // The attach pushed an initial snapshot; the queue change pushed
+        // another. Both are `ConsentUpdate`s — drain them.
+        while let Ok(msg) = brx.try_recv() {
+            assert!(matches!(
+                msg,
+                crate::daemon::proto::DaemonMsg::ConsentUpdate { .. }
+            ));
+        }
+
+        // Drain the queue (deny the only ask). The badge is no longer
+        // needed once nothing awaits a decision.
+        {
+            let mut guard = shared.lock().expect("state mutex");
+            guard.resolve(
+                &key,
+                Decision::Deny,
+                ApprovalScope {
+                    pid: 100,
+                    start_time: 1_700_000_000,
+                },
+                &shared,
+            );
+            assert!(guard.queue_is_empty());
+            // A badge is still attached, but `needs_badge_window` is false
+            // because the queue is empty — the daemon's main loop will send
+            // the exit signal on its next tick.
+            assert!(!guard.needs_badge_window());
+        }
+
+        // The exit broadcast reaches the attached badge.
+        {
+            let mut guard = shared.lock().expect("state mutex");
+            guard.broadcast_badge_exit_please();
+        }
+        // Skip any trailing snapshot pushes; the exit signal must arrive.
+        let mut saw_exit = false;
+        while let Ok(msg) = brx.try_recv() {
+            if matches!(msg, crate::daemon::proto::DaemonMsg::ConsentExitPlease) {
+                saw_exit = true;
+            }
+        }
+        assert!(saw_exit, "badge must receive ConsentExitPlease on drain");
+
+        // Detaching with an empty queue leaves no badge needed.
+        shared.lock().expect("state mutex").detach_badge_window(id);
+        assert!(!shared.lock().unwrap().needs_badge_window());
     }
 
     #[test]

@@ -1449,6 +1449,52 @@ fn pending_arrival_highlight() {
     );
 }
 
+// ── Pending-badge fixtures ────────────────────────────────────────────────
+
+/// The always-on-top pending badge renders in its own tiny borderless
+/// window (`secreq pending-badge`), not the consent panel — so it gets a
+/// dedicated, much simpler harness path: no daemon state, no audit log,
+/// no tabs. Just `render_badge` at the production badge size with a
+/// `inner_margin(0.0)` central panel, so the pill fills the frame exactly
+/// as the real borderless window does.
+fn render_badge_fixture(name: &str, count: usize) {
+    // Matches `daemon/badge.rs::BADGE_SIZE`.
+    let size = Vec2::new(184.0, 44.0);
+    let mut harness = Harness::builder()
+        .with_size(size)
+        .with_pixels_per_point(PIXELS_PER_POINT)
+        .wgpu()
+        .build_ui(move |ui| {
+            let ctx = ui.ctx().clone();
+            secreq::daemon::ui::install_style(&ctx);
+            secreq::daemon::ui::render_badge(ui, count);
+        });
+    harness.run();
+    let img = harness.render().expect("render wgpu");
+
+    let out_dir = Path::new(OUT_DIR);
+    std::fs::create_dir_all(out_dir).expect("mkdir out");
+    let out = out_dir.join(format!("{name}.png"));
+    img.save(&out).expect("save png");
+    eprintln!("wrote {} ({}x{})", out.display(), img.width(), img.height());
+}
+
+#[test]
+#[ignore = "screenshot harness"]
+fn badge_one_pending() {
+    // Singular case — exercises the "1 pending" (not "1 pendings")
+    // branch in `render_badge`.
+    render_badge_fixture("25-badge-one-pending", 1);
+}
+
+#[test]
+#[ignore = "screenshot harness"]
+fn badge_three_pending() {
+    // The common multi-request case: "3 pending" floating over other
+    // apps, indicator dot + count, the whole pill a click target.
+    render_badge_fixture("26-badge-three-pending", 3);
+}
+
 /// Stress test: render at progressively smaller viewport sizes to
 /// catch panics from the hand-painted title bar, card layouts, and
 /// scope_builder rects when the user drags the window down. A user-

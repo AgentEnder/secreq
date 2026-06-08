@@ -670,6 +670,58 @@ pub fn install_fonts(ctx: &egui::Context) {
     install_style(ctx);
 }
 
+/// Alert background for the always-on-top pending badge. A deep,
+/// saturated red so a "N pending" pill reads as "act on me" against an
+/// arbitrary desktop — distinct from the consent window's calm dark
+/// canvas, which the user has to be looking at to see at all.
+const COLOR_BADGE_BG: egui::Color32 = egui::Color32::from_rgb(198, 52, 64);
+
+/// Render the always-on-top pending-requests badge: a compact pill
+/// reading "N pending" with a bright indicator dot. The background is
+/// painted here (not left to the window/panel fill) so the screenshot
+/// fixture renders the exact pixels the production badge window shows.
+/// Returns the click response over the whole pill — the badge child
+/// turns a click into a `RaiseConsentRequested`.
+pub fn render_badge(ui: &mut egui::Ui, count: usize) -> egui::Response {
+    let rect = ui.max_rect();
+    // Clone so the painter doesn't hold a borrow across `allocate_rect`.
+    let painter = ui.painter().clone();
+
+    // Opaque fill of the whole (small, borderless) window.
+    painter.rect_filled(rect, egui::CornerRadius::ZERO, COLOR_BADGE_BG);
+
+    // Bright indicator dot, vertically centred, inset from the left.
+    let dot_radius = 5.0;
+    let dot_center = egui::pos2(rect.left() + 16.0, rect.center().y);
+    painter.circle_filled(dot_center, dot_radius, COLOR_TEXT);
+
+    // "N pending" — singular/plural so a single request doesn't read
+    // "1 pendings".
+    let label = if count == 1 {
+        "1 pending".to_owned()
+    } else {
+        format!("{count} pending")
+    };
+    painter.text(
+        egui::pos2(dot_center.x + dot_radius + 10.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(18.0),
+        COLOR_TEXT,
+    );
+
+    ui.allocate_rect(rect, egui::Sense::click())
+}
+
+/// The badge window's clear colour, matching [`render_badge`]'s fill, so
+/// any pixels the painter doesn't cover (sub-pixel edges, the frame
+/// before the first paint) show the alert colour rather than flashing a
+/// stale or black background. Shape matches `eframe::App::clear_color`'s
+/// `[r, g, b, a]` gamma-normalised return.
+pub fn badge_clear_color() -> [f32; 4] {
+    COLOR_BADGE_BG.to_normalized_gamma_f32()
+}
+
 // ── Audit history cache ──────────────────────────────────────────────────
 //
 // The daemon never writes the audit log (clients do, post-decision in
