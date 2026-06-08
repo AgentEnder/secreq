@@ -27,6 +27,7 @@ pub mod log;
 pub mod peercred;
 pub mod proto;
 pub mod server;
+pub mod ssh_proto;
 pub mod state;
 pub mod ui;
 
