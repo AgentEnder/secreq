@@ -342,8 +342,8 @@ fn handle_sign(
     //    the queue submission, never across the (blocking) consent wait.
     let decision = match decide_sign(state, identity, anchor_pid, anchor_start_time, &chain) {
         Some(d) if d.approved() => d,
-        Some(_) => {
-            // Task 12: audit deny.
+        Some(deny) => {
+            audit_sign(identity, &chain, deny);
             super::log::log_at(
                 "ssh-agent",
                 format_args!(
@@ -384,7 +384,11 @@ fn handle_sign(
     //    is never cached or held across requests.
     match resolve_and_sign(&ctx.providers, identity, data, flags) {
         Ok(sig_blob) => {
-            // Task 12: audit approve (decision = `decision`).
+            // Audit the grant only once the sign actually succeeds — the row
+            // carries the decision that authorized it (`ApproveCached` on a
+            // cache hit, or whatever the user chose). The signature bytes are
+            // never recorded; the row holds only the key id + fingerprint.
+            audit_sign(identity, &chain, decision);
             super::log::log_at(
                 "ssh-agent",
                 format_args!(
@@ -432,7 +436,9 @@ fn decide_sign(
     {
         let mut guard = state.lock().expect("state mutex");
         if guard.has_ssh_approval(&identity.key_id, anchor_pid, anchor_start_time) {
-            // Task 12: audit cached.
+            // The audit row for a cache hit is written at the sign outcome
+            // (with `decision = ApproveCached`), alongside the approve/deny
+            // rows — one audit-write site, fed the decision this returns.
             return Some(Decision::ApproveCached);
         }
     }
@@ -605,6 +611,41 @@ fn resolve_and_sign(
     // end of the function. Neither copy is cached.
     let pem = Zeroizing::new(secret.value.expose().to_owned());
     crate::ssh_sign::sign(&pem, data, flags).context("signing the SSH challenge")
+}
+
+/// Write the audit row for one SSH-sign outcome.
+///
+/// This is the **one documented exception** to "the daemon never writes
+/// audit rows" (see `CLAUDE.md`): there is no wrap client on the SSH path
+/// to do it, so the daemon records the sign itself. The row carries the
+/// identity key id, the public-key SHA256 fingerprint, the decision, and
+/// the caller chain — and **never** the private key or the signature bytes
+/// (see [`crate::audit::AuditEntry::ssh_sign`]).
+///
+/// An audit-write failure is non-fatal to the sign — we log it and move on,
+/// mirroring the wrap client, which treats `audit::append` errors as
+/// non-fatal (`commands.rs` ignores the `Result`). Failing a sign over an
+/// audit-log write error would be a worse outcome than a missing row.
+fn audit_sign(
+    identity: &PreparedIdentity,
+    chain: &[crate::provenance::Caller],
+    decision: Decision,
+) {
+    let entry = crate::audit::AuditEntry::ssh_sign(
+        &identity.key_id,
+        &identity.fingerprint,
+        chain,
+        decision,
+    );
+    if let Err(err) = crate::audit::append(&entry) {
+        super::log::log_at(
+            "ssh-agent",
+            format_args!(
+                "failed to write audit row for ssh sign {:?}: {err:#}",
+                identity.key_id
+            ),
+        );
+    }
 }
 
 /// Current Unix time in whole seconds, for stamping `expires_at` on a

@@ -47,6 +47,13 @@ pub struct AuditEntry {
     /// older `secreq` deserialize cleanly here.
     #[serde(default)]
     pub rule_id: Option<String>,
+    /// SHA256 fingerprint of the public key, set only for SSH-agent sign
+    /// rows (`Some("SHA256:…")`); `None` for every wrap-run row. This is a
+    /// public-key fingerprint — never the private key and never the
+    /// signature bytes. `#[serde(default)]` so older logs (and every
+    /// non-SSH row, which omits it) deserialize cleanly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
 }
 
 /// One process in the audit-time caller chain. Mirrors the runtime
@@ -94,6 +101,35 @@ impl AuditEntry {
             secrets: secret_names.to_vec(),
             decision: decision.as_str().to_owned(),
             rule_id: None,
+            fingerprint: None,
+        }
+    }
+
+    /// Assemble an SSH-agent **sign** audit row. There is no wrap client on
+    /// the SSH path, so the daemon writes this itself (the one documented
+    /// exception to "the daemon never writes audit rows" — see `CLAUDE.md`).
+    ///
+    /// The row carries the identity (`wrap = "ssh:<key_id>"`), the public
+    /// key's SHA256 `fingerprint`, the `decision`, and the caller `chain`.
+    /// It carries **no secret material**: `secrets` is empty (the private
+    /// key is resolved fresh, signed from, and zeroized — never named here),
+    /// and the signature bytes are never recorded.
+    pub fn ssh_sign(
+        key_id: &str,
+        fingerprint: &str,
+        callers: &[Caller],
+        decision: Decision,
+    ) -> AuditEntry {
+        AuditEntry {
+            ts_unix: now_unix(),
+            cwd: String::new(),
+            wrap: format!("ssh:{key_id}"),
+            args: Vec::new(),
+            callers: callers.iter().map(AuditCaller::from_runtime).collect(),
+            secrets: Vec::new(),
+            decision: decision.as_str().to_owned(),
+            rule_id: None,
+            fingerprint: Some(fingerprint.to_owned()),
         }
     }
 
@@ -218,6 +254,81 @@ mod tests {
             }
         }
         entries
+    }
+
+    #[test]
+    fn ssh_sign_entry_carries_identity_not_key_or_signature() {
+        // An SSH-sign row must record the key id, the public-key
+        // fingerprint, the decision, and the full caller chain — and must
+        // leak NEITHER the private key NOR the signature bytes. We construct
+        // the entry the way the daemon does and assert on its serialized
+        // JSON (the exact on-disk shape).
+        let callers = vec![
+            Caller {
+                pid: 4242,
+                name: "git".to_owned(),
+                command: "git push origin main".to_owned(),
+                exe: None,
+                start_time: 1,
+            },
+            Caller {
+                pid: 4000,
+                name: "zsh".to_owned(),
+                command: "-zsh".to_owned(),
+                exe: None,
+                start_time: 1,
+            },
+        ];
+        // A made-up PEM + signature blob that must NOT appear in the row.
+        let secret_private_key = "-----BEGIN OPENSSH PRIVATE KEY-----DEADBEEF";
+        let secret_signature = "c2lnbmF0dXJlLWJ5dGVz";
+
+        let entry = AuditEntry::ssh_sign(
+            "ssh.deploy",
+            "SHA256:Nh0Me49Zh9fDwabc",
+            &callers,
+            Decision::ApproveCached,
+        );
+        let json = serde_json::to_string(&entry).expect("serialize ssh-sign entry");
+
+        // Identity + fingerprint + decision present.
+        assert!(json.contains("\"wrap\":\"ssh:ssh.deploy\""), "json: {json}");
+        assert!(
+            json.contains("\"fingerprint\":\"SHA256:Nh0Me49Zh9fDwabc\""),
+            "json: {json}"
+        );
+        assert!(
+            json.contains("\"decision\":\"approve+cached\""),
+            "json: {json}"
+        );
+        // Caller chain present (names + pids).
+        assert!(json.contains("\"pid\":4242"), "json: {json}");
+        assert!(json.contains("git push origin main"), "json: {json}");
+        // No secrets are named on an SSH-sign row.
+        assert!(json.contains("\"secrets\":[]"), "json: {json}");
+        // CRITICAL: never the private key, never the signature.
+        assert!(
+            !json.contains(secret_private_key),
+            "private key leaked into audit row: {json}"
+        );
+        assert!(
+            !json.contains(secret_signature),
+            "signature bytes leaked into audit row: {json}"
+        );
+        assert!(
+            !json.to_lowercase().contains("private key"),
+            "private-key text leaked into audit row: {json}"
+        );
+
+        // Round-trips back through Deserialize the way the history view reads it.
+        let parsed: AuditEntry = serde_json::from_str(&json).expect("round-trip");
+        assert_eq!(
+            parsed.fingerprint.as_deref(),
+            Some("SHA256:Nh0Me49Zh9fDwabc")
+        );
+        assert_eq!(parsed.wrap, "ssh:ssh.deploy");
+        assert_eq!(parsed.callers.len(), 2);
+        assert!(parsed.secrets.is_empty());
     }
 
     #[test]

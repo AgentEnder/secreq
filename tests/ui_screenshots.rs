@@ -203,6 +203,7 @@ fn audit_line(
         secrets: secrets.iter().map(|s| (*s).to_owned()).collect(),
         decision: decision.to_owned(),
         rule_id: None,
+        fingerprint: None,
     }
 }
 
@@ -237,6 +238,7 @@ fn audit_line_traced(
         secrets: secrets.iter().map(|s| (*s).to_owned()).collect(),
         decision: decision.to_owned(),
         rule_id: None,
+        fingerprint: None,
     }
 }
 
@@ -258,6 +260,7 @@ fn audit_auto_fire(secs_ago: u64, rule_id: &str, decision: &str) -> AuditEntry {
         secrets: vec!["GITHUB_TOKEN".to_owned()],
         decision: decision.to_owned(),
         rule_id: Some(rule_id.to_owned()),
+        fingerprint: None,
     }
 }
 

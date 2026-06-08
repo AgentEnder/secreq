@@ -462,6 +462,7 @@ mod tests {
             secrets: secrets.iter().map(|s| (*s).to_owned()).collect(),
             decision: decision.to_owned(),
             rule_id: None,
+            fingerprint: None,
         }
     }
 

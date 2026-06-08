@@ -80,6 +80,15 @@ row is two lines of authorship cost; it's never wrong to write.
   `tests/schema_drift.rs` fails CI if either is stale.
 - The audit log is written by the **wrap client** (`commands.rs`)
   after the daemon's reply lands. The daemon never writes audit
-  rows itself. If you change the audit shape, update both
+  rows itself — **with one exception: SSH-agent signs.** There is no
+  wrap client on the SSH path (the daemon *is* the agent), so the
+  daemon records each sign outcome itself via
+  `audit.rs::AuditEntry::ssh_sign` from `daemon/ssh_agent.rs::audit_sign`
+  (`ssh:<key_id>` wrap, the public-key SHA256 fingerprint, the
+  decision, and the caller chain — never the private key or the
+  signature bytes). This is the sole carve-out to "the daemon never
+  writes audit rows." Audit-write failures are non-fatal on both
+  paths (logged, never failing the user's command / the sign).
+  If you change the audit shape, update both
   `audit.rs::AuditEntry::new` and the screenshot fixture helpers that
   construct `AuditEntry` directly.

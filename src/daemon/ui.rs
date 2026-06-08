@@ -3895,6 +3895,7 @@ mod tests {
             secrets: secrets.iter().map(|s| (*s).to_owned()).collect(),
             decision: decision.to_owned(),
             rule_id: None,
+            fingerprint: None,
         }
     }
 
@@ -4283,6 +4284,7 @@ mod tests {
             secrets: vec![],
             decision: "approve+auto".to_owned(),
             rule_id: rule_id.map(str::to_owned),
+            fingerprint: None,
         }
     }
 
@@ -4408,6 +4410,7 @@ mod tests {
             secrets: vec![],
             decision: decision.to_owned(),
             rule_id: None,
+            fingerprint: None,
         }
     }
 
