@@ -1,8 +1,9 @@
 //! Command-line surface for the per-binary wrap model.
 //!
 //! Admin verbs (`init`, `wrap`, `unwrap`, `wraps`, `check`, `doctor`,
-//! `edit`) are parsed by clap. Anything else is treated as an *external
-//! subcommand* (the binary name to wrap-and-run, via [`commands::wrap_run`]).
+//! `edit`) are parsed by clap. Wrap-and-run is the explicit `x` subcommand:
+//! `secreq x <wrap> [args…]` (via [`commands::wrap_run`]) — that's what the
+//! PATH shims `exec`.
 
 use std::path::PathBuf;
 
@@ -19,8 +20,6 @@ use crate::ssh_setup;
     version,
     about,
     long_about = None,
-    // Anything that isn't an admin verb is the binary to wrap.
-    allow_external_subcommands = true,
 )]
 struct Cli {
     /// Use a specific config file instead of `$XDG_CONFIG_HOME/secreq/wraps.json5`.
@@ -191,9 +190,16 @@ enum Command {
     #[command(hide = true)]
     PendingBadge,
 
-    /// Anything else: the binary to wrap-and-run.
-    #[command(external_subcommand)]
-    External(Vec<String>),
+    /// Run a wrapped binary through secreq: consent → inject secrets → exec
+    /// the real binary with output masking. This is what the PATH shims call
+    /// (`exec secreq x <wrap> "$@"`). Run it directly to wrap a one-off.
+    X {
+        /// The wrap (binary) name, e.g. `gh`.
+        wrap: String,
+        /// Arguments forwarded to the wrapped binary.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 /// Which config file `secreq ssh-setup` should wire the agent into. Mirrors
@@ -343,22 +349,19 @@ pub fn run() -> i32 {
         },
         Some(Command::ConsentWindow) => crate::daemon::child::run(),
         Some(Command::PendingBadge) => crate::daemon::badge::run(),
-        Some(Command::External(parts)) => {
-            let (binary, args) = parts.split_first().expect("external subcommand has a name");
-            commands::wrap_run(
-                binary,
-                args,
-                WrapRunOpts {
-                    raw: cli.raw,
-                    no_remember: cli.no_remember,
-                    assume_yes: cli.yes,
-                },
-                config,
-            )
-        }
+        Some(Command::X { wrap, args }) => commands::wrap_run(
+            &wrap,
+            &args,
+            WrapRunOpts {
+                raw: cli.raw,
+                no_remember: cli.no_remember,
+                assume_yes: cli.yes,
+            },
+            config,
+        ),
         None => {
             // `secreq` with no args: short usage hint.
-            eprintln!("secreq: missing command. Try `secreq --help` or `secreq <binary>`.");
+            eprintln!("secreq: missing command. Try `secreq --help` or `secreq x <binary>`.");
             return 2;
         }
     };

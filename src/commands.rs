@@ -277,6 +277,22 @@ pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Re
     config.shim_dir = Some(shim_dir.clone());
     write_config(&config_path, &config)?;
 
+    // 4b. Repair/migrate managed shims. `install` rewrites the body of any
+    // shim that carries our sentinel, so reinstalling every configured wrap's
+    // shim migrates stale bodies (e.g. the old `exec secreq <wrap>` form) to
+    // the current `exec secreq x <wrap>` form. Only touch shims we already
+    // own — a foreign file at the same name must never abort init.
+    let managed: Vec<String> = config
+        .wraps
+        .keys()
+        .filter(|name| shim::is_managed(&shim_dir, name))
+        .cloned()
+        .collect();
+    if !managed.is_empty() {
+        let refreshed = shim::reinstall_all(&shim_dir, managed)?;
+        cliclack::log::success(format!("Refreshed {} managed shims.", refreshed.len()))?;
+    }
+
     // 5. Offer SSH-agent setup. secreq doubles as a provenance-aware SSH
     // agent when the config has an `ssh` block; wiring SSH clients at its
     // socket is the same plan/confirm/apply flow as `secreq ssh-setup`, so
@@ -1881,7 +1897,7 @@ fn resolve_wrap_env(config: &WrapsConfig, wrap: &Wrap) -> Result<Vec<(String, Se
 /// The second exclusion is load-bearing: a user can end up with stray
 /// shims in `~/.local/bin`, `/usr/local/bin`, or wherever an earlier
 /// `secreq wrap` left one before they moved the shim dir. Those stray
-/// shims are still functional (`exec secreq <wrap> "$@"`) but secreq
+/// shims are still functional (`exec secreq x <wrap> "$@"`) but secreq
 /// doesn't know about them — and if the spawned-process PATH happens
 /// to put one *before* the real binary's location, find_real_binary
 /// would otherwise pick up the stray and spawn `secreq` recursively,
@@ -2289,7 +2305,7 @@ mod tests {
         let path = dir.path().join("gh");
         std::fs::write(
             &path,
-            "#!/bin/sh\n# secreq-managed-shim: wrap=gh\nexec secreq gh \"$@\"\n",
+            "#!/bin/sh\n# secreq-managed-shim: wrap=gh\nexec secreq x gh \"$@\"\n",
         )
         .unwrap();
         make_executable(&path);

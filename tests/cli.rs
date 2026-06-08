@@ -98,7 +98,7 @@ fn wrap_run_injects_env_and_masks_output_when_token_is_echoed() {
     // Put the fake gh on PATH so secreq's find_real_binary picks it up.
     let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
     let out = Command::new(bin())
-        .args(["--yes", "gh", "auth", "status"])
+        .args(["--yes", "x", "gh", "auth", "status"])
         .env("XDG_CONFIG_HOME", dir.path().join("config"))
         .env("XDG_STATE_HOME", dir.path().join("state"))
         .env("PATH", &path)
@@ -134,7 +134,7 @@ fn raw_flag_disables_output_masking() {
     let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
 
     let out = Command::new(bin())
-        .args(["--yes", "--raw", "gh"])
+        .args(["--yes", "--raw", "x", "gh"])
         .env("XDG_CONFIG_HOME", dir.path().join("config"))
         .env("XDG_STATE_HOME", dir.path().join("state"))
         .env("PATH", &path)
@@ -165,7 +165,7 @@ fn unwrapped_binary_passes_through_unchanged() {
     let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
 
     let out = Command::new(bin())
-        .args(["gh", "passthrough-args"])
+        .args(["x", "gh", "passthrough-args"])
         .env("XDG_CONFIG_HOME", dir.path().join("config"))
         .env("XDG_STATE_HOME", dir.path().join("state"))
         .env("PATH", &path)
@@ -201,7 +201,7 @@ fn denies_without_terminal_or_yes() {
     // No --yes; SECREQ_NO_DAEMON forces fail-closed without contacting the
     // daemon (which would otherwise pop a GUI window).
     let out = Command::new(bin())
-        .args(["gh"])
+        .args(["x", "gh"])
         .env("XDG_CONFIG_HOME", dir.path().join("config"))
         .env("XDG_STATE_HOME", dir.path().join("state"))
         .env("PATH", &path)
@@ -212,6 +212,37 @@ fn denies_without_terminal_or_yes() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     // Child must not have run.
     assert!(!stdout.contains("argv="));
+}
+
+#[test]
+fn bare_unknown_command_is_not_a_wrap() {
+    // With the external-subcommand catch-all gone, a bare `secreq gh` is no
+    // longer wrap-and-run — clap rejects it as an unrecognized subcommand.
+    // Wrap execution now lives behind the explicit `secreq x gh` form.
+    let (dir, config) = sandbox();
+    let bin_dir = dir.path().join("realbin");
+    let shim_dir = dir.path().join("shims");
+    install_fake_gh(&bin_dir);
+    write_config(&config, &echo_provider_config(&shim_dir));
+    let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
+
+    let out = Command::new(bin())
+        .args(["gh", "auth", "status"])
+        .env("XDG_CONFIG_HOME", dir.path().join("config"))
+        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("PATH", &path)
+        .env("SECREQ_NO_DAEMON", "1")
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "bare `secreq gh` should not succeed");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unrecognized subcommand"),
+        "expected a clap unrecognized-subcommand error; got: {stderr}"
+    );
+    // The wrapped binary must not have run.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!stdout.contains("argv="), "child ran; got: {stdout}");
 }
 
 // ── wrap / unwrap / wraps ─────────────────────────────────────────────────
@@ -289,7 +320,7 @@ fn wrap_records_config_and_drops_shim() {
     assert!(shim.is_file());
     let shim_body = fs::read_to_string(&shim).unwrap();
     assert!(shim_body.contains("secreq-managed-shim"));
-    assert!(shim_body.contains("exec secreq gh"));
+    assert!(shim_body.contains("exec secreq x gh"));
 }
 
 #[test]
@@ -336,7 +367,7 @@ fn wrap_with_no_env_creates_a_gate_only_wrap() {
     let shim = shim_dir.join("op");
     assert!(shim.is_file());
     let shim_body = fs::read_to_string(&shim).unwrap();
-    assert!(shim_body.contains("exec secreq op"));
+    assert!(shim_body.contains("exec secreq x op"));
 }
 
 #[test]
@@ -365,7 +396,7 @@ fn gate_only_wrap_denies_without_terminal_or_yes() {
     let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
 
     let out = Command::new(bin())
-        .args(["op", "read", "op://Personal/AWS/credential"])
+        .args(["x", "op", "read", "op://Personal/AWS/credential"])
         .env("XDG_CONFIG_HOME", dir.path().join("config"))
         .env("XDG_STATE_HOME", dir.path().join("state"))
         .env("PATH", &path)
@@ -406,7 +437,7 @@ fn resolving_env_bypasses_the_gate_for_a_wrapped_provider() {
     let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
 
     let out = Command::new(bin())
-        .args(["op", "read", "op://Personal/AWS/credential"])
+        .args(["x", "op", "read", "op://Personal/AWS/credential"])
         .env("XDG_CONFIG_HOME", dir.path().join("config"))
         .env("XDG_STATE_HOME", dir.path().join("state"))
         .env("PATH", &path)
@@ -503,7 +534,7 @@ fn doctor_flags_when_a_shim_is_shadowed_by_an_earlier_path_entry() {
     // Drop the shim manually (skip running `wrap` here — focused test).
     fs::write(
         shim_dir.join("gh"),
-        "#!/bin/sh\n# secreq-managed-shim: wrap=gh\nexec secreq gh \"$@\"\n",
+        "#!/bin/sh\n# secreq-managed-shim: wrap=gh\nexec secreq x gh \"$@\"\n",
     )
     .unwrap();
     use std::os::unix::fs::PermissionsExt;
@@ -551,7 +582,7 @@ fn doctor_is_happy_when_the_shim_is_first_on_path() {
     );
     fs::write(
         shim_dir.join("gh"),
-        "#!/bin/sh\n# secreq-managed-shim: wrap=gh\nexec secreq gh \"$@\"\n",
+        "#!/bin/sh\n# secreq-managed-shim: wrap=gh\nexec secreq x gh \"$@\"\n",
     )
     .unwrap();
     use std::os::unix::fs::PermissionsExt;
