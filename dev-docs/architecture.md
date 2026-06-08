@@ -37,11 +37,11 @@ src/
 └── schema.rs        — JSON Schema for wraps.json5 (source of truth)
 ```
 
-## Data flow for `secreq <BINARY> [args…]`
+## Data flow for `secreq x <WRAP> [args…]`
 
 ```
 ┌─ cli ────────────────────────────────────────────────────────────────────┐
-│ parse argv. Anything not an admin verb is an external subcommand;        │
+│ parse argv. The `x` verb takes <WRAP> + trailing args;                   │
 │ dispatch to commands::wrap_run                                            │
 └────────────────────────┬─────────────────────────────────────────────────┘
                          ▼
@@ -82,7 +82,7 @@ live socket, exits after 2 hours of empty queue.
 
 ### Why a daemon
 
-Without it, N parallel `secreq gh` invocations (a monitoring app firing
+Without it, N parallel `secreq x gh` invocations (a monitoring app firing
 50 `gh api` calls at once) each independently check the cache, all miss,
 and all prompt — the user sees 50 modal dialogs.
 
@@ -223,8 +223,8 @@ trust boundary:
 
 ### `find_real_binary` skips the shim dir
 
-Without this, our shim recurses: `secreq gh` finds `<shim_dir>/gh`, execs
-it, which calls `secreq gh` again. The `skip` argument is mandatory; the
+Without this, our shim recurses: `secreq x gh` finds `<shim_dir>/gh`, execs
+it, which calls `secreq x gh` again. The `skip` argument is mandatory; the
 test `wrap_run_injects_env_and_masks_output…` exercises this.
 
 ### Resolution doesn't re-gate a wrapped provider CLI
@@ -376,7 +376,7 @@ post-parse representations (e.g. `ValueMode::Stdin` vs the JSON's
 | Looking for… | File |
 |---|---|
 | The CLI entry point | `src/main.rs` → `src/cli.rs` |
-| What `secreq <binary>` actually does | `src/commands.rs::wrap_run` |
+| What `secreq x <wrap>` actually does | `src/commands.rs::wrap_run` |
 | Wraps config + parser | `src/wraps.rs` |
 | Provider types + built-ins | `src/manifest.rs` |
 | Provider execution (retrieve / store / batch) | `src/provider.rs` |

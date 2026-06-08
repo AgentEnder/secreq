@@ -68,19 +68,19 @@ identity**, **keep the daemon running**, and **point your SSH clients at
 it**. The guided command walks all three:
 
 ```sh
-secreq ssh-setup
+secreq ssh setup
 ```
 
 Run bare, it offers each step in turn (each is skippable): add an
 identity if you have none, install the login service if it isn't there,
-then wire your clients. `secreq init` also offers `ssh-setup` once it has
+then wire your clients. `secreq init` also offers `ssh setup` once it has
 set up your PATH. The rest of this section covers each step as a
 standalone command, so you can run them granularly or by hand.
 
 ### 1. Declare the identity
 
 ```sh
-secreq ssh-add github \
+secreq ssh add github \
   --public-key ~/.ssh/id_ed25519.pub \
   --private-key "secret://op/Private/GitHub/private key"
 ```
@@ -147,8 +147,8 @@ Let secreq wire it for you. The scripted form does only this client
 wiring (it skips the identity and auto-start prompts):
 
 ```sh
-secreq ssh-setup --yes --method ssh-config   # ~/.ssh/config IdentityAgent
-secreq ssh-setup --yes --method shell-rc     # SSH_AUTH_SOCK export
+secreq ssh setup --yes --method ssh-config   # ~/.ssh/config IdentityAgent
+secreq ssh setup --yes --method shell-rc     # SSH_AUTH_SOCK export
 ```
 
 This resolves the socket path for your machine, shows you the exact block
@@ -157,7 +157,7 @@ by sentinel comments, so the command is **idempotent** (re-running is a
 no-op) and **reversible**:
 
 ```sh
-secreq ssh-setup --undo
+secreq ssh setup --undo
 ```
 
 **Pick a method.** Omit `--method` for an interactive prompt, or name one
@@ -203,11 +203,11 @@ the other agent answers.
 ### Verify it works
 
 ```sh
-secreq ssh-test            # test every configured identity
-secreq ssh-test github     # test just one
+secreq ssh validate            # test every configured identity
+secreq ssh validate github     # test just one
 ```
 
-`ssh-test` proves the wiring end to end: it connects to the agent socket,
+`ssh validate` proves the wiring end to end: it connects to the agent socket,
 asks the agent to sign a fixed test message with the key, and verifies the
 returned signature against the key's public half — the same
 consent → resolve → sign path a real `git push` takes. A passing run prints
@@ -219,8 +219,8 @@ talks to the live socket) and **may prompt for consent** the first time
 daemon probably isn't running yet — `secreq daemon install` sets it to start
 at login.
 
-You don't have to run it by hand: both `secreq ssh-setup` (the guided flow)
-and `secreq ssh-add` offer to run the self-test for you right after they wire
+You don't have to run it by hand: both `secreq ssh setup` (the guided flow)
+and `secreq ssh add` offer to run the self-test for you right after they wire
 things up.
 
 ## Behavior

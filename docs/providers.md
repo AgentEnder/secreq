@@ -11,7 +11,7 @@ is templates.
 |---|---|---|
 | `retrieve` | Yes | every wrap-and-run invocation; resolves each `env` entry |
 | `store` | No | not exposed via the CLI in the current model — kept on the type so user-written tooling can drive it (and for forward-compat with future verbs) |
-| `retrieve_batch` | No | `secreq <binary>` automatically, when a wrap's `env` references the same provider for ≥2 entries |
+| `retrieve_batch` | No | `secreq x <binary>` automatically, when a wrap's `env` references the same provider for ≥2 entries |
 
 A provider with no `store` is *retrieve-only* — fine for read-only stores
 like `op read` or `lpass show`. A provider with `retrieve_batch` declared

@@ -40,7 +40,7 @@ aws s3 ls         # same; one biometric for both keys (retrieve_batch)
 | `secreq wraps` | List configured wraps (names only — no values). |
 | `secreq check` / `doctor` | Validate config / verify provider CLIs. |
 | `secreq edit` | Open the config in `$EDITOR`. |
-| `secreq <bin> [args…]` | Wrap-and-run path. The shim invokes this. |
+| `secreq x <bin> [args…]` | Wrap-and-run path. The shim invokes this. |
 
 Built-in providers: `op` (with `retrieve_batch` — one biometric per
 multi-secret invocation), `keychain` (macOS), `lastpass`, `pass` (Unix).

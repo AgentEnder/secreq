@@ -15,7 +15,7 @@ consent ceremony** — the wedge nobody else covers.
 | **Looking up a command or flag** | [cli.md](./cli.md) — full reference. |
 | **Authoring `wraps.json5`** | [wraps.md](./wraps.md) + [wraps.schema.json](./wraps.schema.json) (point your editor at the schema for validation). |
 | **Picking or defining a provider** | [providers.md](./providers.md). |
-| **Using `secreq` as your SSH agent** | [ssh-agent.md](./ssh-agent.md) — onboarding (`ssh-add`, `daemon install`, `ssh-setup`), config, the key-custody tradeoff. |
+| **Using `secreq` as your SSH agent** | [ssh-agent.md](./ssh-agent.md) — onboarding (`ssh add`, `daemon install`, `ssh setup`), config, the key-custody tradeoff. |
 | **Understanding what the daemon window shows** | [consent-window.md](./consent-window.md) — pending tree, audit log, viewer mode. |
 
 ## Documentation map
@@ -30,8 +30,8 @@ consent ceremony** — the wedge nobody else covers.
 - **[providers.md](./providers.md)** — the provider model
   (retrieve / store / retrieve_batch), the built-ins, defining your own.
 - **[ssh-agent.md](./ssh-agent.md)** — the provenance-aware SSH agent:
-  the three-step onboarding (`ssh-add` to declare an identity, `daemon
-  install` for the login service, `ssh-setup` to wire clients), the `ssh`
+  the three-step onboarding (`ssh add` to declare an identity, `daemon
+  install` for the login service, `ssh setup` to wire clients), the `ssh`
   config block, the per-anchor TTL, and the key-custody downgrade vs.
   1Password's sealed agent.
 - **[consent-window.md](./consent-window.md)** — the daemon UI: the

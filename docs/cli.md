@@ -1,13 +1,12 @@
 # CLI reference
 
-`secreq` has admin subcommands (configuration) and a wrap-and-run path
-(invoked when the first argument is a binary name rather than an admin
-verb). The wrap-and-run path is what fires when a PATH shim invokes
-`secreq <BINARY> "$@"`.
+`secreq` has admin subcommands (configuration) and a wrap-and-run verb
+(`x`, invoked when a PATH shim runs a wrapped binary). The wrap-and-run
+path is what fires when a PATH shim invokes `secreq x <WRAP> "$@"`.
 
 ```
-secreq [GLOBAL OPTIONS] <ADMIN VERB> ...   # init, wrap, unwrap, wraps, check, doctor, edit
-secreq [GLOBAL OPTIONS] <BINARY> [ARGS...] # wrap-and-run (external subcommand)
+secreq [GLOBAL OPTIONS] <ADMIN VERB> ...    # init, wrap, unwrap, wraps, check, doctor, edit, ssh
+secreq [GLOBAL OPTIONS] x <WRAP> [ARGS...]  # wrap-and-run
 ```
 
 ## Global options
@@ -44,13 +43,26 @@ Idempotent: re-running detects the sentinel and skips the append.
 The PATH-config edit is shown to you in full and gated by a y/N prompt;
 nothing touches your dotfiles without explicit confirmation.
 
-`init` also offers to run the SSH-agent wiring step (see `ssh-setup`)
+`init` also offers to run the SSH-agent wiring step (see `ssh setup`)
 once PATH is sorted.
 
-### `ssh-add`
+### `ssh`
 
 ```
-secreq ssh-add <NAME> [--public-key <PATH-OR-LITERAL>] [--private-key secret://...] [--reason "..."] [--force]
+secreq ssh add <NAME> [--public-key <PATH-OR-LITERAL>] [--private-key secret://...] [--reason "..."] [--force]
+secreq ssh setup [--method ssh-config|shell-rc] [--undo]
+secreq ssh validate [<NAME>]
+```
+
+`secreq`'s SSH agent is managed through three nested subcommands:
+`add` declares an identity, `setup` runs the guided wiring flow, and
+`validate` proves the agent can sign. See [`ssh-agent.md`](./ssh-agent.md)
+for the full onboarding.
+
+#### `ssh add`
+
+```
+secreq ssh add <NAME> [--public-key <PATH-OR-LITERAL>] [--private-key secret://...] [--reason "..."] [--force]
 ```
 
 Declares an SSH identity in `wraps.json5` under the `ssh` block so the
@@ -73,17 +85,17 @@ it) when `op` is on `PATH`, otherwise a manual prompt. You can also
 hand-edit the `ssh` block directly. See [`ssh-agent.md`](./ssh-agent.md).
 
 On the interactive path (not the fully non-interactive `--public-key` +
-`--private-key` run), `ssh-add` offers to run `ssh-test` for the new
+`--private-key` run), `ssh add` offers to run `ssh validate` for the new
 identity once it's written, so you can confirm the agent can sign with it.
 
-### `ssh-setup`
+#### `ssh setup`
 
 ```
-secreq ssh-setup [--method ssh-config|shell-rc] [--undo]
+secreq ssh setup [--method ssh-config|shell-rc] [--undo]
 ```
 
 A guided flow that walks the three SSH-onboarding steps: declare an
-identity (`ssh-add`), install the login service (`daemon install`), then
+identity (`ssh add`), install the login service (`daemon install`), then
 wire your SSH clients at secreq's agent socket by writing a
 sentinel-bracketed managed block to a config file.
 
@@ -94,7 +106,7 @@ sentinel-bracketed managed block to a config file.
 | `--undo` | Remove the managed block instead of writing it. |
 
 Run it bare to be walked through all three steps interactively (each is
-skippable). The scripted form `ssh-setup --yes --method <method>` skips
+skippable). The scripted form `ssh setup --yes --method <method>` skips
 the identity and auto-start prompts and runs **only** the client-wiring
 step — the deterministic path for scripts. Omit `--method` to choose the
 method interactively. Each block is shown to you in full and gated by a
@@ -103,13 +115,13 @@ the sentinel and skips the write. See [`ssh-agent.md`](./ssh-agent.md)
 for the full onboarding, the two wiring methods, and the key-custody
 tradeoff.
 
-The guided (non-scripted) flow ends by offering to run `ssh-test` so you
-can confirm the agent can actually sign before you walk away.
+The guided (non-scripted) flow ends by offering to run `ssh validate` so
+you can confirm the agent can actually sign before you walk away.
 
-### `ssh-test`
+#### `ssh validate`
 
 ```
-secreq ssh-test [<NAME>]
+secreq ssh validate [<NAME>]
 ```
 
 Proves the agent can sign. Connects to the agent socket, asks it to sign a
@@ -283,22 +295,23 @@ on queued requests. Clicking the window's close button exits viewer
 mode and hides the window (the daemon keeps running). Auto-spawns the
 daemon if it isn't running.
 
-## Wrap-and-run (external subcommand)
+### `x`
 
 ```
-secreq <BINARY> [ARGS...]
+secreq x <WRAP> [ARGS...]
 ```
 
-Most of the time you don't invoke this by hand — your PATH shim does. The
-shim at `<shim_dir>/<BINARY>` is a 5-line POSIX script that execs
-`secreq <BINARY> "$@"`, so anything that does `execvp("<BINARY>", …)`
-(interactive shells, `npm`, `make`, IDEs) routes through us.
+The wrap-and-run verb. Most of the time you don't invoke this by hand —
+your PATH shim does. The shim at `<shim_dir>/<WRAP>` is a 5-line POSIX
+script that execs `secreq x <WRAP> "$@"`, so anything that does
+`execvp("<WRAP>", …)` (interactive shells, `npm`, `make`, IDEs) routes
+through us.
 
-### Flow
+#### Flow
 
-1. Load the config. Look up `<BINARY>` in `wraps`.
+1. Load the config. Look up `<WRAP>` in `wraps`.
 2. **If no wrap is configured**: pass through unchanged. Find the real
-   `<BINARY>` on PATH (excluding our shim dir to avoid recursion) and exec
+   `<WRAP>` on PATH (excluding our shim dir to avoid recursion) and exec
    it with no injection. This makes blanket-aliasing of binaries safe even
    before you've wrapped each one.
 3. **If a wrap exists**:
@@ -315,7 +328,7 @@ shim at `<shim_dir>/<BINARY>` is a 5-line POSIX script that execs
    - Spawn in a PTY (or piped if non-tty), streaming output through a
      masking filter that redacts any resolved value (unless `--raw`).
 
-### Exit codes
+#### Exit codes
 
 | Code | Meaning |
 |---|---|

@@ -79,7 +79,7 @@ This:
 
 - Adds an entry to `~/.config/secreq/wraps.json5`.
 - Drops a 5-line POSIX shim at `<shim_dir>/gh` whose body is
-  `exec secreq gh "$@"`.
+  `exec secreq x gh "$@"`.
 
 Confirm:
 
@@ -106,7 +106,7 @@ gh repo list
 What happens (the first time):
 
 1. Your shell finds `<shim_dir>/gh` first on `$PATH` and execs it.
-2. The shim execs `secreq gh repo list`.
+2. The shim execs `secreq x gh repo list`.
 3. `secreq` looks up `gh` in your wraps config, sees the wrap entry,
    and auto-spawns the consent daemon (if it isn't running yet).
 4. A small native window pops up showing what's about to happen:
@@ -141,12 +141,12 @@ covers.
   supported path for scripted/CI runs:
 
   ```sh
-  secreq --yes gh repo list
+  secreq --yes x gh repo list
   ```
 
 - **`--raw`** disables output masking for the wrap-and-run path. Use
   it when you actually want the resolved value to reach stdout (e.g.
-  `secreq --raw gh auth token | pbcopy`).
+  `secreq --raw x gh auth token | pbcopy`).
 
 ## SSH keys, too
 

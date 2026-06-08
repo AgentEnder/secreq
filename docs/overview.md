@@ -44,7 +44,7 @@ provenance-aware consent**. Nobody else covers all three.
                   │
                   ▼  shell or script invokes `gh repo list`
    ┌─ PATH shim ────────────────────────────────────────────────────────┐
-   │  ~/.secreq/shims/gh ⇒ exec secreq gh "$@"                          │
+   │  ~/.secreq/shims/gh ⇒ exec secreq x gh "$@"                        │
    │  covers every execvp() — interactive shells, npm postinstalls,     │
    │  IDE integrations, anything that resolves `gh` via PATH            │
    └───────────────────────────────────────────────────────────────────┘
@@ -82,13 +82,13 @@ provenance-aware consent**. Nobody else covers all three.
 | Concept | One-line definition |
 |---|---|
 | **Wrap** | A per-binary config entry: env vars to inject + reason. Cache lifetime is the lesser of the parent process's lifetime and the daemon's lifetime (there's no clock-based TTL). |
-| **Shim** | A 5-line POSIX script in your shim dir that execs `secreq <wrap>`. Placed on PATH so every invocation of the wrapped binary goes through us. |
+| **Shim** | A 5-line POSIX script in your shim dir that execs `secreq x <wrap>`. Placed on PATH so every invocation of the wrapped binary goes through us. |
 | **Provider** | A scheme that knows how to fetch (and optionally store) a value. Built-ins: `op`, `keychain` (macOS), `lastpass`, `pass` (Unix). |
 | **Reference** | `secret://<provider>/<locator>`. The thing that crosses code boundaries; values never do. |
 | **Consent ceremony** | The before-fetch prompt showing the caller chain and what's about to be released. Approval is **direct-parent-scoped**. |
 | **Cache key** | `(wrap_name, ppid, parent_start_time)`. Direct parent only; pid-recycle-safe. |
 | **Masking** | A streaming, byte-exact redactor that scrubs any resolved value from the child's output. |
-| **Pass-through** | `secreq <bin>` for a binary with no wrap entry just execs the binary unchanged. Lets you blanket-shim safely. |
+| **Pass-through** | `secreq x <bin>` for a binary with no wrap entry just execs the binary unchanged. Lets you blanket-shim safely. |
 | **`retrieve_batch`** | A provider's optional multi-resolve mode (`op run -- printenv` for `op`). N secrets, one biometric. |
 | **SSH agent** | A second daemon socket speaking the SSH agent protocol. Gates each key signature on consent, then resolves the private key from a provider and signs in-process. See [`ssh-agent.md`](./ssh-agent.md). |
 | **SSH approval TTL** | The SSH-only approval cache is clock-bounded (~5 min per anchor), unlike the wrap cache which lives as long as the parent process. |
