@@ -47,13 +47,40 @@ nothing touches your dotfiles without explicit confirmation.
 `init` also offers to run the SSH-agent wiring step (see `ssh-setup`)
 once PATH is sorted.
 
+### `ssh-add`
+
+```
+secreq ssh-add <NAME> [--public-key <PATH-OR-LITERAL>] [--private-key secret://...] [--reason "..."] [--force]
+```
+
+Declares an SSH identity in `wraps.json5` under the `ssh` block so the
+agent can serve it. The public key is stored inline (it isn't secret);
+the private key is a `secret://provider/locator` reference resolved only
+at sign time.
+
+| Flag | Meaning |
+|---|---|
+| `--public-key <PATH-OR-LITERAL>` | A path to a `.pub` file (read and validated) or a literal `ssh-…`/`ecdsa-…`/`sk-…` line. Prompted for if omitted. |
+| `--private-key secret://...` | The private-key reference, `secret://provider/locator`. Prompted for if omitted. |
+| `--reason "..."` | Reason shown in the consent prompt when this identity signs. |
+| `--force` | Overwrite an existing identity of the same name (otherwise a duplicate name errors). |
+
+Pass both `--public-key` and `--private-key` for a fully non-interactive
+run. Omit either and `secreq` resolves it interactively — including
+1Password `op` discovery (pick an SSH-Key item; the private-key
+reference, and the public key if you didn't supply one, are derived from
+it) when `op` is on `PATH`, otherwise a manual prompt. You can also
+hand-edit the `ssh` block directly. See [`ssh-agent.md`](./ssh-agent.md).
+
 ### `ssh-setup`
 
 ```
 secreq ssh-setup [--method ssh-config|shell-rc] [--undo]
 ```
 
-Wires your SSH clients at secreq's agent socket by writing a
+A guided flow that walks the three SSH-onboarding steps: declare an
+identity (`ssh-add`), install the login service (`daemon install`), then
+wire your SSH clients at secreq's agent socket by writing a
 sentinel-bracketed managed block to a config file.
 
 | Flag | Meaning |
@@ -62,10 +89,14 @@ sentinel-bracketed managed block to a config file.
 | `--method shell-rc` | Append an `SSH_AUTH_SOCK` export to your shell rc (affects every SSH client in that shell). |
 | `--undo` | Remove the managed block instead of writing it. |
 
-Omit `--method` to choose interactively. The block is shown to you in
-full and gated by a confirm prompt (use `--yes` to skip it). Idempotent:
-re-running detects the sentinel and skips the write. See
-[`ssh-agent.md`](./ssh-agent.md) for the two methods and the key-custody
+Run it bare to be walked through all three steps interactively (each is
+skippable). The scripted form `ssh-setup --yes --method <method>` skips
+the identity and auto-start prompts and runs **only** the client-wiring
+step — the deterministic path for scripts. Omit `--method` to choose the
+method interactively. Each block is shown to you in full and gated by a
+confirm prompt (use `--yes` to skip it). Idempotent: re-running detects
+the sentinel and skips the write. See [`ssh-agent.md`](./ssh-agent.md)
+for the full onboarding, the two wiring methods, and the key-custody
 tradeoff.
 
 ### `wrap`
@@ -153,6 +184,7 @@ secreq daemon              # ensure a daemon is running, then tail its log
 secreq daemon --fg         # run the daemon in the foreground in this process
 secreq daemon stop [--force | -f]
 secreq daemon log-path     # print the persistent log file path
+secreq daemon install [--undo]   # install (or remove) the login service
 ```
 
 Bare `secreq daemon` ensures a daemon is running in the background
@@ -185,6 +217,18 @@ hung socket thread). Liveness is probed via the pidfile flock, not
 just `kill(pid, 0)`, so a recycled pid can't be mistaken for a live
 daemon. The force path also removes the pidfile and socket file,
 which a SIGKILL'd process can't clean up itself.
+
+`secreq daemon install` writes a per-user login service that runs
+`secreq daemon --fg` at login and keeps it alive — a launchd
+LaunchAgent at `~/Library/LaunchAgents/com.secreq.daemon.plist` on
+macOS, a systemd `--user` unit at `~/.config/systemd/user/secreq.service`
+on Linux. This is what keeps the SSH agent socket live for incoming
+connections: wraps auto-spawn the daemon on demand, but nothing else
+spawns it for an *incoming* SSH sign. It shows the service file before
+writing (gated by a confirm prompt; `--yes` skips it), then loads it so
+the daemon is running immediately. `--undo` unloads and removes the
+service. See [`ssh-agent.md`](./ssh-agent.md) for the per-platform
+details and the `op`-on-PATH caveat.
 
 ### `pending`
 
