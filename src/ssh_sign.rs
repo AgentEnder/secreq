@@ -136,6 +136,41 @@ mod tests {
     use rsa::signature::Verifier;
     use ssh_key::{Algorithm, EcdsaCurve, LineEnding, PublicKey};
 
+    /// A static 2048-bit RSA private key (OpenSSH format) used by the RSA
+    /// signing tests. In debug builds `PrivateKey::random(.., Rsa)` takes
+    /// ~30-40s per call, which dominated the entire test suite. The key is a
+    /// throwaway generated once with `ssh-keygen -t rsa -b 2048`; embedding it
+    /// keeps these tests in the millisecond range. Do NOT switch this back to
+    /// `PrivateKey::random` — that reintroduces the slow keygen.
+    const RSA_TEST_KEY: &str = "-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABFwAAAAdzc2gtcn
+NhAAAAAwEAAQAAAQEA9ydPEFgcRVKRXdYvGS1+qHliLtDXB798bW5nsvdrtijnep9LvaeD
+SeH/2tFPbfYltz2QV2rvzAmC+tOwfH2X6tOvLJtNCHQmqtrzq0D9mPy6cAAcPJIeozHTnB
+T2OsLXtChU8t9z0wh1N2d1586slgEO99CrHm+WqMWeguIJitu6MdaQH6R62k5bvUmTDi+/
+kxtZBO43Ozy01QvnYqO+o77YigpiKp7JSdmESSfrg4WgExiZ1fF6JXU1GTrZ8VrRZ9WKvB
+eYpqFDO3LB/1W4s7vBLNkMHY0VGGqwJC7GLY7Jkx1UdMBJtip+J+fcoqL2euCJsenUYwKL
+IXxIXdhlRQAAA8ihJqnSoSap0gAAAAdzc2gtcnNhAAABAQD3J08QWBxFUpFd1i8ZLX6oeW
+Iu0NcHv3xtbmey92u2KOd6n0u9p4NJ4f/a0U9t9iW3PZBXau/MCYL607B8fZfq068sm00I
+dCaq2vOrQP2Y/LpwABw8kh6jMdOcFPY6wte0KFTy33PTCHU3Z3XnzqyWAQ730Kseb5aoxZ
+6C4gmK27ox1pAfpHraTlu9SZMOL7+TG1kE7jc7PLTVC+dio76jvtiKCmIqnslJ2YRJJ+uD
+haATGJnV8XoldTUZOtnxWtFn1Yq8F5imoUM7csH/Vbizu8Es2QwdjRUYarAkLsYtjsmTHV
+R0wEm2Kn4n59yiovZ64Imx6dRjAoshfEhd2GVFAAAAAwEAAQAAAQEAmhKYODElVpXVZzD5
+ZXG2DqK08UhhdEQL9lAoNyoErKctPoUFe3Js5ucLT8bCBGO5OVUYoVZZrNGVJHZJBCJrTQ
+mvn1glGosF++bIlk7KiM+sDdwTvjK9BLEwIJH0ucbzHy0xX8Kq+rjAEczedKajclOwmA4u
+TqfzvLyNRzxQBI4iE40PYKOOZjzxTaVdfJKZTfGnbtvPP4vBfge4F5LWXHRpz7b9SrScqs
+8XYbxK795ZvA1QWAIzb/52pRAcdgsK21/jicvUKs6MDVrATdFIGotVX0Q2dQG6ROmfXfht
+yYd+WNj4y+SRY5tGn5FOO2hG4SHGhrGheTGmhICqMez/AQAAAIAxuqjlWYPC3T2ZyV3jmq
+XsVSo0nLFgybECb1GNhVTxO6xspKSRebfCGsl4NsrXkXun3ER1ZmtL+gXpQAFvmc81vqNp
+WFEXCIY8HO1RCSUd8Rf13sOEYNwLwUz2iwJYHxc8/0pz4rx+HVgG7Dy55Qgi0bt5A0i5gP
+J9FPk0XQnCnwAAAIEA/D1RrJQdU7TNYlF/KkmT9duBXXKPU/BtaFfh8xIw3vFtkEiaCllW
+N3INDs9gTNp/bgyDJ3/1vkgy5qgFPVJ4N0H3Cmekf6BYqRL3b3UuCdUTmW5vY+tbjbN4cR
+J1pcoAEvHB/6gi1QQYXG6pCrKcuoku7ib/4lvmWZ5Mom56dgUAAACBAPrWlDjsCcs357P4
+eNyj8wTCR3TPg2yy0FhQd3vMF1O5MVrgp4wI1sgsYSa//jfQeTlZJSZocJMG8p+HLgUzRM
+XuvFOkbWVXWXVyJZRq4J7Cw40OVsXYf/jUw8zxFAehxxihH3eu7JaTOaAS0BzOapCG8oHh
+UmZO5k6cb+1m7BZBAAAAD3NlY3JlcS1yc2EtdGVzdAECAw==
+-----END OPENSSH PRIVATE KEY-----
+";
+
     fn pem_for(algorithm: Algorithm) -> String {
         PrivateKey::random(&mut rand::rngs::OsRng, algorithm)
             .expect("generate test key")
@@ -169,10 +204,10 @@ mod tests {
 
     #[test]
     fn signs_and_verifies_rsa_sha256() {
-        let pem = pem_for(Algorithm::Rsa { hash: None });
-        let key = PrivateKey::from_openssh(&pem).unwrap();
+        let pem = RSA_TEST_KEY;
+        let key = PrivateKey::from_openssh(pem).unwrap();
         let data = b"challenge bytes";
-        let blob = sign(&pem, data, SSH_AGENT_RSA_SHA2_256).unwrap();
+        let blob = sign(pem, data, SSH_AGENT_RSA_SHA2_256).unwrap();
         let sig = verify_blob(key.public_key(), data, &blob);
         assert_eq!(
             sig.algorithm(),
@@ -185,10 +220,10 @@ mod tests {
 
     #[test]
     fn signs_and_verifies_rsa_sha512() {
-        let pem = pem_for(Algorithm::Rsa { hash: None });
-        let key = PrivateKey::from_openssh(&pem).unwrap();
+        let pem = RSA_TEST_KEY;
+        let key = PrivateKey::from_openssh(pem).unwrap();
         let data = b"challenge bytes";
-        let blob = sign(&pem, data, SSH_AGENT_RSA_SHA2_512).unwrap();
+        let blob = sign(pem, data, SSH_AGENT_RSA_SHA2_512).unwrap();
         let sig = verify_blob(key.public_key(), data, &blob);
         assert_eq!(
             sig.algorithm(),
