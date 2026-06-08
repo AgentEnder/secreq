@@ -670,10 +670,10 @@ fn init_writes_config_with_shim_dir() {
     }
 }
 
-// ── ssh-setup ─────────────────────────────────────────────────────────────
+// ── ssh setup ─────────────────────────────────────────────────────────────
 
 /// Run `secreq` with a sandboxed `$HOME` (and `$XDG_RUNTIME_DIR`) so
-/// `ssh-setup` writes into the tempdir, never the developer's real home.
+/// `ssh setup` writes into the tempdir, never the developer's real home.
 /// `shell` sets `$SHELL` (pass `""` to leave it unset, going through the
 /// `Unknown` shell path).
 fn run_ssh_setup(dir: &Path, home: &Path, shell: &str, args: &[&str]) -> std::process::Output {
@@ -706,7 +706,7 @@ fn ssh_setup_ssh_config_writes_identityagent_block_0600() {
         dir.path(),
         &home,
         "",
-        &["ssh-setup", "--method", "ssh-config", "--yes"],
+        &["ssh", "setup", "--method", "ssh-config", "--yes"],
     );
     assert!(
         out.status.success(),
@@ -740,7 +740,7 @@ fn ssh_setup_undo_removes_the_ssh_config_block() {
         dir.path(),
         &home,
         "",
-        &["ssh-setup", "--method", "ssh-config", "--yes"],
+        &["ssh", "setup", "--method", "ssh-config", "--yes"],
     );
     assert!(out.status.success());
     let ssh_config = home.join(".ssh/config");
@@ -753,7 +753,7 @@ fn ssh_setup_undo_removes_the_ssh_config_block() {
         dir.path(),
         &home,
         "",
-        &["ssh-setup", "--method", "ssh-config", "--undo"],
+        &["ssh", "setup", "--method", "ssh-config", "--undo"],
     );
     assert!(
         out.status.success(),
@@ -779,7 +779,7 @@ fn ssh_setup_shell_rc_writes_ssh_auth_sock_block() {
         dir.path(),
         &home,
         "/bin/zsh",
-        &["ssh-setup", "--method", "shell-rc", "--yes"],
+        &["ssh", "setup", "--method", "shell-rc", "--yes"],
     );
     assert!(
         out.status.success(),
@@ -813,7 +813,7 @@ fn ssh_setup_scripted_does_only_client_wiring() {
         dir.path(),
         &home,
         "",
-        &["ssh-setup", "--method", "ssh-config", "--yes"],
+        &["ssh", "setup", "--method", "ssh-config", "--yes"],
     );
     assert!(
         out.status.success(),
@@ -838,7 +838,7 @@ fn ssh_setup_scripted_does_only_client_wiring() {
     assert!(
         !combined.contains("Test that the agent can sign")
             && !combined.contains("Signing may prompt"),
-        "scripted ssh-setup must not offer the self-test: {combined}"
+        "scripted ssh setup must not offer the self-test: {combined}"
     );
 
     // No login service was installed (macOS LaunchAgents / Linux systemd user).
@@ -861,9 +861,9 @@ fn ssh_setup_scripted_does_only_client_wiring() {
     }
 }
 
-// ── ssh-add ───────────────────────────────────────────────────────────────
+// ── ssh add ───────────────────────────────────────────────────────────────
 
-/// A real (throwaway) ed25519 public key line for the ssh-add tests. Used as
+/// A real (throwaway) ed25519 public key line for the ssh add tests. Used as
 /// both a literal and the contents of a `.pub` file.
 const TEST_ED25519_PUB: &str =
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFxM1DmY0MNYQSHCQECYWC1Rqdom+nv5d1rCDKSm+nEn secreq-test@example";
@@ -877,7 +877,8 @@ fn ssh_add_writes_identity_with_explicit_flags() {
     let out = run_secreq(
         dir.path(),
         &[
-            "ssh-add",
+            "ssh",
+            "add",
             "github",
             "--public-key",
             pub_path.to_str().unwrap(),
@@ -926,7 +927,7 @@ fn ssh_add_writes_identity_with_explicit_flags() {
         !combined.contains("Test that the agent can sign")
             && !combined.contains("real signature")
             && !combined.contains("Signing may prompt"),
-        "scripted ssh-add must not offer the self-test: {combined}"
+        "scripted ssh add must not offer the self-test: {combined}"
     );
 }
 
@@ -938,7 +939,8 @@ fn ssh_add_rejects_duplicate_without_force() {
         run_secreq(
             dir.path(),
             &[
-                "ssh-add",
+                "ssh",
+                "add",
                 "github",
                 "--public-key",
                 TEST_ED25519_PUB,
@@ -971,7 +973,8 @@ fn ssh_add_rejects_duplicate_without_force() {
     let forced = run_secreq(
         dir.path(),
         &[
-            "ssh-add",
+            "ssh",
+            "add",
             "github",
             "--public-key",
             TEST_ED25519_PUB,
@@ -1001,7 +1004,8 @@ fn ssh_add_rejects_invalid_public_key() {
     let out = run_secreq(
         dir.path(),
         &[
-            "ssh-add",
+            "ssh",
+            "add",
             "github",
             "--public-key",
             "not a key",
@@ -1015,6 +1019,26 @@ fn ssh_add_rejects_invalid_public_key() {
         stderr.contains("neither an existing file") || stderr.contains("OpenSSH public key"),
         "stderr: {stderr}"
     );
+}
+
+#[test]
+fn ssh_help_lists_subcommands() {
+    // `secreq ssh --help` should advertise the nested subcommands so the flat
+    // names didn't silently survive the migration.
+    let (dir, _config) = sandbox();
+    let out = run_secreq(dir.path(), &["ssh", "--help"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    for sub in ["setup", "add", "validate"] {
+        assert!(
+            stdout.contains(sub),
+            "`ssh --help` should list `{sub}`: {stdout}"
+        );
+    }
 }
 
 #[test]

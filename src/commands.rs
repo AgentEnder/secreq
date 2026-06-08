@@ -295,14 +295,14 @@ pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Re
 
     // 5. Offer SSH-agent setup. secreq doubles as a provenance-aware SSH
     // agent when the config has an `ssh` block; wiring SSH clients at its
-    // socket is the same plan/confirm/apply flow as `secreq ssh-setup`, so
+    // socket is the same plan/confirm/apply flow as `secreq ssh setup`, so
     // we share `ssh_setup_core`. Entirely optional and non-fatal: declining
     // (or any failure, including a non-terminal `interact`) must not fail
     // `init`.
     if prompt::confirm_default_yes("Also set up secreq as your SSH agent?").unwrap_or(false) {
         if let Err(err) = ssh_setup_core(None, false, false, Some(&config_path)) {
             cliclack::log::warning(format!(
-                "skipped SSH-agent setup: {err:#}. Run `secreq ssh-setup` later to wire it."
+                "skipped SSH-agent setup: {err:#}. Run `secreq ssh setup` later to wire it."
             ))?;
         }
     }
@@ -314,7 +314,7 @@ pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Re
     Ok(0)
 }
 
-/// `secreq ssh-setup` — wire SSH clients at secreq's agent socket (or, with
+/// `secreq ssh setup` — wire SSH clients at secreq's agent socket (or, with
 /// `--undo`, strip the managed block back out). Thin wrapper over
 /// [`ssh_setup_core`], which `init` shares.
 pub fn ssh_setup(
@@ -327,28 +327,28 @@ pub fn ssh_setup(
     Ok(0)
 }
 
-/// `secreq ssh-setup` — a guided three-step onboarding flow:
+/// `secreq ssh setup` — a guided three-step onboarding flow:
 ///
 /// 1. **Identity** — ensure the config declares at least one `ssh` identity
-///    (offer `ssh-add`'s interactive flow when there are none).
+///    (offer `ssh add`'s interactive flow when there are none).
 /// 2. **Auto-start** — offer to install the login service so the agent socket
 ///    is always live (the SSH agent is useless if the daemon isn't running).
 /// 3. **Client wiring** — point SSH clients at the agent socket (the original
 ///    method-select + plan/confirm/apply block).
 ///
-/// Used by both `secreq ssh-setup` and the optional step inside `secreq init`.
+/// Used by both `secreq ssh setup` and the optional step inside `secreq init`.
 ///
 /// ## Scripted vs. guided
 ///
 /// When `assume_yes` is set AND an explicit `--method` was passed
 /// (`method.is_some()`), the caller wants a non-interactive, scripted
 /// client-wiring run: we do ONLY step 3 and never prompt for identity or
-/// auto-start. This preserves `ssh-setup --yes --method ssh-config` for
+/// auto-start. This preserves `ssh setup --yes --method ssh-config` for
 /// scripts and tests. Otherwise (no `--method`, or interactive), we run the
 /// full guided flow.
 ///
 /// `--undo` also strips only the client-wiring block — it never removes
-/// identities or the login service. Run `secreq ssh-add --force`/`secreq
+/// identities or the login service. Run `secreq ssh add --force`/`secreq
 /// daemon install --undo` to reverse those steps individually.
 ///
 /// Steps 1 and 2 are best-effort: a failure or a decline there is surfaced as
@@ -368,7 +368,7 @@ fn ssh_setup_core(
         // Step 1: identity. Non-fatal — warn and continue on any error.
         if let Err(err) = ssh_setup_identity_step(config_path) {
             cliclack::log::warning(format!(
-                "skipped the identity step: {err:#}. Add one later with `secreq ssh-add`."
+                "skipped the identity step: {err:#}. Add one later with `secreq ssh add`."
             ))?;
         }
         // Step 2: auto-start. Non-fatal — warn and continue on any error.
@@ -388,7 +388,7 @@ fn ssh_setup_core(
     if !scripted && !undo {
         if let Err(err) = ssh_setup_self_test_step(config_path) {
             cliclack::log::warning(format!(
-                "skipped the self-test: {err:#}. Run `secreq ssh-test` later to verify signing."
+                "skipped the self-test: {err:#}. Run `secreq ssh validate` later to verify signing."
             ))?;
         }
     }
@@ -396,7 +396,7 @@ fn ssh_setup_core(
     Ok(())
 }
 
-/// Optional final step of the guided `ssh-setup`: offer to self-test one
+/// Optional final step of the guided `ssh setup`: offer to self-test one
 /// configured identity (prove the agent can sign). With one identity it tests
 /// that one; with several it asks which. Skipped when no identities are
 /// configured. Always non-fatal — `offer_self_test` swallows its own errors.
@@ -426,8 +426,8 @@ fn ssh_setup_self_test_step(config_path: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-/// Step 1 of `ssh-setup`: make sure an `ssh` identity is declared. With none
-/// configured, offer the interactive `ssh-add` flow; with some, list them and
+/// Step 1 of `ssh setup`: make sure an `ssh` identity is declared. With none
+/// configured, offer the interactive `ssh add` flow; with some, list them and
 /// offer to add another. Continues either way.
 fn ssh_setup_identity_step(config_path: Option<&Path>) -> Result<()> {
     let config = load_config_or_default(config_path)?;
@@ -452,7 +452,7 @@ fn ssh_setup_identity_step(config_path: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-/// Step 2 of `ssh-setup`: ensure the login service is installed so the agent
+/// Step 2 of `ssh setup`: ensure the login service is installed so the agent
 /// socket is always live. Already installed → just report it; otherwise offer
 /// to install it (respecting `assume_yes` for the install confirm).
 fn ssh_setup_autostart_step(assume_yes: bool) -> Result<()> {
@@ -469,7 +469,7 @@ fn ssh_setup_autostart_step(assume_yes: bool) -> Result<()> {
     Ok(())
 }
 
-/// Step 3 of `ssh-setup`: the client-wiring block — resolve the agent socket,
+/// Step 3 of `ssh setup`: the client-wiring block — resolve the agent socket,
 /// pick the method, then plan/confirm/apply (or `--undo` strips it).
 ///
 /// `assume_yes` skips the confirmation prompt so the command can run without
@@ -571,7 +571,7 @@ fn ssh_setup_wiring_step(
     Ok(())
 }
 
-/// Args for `secreq ssh-add`.
+/// Args for `secreq ssh add`.
 #[derive(Debug, Clone, Default)]
 pub struct SshAddArgs {
     /// The identity name (the key under the `ssh` block).
@@ -586,7 +586,7 @@ pub struct SshAddArgs {
     pub force: bool,
 }
 
-/// `secreq ssh-add <name>` — declare an SSH identity in `wraps.json5` so the
+/// `secreq ssh add <name>` — declare an SSH identity in `wraps.json5` so the
 /// agent serves it. Mirrors [`wrap`]: load → build → insert → `write_config`.
 ///
 /// The public key is stored inline (it isn't secret); the private key is a
@@ -600,7 +600,7 @@ pub fn ssh_add(args: SshAddArgs, assume_yes: bool, config_path: Option<&Path>) -
     Ok(0)
 }
 
-/// The reusable body of `secreq ssh-add`, shared with the `ssh-setup`
+/// The reusable body of `secreq ssh add`, shared with the `ssh setup`
 /// orchestrator's identity step. Returns `Ok(())` after writing the identity;
 /// the standalone command wraps it to produce an exit code.
 ///
@@ -684,7 +684,7 @@ fn ssh_add_core(args: SshAddArgs, config_path: Option<&Path>) -> Result<()> {
         "  Ensure the private_key reference resolves to an OpenSSH private key, e.g. `op read \"op://Vault/My Key/private key\"`."
     );
     println!(
-        "  secreq's daemon must be running to serve this key — run `secreq daemon install` to start it at login (or wire it via `secreq ssh-setup`)."
+        "  secreq's daemon must be running to serve this key — run `secreq daemon install` to start it at login (or wire it via `secreq ssh setup`)."
     );
 
     // Optional post-step (interactive path only): offer to prove the agent can
@@ -703,7 +703,7 @@ fn ssh_add_core(args: SshAddArgs, config_path: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-/// `secreq ssh-test [<name>]` — prove the agent can sign with a configured
+/// `secreq ssh validate [<name>]` — prove the agent can sign with a configured
 /// identity. Connects to the agent socket, lists identities, asks the agent to
 /// sign a fixed test message with the key, and verifies the returned signature
 /// against the key's public half. With no `<name>`, tests every configured
@@ -717,7 +717,7 @@ pub fn ssh_test(name: Option<String>, config_path: Option<&Path>) -> Result<i32>
     let config = load_config_or_default(config_path)?;
 
     if config.ssh.is_empty() {
-        bail!("no SSH identities configured; add one with `secreq ssh-add <name>` first");
+        bail!("no SSH identities configured; add one with `secreq ssh add <name>` first");
     }
 
     // Resolve the identities to test: the named one, or all of them.
@@ -750,8 +750,9 @@ pub fn ssh_test(name: Option<String>, config_path: Option<&Path>) -> Result<i32>
 }
 
 /// Print a single identity's self-test outcome as a `✓`/`✗` line and report
-/// whether it passed. Shared by `secreq ssh-test` and the optional post-step
-/// after `ssh-add`/`ssh-setup` so both render the same per-identity result.
+/// whether it passed. Shared by `secreq ssh validate` and the optional
+/// post-step after `ssh add`/`ssh setup` so both render the same per-identity
+/// result.
 fn print_self_test_result(name: &str, result: &Result<crate::ssh_selftest::SelfTest>) -> bool {
     match result {
         Ok(test) if test.listed && test.verified => {
@@ -775,10 +776,10 @@ fn print_self_test_result(name: &str, result: &Result<crate::ssh_selftest::SelfT
     }
 }
 
-/// Offer the self-test as a NON-FATAL post-step after `ssh-add`/`ssh-setup`.
+/// Offer the self-test as a NON-FATAL post-step after `ssh add`/`ssh setup`.
 ///
 /// Resolves the agent socket, loads the identity by `key_id`, runs the
-/// self-test, and prints the same `✓`/`✗` line as `secreq ssh-test`. Failure
+/// self-test, and prints the same `✓`/`✗` line as `secreq ssh validate`. Failure
 /// is never fatal: an unreachable socket is reported as a friendly hint (the
 /// daemon is probably not running yet), and a refused/unverified sign is a
 /// warning. The caller's exit status is unaffected either way.
@@ -818,7 +819,7 @@ fn offer_self_test(key_id: &str, config_path: Option<&Path>) {
         // running yet (the most common case right after onboarding). Give a
         // friendly hint rather than an alarming ✗.
         let _ = cliclack::log::info(format!(
-            "couldn't reach the agent yet — make sure the daemon is running (`secreq daemon install`), then `secreq ssh-test {key_id}`."
+            "couldn't reach the agent yet — make sure the daemon is running (`secreq daemon install`), then `secreq ssh validate {key_id}`."
         ));
         return;
     }
@@ -1411,7 +1412,7 @@ pub fn daemon_install(undo: bool, assume_yes: bool) -> Result<i32> {
     Ok(0)
 }
 
-/// The reusable body of `secreq daemon install`, shared with the `ssh-setup`
+/// The reusable body of `secreq daemon install`, shared with the `ssh setup`
 /// orchestrator's auto-start step. Returns `Ok(())` once the service file is
 /// written (or undone); the standalone command wraps it for an exit code.
 fn daemon_install_core(undo: bool, assume_yes: bool) -> Result<()> {
@@ -2149,7 +2150,7 @@ mod prompt {
     }
 
     /// Prompt for the identity name (the key under the `ssh` block). Used by
-    /// the `ssh-setup` orchestrator's identity step, which has no preset name.
+    /// the `ssh setup` orchestrator's identity step, which has no preset name.
     pub(super) fn ssh_identity_name() -> Result<String> {
         cliclack::input("Identity name (the key under the `ssh` block)")
             .placeholder("e.g. github")

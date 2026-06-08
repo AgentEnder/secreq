@@ -75,58 +75,11 @@ enum Command {
     /// List configured wraps.
     Wraps,
 
-    /// Wire SSH clients at secreq's agent socket by writing a managed
-    /// block to `~/.ssh/config` (`IdentityAgent`) or your shell rc
-    /// (`SSH_AUTH_SOCK`). Pick the method with `--method`, or get an
-    /// interactive prompt when it's omitted. `--undo` strips the block
-    /// back out.
-    SshSetup {
-        /// Which file to wire: `ssh-config` (`~/.ssh/config`
-        /// `IdentityAgent`) or `shell-rc` (`SSH_AUTH_SOCK` export).
-        /// Omit to choose interactively.
-        #[arg(long, value_enum)]
-        method: Option<SshMethod>,
-        /// Remove the managed block instead of adding it.
-        #[arg(long)]
-        undo: bool,
-    },
-
-    /// Add (or overwrite) an SSH identity in `wraps.json5`. The agent serves
-    /// this identity once the daemon is running. The public key is stored
-    /// inline; the private key is a `secret://provider/locator` reference
-    /// resolved only at sign time. Omit `--public-key`/`--private-key` to
-    /// resolve them interactively (with 1Password `op` discovery when on
-    /// PATH). Pass both for a fully non-interactive run.
-    SshAdd {
-        /// The identity name (the key under the `ssh` block), e.g. `github`.
-        name: String,
-        /// The OpenSSH public key: a path to a `.pub` file, or the literal
-        /// `ssh-… / ecdsa-… / sk-…` line. Prompted for if omitted.
-        #[arg(long, value_name = "PATH-OR-LITERAL")]
-        public_key: Option<String>,
-        /// The private key reference, `secret://provider/locator`. Prompted
-        /// for (with `op` discovery) if omitted.
-        #[arg(long, value_name = "secret://…")]
-        private_key: Option<String>,
-        /// Reason shown in the consent prompt when this identity signs.
-        #[arg(long)]
-        reason: Option<String>,
-        /// Overwrite an existing identity of the same name.
-        #[arg(long)]
-        force: bool,
-    },
-
-    /// Prove the agent can sign with a configured SSH identity. Connects to
-    /// the agent socket, lists identities, then asks the agent to sign a fixed
-    /// test message with the key and verifies the returned signature against
-    /// its public half — exercising the real consent → resolve → sign path.
-    /// With no `<name>`, tests every configured identity. Signing is a real
-    /// sign, so it may prompt for consent (and a biometric). Exits 0 only if
-    /// every tested identity verifies.
-    SshTest {
-        /// The identity name to test (the key under the `ssh` block). Omit to
-        /// test every configured identity.
-        name: Option<String>,
+    /// Manage secreq's SSH agent: configure identities, wire SSH clients to
+    /// the agent socket, and verify that signing works.
+    Ssh {
+        #[command(subcommand)]
+        action: SshAction,
     },
 
     /// Validate the config.
@@ -202,7 +155,66 @@ enum Command {
     },
 }
 
-/// Which config file `secreq ssh-setup` should wire the agent into. Mirrors
+/// Subcommands under `secreq ssh …`: configure an identity, wire clients to
+/// the agent socket, and prove the agent can sign.
+#[derive(Subcommand)]
+enum SshAction {
+    /// Wire SSH clients at secreq's agent socket by writing a managed
+    /// block to `~/.ssh/config` (`IdentityAgent`) or your shell rc
+    /// (`SSH_AUTH_SOCK`). Pick the method with `--method`, or get an
+    /// interactive prompt when it's omitted. `--undo` strips the block
+    /// back out.
+    Setup {
+        /// Which file to wire: `ssh-config` (`~/.ssh/config`
+        /// `IdentityAgent`) or `shell-rc` (`SSH_AUTH_SOCK` export).
+        /// Omit to choose interactively.
+        #[arg(long, value_enum)]
+        method: Option<SshMethod>,
+        /// Remove the managed block instead of adding it.
+        #[arg(long)]
+        undo: bool,
+    },
+
+    /// Add (or overwrite) an SSH identity in `wraps.json5`. The agent serves
+    /// this identity once the daemon is running. The public key is stored
+    /// inline; the private key is a `secret://provider/locator` reference
+    /// resolved only at sign time. Omit `--public-key`/`--private-key` to
+    /// resolve them interactively (with 1Password `op` discovery when on
+    /// PATH). Pass both for a fully non-interactive run.
+    Add {
+        /// The identity name (the key under the `ssh` block), e.g. `github`.
+        name: String,
+        /// The OpenSSH public key: a path to a `.pub` file, or the literal
+        /// `ssh-… / ecdsa-… / sk-…` line. Prompted for if omitted.
+        #[arg(long, value_name = "PATH-OR-LITERAL")]
+        public_key: Option<String>,
+        /// The private key reference, `secret://provider/locator`. Prompted
+        /// for (with `op` discovery) if omitted.
+        #[arg(long, value_name = "secret://…")]
+        private_key: Option<String>,
+        /// Reason shown in the consent prompt when this identity signs.
+        #[arg(long)]
+        reason: Option<String>,
+        /// Overwrite an existing identity of the same name.
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Prove the agent can sign with a configured SSH identity. Connects to
+    /// the agent socket, lists identities, then asks the agent to sign a fixed
+    /// test message with the key and verifies the returned signature against
+    /// its public half — exercising the real consent → resolve → sign path.
+    /// With no `<name>`, validates every configured identity. Signing is a
+    /// real sign, so it may prompt for consent (and a biometric). Exits 0 only
+    /// if every validated identity verifies.
+    Validate {
+        /// The identity name to validate (the key under the `ssh` block). Omit
+        /// to validate every configured identity.
+        name: Option<String>,
+    },
+}
+
+/// Which config file `secreq ssh setup` should wire the agent into. Mirrors
 /// [`ssh_setup::Method`] as a clap `ValueEnum` so it parses `--method`.
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum SshMethod {
@@ -289,15 +301,18 @@ pub fn run() -> i32 {
             },
             config,
         ),
-        Some(Command::SshSetup { method, undo }) => {
-            commands::ssh_setup(method.map(ssh_setup::Method::from), undo, cli.yes, config)
-        }
-        Some(Command::SshAdd {
-            name,
-            public_key,
-            private_key,
-            reason,
-            force,
+        Some(Command::Ssh {
+            action: SshAction::Setup { method, undo },
+        }) => commands::ssh_setup(method.map(ssh_setup::Method::from), undo, cli.yes, config),
+        Some(Command::Ssh {
+            action:
+                SshAction::Add {
+                    name,
+                    public_key,
+                    private_key,
+                    reason,
+                    force,
+                },
         }) => commands::ssh_add(
             SshAddArgs {
                 name,
@@ -309,7 +324,9 @@ pub fn run() -> i32 {
             cli.yes,
             config,
         ),
-        Some(Command::SshTest { name }) => commands::ssh_test(name, config),
+        Some(Command::Ssh {
+            action: SshAction::Validate { name },
+        }) => commands::ssh_test(name, config),
         Some(Command::Unwrap { binary }) => commands::unwrap_cmd(&binary, config),
         Some(Command::Wraps) => commands::wraps_list(config),
         Some(Command::Check) => commands::check(config),

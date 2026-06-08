@@ -1,4 +1,4 @@
-//! SSH-agent wiring for `secreq ssh-setup` (and `init`).
+//! SSH-agent wiring for `secreq ssh setup` (and `init`).
 //!
 //! Points SSH clients at secreq's agent socket by writing a
 //! sentinel-bracketed managed block to a config file. Two methods, chosen
