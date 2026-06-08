@@ -49,6 +49,19 @@ pub fn start(socket_path: PathBuf, state: SharedState) -> Result<UnixListener> {
     Ok(listener)
 }
 
+/// Bind and start the SSH agent listener when the loaded config declares
+/// any `ssh` identities. Mirrors [`start`] (its own thread, returns the
+/// bound listener for the caller to keep alive) but speaks the SSH agent
+/// protocol on `agent.sock` rather than the JSON control protocol. Returns
+/// `Ok(None)` when no identities are configured — no agent socket exists
+/// in that case.
+pub fn start_ssh_agent(
+    socket_path: PathBuf,
+    ssh: &std::collections::BTreeMap<String, crate::wraps::SshIdentity>,
+) -> Result<Option<UnixListener>> {
+    super::ssh_agent::start(socket_path, ssh)
+}
+
 fn accept_loop(listener: UnixListener, state: SharedState) {
     for incoming in listener.incoming() {
         let stream = match incoming {
@@ -785,6 +798,13 @@ pub fn socket_dir() -> Result<PathBuf> {
 /// way; no env-var handshake needed.
 pub fn default_socket_path() -> Result<PathBuf> {
     Ok(socket_dir()?.join("consent.sock"))
+}
+
+/// Stable per-user SSH agent socket path (`agent.sock`), alongside the
+/// control socket. Re-exported here so the daemon derives both socket
+/// paths through `server::`.
+pub fn default_agent_socket_path() -> Result<PathBuf> {
+    super::ssh_agent::default_agent_socket_path()
 }
 
 #[allow(dead_code)]

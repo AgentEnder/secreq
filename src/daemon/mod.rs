@@ -27,6 +27,7 @@ pub mod log;
 pub mod peercred;
 pub mod proto;
 pub mod server;
+pub mod ssh_agent;
 pub mod ssh_proto;
 pub mod state;
 pub mod ui;
@@ -104,6 +105,30 @@ pub fn run() -> Result<i32> {
 
     let _listener =
         server::start(socket_path.clone(), state.clone()).context("start daemon socket server")?;
+
+    // SSH agent listener. A second socket (`agent.sock`) speaking the SSH
+    // agent protocol, started only when `wraps.json5` declares any `ssh`
+    // identities. Held alive for the daemon's lifetime alongside the
+    // control listener; its accept thread exits when this drops. A missing
+    // or unparseable config simply yields no agent (best-effort) — the
+    // control socket and existing wrap flow are unaffected.
+    let _agent_listener = match crate::wraps::default_config_path() {
+        Some(config_path) => match crate::wraps::WrapsConfig::load(&config_path) {
+            Ok(config) if !config.ssh.is_empty() => {
+                let agent_socket = server::default_agent_socket_path()?;
+                server::start_ssh_agent(agent_socket, &config.ssh)
+                    .context("start ssh agent listener")?
+            }
+            Ok(_) => None,
+            Err(err) => {
+                log::log(format_args!(
+                    "ssh agent: could not load config ({err:#}); agent disabled"
+                ));
+                None
+            }
+        },
+        None => None,
+    };
 
     log::log(format_args!(
         "daemon ready; entering main loop (idle exit after {}s, resource sampling every {}s)",
