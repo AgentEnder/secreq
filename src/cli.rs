@@ -133,7 +133,8 @@ enum Command {
     /// in this process instead (the form auto-spawned by wraps).
     /// `secreq daemon stop` tells a running daemon to exit, which also
     /// clears every remembered approval (the cache is in-memory only by
-    /// design). `secreq daemon log-path` prints the log file path.
+    /// design). `secreq daemon status` reports whether one is running.
+    /// `secreq daemon log-path` prints the log file path.
     Daemon {
         /// Run the daemon in the foreground in this process instead of
         /// starting a background daemon and tailing its log.
@@ -231,6 +232,11 @@ enum DaemonAction {
         #[arg(long, short = 'f')]
         force: bool,
     },
+    /// Report whether a daemon is running, without spawning one. Prints the
+    /// pid, the running build (flagging a stale daemon whose build differs
+    /// from this CLI's), and the socket + log paths. Exits 0 when a daemon is
+    /// running and 3 when none is, so scripts can branch on it.
+    Status,
     /// Print the path of the daemon's persistent log file and exit.
     /// Does not start a daemon.
     LogPath,
@@ -300,6 +306,10 @@ pub fn run() -> i32 {
             action: Some(DaemonAction::Stop { force }),
             ..
         }) => commands::daemon_stop(force),
+        Some(Command::Daemon {
+            action: Some(DaemonAction::Status),
+            ..
+        }) => commands::daemon_status(),
         Some(Command::Daemon {
             action: Some(DaemonAction::LogPath),
             ..

@@ -1117,6 +1117,48 @@ pub fn daemon_stop(force: bool) -> Result<i32> {
     }
 }
 
+/// `secreq daemon status` — report whether a daemon is running, without
+/// spawning one. Exit code follows the `systemctl status` convention so
+/// scripts can branch on it: `0` when a daemon is running, [`STATUS_EXIT_NOT_RUNNING`]
+/// when none is. The pid is decided by the pidfile flock, so it's always a
+/// live process; the build id comes from the `Hello` handshake and is absent
+/// when the daemon holds the lock but doesn't answer (wedged).
+pub fn daemon_status() -> Result<i32> {
+    let socket = crate::daemon::server::default_socket_path()?;
+    let log = crate::daemon::log::log_path()?;
+    match daemon_client::daemon_status().context("could not query the consent daemon")? {
+        daemon_client::DaemonStatus::NotRunning => {
+            println!("secreq daemon: not running");
+            println!("  socket: {} (created on next spawn)", socket.display());
+            println!("  log:    {}", log.display());
+            Ok(STATUS_EXIT_NOT_RUNNING)
+        }
+        daemon_client::DaemonStatus::Running { pid, build_id } => {
+            println!("secreq daemon: running");
+            println!("  pid:    {pid}");
+            match build_id {
+                Some(id) if id == crate::BUILD_ID => {
+                    println!("  build:  {id} (matches this CLI)");
+                }
+                Some(id) => {
+                    println!("  build:  {id} (stale; this CLI is {})", crate::BUILD_ID);
+                }
+                None => {
+                    println!("  build:  unknown (daemon holds the lock but isn't answering)");
+                }
+            }
+            println!("  socket: {}", socket.display());
+            println!("  log:    {}", log.display());
+            Ok(0)
+        }
+    }
+}
+
+/// Exit code for `secreq daemon status` when no daemon is running. Mirrors
+/// `systemctl status`'s "program is not running" code so shell scripts can
+/// branch on `secreq daemon status` the same way.
+const STATUS_EXIT_NOT_RUNNING: i32 = 3;
+
 /// How many trailing lines of the existing log to print before
 /// following, matching the familiar `tail -f` default feel (but a touch
 /// larger — daemon lines are terse and a session's worth of context is

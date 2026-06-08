@@ -276,6 +276,46 @@ pub fn stop_daemon() -> Result<bool> {
     }
 }
 
+/// Snapshot of the daemon's liveness, as reported by `secreq daemon status`.
+///
+/// `Running` is decided by the pidfile flock — the authoritative liveness
+/// signal (see [`probe_pidfile_lock`]) — so the pid is always a *live*
+/// process, never a recycled one. `build_id` is the separate, weaker
+/// "responsive?" signal: `Some` when the daemon answered the `Hello`
+/// handshake over its socket, `None` when it holds the lock but didn't
+/// reply (a wedged UI or deadlocked socket thread). The two-level answer
+/// lets the CLI distinguish "running" from "running but not responding."
+#[derive(Debug, PartialEq, Eq)]
+pub enum DaemonStatus {
+    NotRunning,
+    Running { pid: u32, build_id: Option<String> },
+}
+
+/// `secreq daemon status` — report whether a daemon is running without
+/// spawning one. Resolves the real pidfile/socket paths and delegates to
+/// [`status_from_paths`].
+pub fn daemon_status() -> Result<DaemonStatus> {
+    let pidfile = server::pidfile_path()?;
+    let socket = server::default_socket_path()?;
+    status_from_paths(&pidfile, &socket)
+}
+
+/// The path-parameterised core of [`daemon_status`], split out so tests can
+/// drive it against a temp pidfile/socket. A free flock means no live
+/// daemon; a held flock means one is running, and we then probe the socket
+/// for its build id (which is `None` when the daemon is wedged or the socket
+/// path doesn't point at a live listener).
+fn status_from_paths(pidfile: &Path, socket: &Path) -> Result<DaemonStatus> {
+    match probe_pidfile_lock(pidfile)? {
+        LockState::Free => Ok(DaemonStatus::NotRunning),
+        LockState::Held => {
+            let pid = read_pid(pidfile)?;
+            let build_id = daemon_build_id(socket);
+            Ok(DaemonStatus::Running { pid, build_id })
+        }
+    }
+}
+
 /// Outcome of a force-stop. `Killed` carries the pid we SIGKILL'd so the
 /// CLI can print it (useful when debugging "wait, what did we just
 /// terminate?"); `NotRunning` covers both "no pidfile" and "pidfile
@@ -656,5 +696,57 @@ mod tests {
             msg.contains("non-integer"),
             "{msg:?} should explain the parse failure"
         );
+    }
+
+    #[test]
+    fn status_reports_not_running_when_no_pidfile() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pidfile = dir.path().join("missing.pid");
+        let socket = dir.path().join("daemon.sock");
+        assert_eq!(
+            status_from_paths(&pidfile, &socket).expect("status"),
+            DaemonStatus::NotRunning,
+        );
+    }
+
+    #[test]
+    fn status_reports_not_running_for_a_stale_pidfile() {
+        // File left by a crashed daemon: present, but nobody holds the flock.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pidfile = dir.path().join("stale.pid");
+        let socket = dir.path().join("daemon.sock");
+        std::fs::write(&pidfile, "99999\n").expect("write pid");
+        assert_eq!(
+            status_from_paths(&pidfile, &socket).expect("status"),
+            DaemonStatus::NotRunning,
+        );
+    }
+
+    #[test]
+    fn status_reports_running_with_no_build_id_when_lock_held_but_socket_dead() {
+        // A held flock means the daemon is alive; with no live listener on
+        // the socket the Hello handshake fails, so build_id is None — the
+        // "running but not responding" shape.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pidfile = dir.path().join("held.pid");
+        let socket = dir.path().join("daemon.sock");
+        std::fs::write(&pidfile, "12345\n").expect("write pid");
+        let owner = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&pidfile)
+            .expect("open owner");
+        let lock_ret = unsafe { libc::flock(owner.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        assert_eq!(lock_ret, 0, "owner takes the lock");
+
+        assert_eq!(
+            status_from_paths(&pidfile, &socket).expect("status"),
+            DaemonStatus::Running {
+                pid: 12345,
+                build_id: None,
+            },
+        );
+
+        let _ = unsafe { libc::flock(owner.as_raw_fd(), libc::LOCK_UN) };
     }
 }
