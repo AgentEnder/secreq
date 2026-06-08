@@ -34,6 +34,14 @@ impl Reference {
     }
 }
 
+impl std::fmt::Display for Reference {
+    /// Reconstruct the `secret://provider/locator` string. Round-trips through
+    /// [`Reference::parse`].
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{SCHEME}{}/{}", self.provider, self.locator)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -58,6 +66,19 @@ mod tests {
         assert!(Reference::parse("secret://op").is_none()); // no locator
         assert!(Reference::parse("secret:///locator").is_none()); // empty provider
         assert!(Reference::parse("secret://op/").is_none()); // empty locator
+    }
+
+    #[test]
+    fn display_round_trips_through_parse() {
+        for input in [
+            "secret://op/Work/Stripe/api_key",
+            "secret://keychain/myapp",
+            "secret://op/Private/GitHub/private key",
+        ] {
+            let r = Reference::parse(input).unwrap();
+            assert_eq!(r.to_string(), input);
+            assert_eq!(Reference::parse(&r.to_string()).unwrap(), r);
+        }
     }
 
     #[test]

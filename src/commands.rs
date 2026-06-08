@@ -1322,6 +1322,31 @@ fn config_to_json_value(config: &WrapsConfig) -> Result<serde_json::Value> {
             serde_json::Value::Object(providers_obj),
         );
     }
+    if !config.ssh.is_empty() {
+        let mut ssh_obj = serde_json::Map::new();
+        for (name, identity) in &config.ssh {
+            let mut obj = serde_json::Map::new();
+            if let Some(reason) = &identity.reason {
+                obj.insert(
+                    "$reason".to_owned(),
+                    serde_json::Value::String(reason.clone()),
+                );
+            }
+            obj.insert(
+                "public_key".to_owned(),
+                serde_json::Value::String(identity.public_key.clone()),
+            );
+            obj.insert(
+                "private_key".to_owned(),
+                serde_json::Value::String(identity.private_key.to_string()),
+            );
+            ssh_obj.insert(name.clone(), serde_json::Value::Object(obj));
+        }
+        root.insert(
+            wraps::SSH_KEY.to_owned(),
+            serde_json::Value::Object(ssh_obj),
+        );
+    }
     Ok(serde_json::Value::Object(root))
 }
 
@@ -1551,5 +1576,45 @@ mod tests {
     fn is_secreq_shim_returns_false_for_missing_files() {
         let path = std::path::PathBuf::from("/this/does/not/exist/gh");
         assert!(!is_secreq_shim(&path));
+    }
+
+    #[test]
+    fn write_config_preserves_ssh_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wraps.json5");
+
+        let mut config = WrapsConfig::default();
+        config.wraps.insert(
+            "gh".to_owned(),
+            Wrap {
+                name: "gh".to_owned(),
+                reason: Some("GitHub API access".to_owned()),
+                env: std::iter::once((
+                    "GITHUB_TOKEN".to_owned(),
+                    "secret://op/Private/gh/token".to_owned(),
+                ))
+                .collect(),
+            },
+        );
+        config.ssh.insert(
+            "github".to_owned(),
+            wraps::SshIdentity {
+                reason: Some("git pushes".to_owned()),
+                public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1 me@mac".to_owned(),
+                private_key: Reference::parse("secret://op/Private/GitHub/private key").unwrap(),
+            },
+        );
+
+        write_config(&path, &config).unwrap();
+
+        let reloaded = WrapsConfig::load(&path).unwrap();
+        let id = reloaded
+            .ssh
+            .get("github")
+            .expect("ssh identity must survive a write/reload round-trip");
+        assert_eq!(id.reason.as_deref(), Some("git pushes"));
+        assert_eq!(id.public_key, "ssh-ed25519 AAAAC3NzaC1lZDI1 me@mac");
+        assert_eq!(id.private_key.provider, "op");
+        assert_eq!(id.private_key.locator, "Private/GitHub/private key");
     }
 }
