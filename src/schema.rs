@@ -36,6 +36,10 @@ pub fn wraps_schema() -> Value {
                 "type": "string",
                 "description": "Directory where `secreq wrap` drops PATH shims. Set by `secreq init`. Supports a leading `~/`."
             },
+            "$wait_indicator": {
+                "type": "boolean",
+                "description": "Whether a wrap prints a 'waiting for approval' indicator to stderr while blocked on the consent prompt (spinner on a TTY, a timestamped line on a pipe). Defaults to true; set false to silence. The SECREQ_NO_WAIT_INDICATOR env var overrides this per-invocation."
+            },
             "providers": {
                 "type": "object",
                 "description": "Provider scheme definitions. Built-in providers (`op`, `keychain` on macOS, `lastpass` / `pass` on Unix) are available without an explicit entry; entries here override or add new schemes.",

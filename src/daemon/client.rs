@@ -4,13 +4,14 @@
 //! the window open).
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, IsTerminal, Write};
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::{Child, Command};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 
@@ -27,6 +28,12 @@ use super::server;
 /// up. Not a public CLI flag because it's a per-process kill-switch, not a
 /// per-invocation preference.
 pub const NO_DAEMON_ENV: &str = "SECREQ_NO_DAEMON";
+
+/// Env var that silences the wrap's stderr "waiting for approval" indicator
+/// for this invocation, overriding the `$wait_indicator` config setting. Set
+/// to any non-empty value to suppress the spinner / waiting line — useful in
+/// CI or scripts where the config can't be edited.
+pub const NO_WAIT_INDICATOR_ENV: &str = "SECREQ_NO_WAIT_INDICATOR";
 
 /// How long the client waits for the daemon socket to appear after spawning
 /// the daemon. The daemon usually binds in milliseconds; allow a generous
@@ -77,7 +84,7 @@ impl ConsentOutcome {
 /// (fail-closed boundary). A daemon-side resolution failure surfaces as
 /// `Err` so the caller can render the real error rather than silently
 /// exit 1.
-pub fn request_consent(ask: Ask) -> Result<ConsentOutcome> {
+pub fn request_consent(ask: Ask, show_indicator: bool) -> Result<ConsentOutcome> {
     if daemon_disabled() {
         return Ok(ConsentOutcome::deny());
     }
@@ -88,7 +95,17 @@ pub fn request_consent(ask: Ask) -> Result<ConsentOutcome> {
     }
     let socket = server::default_socket_path()?;
     let stream = connect_or_spawn(&socket)?;
-    match send_and_recv(stream, ClientMsg::Ask(ask))? {
+    // Surface a "waiting for approval" indicator on stderr while we block on
+    // the daemon's decision, so the terminal doesn't sit silent. Dropped (and
+    // the line cleared) the moment the reply lands or the send/recv errors.
+    // Gated by the `$wait_indicator` config (passed in) and the
+    // `SECREQ_NO_WAIT_INDICATOR` env override.
+    let wrap_label = ask.dedupe_key.wrap.clone();
+    let _indicator = (show_indicator && !wait_indicator_silenced_by_env())
+        .then(|| WaitIndicator::start(&wrap_label));
+    let reply = send_and_recv(stream, ClientMsg::Ask(ask))?;
+    drop(_indicator);
+    match reply {
         DaemonMsg::Decision {
             decision,
             secrets,
@@ -441,6 +458,12 @@ fn daemon_disabled() -> bool {
     std::env::var_os(NO_DAEMON_ENV).is_some_and(|v| !v.is_empty())
 }
 
+/// True iff the wait indicator is silenced for this invocation via the
+/// `SECREQ_NO_WAIT_INDICATOR` env override (any non-empty value).
+fn wait_indicator_silenced_by_env() -> bool {
+    std::env::var_os(NO_WAIT_INDICATOR_ENV).is_some_and(|v| !v.is_empty())
+}
+
 /// True iff this process can plausibly render a GUI window.
 ///
 /// macOS always has WindowServer in an interactive login; we don't try to
@@ -600,6 +623,168 @@ fn spawn_daemon() -> Result<Child> {
         .context("spawn daemon process")
 }
 
+// ── Pending-approval indicator ───────────────────────────────────────────
+//
+// While a wrap blocks on the daemon's decision the terminal would otherwise
+// sit silent — the user can't tell whether the command hung or is waiting on
+// the consent popup. We print a stderr indicator during the wait: an animated
+// spinner on a TTY (plus a one-shot bell to pull the eye to the terminal),
+// or a static, timestamped line on a pipe/file, reprinted every 30s so a long
+// wait leaves a breadcrumb trail. A short grace period suppresses it entirely
+// for fast (cached / auto-rule) approvals that resolve before it would show.
+
+/// How long to wait before showing anything. Fast approvals (cache hit,
+/// auto-rule) finish inside this window and never flash an indicator.
+const INDICATOR_GRACE: Duration = Duration::from_millis(250);
+/// Spinner redraw cadence on a TTY.
+const SPINNER_TICK: Duration = Duration::from_millis(100);
+/// How often the non-TTY static line is reprinted.
+const NONTTY_REPRINT: Duration = Duration::from_secs(30);
+/// Braille spinner frames (the cliclack/ora house style).
+const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// A background thread that paints the waiting indicator to stderr until
+/// dropped. Drop stops the thread promptly (via a condvar, no polling lag)
+/// and clears the spinner line so the wrap's own output starts clean.
+struct WaitIndicator {
+    // (stopped flag, condvar) — Drop flips the flag and notifies so the
+    // render thread wakes immediately instead of sleeping out its tick.
+    inner: Arc<(Mutex<bool>, Condvar)>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl WaitIndicator {
+    fn start(label: &str) -> Self {
+        let inner = Arc::new((Mutex::new(false), Condvar::new()));
+        let tty = std::io::stderr().is_terminal();
+        let label = label.to_owned();
+        let inner_thread = Arc::clone(&inner);
+        let handle = std::thread::Builder::new()
+            .name("secreq-wait-indicator".to_owned())
+            .spawn(move || run_wait_indicator(&label, tty, &inner_thread))
+            .ok();
+        WaitIndicator { inner, handle }
+    }
+}
+
+impl Drop for WaitIndicator {
+    fn drop(&mut self) {
+        let (lock, cv) = &*self.inner;
+        {
+            let mut stopped = lock.lock().expect("indicator mutex");
+            *stopped = true;
+            cv.notify_all();
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// Block on the indicator's condvar for `dur`, returning `true` if a stop was
+/// signalled (so the caller should exit) and `false` on timeout.
+fn indicator_sleep(inner: &(Mutex<bool>, Condvar), dur: Duration) -> bool {
+    let (lock, cv) = inner;
+    let stopped = lock.lock().expect("indicator mutex");
+    // Check the flag *before* waiting: if Drop set it (and sent its notify)
+    // while we were between waits, the notify would be lost and we'd block the
+    // full `dur` — up to 30s for the non-TTY tick. The flag, read under the
+    // lock, is the source of truth and closes that race.
+    if *stopped {
+        return true;
+    }
+    let (stopped, _) = cv
+        .wait_timeout(stopped, dur)
+        .expect("indicator condvar wait");
+    *stopped
+}
+
+fn run_wait_indicator(label: &str, tty: bool, inner: &(Mutex<bool>, Condvar)) {
+    // Grace period: stay silent if the decision arrives quickly.
+    if indicator_sleep(inner, INDICATOR_GRACE) {
+        return;
+    }
+    let mut err = std::io::stderr();
+    let start = Instant::now();
+    if tty {
+        // One-shot bell: nudge attention to the terminal that's now blocked.
+        let _ = write!(err, "\x07");
+        let mut tick = 0usize;
+        loop {
+            let _ = write!(err, "\r\x1b[K{}", spinner_frame(label, tick));
+            let _ = err.flush();
+            tick += 1;
+            if indicator_sleep(inner, SPINNER_TICK) {
+                // Clear the spinner line so the wrap's output starts clean.
+                let _ = write!(err, "\r\x1b[K");
+                let _ = err.flush();
+                return;
+            }
+        }
+    } else {
+        loop {
+            let _ = writeln!(
+                err,
+                "{}",
+                waiting_line(label, now_unix_secs(), start.elapsed().as_secs())
+            );
+            let _ = err.flush();
+            if indicator_sleep(inner, NONTTY_REPRINT) {
+                return;
+            }
+        }
+    }
+}
+
+/// One spinner line's text (no leading carriage-return / clear sequence; the
+/// caller adds those). Pure so it can be unit-tested.
+fn spinner_frame(label: &str, tick: usize) -> String {
+    let frame = SPINNER_FRAMES[tick % SPINNER_FRAMES.len()];
+    format!("{frame} secreq: waiting for approval of `{label}` — approve in the popup window")
+}
+
+/// One static non-TTY waiting line, carrying a UTC timestamp and elapsed
+/// seconds so a piped log shows the wait isn't wedged. Pure for testability.
+fn waiting_line(label: &str, now_unix: u64, elapsed_secs: u64) -> String {
+    format!(
+        "[secreq {ts}] waiting for approval of `{label}` ({elapsed_secs}s elapsed) — approve in the secreq window",
+        ts = utc_timestamp(now_unix),
+    )
+}
+
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Format Unix seconds as `YYYY-MM-DDTHH:MM:SSZ` (UTC), without pulling in a
+/// datetime crate. Uses Howard Hinnant's `civil_from_days` algorithm.
+fn utc_timestamp(unix_secs: u64) -> String {
+    let secs = unix_secs as i64;
+    let days = secs.div_euclid(86_400);
+    let tod = secs.rem_euclid(86_400);
+    let (hh, mm, ss) = (tod / 3600, (tod % 3600) / 60, tod % 60);
+    let (y, mo, d) = civil_from_days(days);
+    format!("{y:04}-{mo:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}Z")
+}
+
+/// Days since the Unix epoch → (year, month, day). Hinnant's civil-from-days.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let month = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32; // [1, 12]
+    let year = if month <= 2 { year + 1 } else { year };
+    (year, month, day)
+}
+
 fn send_and_recv(stream: UnixStream, msg: ClientMsg) -> Result<DaemonMsg> {
     let line = serde_json::to_string(&msg).context("serialize client msg")?;
     let mut writer = stream.try_clone().context("clone socket for write")?;
@@ -618,6 +803,53 @@ fn send_and_recv(stream: UnixStream, msg: ClientMsg) -> Result<DaemonMsg> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utc_timestamp_formats_known_epochs() {
+        assert_eq!(utc_timestamp(0), "1970-01-01T00:00:00Z");
+        // 1700000000 = 2023-11-14T22:13:20Z (a well-known round value).
+        assert_eq!(utc_timestamp(1_700_000_000), "2023-11-14T22:13:20Z");
+        // 1735689600 = 2025-01-01T00:00:00Z.
+        assert_eq!(utc_timestamp(1_735_689_600), "2025-01-01T00:00:00Z");
+        // Leap day: 2024-02-29T12:00:00Z = 1709208000.
+        assert_eq!(utc_timestamp(1_709_208_000), "2024-02-29T12:00:00Z");
+    }
+
+    #[test]
+    fn spinner_frame_cycles_and_carries_the_label() {
+        let a = spinner_frame("gh", 0);
+        assert!(a.starts_with(SPINNER_FRAMES[0]));
+        assert!(a.contains("`gh`"));
+        // The tick wraps around the frame set.
+        assert_eq!(
+            spinner_frame("gh", 0),
+            spinner_frame("gh", SPINNER_FRAMES.len())
+        );
+    }
+
+    #[test]
+    fn waiting_line_has_timestamp_label_and_elapsed() {
+        let line = waiting_line("aws", 1_700_000_000, 30);
+        assert!(line.contains("2023-11-14T22:13:20Z"));
+        assert!(line.contains("`aws`"));
+        assert!(line.contains("30s elapsed"));
+    }
+
+    #[test]
+    fn wait_indicator_drops_promptly_without_hanging() {
+        // Start then immediately drop — well inside the grace window, so it
+        // prints nothing. The point is the thread joins cleanly and fast: a
+        // lost-wakeup bug would block Drop's join on the full tick timeout.
+        let start = Instant::now();
+        {
+            let _indicator = WaitIndicator::start("gh");
+        } // Drop runs here (joins the thread).
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "WaitIndicator::drop should join promptly, took {:?}",
+            start.elapsed()
+        );
+    }
 
     #[test]
     fn build_id_is_stamped_at_compile_time() {

@@ -54,6 +54,10 @@ pub const SHIM_DIR_KEY: &str = "$shim_dir";
 /// The reserved top-level key holding SSH identity definitions for the agent.
 pub const SSH_KEY: &str = "ssh";
 
+/// `$wait_indicator` — global toggle for the wrap's stderr "waiting for
+/// approval" indicator. Absent / `true` = shown; `false` = silenced.
+pub const WAIT_INDICATOR_KEY: &str = "$wait_indicator";
+
 /// Top-level configuration loaded from `wraps.json5`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct WrapsConfig {
@@ -65,6 +69,10 @@ pub struct WrapsConfig {
     pub providers: BTreeMap<String, Provider>,
     /// SSH identities served by the agent, keyed by identity name.
     pub ssh: BTreeMap<String, SshIdentity>,
+    /// `$wait_indicator` — whether a blocked wrap prints the stderr "waiting
+    /// for approval" indicator. `None` means unset (defaults to enabled); see
+    /// [`WrapsConfig::wait_indicator_enabled`].
+    pub wait_indicator: Option<bool>,
 }
 
 /// One SSH identity served by the agent. The public key is stored inline
@@ -125,6 +133,12 @@ impl WrapsConfig {
                     })?;
                     config.shim_dir = Some(expand_tilde(raw));
                 }
+                WAIT_INDICATOR_KEY => {
+                    let on = value.as_bool().with_context(|| {
+                        format!("{source_label}: `{WAIT_INDICATOR_KEY}` must be a boolean")
+                    })?;
+                    config.wait_indicator = Some(on);
+                }
                 other if other.starts_with('$') => {
                     // `$schema`, `$version`, future metadata — silently ignored.
                     continue;
@@ -154,7 +168,15 @@ impl WrapsConfig {
             wraps: BTreeMap::new(),
             providers: builtin_providers(),
             ssh: BTreeMap::new(),
+            wait_indicator: None,
         }
+    }
+
+    /// Whether a blocked wrap should print the stderr "waiting for approval"
+    /// indicator. Defaults to enabled; only an explicit `$wait_indicator:
+    /// false` silences it.
+    pub fn wait_indicator_enabled(&self) -> bool {
+        self.wait_indicator != Some(false)
     }
 
     /// Look up a wrap by binary name.
@@ -357,6 +379,33 @@ mod tests {
         assert_eq!(
             c.shim_dir.as_deref(),
             Some(home.join(".local/bin").as_path())
+        );
+    }
+
+    #[test]
+    fn wait_indicator_defaults_on_and_parses_explicit_toggle() {
+        // Absent → enabled (None).
+        let c = WrapsConfig::parse(r#"{ gh: { env: { T: "secret://op/x" } } }"#, "t").unwrap();
+        assert_eq!(c.wait_indicator, None);
+        assert!(c.wait_indicator_enabled());
+
+        // Explicit false → silenced.
+        let off = WrapsConfig::parse(r#"{ $wait_indicator: false }"#, "t").unwrap();
+        assert_eq!(off.wait_indicator, Some(false));
+        assert!(!off.wait_indicator_enabled());
+
+        // Explicit true → enabled.
+        let on = WrapsConfig::parse(r#"{ $wait_indicator: true }"#, "t").unwrap();
+        assert_eq!(on.wait_indicator, Some(true));
+        assert!(on.wait_indicator_enabled());
+    }
+
+    #[test]
+    fn wait_indicator_rejects_non_boolean() {
+        let err = WrapsConfig::parse(r#"{ $wait_indicator: "yes" }"#, "t").unwrap_err();
+        assert!(
+            format!("{err:#}").contains("$wait_indicator"),
+            "error should name the offending key: {err:#}"
         );
     }
 

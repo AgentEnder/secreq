@@ -193,6 +193,10 @@
       "description": "Directory where `secreq wrap` drops PATH shims. Set by `secreq init`. Supports a leading `~/`.",
       "type": "string"
     },
+    "$wait_indicator": {
+      "description": "Whether a wrap prints a 'waiting for approval' indicator to stderr while blocked on the consent prompt (spinner on a TTY, a timestamped line on a pipe). Defaults to true; set false to silence. The SECREQ_NO_WAIT_INDICATOR env var overrides this per-invocation.",
+      "type": "boolean"
+    },
     "providers": {
       "additionalProperties": {
         "$ref": "#/definitions/Provider"

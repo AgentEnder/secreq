@@ -1840,7 +1840,8 @@ fn obtain_wrap_consent(
         ssh: None,
     };
 
-    daemon_client::request_consent(ask).context("daemon consent request failed")
+    daemon_client::request_consent(ask, config.wait_indicator_enabled())
+        .context("daemon consent request failed")
 }
 
 fn to_wire_provider(p: &crate::manifest::Provider) -> proto::WireProvider {
