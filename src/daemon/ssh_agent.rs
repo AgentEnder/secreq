@@ -457,6 +457,30 @@ fn decide_sign(
         }
     }
 
+    // Auto-rules path — mirrors `server.rs::handle_ask`. A rule whose `wrap`
+    // matches this identity's `ssh:<key_id>` fires here, so the sign is
+    // auto-approved/denied without an interactive prompt. The SSH listener is
+    // a separate socket from the wrap path (whose `handle_message` reloads on
+    // every request), so reload hand-edits here too before evaluating. Lock is
+    // held only for the reload + evaluation; we drop it before returning.
+    {
+        let ask = sign_ask(identity, anchor_pid, anchor_start_time, chain);
+        let mut guard = state.lock().expect("state mutex");
+        guard.reload_rules_if_changed();
+        if let Some(hit) = guard.evaluate_rules_for_ask(&ask) {
+            return Some(match hit.decide {
+                crate::rules::RuleDecision::Approve => Decision::ApproveAuto,
+                crate::rules::RuleDecision::Deny => {
+                    // Surface the auto-deny to any attached consent window,
+                    // matching the wrap path's `handle_rule_hit` toast.
+                    guard
+                        .broadcast_auto_deny_toast(hit.rule_name.clone(), hit.deny_message.clone());
+                    Decision::DenyAuto
+                }
+            });
+        }
+    }
+
     // Cache miss → interactive consent is required, which needs a window to
     // render. Pass the real gui-availability bool into the miss handler so it
     // can fail closed in a headless environment instead of blocking forever.
@@ -798,6 +822,119 @@ mod tests {
                 .entries
                 .is_empty(),
             "no Ask should be enqueued when failing closed without a GUI"
+        );
+    }
+
+    /// Build a `PreparedIdentity` for the given config name. Mirrors what
+    /// `prepare_identities` produces: `key_id` is the config name, which
+    /// `sign_ask` formats into the `ssh:<key_id>` wrap the rule matcher sees.
+    fn test_identity(key_id: &str) -> PreparedIdentity {
+        PreparedIdentity {
+            blob: vec![1, 2, 3],
+            comment: "test key".to_owned(),
+            fingerprint: "SHA256:testfingerprint".to_owned(),
+            key_id: key_id.to_owned(),
+            reference: crate::reference::Reference {
+                provider: "env".to_owned(),
+                locator: "SSH_KEY".to_owned(),
+            },
+            reason: None,
+        }
+    }
+
+    /// Build an `ssh:<wrap_key>` rule with the given decision. `trained_secrets`
+    /// is empty (the guard is irrelevant for SSH — sign asks carry no secrets).
+    fn ssh_rule(
+        id: &str,
+        wrap_key: &str,
+        decide: crate::rules::RuleDecision,
+    ) -> crate::rules::Rule {
+        crate::rules::Rule {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            enabled: true,
+            decide,
+            r#match: crate::rules::RuleMatch {
+                wrap: format!("ssh:{wrap_key}"),
+                argv: None,
+                ancestor: None,
+                cwd: None,
+            },
+            trained_secrets: Default::default(),
+            deny_message: None,
+            created_at_unix: 0,
+        }
+    }
+
+    /// An auto-approve rule whose `wrap` matches the SSH identity
+    /// (`ssh:<key_id>`) must fire on the sign path exactly as it does on the
+    /// wrap path: `decide_sign` returns `ApproveAuto` **without** enqueuing an
+    /// Ask or blocking on consent. Regression guard for the bug where the SSH
+    /// sign path skipped rule evaluation entirely and always prompted, even
+    /// with a matching rule saved from the suggested `ssh:<name>` template.
+    #[test]
+    fn auto_approve_rule_fires_for_ssh_sign() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        crate::rules::save_rules(
+            &path,
+            &[ssh_rule(
+                "01",
+                "github",
+                crate::rules::RuleDecision::Approve,
+            )],
+        )
+        .expect("save rules");
+        let state: SharedState = Arc::new(Mutex::new(State::with_rules_path(path)));
+        let identity = test_identity("github");
+        let chain: Vec<crate::provenance::Caller> = Vec::new();
+
+        let decision = decide_sign(
+            &state, &identity, /* anchor_pid */ 4242, /* start */ 1, &chain,
+        );
+
+        assert_eq!(
+            decision,
+            Some(Decision::ApproveAuto),
+            "a matching ssh:<key_id> approve rule must auto-approve the sign"
+        );
+        assert!(
+            state
+                .lock()
+                .expect("state mutex")
+                .snapshot()
+                .entries
+                .is_empty(),
+            "auto-approved sign must not enqueue an Ask for interactive consent"
+        );
+    }
+
+    /// A matching auto-deny rule must short-circuit to `DenyAuto` on the sign
+    /// path without prompting — the mirror of the approve case.
+    #[test]
+    fn auto_deny_rule_fires_for_ssh_sign() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        crate::rules::save_rules(
+            &path,
+            &[ssh_rule("01", "github", crate::rules::RuleDecision::Deny)],
+        )
+        .expect("save rules");
+        let state: SharedState = Arc::new(Mutex::new(State::with_rules_path(path)));
+        let identity = test_identity("github");
+        let chain: Vec<crate::provenance::Caller> = Vec::new();
+
+        let decision = decide_sign(&state, &identity, 4242, 1, &chain);
+
+        assert_eq!(decision, Some(Decision::DenyAuto));
+        assert!(
+            state
+                .lock()
+                .expect("state mutex")
+                .snapshot()
+                .entries
+                .is_empty(),
+            "auto-denied sign must not enqueue an Ask"
         );
     }
 
