@@ -476,11 +476,13 @@ fn pending_resolving() {
 #[ignore = "screenshot harness"]
 fn ssh_sign_pending() {
     // The SSH-agent sign prompt: `git push` over SSH triggered a
-    // SIGN_REQUEST the daemon couldn't serve from cache, so it raised a
-    // consent prompt. The card reads "SSH key request" with the identity
-    // name + SHA256 fingerprint and the configured `$reason`, and shows the
-    // caller chain (git under the shell). No secret list — an SSH sign
-    // releases a signature, not an env var.
+    // SIGN_REQUEST the daemon couldn't serve from a session grant, so it
+    // raised a consent prompt. The card reads "SSH key request" with the
+    // identity name + SHA256 fingerprint and the configured `$reason`, and
+    // shows the caller chain (git under the shell). No secret list — an SSH
+    // sign releases a signature, not an env var. The action row offers the
+    // four session choices: Approve once · Approve 30m · Approve all keys
+    // 30m · Deny.
     render_fixture("24-ssh-sign-pending", vec![], |state| {
         vec![submit_ssh(
             state,

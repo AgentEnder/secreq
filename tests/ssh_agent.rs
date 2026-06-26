@@ -21,7 +21,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use secreq::consent::SshApprovalEntry;
+use secreq::consent::{SshAnchor, SshGrant, SshGrantScope};
 use secreq::daemon::ssh_agent::{self, SignContext};
 use secreq::daemon::ssh_proto::{self, SSH_AGENT_FAILURE, SSH_AGENT_IDENTITIES_ANSWER};
 use secreq::daemon::state::State;
@@ -186,21 +186,20 @@ fn signing_context_with_seeded_approval(
     assert_eq!(identities.len(), 1);
     let blob = identities[0].blob.clone();
 
-    // Compute the anchor exactly as the SIGN handler will, then seed an
-    // approval for it that won't expire during the test.
+    // Compute the anchor exactly as the SIGN handler will, then seed a
+    // session grant for it that won't expire during the test.
     let chain = secreq::provenance::caller_chain_from_pid(std::process::id());
     let anchor = secreq::provenance::select_anchor(&chain).expect("an anchor in the test's chain");
     let far_future = u64::MAX;
     let state = Arc::new(Mutex::new(State::new()));
-    state
-        .lock()
-        .unwrap()
-        .remember_ssh_approval(SshApprovalEntry {
-            key_id: "github".to_owned(),
-            anchor_pid: anchor.pid,
-            anchor_start_time: anchor.start_time,
-            expires_at: far_future,
-        });
+    state.lock().unwrap().remember_ssh_grant(SshGrant {
+        scope: SshGrantScope::OneKey("github".to_owned()),
+        anchor: SshAnchor {
+            pid: anchor.pid,
+            start_time: anchor.start_time,
+        },
+        expires_at: far_future,
+    });
 
     let ctx = SignContext {
         identities: Arc::new(identities),

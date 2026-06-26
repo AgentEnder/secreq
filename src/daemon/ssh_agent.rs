@@ -12,11 +12,13 @@
 //!
 //! `SIGN_REQUEST` is the gated path: derive the connecting peer pid from
 //! socket peer-credentials, walk that pid's ancestry to an anchor, gate on
-//! the SSH approval cache + (on a miss) interactive consent, then resolve
-//! the private key fresh through the provider, sign in-process, zeroize the
-//! key material, and return only the signature. The approval cache caches
-//! the *decision* (skip the prompt), never the key material — every sign
-//! resolves the key fresh and drops it.
+//! the SSH session grants + (on a miss) interactive consent, then resolve
+//! the private key through the shared encrypted secret cache, sign
+//! in-process, and return only the signature. Two caches cooperate: a
+//! *session grant* skips the prompt (scoped to an anchor with a TTL, one key
+//! or all keys), and the *secret cache* holds the resolved key encrypted for
+//! the daemon's lifetime so the provider's biometric runs at most once per
+//! key — exactly like any other secret. `secreq daemon stop` resets both.
 
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
@@ -24,17 +26,18 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
-use zeroize::Zeroizing;
 
+use super::cache::{CacheKey, SecretCache};
+use super::in_flight::InFlightMap;
 use super::proto::{Ask, Caller, DedupeKey, SshAskInfo};
 use super::ssh_proto::{self, AgentRequest};
 use super::state::{SharedState, WaiterReply};
-use crate::consent::{Decision, SshApprovalEntry};
+use crate::consent::{Decision, SshAnchor, SshGrant, SshGrantScope};
 use crate::manifest::Provider;
 use crate::wraps::SshIdentity;
 
@@ -45,17 +48,19 @@ use crate::wraps::SshIdentity;
 /// wire value can't drive an arbitrary allocation in the long-lived daemon.
 const MAX_AGENT_MSG_LEN: usize = 256 * 1024;
 
-/// Default lifetime of an SSH sign approval when the user chooses
-/// "remember". An anchor (shell / IDE / git session) can live for hours, so
-/// a SIGN approval is time-bounded rather than tied to the anchor's
-/// lifetime alone. There is no per-identity TTL knob in `wraps.json5`
-/// today, so this constant is the single source of truth.
-const SSH_APPROVAL_TTL_SECS: u64 = 300;
+/// Lifetime of an SSH sign **session grant** when the user chooses
+/// "Approve 30m" / "Approve all keys 30m" (or hits Enter, the
+/// approve-and-remember shortcut). An anchor (shell / IDE / git session) can
+/// live for hours, so a grant is time-bounded rather than tied to the
+/// anchor's lifetime alone. There is no per-identity TTL knob in
+/// `wraps.json5` today, so this constant is the single source of truth — and
+/// the "30m" in the button labels must track it.
+const SSH_SESSION_GRANT_TTL_SECS: u64 = 1800;
 
 /// One configured identity prepared for `REQUEST_IDENTITIES` *and* the
 /// SIGN path. The public-key blob + comment answer the listing; the
 /// `key_id`, `reference`, and `reason` are what the SIGN handler needs to
-/// map a wire blob back to its config entry, scope the approval cache, and
+/// map a wire blob back to its config entry, scope the session grant, and
 /// resolve the private key.
 ///
 /// Derived once, up front, from the inline `public_key` string so the
@@ -77,7 +82,7 @@ pub struct PreparedIdentity {
     /// the audit/consent label.
     pub key_id: String,
     /// `secret://provider/locator` reference to the private key, resolved
-    /// fresh at every SIGN and never cached.
+    /// through the shared encrypted cache on the first SIGN for this key.
     pub reference: crate::reference::Reference,
     /// `$reason` from the config, shown in the consent prompt.
     pub reason: Option<String>,
@@ -366,23 +371,32 @@ fn handle_sign(
         }
     };
 
-    // 4. On "remember", insert a TTL-bounded approval scoped to the anchor.
-    if decision == Decision::ApproveRemember {
-        let expires_at = now_unix_secs().saturating_add(SSH_APPROVAL_TTL_SECS);
+    // 4. On a session grant, remember it scoped to the anchor with the
+    //    session TTL. "Approve 30m" (and the Enter shortcut) grant this key;
+    //    "Approve all keys 30m" grants every key on this anchor.
+    if let Some(scope) = grant_scope_for(decision, &identity.key_id) {
+        let expires_at = now_unix_secs().saturating_add(SSH_SESSION_GRANT_TTL_SECS);
         state
             .lock()
             .expect("state mutex")
-            .remember_ssh_approval(SshApprovalEntry {
-                key_id: identity.key_id.clone(),
-                anchor_pid,
-                anchor_start_time,
+            .remember_ssh_grant(SshGrant {
+                scope,
+                anchor: SshAnchor {
+                    pid: anchor_pid,
+                    start_time: anchor_start_time,
+                },
                 expires_at,
             });
     }
 
-    // 5. Resolve the private key FRESH, sign, and zeroize. The key material
-    //    is never cached or held across requests.
-    match resolve_and_sign(&ctx.providers, identity, data, flags) {
+    // 5. Resolve the private key through the shared encrypted cache, sign, and
+    //    zeroize. The first sign for a key invokes the provider (one
+    //    biometric); subsequent signs ride the cache, like any other secret.
+    let (cache, in_flight) = {
+        let guard = state.lock().expect("state mutex");
+        (guard.secret_cache_arc(), guard.in_flight_arc())
+    };
+    match resolve_and_sign(&cache, &in_flight, &ctx.providers, identity, data, flags) {
         Ok(sig_blob) => {
             // Audit the grant only once the sign actually succeeds — the row
             // carries the decision that authorized it (`ApproveCached` on a
@@ -430,13 +444,13 @@ fn decide_sign(
     anchor_start_time: u64,
     chain: &[crate::provenance::Caller],
 ) -> Option<Decision> {
-    // Cache check — lock held only for the lookup. A cached approval needs no
-    // UI, so this path is unaffected by whether a display is available; it
+    // Grant check — lock held only for the lookup. A live session grant needs
+    // no UI, so this path is unaffected by whether a display is available; it
     // works headless.
     {
         let mut guard = state.lock().expect("state mutex");
-        if guard.has_ssh_approval(&identity.key_id, anchor_pid, anchor_start_time) {
-            // The audit row for a cache hit is written at the sign outcome
+        if guard.has_ssh_grant(&identity.key_id, anchor_pid, anchor_start_time) {
+            // The audit row for a grant hit is written at the sign outcome
             // (with `decision = ApproveCached`), alongside the approve/deny
             // rows — one audit-write site, fed the decision this returns.
             return Some(Decision::ApproveCached);
@@ -527,11 +541,29 @@ fn decide_sign_on_miss(
     }
 }
 
+/// Map an approved [`Decision`] to the session-grant scope it should
+/// remember, or `None` for a one-shot approval that grants nothing.
+///
+/// `ApproveSshSession` and the Enter-key `ApproveRemember` shortcut both
+/// grant *this* key; `ApproveSshSessionAll` grants every key on the anchor.
+/// `Approve` / `ApproveCached` / `ApproveAuto` (and any deny) return `None` —
+/// a cached/auto/one-shot decision doesn't add a new grant.
+fn grant_scope_for(decision: Decision, key_id: &str) -> Option<SshGrantScope> {
+    match decision {
+        Decision::ApproveSshSession | Decision::ApproveRemember => {
+            Some(SshGrantScope::OneKey(key_id.to_owned()))
+        }
+        Decision::ApproveSshSessionAll => Some(SshGrantScope::AllKeys),
+        _ => None,
+    }
+}
+
 /// Build the in-process consent [`Ask`] for an SSH sign. Carries **no
-/// secrets** for the daemon to resolve — the SSH path resolves the private
-/// key itself, fresh, after the decision (so the key is never cached in the
-/// daemon's secret cache). The ask exists only to drive the consent prompt
-/// and coalesce repeated signs from the same anchor into one queue entry.
+/// secrets** for the daemon to resolve — the SSH path resolves (and caches)
+/// the private key itself after the decision via [`resolve_and_sign`], rather
+/// than handing a value back to a client. The ask exists only to drive the
+/// consent prompt and coalesce repeated signs from the same anchor into one
+/// queue entry.
 fn sign_ask(
     identity: &PreparedIdentity,
     anchor_pid: u32,
@@ -571,54 +603,43 @@ fn sign_ask(
     }
 }
 
-/// Resolve the identity's private-key reference fresh and sign `data`.
+/// Resolve the identity's private-key reference through the shared encrypted
+/// cache and sign `data`.
 ///
-/// The PEM is held in a [`Zeroizing`] string and scrubbed when this
-/// function returns; it is never written to the daemon's secret cache. The
-/// resolved [`crate::secret::SecretValue`] is itself zeroizing-on-drop, so
-/// the only copy that outlives the resolve is the `Zeroizing` PEM we sign
-/// from and immediately drop.
+/// The key is cached under `CacheKey { wrap: "ssh:<key_id>", provider,
+/// locator }` exactly like any other secret (encrypted at rest with a
+/// per-entry key; see [`super::cache`]), so the provider — and its biometric
+/// prompt — runs at most once per key per daemon lifetime instead of on
+/// every sign. `secreq daemon stop` is the reset, same as for wrap secrets.
+/// The returned PEM is a `Zeroizing` buffer that scrubs when this function
+/// returns; only the encrypted ciphertext outlives the call.
 fn resolve_and_sign(
+    cache: &Arc<Mutex<SecretCache>>,
+    in_flight: &Arc<InFlightMap>,
     providers: &BTreeMap<String, Provider>,
     identity: &PreparedIdentity,
     data: &[u8],
     flags: u32,
 ) -> Result<Vec<u8>> {
-    use crate::manifest::Manifest;
-    use crate::resolve::{self, ResolutionPlan, SecretRequest, Source};
-
-    let manifest = Manifest {
-        groups: BTreeMap::new(),
-        providers: providers.clone(),
+    let key = CacheKey {
+        wrap: format!("ssh:{}", identity.key_id),
+        provider: identity.reference.provider.clone(),
+        locator: identity.reference.locator.clone(),
     };
-    let plan = ResolutionPlan {
-        requests: vec![SecretRequest {
-            name: identity.key_id.clone(),
-            provider: identity.reference.provider.clone(),
-            locator: identity.reference.locator.clone(),
-            group: None,
-            reason: identity.reason.clone(),
-            description: None,
-            default: None,
-            source: Source::Eager,
-        }],
-    };
-
-    let resolved = resolve::resolve_all(&manifest, &plan).with_context(|| {
+    let pem = super::state::resolve_single_cached(
+        cache,
+        in_flight,
+        key,
+        &identity.key_id,
+        identity.reason.as_deref(),
+        providers,
+    )
+    .with_context(|| {
         format!(
             "resolving private key for ssh identity {:?}",
             identity.key_id
         )
     })?;
-    let secret = resolved
-        .into_iter()
-        .next()
-        .with_context(|| format!("provider returned no value for {:?}", identity.key_id))?;
-
-    // Copy the exposed PEM into a zeroizing buffer so it scrubs when this
-    // scope ends, then sign from it. `secret` (also zeroizing) drops at the
-    // end of the function. Neither copy is cached.
-    let pem = Zeroizing::new(secret.value.expose().to_owned());
     crate::ssh_sign::sign(&pem, data, flags).context("signing the SSH challenge")
 }
 
@@ -778,6 +799,30 @@ mod tests {
                 .is_empty(),
             "no Ask should be enqueued when failing closed without a GUI"
         );
+    }
+
+    /// `grant_scope_for` maps each approved decision to the grant it should
+    /// remember: session→this key, session-all→all keys, Enter-key
+    /// remember→this key, and one-shot/cached/auto/deny→no grant.
+    #[test]
+    fn grant_scope_for_maps_decisions() {
+        assert_eq!(
+            grant_scope_for(Decision::ApproveSshSession, "github"),
+            Some(SshGrantScope::OneKey("github".to_owned()))
+        );
+        assert_eq!(
+            grant_scope_for(Decision::ApproveRemember, "github"),
+            Some(SshGrantScope::OneKey("github".to_owned()))
+        );
+        assert_eq!(
+            grant_scope_for(Decision::ApproveSshSessionAll, "github"),
+            Some(SshGrantScope::AllKeys)
+        );
+        // One-shot / cached / auto / deny add no grant.
+        assert_eq!(grant_scope_for(Decision::Approve, "github"), None);
+        assert_eq!(grant_scope_for(Decision::ApproveCached, "github"), None);
+        assert_eq!(grant_scope_for(Decision::ApproveAuto, "github"), None);
+        assert_eq!(grant_scope_for(Decision::Deny, "github"), None);
     }
 
     /// An oversized length prefix must be rejected by the guard *before*

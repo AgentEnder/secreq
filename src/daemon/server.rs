@@ -647,6 +647,10 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
             crate::consent::Decision::ApproveRemember => "Decision::ApproveRemember",
             crate::consent::Decision::ApproveCached => "Decision::ApproveCached",
             crate::consent::Decision::ApproveAuto => "Decision::ApproveAuto",
+            // SSH-only decisions; they ride the in-process sign waiter, not
+            // this wrap socket reply, but Decision is shared so list them.
+            crate::consent::Decision::ApproveSshSession => "Decision::ApproveSshSession",
+            crate::consent::Decision::ApproveSshSessionAll => "Decision::ApproveSshSessionAll",
             crate::consent::Decision::Deny => "Decision::Deny",
             crate::consent::Decision::DenyAuto => "Decision::DenyAuto",
         },

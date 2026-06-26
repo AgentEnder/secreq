@@ -78,15 +78,51 @@ fn caller_chain_from_pid_with_limit(
 
 const TRANSPORT_FRAMES: &[&str] = &["ssh", "scp", "sftp", "ssh-agent"];
 
-/// Pick the meaningful ancestor a SIGN approval should be scoped to.
-/// The connecting peer is almost always `ssh` (spawned fresh per git op),
-/// so caching on it gives no reuse. Skip transport frames to anchor on
-/// the real initiator (git / shell / IDE). Falls through to the last
+/// Shell / session frame names a SIGN grant should anchor on. Login shells
+/// are exec'd with a leading `-` (e.g. `-zsh`), which we strip before
+/// matching.
+const SESSION_FRAMES: &[&str] = &[
+    "sh",
+    "bash",
+    "zsh",
+    "fish",
+    "dash",
+    "ksh",
+    "tcsh",
+    "csh",
+    "nu",
+    "pwsh",
+    "powershell",
+    "tmux",
+    "tmux: server",
+    "screen",
+];
+
+/// True if `name` is a long-lived shell / session frame (see
+/// [`SESSION_FRAMES`]), accounting for the leading `-` on login shells.
+fn is_session_frame(name: &str) -> bool {
+    let base = name.strip_prefix('-').unwrap_or(name);
+    SESSION_FRAMES.contains(&base)
+}
+
+/// Pick the long-lived ancestor a SIGN grant should be scoped to.
+///
+/// A `git push` over SSH spawns a fresh `ssh` **and** a fresh `git` for every
+/// push, so anchoring on either gives a timed grant no reuse across pushes —
+/// the user would be re-prompted every time. The stable context the user
+/// actually drives is their shell (or terminal multiplexer), so we anchor on
+/// the nearest session frame. Failing that (GUI/daemon-launched, no shell in
+/// the chain) we fall back to the first non-transport frame, then to the last
 /// frame if the whole chain is transport.
 pub fn select_anchor(chain: &[Caller]) -> Option<&Caller> {
     chain
         .iter()
-        .find(|c| !TRANSPORT_FRAMES.contains(&c.name.as_str()))
+        .find(|c| is_session_frame(&c.name))
+        .or_else(|| {
+            chain
+                .iter()
+                .find(|c| !TRANSPORT_FRAMES.contains(&c.name.as_str()))
+        })
         .or_else(|| chain.last())
 }
 
@@ -204,24 +240,55 @@ mod tests {
     }
 
     #[test]
-    fn anchor_skips_transport_frames() {
+    fn anchor_skips_transport_and_per_command_frames_to_the_shell() {
+        // `git push` over SSH spawns a fresh `git` AND a fresh `ssh` for
+        // every push, so anchoring on either gives a timed grant no reuse
+        // across pushes. The stable context is the shell, so the anchor must
+        // land on `zsh`, not `git`.
         let chain = vec![
             mk_caller(10, "ssh", Some("/usr/bin/ssh")),
             mk_caller(11, "git", Some("/usr/bin/git")),
             mk_caller(12, "zsh", Some("/bin/zsh")),
         ];
         let anchor = select_anchor(&chain).unwrap();
-        assert_eq!(anchor.name, "git"); // ssh skipped, git is the real actor
+        assert_eq!(anchor.name, "zsh");
+        assert_eq!(anchor.pid, 12);
     }
 
     #[test]
-    fn anchor_skips_consecutive_transport_then_falls_through() {
+    fn anchor_picks_nearest_shell_through_a_deep_chain() {
+        // Real-world shape: a CLI tool runs `git push` from inside a login
+        // shell. The anchor is the nearest shell (`-zsh`), which survives
+        // across pushes, not the ephemeral `git`/`claude` frames.
+        let chain = vec![
+            mk_caller(10, "ssh", Some("/usr/bin/ssh")),
+            mk_caller(11, "git", Some("/usr/bin/git")),
+            mk_caller(12, "claude", Some("/usr/local/bin/claude")),
+            mk_caller(13, "-zsh", Some("/bin/zsh")),
+            mk_caller(14, "login", Some("/usr/bin/login")),
+        ];
+        let anchor = select_anchor(&chain).unwrap();
+        assert_eq!(anchor.name, "-zsh"); // login-shell prefix still matches
+        assert_eq!(anchor.pid, 13);
+    }
+
+    #[test]
+    fn anchor_falls_back_to_first_non_transport_when_no_shell() {
+        // GUI/daemon-launched with no shell in the chain: there's no stable
+        // session to anchor on, so fall back to the first non-transport
+        // frame (here `git`) rather than the transport peer.
         let chain = vec![
             mk_caller(10, "ssh", None),
             mk_caller(11, "scp", None),
-            mk_caller(12, "bash", Some("/bin/bash")),
+            mk_caller(12, "git", Some("/usr/bin/git")),
         ];
-        assert_eq!(select_anchor(&chain).unwrap().name, "bash");
+        assert_eq!(select_anchor(&chain).unwrap().name, "git");
+    }
+
+    #[test]
+    fn anchor_falls_through_to_last_when_all_transport() {
+        let chain = vec![mk_caller(10, "ssh", None), mk_caller(11, "scp", None)];
+        assert_eq!(select_anchor(&chain).unwrap().name, "scp");
     }
 
     #[test]

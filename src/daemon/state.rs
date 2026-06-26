@@ -19,9 +19,10 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use zeroize::Zeroizing;
 
-use crate::consent::{ApprovalEntry, Decision, SshApprovalEntry};
+use crate::consent::{ApprovalEntry, Decision, SshGrant};
 use crate::manifest::{BatchRetrieve, Manifest, Provider};
 use crate::resolve::{self, ResolutionPlan, SecretRequest, Source};
 use crate::rules::{self, EvalCtx, Rule, RuleHit};
@@ -107,13 +108,14 @@ pub struct State {
     /// "Approve all from X" decisions for the daemon's lifetime. No disk
     /// backing — `secreq daemon stop` is the canonical reset.
     approvals: Vec<ApprovalEntry>,
-    /// Remembered SSH sign approvals. Parallel to `approvals` but each
-    /// entry carries a wall-clock `expires_at`: an SSH anchor (shell /
-    /// IDE / git session) can live for hours, so a SIGN approval is
-    /// time-bounded rather than tied to anchor lifetime alone. See
-    /// [`SshApprovalEntry`] for the rationale behind the TTL divergence.
-    /// No disk backing — same `secreq daemon stop` reset as `approvals`.
-    ssh_approvals: Vec<SshApprovalEntry>,
+    /// Remembered SSH sign session grants. Parallel to `approvals` but each
+    /// grant carries a wall-clock `expires_at` and a key scope (one key or
+    /// all keys): an SSH anchor (shell / IDE / git session) can live for
+    /// hours, so a SIGN grant is time-bounded rather than tied to anchor
+    /// lifetime alone. See [`SshGrant`] for the rationale behind the
+    /// divergences. No disk backing — same `secreq daemon stop` reset as
+    /// `approvals`.
+    ssh_grants: Vec<SshGrant>,
     /// Encrypted in-memory cache of resolved secret values.
     secret_cache: Arc<Mutex<SecretCache>>,
     /// Singleflight coordinator. Ensures concurrent asks for the same
@@ -218,7 +220,7 @@ impl Default for State {
             queue: HashMap::new(),
             pending: HashMap::new(),
             approvals: Vec::new(),
-            ssh_approvals: Vec::new(),
+            ssh_grants: Vec::new(),
             secret_cache: Arc::new(Mutex::new(SecretCache::new())),
             in_flight: InFlightMap::new(),
             last_activity: Instant::now(),
@@ -714,54 +716,47 @@ impl State {
         approval_scope_for(&self.approvals, ask).is_some()
     }
 
-    // ── SSH sign approval cache ──────────────────────────────────────
+    // ── SSH sign session grants ──────────────────────────────────────
     //
     // The SSH analogue of the wrap approvals cache above. Same in-memory,
-    // no-disk-backing model — but each entry carries a wall-clock TTL (see
-    // [`SshApprovalEntry`]). The wrap cache reads no clock (the parent
+    // no-disk-backing model — but each grant carries a wall-clock TTL and a
+    // key scope (see [`SshGrant`]). The wrap cache reads no clock (the parent
     // process's lifetime is its natural expiry); the SSH cache does, so its
-    // lookup is split into a public `has_ssh_approval` that reads
-    // `SystemTime::now()` and a private `has_ssh_approval_at(now)` that
-    // takes the clock explicitly — the latter is what the unit test drives.
+    // lookup is split into a public `has_ssh_grant` that reads
+    // `SystemTime::now()` and a private `has_ssh_grant_at(now)` that takes
+    // the clock explicitly — the latter is what the unit test drives.
 
-    /// True if a non-expired SSH approval matches `(key_id, anchor_pid,
-    /// anchor_start_time)` as of *now*. Prunes expired entries on access.
-    /// Reads the wall clock; see [`State::has_ssh_approval_at`] for the
+    /// True if a non-expired SSH grant covers `(key_id, anchor_pid,
+    /// anchor_start_time)` as of *now*. Prunes expired grants on access.
+    /// Reads the wall clock; see [`State::has_ssh_grant_at`] for the
     /// clock-injectable form the tests use.
-    pub fn has_ssh_approval(
-        &mut self,
-        key_id: &str,
-        anchor_pid: u32,
-        anchor_start_time: u64,
-    ) -> bool {
-        self.has_ssh_approval_at(key_id, anchor_pid, anchor_start_time, now_unix_secs())
+    pub fn has_ssh_grant(&mut self, key_id: &str, anchor_pid: u32, anchor_start_time: u64) -> bool {
+        self.has_ssh_grant_at(key_id, anchor_pid, anchor_start_time, now_unix_secs())
     }
 
-    /// Clock-injectable core of [`State::has_ssh_approval`]. Prunes every
-    /// entry that has expired as of `now`, then reports whether any
-    /// surviving entry matches the anchor + key.
-    fn has_ssh_approval_at(
+    /// Clock-injectable core of [`State::has_ssh_grant`]. Prunes every grant
+    /// that has expired as of `now`, then reports whether any surviving grant
+    /// covers the anchor + key.
+    fn has_ssh_grant_at(
         &mut self,
         key_id: &str,
         anchor_pid: u32,
         anchor_start_time: u64,
         now: u64,
     ) -> bool {
-        self.ssh_approvals.retain(|e| now < e.expires_at);
-        self.ssh_approvals
+        self.ssh_grants.retain(|g| now < g.expires_at);
+        self.ssh_grants
             .iter()
-            .any(|e| e.matches(key_id, anchor_pid, anchor_start_time, now))
+            .any(|g| g.matches(key_id, anchor_pid, anchor_start_time, now))
     }
 
-    /// Remember an SSH sign approval. Mirrors the `ApproveRemember` insert
-    /// in [`State::resolve`]: dedupes on the full entry so re-approving the
-    /// same anchor+key just refreshes nothing (the caller supplies the
-    /// fresh `expires_at`, so a re-approval with a later expiry is a
-    /// distinct entry and both coexist harmlessly — the latest one wins on
-    /// lookup).
-    pub fn remember_ssh_approval(&mut self, entry: SshApprovalEntry) {
-        if !self.ssh_approvals.contains(&entry) {
-            self.ssh_approvals.push(entry);
+    /// Remember an SSH sign session grant. Dedupes on the full grant so a
+    /// re-approval with the same scope/anchor/expiry is a no-op; a re-approval
+    /// with a later expiry is a distinct grant and both coexist harmlessly —
+    /// the latest still-valid one wins on lookup.
+    pub fn remember_ssh_grant(&mut self, grant: SshGrant) {
+        if !self.ssh_grants.contains(&grant) {
+            self.ssh_grants.push(grant);
         }
     }
 
@@ -858,10 +853,10 @@ impl State {
             return;
         };
 
-        // SSH asks track their "remember" approval separately via
-        // `SshApprovalEntry` (keyed on the anchor, inserted on the SSH
-        // path); the wrap approvals cache is never read for them, so
-        // skip the insert to avoid polluting it with dead entries.
+        // SSH asks track their session grants separately via `SshGrant`
+        // (keyed on the anchor, inserted on the SSH path); the wrap approvals
+        // cache is never read for them, so skip the insert to avoid polluting
+        // it with dead entries.
         if decision == Decision::ApproveRemember && entry.representative.ssh.is_none() {
             let new = ApprovalEntry {
                 wrap: key.wrap.clone(),
@@ -1438,6 +1433,100 @@ pub(super) fn resolve_for_ask(
     }
 }
 
+/// Resolve a **single** secret through the shared encrypted cache + the
+/// singleflight coordinator, returning the value in a [`Zeroizing`] buffer.
+///
+/// This is the single-key analogue of [`resolve_for_ask`], used by the SSH
+/// sign path so a resolved private key is cached under
+/// `CacheKey { wrap: "ssh:<key_id>", provider, locator }` exactly like any
+/// other secret — the provider (and its biometric prompt) is invoked at most
+/// once per key per daemon lifetime, instead of on every sign. The wrap path
+/// keeps using `resolve_for_ask` so it can batch multiple secrets into one
+/// provider call; the SSH path only ever has one key, so it doesn't need the
+/// batch machinery, but it does need the cache + singleflight, which this
+/// function provides without the plaintext-`String` reply map.
+///
+/// On a cache hit it returns immediately. On a miss it either becomes the
+/// resolver (invokes the provider, populates the cache, signals waiters) or
+/// parks until another thread's resolve completes and reads the freshly
+/// cached value. Every error path marks the in-flight slot failed so parked
+/// waiters get a real error instead of hanging.
+pub(super) fn resolve_single_cached(
+    cache: &Arc<Mutex<SecretCache>>,
+    in_flight: &Arc<InFlightMap>,
+    key: CacheKey,
+    name: &str,
+    reason: Option<&str>,
+    providers: &std::collections::BTreeMap<String, Provider>,
+) -> Result<Zeroizing<String>> {
+    // Cache check — lock held only for the lookup.
+    {
+        let guard = cache.lock().expect("secret cache mutex");
+        if let Some(value) = guard.get(&key) {
+            return Ok(value);
+        }
+    }
+    // Miss → singleflight, mirroring `resolve_for_ask`.
+    match in_flight.acquire(&key) {
+        Acquired::Resolver(g) => {
+            let manifest = Manifest {
+                groups: std::collections::BTreeMap::new(),
+                providers: providers.clone(),
+            };
+            let plan = ResolutionPlan {
+                requests: vec![SecretRequest {
+                    name: name.to_owned(),
+                    provider: key.provider.clone(),
+                    locator: key.locator.clone(),
+                    group: None,
+                    reason: reason.map(str::to_owned),
+                    description: None,
+                    default: None,
+                    source: Source::Eager,
+                }],
+            };
+            let resolved = resolve::resolve_all(&manifest, &plan).and_then(|rows| {
+                rows.into_iter()
+                    .next()
+                    .map(|r| r.value)
+                    .with_context(|| format!("provider returned no value for {name:?}"))
+            });
+            match resolved {
+                Ok(secret) => {
+                    let exposed = Zeroizing::new(secret.expose().to_owned());
+                    {
+                        let mut guard = cache.lock().expect("secret cache mutex");
+                        guard.put(key, exposed.as_str());
+                    }
+                    // Cache populated → wake any parked waiters (also drops
+                    // the in-flight slot).
+                    g.mark_ready();
+                    Ok(exposed)
+                }
+                Err(err) => {
+                    let msg = format!("{err:#}");
+                    g.mark_failed(msg);
+                    Err(err)
+                }
+            }
+        }
+        Acquired::Ready => {
+            // Another thread resolved while we waited; the value should be in
+            // the cache now. Treat a "ready but empty" cache as a failure
+            // rather than retrying, matching `resolve_for_ask`.
+            let guard = cache.lock().expect("secret cache mutex");
+            guard.get(&key).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "in-flight slot for {}/{} signalled ready but cache was empty",
+                    key.provider,
+                    key.locator,
+                )
+            })
+        }
+        Acquired::Failed(msg) => Err(anyhow::anyhow!(msg)),
+    }
+}
+
 /// Consume `guards` and propagate `msg` to all waiters parked on
 /// their slots. Used in the failure paths of `resolve_for_ask` so
 /// concurrent asks for the same keys get a real error string.
@@ -1500,30 +1589,52 @@ mod tests {
     }
 
     #[test]
-    fn ssh_approval_insert_hit_then_expiry_miss() {
+    fn ssh_grant_insert_hit_then_expiry_miss() {
+        use crate::consent::{SshAnchor, SshGrantScope};
         let mut state = State::new();
-        state.remember_ssh_approval(SshApprovalEntry {
-            key_id: "github".into(),
-            anchor_pid: 99,
-            anchor_start_time: 1_700_000_000,
+        state.remember_ssh_grant(SshGrant {
+            scope: SshGrantScope::OneKey("github".into()),
+            anchor: SshAnchor {
+                pid: 99,
+                start_time: 1_700_000_000,
+            },
             expires_at: 5000,
         });
 
         // Inside the window, matching anchor + key: hit. `now` is passed
         // explicitly so the test never reads the real clock.
-        assert!(state.has_ssh_approval_at("github", 99, 1_700_000_000, /*now=*/ 4999));
+        assert!(state.has_ssh_grant_at("github", 99, 1_700_000_000, /*now=*/ 4999));
         // Wrong anchor pid: miss even before expiry.
-        assert!(!state.has_ssh_approval_at("github", 100, 1_700_000_000, 4999));
-        // Past expiry: miss. This also prunes the entry.
-        assert!(!state.has_ssh_approval_at("github", 99, 1_700_000_000, 5001));
-        // The expired entry was pruned on the last access, so even a
+        assert!(!state.has_ssh_grant_at("github", 100, 1_700_000_000, 4999));
+        // Past expiry: miss. This also prunes the grant.
+        assert!(!state.has_ssh_grant_at("github", 99, 1_700_000_000, 5001));
+        // The expired grant was pruned on the last access, so even a
         // pre-expiry `now` no longer hits.
-        assert!(!state.has_ssh_approval_at("github", 99, 1_700_000_000, 4999));
+        assert!(!state.has_ssh_grant_at("github", 99, 1_700_000_000, 4999));
+    }
+
+    #[test]
+    fn ssh_all_keys_grant_covers_any_key_on_the_anchor() {
+        use crate::consent::{SshAnchor, SshGrantScope};
+        let mut state = State::new();
+        state.remember_ssh_grant(SshGrant {
+            scope: SshGrantScope::AllKeys,
+            anchor: SshAnchor {
+                pid: 99,
+                start_time: 1_700_000_000,
+            },
+            expires_at: 5000,
+        });
+        // Any key id on the granted anchor is covered.
+        assert!(state.has_ssh_grant_at("github", 99, 1_700_000_000, 4999));
+        assert!(state.has_ssh_grant_at("gitlab", 99, 1_700_000_000, 4999));
+        // A different anchor is not.
+        assert!(!state.has_ssh_grant_at("github", 100, 1_700_000_000, 4999));
     }
 
     #[test]
     fn resolve_ssh_ask_remember_does_not_write_wrap_cache_but_normal_ask_does() {
-        // SSH approvals are remembered via `SshApprovalEntry` (keyed on
+        // SSH approvals are remembered via `SshGrant` (keyed on
         // the anchor), so resolving an SSH ask with ApproveRemember must
         // NOT add anything to the wrap approvals cache — that entry would
         // be dead data. A normal wrap ask, by contrast, still populates it.
@@ -1971,6 +2082,66 @@ mod tests {
         assert_eq!(
             invocations, 1,
             "provider should have been invoked exactly once across {n} concurrent asks; got {invocations}"
+        );
+    }
+
+    #[test]
+    fn resolve_single_cached_resolves_once_then_serves_from_cache() {
+        // The SSH-key regression in one test: the first sign resolves the
+        // private key through the provider (one biometric); a second sign for
+        // the same key must hit the encrypted cache and NOT re-invoke the
+        // provider. The retrieve script appends one line per invocation, so
+        // the line count is the invocation count.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let counter = tmp.path().join("invocations");
+        std::fs::write(&counter, b"").expect("create counter");
+        let script = format!(
+            "echo invoked >> {counter}; echo secret-{{locator}}",
+            counter = counter.display(),
+        );
+        let mut providers = std::collections::BTreeMap::new();
+        providers.insert(
+            "fake".to_owned(),
+            Provider {
+                name: "fake".to_owned(),
+                retrieve: vec!["sh".to_owned(), "-c".to_owned(), script],
+                store: None,
+                retrieve_batch: None,
+            },
+        );
+
+        let state = State::new();
+        let cache = state.secret_cache_arc();
+        let in_flight = state.in_flight_arc();
+        let key = CacheKey {
+            wrap: "ssh:github".into(),
+            provider: "fake".into(),
+            locator: "x".into(),
+        };
+
+        let first = super::resolve_single_cached(
+            &cache,
+            &in_flight,
+            key.clone(),
+            "github",
+            None,
+            &providers,
+        )
+        .expect("first resolve");
+        assert_eq!(&*first, "secret-x");
+
+        let second =
+            super::resolve_single_cached(&cache, &in_flight, key, "github", None, &providers)
+                .expect("second resolve");
+        assert_eq!(&*second, "secret-x");
+
+        let invocations = std::fs::read_to_string(&counter)
+            .expect("read counter")
+            .lines()
+            .count();
+        assert_eq!(
+            invocations, 1,
+            "provider must be invoked once; the second sign must hit the cache, got {invocations}"
         );
     }
 

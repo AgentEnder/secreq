@@ -3572,29 +3572,15 @@ fn render_ssh_card_body(
             );
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            match row.status {
-                RowStatus::Resolving => {
-                    paint_pill(ui, "Signing…", COLOR_ACCENT, COLOR_ACCENT_SOFT);
-                }
-                RowStatus::Awaiting => {
-                    if small_button(ui, "Deny", ButtonRole::Deny).clicked() {
-                        actions.push(PendingAction {
-                            key: row.key.clone(),
-                            decision: Decision::Deny,
-                            scope,
-                        });
-                    }
-                    ui.add_space(4.0);
-                    if small_button(ui, "Approve", ButtonRole::Approve).clicked() {
-                        actions.push(PendingAction {
-                            key: row.key.clone(),
-                            decision: Decision::Approve,
-                            scope,
-                        });
-                    }
-                }
+            // A sign offers more than approve/deny: the user can grant a
+            // session window so they're not re-prompted on every push. Those
+            // buttons don't fit beside the identity label, so the header only
+            // carries the "Signing…" pill (while resolving) and the age; the
+            // action buttons render in a dedicated row below.
+            if row.status == RowStatus::Resolving {
+                paint_pill(ui, "Signing…", COLOR_ACCENT, COLOR_ACCENT_SOFT);
+                ui.add_space(10.0);
             }
-            ui.add_space(10.0);
             ui.label(
                 egui::RichText::new(format!(
                     "{} ago",
@@ -3641,6 +3627,47 @@ fn render_ssh_card_body(
                     .italics()
                     .color(COLOR_FOOTNOTE),
             );
+        });
+    }
+
+    // ── Action row ──
+    // Only when awaiting a decision (a resolving sign is read-only; its
+    // provider call is already in flight). Four choices: a one-shot approve,
+    // two session grants ("this key" / "all keys" for the session TTL), and
+    // deny. In a right-to-left layout the first-added button sits rightmost,
+    // so adding Deny first then the approves yields the visual left-to-right
+    // order: Approve once · Approve 30m · Approve all keys 30m · Deny.
+    if row.status == RowStatus::Awaiting {
+        ui.add_space(10.0);
+        // The outer `horizontal` pins the row to a single button-height; a
+        // bare `with_layout(right_to_left, Align::Center)` on the card body
+        // would inherit the card's full available height and vertically
+        // centre the buttons in a tall void.
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let mut push = |decision: Decision| {
+                    actions.push(PendingAction {
+                        key: row.key.clone(),
+                        decision,
+                        scope,
+                    });
+                };
+                if small_button(ui, "Deny", ButtonRole::Deny).clicked() {
+                    push(Decision::Deny);
+                }
+                ui.add_space(4.0);
+                if small_button(ui, "Approve all keys 30m", ButtonRole::Approve).clicked() {
+                    push(Decision::ApproveSshSessionAll);
+                }
+                ui.add_space(4.0);
+                if small_button(ui, "Approve 30m", ButtonRole::Approve).clicked() {
+                    push(Decision::ApproveSshSession);
+                }
+                ui.add_space(4.0);
+                if small_button(ui, "Approve once", ButtonRole::Approve).clicked() {
+                    push(Decision::Approve);
+                }
+            });
         });
     }
 }

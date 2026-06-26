@@ -219,3 +219,49 @@ private-key resolve (step 5), exactly as it is for an API token today.
 
 These three points should be reflected in `docs/overview.md` (non-goals
 / trust) and `CLAUDE.md` (audit carve-out) when the code lands.
+
+### Update (2026-06-15): resolved key is cached, session grants replace the per-key TTL approval
+
+Two changes landed after the original design, both deliberate trust-model
+moves agreed with the user:
+
+- **The resolved private key is now cached like any other secret.** The
+  SIGN path routes through the shared `SecretCache`
+  (`state::resolve_single_cached`) under
+  `CacheKey { wrap: "ssh:<key_id>", provider, locator }`. The original
+  design's flow diagram said "one biometric" per approval, but the first
+  implementation re-resolved on *every* sign (no key caching), so a
+  provider with its own biometric (e.g. `op read`) prompted on every
+  `git push`. The key is ChaCha20-Poly1305-encrypted at rest in daemon
+  RAM with a per-entry derived key, and — like wrap secrets — has **no
+  TTL**: it lives for the daemon's lifetime, so the provider/biometric
+  runs at most once per key until `secreq daemon stop`. This is a further
+  custody downgrade beyond the original "decrypted into RAM per sign": the
+  key now *persists* (encrypted) for the daemon's life. Accepted because
+  it matches how every other secret is already handled, and the encrypted
+  cache is the same threat-model mitigation used there.
+
+- **Per-key TTL approvals became session grants.** `SshApprovalEntry`
+  (one key, anchor, `expires_at`) is replaced by `SshGrant { scope:
+  OneKey|AllKeys, anchor, expires_at }`. The consent prompt offers
+  **Approve once · Approve 30m · Approve all keys 30m · Deny**; the two
+  30m choices remember a grant scoped to the current anchor (one key, or
+  every key) for `SSH_SESSION_GRANT_TTL_SECS` (30 min). The grant gates
+  the *prompt*; the secret cache gates the *biometric*. So after a grant
+  expires the user is re-prompted (re-confirming intent) but pays no
+  biometric, because the key is still cached. New `Decision` variants:
+  `ApproveSshSession`, `ApproveSshSessionAll`.
+
+- **The anchor is now the shell/session, not the per-command process.**
+  `select_anchor` originally skipped only transport frames (`ssh`/`scp`/
+  `sftp`) and anchored on the first non-transport frame — which for
+  `git push` is the `git` process. But `git push` spawns a fresh `git`
+  (and a fresh `ssh`) on *every* push, so a grant keyed on that pid never
+  matched the next push and the user was re-prompted constantly. The same
+  "spawned fresh per op → no reuse" reasoning that rejected `ssh` applies
+  to `git`. `select_anchor` now anchors on the nearest **session frame**
+  (shell / `tmux` / `screen`; see `SESSION_FRAMES`), which survives across
+  pushes, falling back to the first non-transport frame then the last.
+  Consequence: a session grant covers the whole shell session (every
+  descendant), which is exactly the "approve for this session" intent —
+  and is what makes the 30m grant actually suppress re-prompts.
