@@ -335,11 +335,32 @@ pub fn ensure_consent_window(state: &state::SharedState) -> Result<()> {
     Ok(())
 }
 
+/// Whether the platform honours an always-on-top window. macOS and X11
+/// do; Wayland forbids override-redirect always-on-top, so we detect it
+/// and degrade to a normal window rather than promise a behaviour the
+/// compositor will silently ignore. Shared by the consent window
+/// (`child.rs`) and the pending badge (`badge.rs`).
+#[cfg(target_os = "macos")]
+pub(crate) fn always_on_top_supported() -> bool {
+    true
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn always_on_top_supported() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_none()
+}
+
 /// Spawn a `secreq pending-badge` child if one is needed (queue
 /// non-empty) and none is attached or mid-spawn. The badge is the
 /// always-on-top "N pending" pill that floats over other apps so a
 /// backgrounded consent window can't be forgotten with processes still
 /// hung on a decision.
+///
+/// Skipped entirely where always-on-top isn't honoured (Wayland): a
+/// badge that can neither stay on top nor pin itself to a corner is just
+/// a redundant window, so it earns its keep only on platforms where it
+/// can actually float. The consent window still appears there — it's the
+/// real UI, not a redundant overlay.
 ///
 /// Called both at submit time (so the badge appears immediately on the
 /// first pending ask) and from the daemon's main loop (so a crashed
@@ -347,6 +368,9 @@ pub fn ensure_consent_window(state: &state::SharedState) -> Result<()> {
 /// `needs_badge_window` / `badge_spawn_in_flight` guards make repeated
 /// calls idempotent.
 pub fn ensure_badge_window(state: &state::SharedState) -> Result<()> {
+    if !always_on_top_supported() {
+        return Ok(());
+    }
     let mut guard = state.lock().expect("state mutex");
     if !guard.needs_badge_window() {
         return Ok(());

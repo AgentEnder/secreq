@@ -22,11 +22,15 @@
 //! - A click sends `RaiseConsentRequested`; the daemon brings the
 //!   consent window forward.
 //!
-//! Always-on-top is honoured on macOS and X11; on Wayland (which forbids
-//! override-redirect always-on-top) the badge degrades to a normal small
-//! window. Headless gets no badge — the daemon never spawns one (the SSH
-//! path fails closed without a graphical environment; wrap asks without a
-//! display simply never reach a queued state with a UI).
+//! The badge is always-on-top, and only exists where that's honoured
+//! (macOS and X11). On Wayland — which forbids override-redirect
+//! always-on-top and also denies clients absolute positioning — it could
+//! neither float nor pin itself to a corner, so the daemon doesn't spawn
+//! it there at all (see `super::ensure_badge_window`); the consent window
+//! still appears, it just won't be on top. Headless likewise gets no
+//! badge — the daemon never spawns one (the SSH path fails closed without
+//! a graphical environment; wrap asks without a display simply never reach
+//! a queued state with a UI).
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -98,22 +102,19 @@ pub fn run() -> Result<i32> {
         positioned: false,
     };
 
-    let mut viewport = egui::ViewportBuilder::default()
+    // Unconditionally always-on-top: the daemon only spawns this child on
+    // platforms that honour it (`ensure_badge_window` skips the badge
+    // entirely on Wayland), so a floating overlay is the only mode the
+    // badge ever runs in.
+    let viewport = egui::ViewportBuilder::default()
         .with_title("secreq pending")
         .with_inner_size(BADGE_SIZE)
         .with_decorations(false)
         .with_resizable(false)
         // Keep the badge out of the dock / taskbar — it's an overlay, not
         // an app the user switches to.
-        .with_taskbar(false);
-    if always_on_top_supported() {
-        viewport = viewport.with_always_on_top();
-    } else {
-        super::log::log_at(
-            "badge",
-            format_args!("always-on-top unavailable (Wayland?); badge degrades to a normal window"),
-        );
-    }
+        .with_taskbar(false)
+        .with_always_on_top();
     let native_opts = eframe::NativeOptions {
         viewport,
         ..Default::default()
@@ -290,20 +291,6 @@ impl eframe::App for BadgeApp {
         // (the macOS case the badge is built for).
         ctx.request_repaint_after(Duration::from_millis(100));
     }
-}
-
-/// Whether the platform honours an always-on-top borderless window.
-/// macOS and X11 do; Wayland forbids override-redirect always-on-top, so
-/// we detect it and degrade to a normal window rather than promise a
-/// behaviour the compositor will silently ignore.
-#[cfg(target_os = "macos")]
-fn always_on_top_supported() -> bool {
-    true
-}
-
-#[cfg(not(target_os = "macos"))]
-fn always_on_top_supported() -> bool {
-    std::env::var_os("WAYLAND_DISPLAY").is_none()
 }
 
 /// See `child.rs::macos_disable_app_nap` — same rationale: keep the run
