@@ -120,19 +120,30 @@ pub enum ClientMsg {
     /// "My OS focus state just changed." Sent by the consent-window
     /// child whenever `egui::InputState.focused` transitions; lets the
     /// daemon distinguish "UI is alive AND in front" from "UI is alive
-    /// but the user has tabbed away." Used to:
-    ///
-    ///   - skip the kill-and-respawn raise on a new ask when the
-    ///     existing window is already focused (the streaming snapshot
-    ///     already paints the new entry — no need to disrupt the user),
-    ///   - suppress the auto-hide grace-period exit while the user is
-    ///     interacting with the UI (e.g. scrolling the Audit tab after
-    ///     clearing the queue).
+    /// but the user has tabbed away." Used to skip the kill-and-respawn
+    /// raise on a new ask when the existing window is already focused
+    /// (the streaming snapshot already paints the new entry — no need to
+    /// disrupt the user). The auto-hide grace exit is gated separately by
+    /// [`ConsentWindowInteractive`].
     ///
     /// Default at attach is `focused = true`: a freshly-spawned child
     /// gets foreground intent on macOS, so until we hear otherwise the
     /// safe assumption is that it's in front.
     ConsentWindowFocus { focused: bool },
+    /// "Whether the user is interacting with a non-Pending tab just
+    /// changed." Sent by the consent-window child whenever
+    /// `focused && current_tab != Pending` transitions. This is a
+    /// narrower signal than [`ConsentWindowFocus`] and exists only to
+    /// gate the auto-hide grace exit: a window focused on the empty
+    /// Pending tab ("All clear") should still hide after the grace
+    /// period, but one the user is actively browsing (Rules / Audit)
+    /// must not be yanked away mid-scroll. Kept separate from `focused`
+    /// because that bit still drives the kill-and-respawn raise, which
+    /// wants true OS focus regardless of tab.
+    ///
+    /// Default at attach is `interacting = false`: a fresh decision
+    /// window opens on the Pending tab.
+    ConsentWindowInteractive { interacting: bool },
 
     // ── Auto-rules management ─────────────────────────────────────
     //

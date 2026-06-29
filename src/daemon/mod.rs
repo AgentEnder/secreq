@@ -212,14 +212,17 @@ pub fn run() -> Result<i32> {
             // hanging the window indefinitely after a single approval
             // is noisy desktop clutter.
             //
-            // Skip the auto-hide entirely when the window is focused —
-            // the user is still interacting with it (e.g. scrolling
-            // the audit log after clearing the queue), and yanking
-            // the window away mid-scroll is exactly the surprise we
-            // want to avoid. The grace clock isn't reset; the next
-            // tick after focus is lost will resume the countdown.
+            // Skip the auto-hide only when the user is interacting with
+            // a non-Pending tab (Rules / Audit) — e.g. scrolling the
+            // audit log after clearing the queue — where yanking the
+            // window away mid-scroll is exactly the surprise we want to
+            // avoid. A window focused on the empty Pending tab ("All
+            // clear") is NOT interacting, so it still hides: there's
+            // nothing there to interrupt. The grace clock isn't reset;
+            // the next tick after the user leaves the other tab (or the
+            // window loses focus) resumes the countdown.
             let should_auto_hide = !guard.viewer_mode()
-                && !guard.any_consent_focused()
+                && !guard.any_consent_interacting()
                 && guard
                     .queue_empty_since()
                     .is_some_and(|t| t.elapsed() >= AUTO_HIDE_GRACE);

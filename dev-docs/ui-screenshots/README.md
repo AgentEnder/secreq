@@ -18,7 +18,8 @@ serialised across fixtures.
 
 | File | Fixture | What it exercises |
 |---|---|---|
-| `01-empty-all-clear.png` | `empty_state` | Pending tab with no asks → "All clear" empty state. |
+| `01-empty-all-clear.png` | `empty_state` | Pending tab with no asks → "All clear" empty state, with the "This window will hide shortly" hint (a decision window does auto-hide). |
+| `01b-empty-all-clear-viewer.png` | `empty_state_viewer` | Same "All clear" Pending tab but in viewer mode (`secreq view`, subtitle "Audit timeline · pinned") — the hide hint is suppressed because viewer windows never auto-hide. |
 | `02-single-pending.png` | `single_pending` | One wrap under a single shell, with one secret. |
 | `03-nested-tree.png` | `nested_tree` | Two child shells under a shared `Superset.app` root. |
 | `04-multi-root.png` | `multi_root` | Two independent process trees + the separator between them. |

@@ -266,6 +266,14 @@ struct ConsentSubscriber {
     /// the child overwrites this whenever the OS reports a focus change
     /// via `ClientMsg::ConsentWindowFocus`.
     focused: bool,
+    /// Latest reported "interacting" state: focused AND on a tab other
+    /// than Pending (Rules / Audit). Distinct from `focused` because the
+    /// auto-hide gate wants "is the user busy on a non-Pending tab" — a
+    /// window focused on the empty Pending tab should still auto-hide,
+    /// whereas one focused on the Audit log must not be yanked away. The
+    /// child reports transitions via `ClientMsg::ConsentWindowInteractive`.
+    /// Defaults to `false`: a fresh decision window opens on Pending.
+    interacting: bool,
 }
 
 /// One attached pending-badge child. Deliberately leaner than
@@ -356,6 +364,7 @@ impl State {
             pid,
             tx: sender,
             focused: true,
+            interacting: false,
         });
         super::log::log_at(
             "state",
@@ -564,10 +573,32 @@ impl State {
     /// itself as focused (OS keyboard focus). Used to gate the
     /// kill-and-respawn raise — when the UI is already in front, a
     /// new ask just needs the streaming snapshot to land, not a
-    /// fresh process — and to suppress the auto-hide grace exit
-    /// while the user is interacting with the window.
+    /// fresh process.
     pub fn any_consent_focused(&self) -> bool {
         self.consent_subscribers.iter().any(|s| s.focused)
+    }
+
+    /// Record an "interacting" update for one attached child. Called by
+    /// the streaming connection handler when a
+    /// `ClientMsg::ConsentWindowInteractive` arrives. Unknown IDs are
+    /// ignored — same detach race as [`set_consent_focused`].
+    pub fn set_consent_interacting(&mut self, id: u64, interacting: bool) {
+        for s in &mut self.consent_subscribers {
+            if s.id == id {
+                s.interacting = interacting;
+                return;
+            }
+        }
+    }
+
+    /// `true` if any attached consent-window child reports the user as
+    /// interacting with a non-Pending tab (Rules / Audit) while focused.
+    /// This — not raw focus — gates the auto-hide grace exit: a window
+    /// idling on the empty Pending tab should still hide, but one the
+    /// user is actively browsing (e.g. scrolling the Audit log) must not
+    /// be yanked out from under them.
+    pub fn any_consent_interacting(&self) -> bool {
+        self.consent_subscribers.iter().any(|s| s.interacting)
     }
 
     /// One-shot toast push for an auto-deny event. Best-effort —
@@ -2335,5 +2366,46 @@ mod tests {
     fn any_consent_focused_is_false_when_no_subscriber_attached() {
         let state = State::new();
         assert!(!state.any_consent_focused());
+    }
+
+    /// `interacting` defaults to false at attach: a freshly-spawned
+    /// decision window opens on the Pending tab, so the user isn't yet
+    /// "interacting with another tab" and the auto-hide gate shouldn't
+    /// be suppressed before we've heard anything from the child.
+    #[test]
+    fn attach_consent_window_defaults_to_not_interacting() {
+        let mut state = State::new();
+        let (tx, _rx) = mpsc::channel();
+        let (_id, _snap) = state.attach_consent_window(4242, tx);
+        assert!(!state.any_consent_interacting());
+    }
+
+    /// The auto-hide gate keys off `interacting`, not raw focus: a
+    /// window focused on the Pending tab (interacting = false) must
+    /// NOT suppress auto-hide, but one focused on another tab
+    /// (interacting = true, e.g. browsing the Audit log) must.
+    #[test]
+    fn set_consent_interacting_flips_per_subscriber_state() {
+        let mut state = State::new();
+        let (tx, _rx) = mpsc::channel();
+        let (id, _snap) = state.attach_consent_window(4242, tx);
+
+        state.set_consent_interacting(id, true);
+        assert!(state.any_consent_interacting());
+
+        state.set_consent_interacting(id, false);
+        assert!(!state.any_consent_interacting());
+    }
+
+    /// Unknown ids are a no-op, same race rationale as the focus path.
+    #[test]
+    fn set_consent_interacting_for_unknown_id_is_a_noop() {
+        let mut state = State::new();
+        let (tx, _rx) = mpsc::channel();
+        let (id, _snap) = state.attach_consent_window(4242, tx);
+        state.set_consent_interacting(id, true);
+        state.set_consent_interacting(9999, false);
+        // The real subscriber's `interacting = true` survives.
+        assert!(state.any_consent_interacting());
     }
 }

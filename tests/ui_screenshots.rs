@@ -409,6 +409,31 @@ fn empty_state() {
 
 #[test]
 #[ignore = "screenshot harness"]
+fn empty_state_viewer() {
+    // Same "All clear" empty Pending tab, but inside a viewer-mode
+    // window (`secreq view`). Viewer windows never auto-hide, so the
+    // "This window will hide shortly" hint is suppressed — this fixture
+    // exists to prove that difference against `01-empty-all-clear`.
+    //
+    // A fresh viewer lands on the Audit tab via the rising edge; we
+    // mark that edge consumed so the harness can hold the Pending tab,
+    // the state a user reaches by clicking Pending in an open viewer.
+    render_fixture_with_extras(
+        "01b-empty-all-clear-viewer",
+        vec![],
+        FixtureExtras {
+            window_state: Some(Box::new(|ws| ws.mark_viewer_rising_edge_consumed())),
+            ..FixtureExtras::default()
+        },
+        |state| {
+            state.lock().unwrap().enter_viewer_mode();
+            Vec::new()
+        },
+    );
+}
+
+#[test]
+#[ignore = "screenshot harness"]
 fn single_pending() {
     render_fixture("02-single-pending", vec![], |state| {
         vec![submit(

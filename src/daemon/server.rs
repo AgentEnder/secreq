@@ -290,6 +290,16 @@ fn handle_consent_window_connection(
                     .expect("state mutex")
                     .set_consent_focused(subscriber_id, focused);
             }
+            ClientMsg::ConsentWindowInteractive { interacting } => {
+                super::log::log_at(
+                    "server",
+                    format_args!("← ConsentWindowInteractive interacting={interacting}"),
+                );
+                state
+                    .lock()
+                    .expect("state mutex")
+                    .set_consent_interacting(subscriber_id, interacting);
+            }
             // Rule mutations from the Rules tab. They arrive over the
             // streaming socket because that's the connection the
             // consent-window child already has open. Routed through
@@ -500,6 +510,7 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
         ClientMsg::ConsentDecision { .. } => "ConsentDecision",
         ClientMsg::ConsentWindowDetach => "ConsentWindowDetach",
         ClientMsg::ConsentWindowFocus { .. } => "ConsentWindowFocus",
+        ClientMsg::ConsentWindowInteractive { .. } => "ConsentWindowInteractive",
         ClientMsg::BadgeWindowAttach { .. } => "BadgeWindowAttach",
         ClientMsg::BadgeWindowDetach => "BadgeWindowDetach",
         ClientMsg::RaiseConsentRequested => "RaiseConsentRequested",
@@ -585,6 +596,7 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
         | ClientMsg::ConsentDecision { .. }
         | ClientMsg::ConsentWindowDetach
         | ClientMsg::ConsentWindowFocus { .. }
+        | ClientMsg::ConsentWindowInteractive { .. }
         | ClientMsg::BadgeWindowAttach { .. }
         | ClientMsg::BadgeWindowDetach
         | ClientMsg::RaiseConsentRequested => DaemonMsg::Err {

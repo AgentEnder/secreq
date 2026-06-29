@@ -112,6 +112,11 @@ pub fn run(always_on_top: bool) -> Result<i32> {
         // redundant `focused = true` message before the OS has had a
         // chance to settle the state.
         last_reported_focused: true,
+        // The daemon defaults attached subscribers to
+        // `interacting = false` (a fresh window opens on the Pending
+        // tab). Match that so we stay silent until the user switches to
+        // a non-Pending tab.
+        last_reported_interacting: false,
     };
 
     let mut viewport = egui::ViewportBuilder::default()
@@ -298,6 +303,12 @@ struct ConsentChildApp {
     /// transitions so the daemon log stays quiet and we don't flood
     /// the socket with one message per frame.
     last_reported_focused: bool,
+    /// Last "interacting" value (focused AND on a non-Pending tab) we
+    /// shipped to the daemon, gating the auto-hide grace exit. Defaults
+    /// to `false` to match the daemon's per-subscriber default, so a
+    /// window that opens on Pending sends nothing until the user
+    /// actually switches to Rules / Audit.
+    last_reported_interacting: bool,
 }
 
 impl eframe::App for ConsentChildApp {
@@ -423,6 +434,27 @@ impl eframe::App for ConsentChildApp {
             };
             if let Err(err) = send_msg(&self.writer, &msg) {
                 super::log::log_at("child", format_args!("RuleAction send failed: {err}"));
+            }
+        }
+
+        // Report "interacting" transitions to the daemon — focused AND
+        // on a non-Pending tab. Computed after the render so it reflects
+        // the tab the user may have just clicked this frame. The daemon
+        // uses it to suppress the auto-hide grace exit only while the
+        // user is busy on Rules / Audit, not while they idle on the
+        // empty Pending tab. Like focus, sent only on transitions.
+        let interacting = focused && !self.window_state.on_pending_tab();
+        if interacting != self.last_reported_interacting {
+            if let Err(err) = send_msg(
+                &self.writer,
+                &ClientMsg::ConsentWindowInteractive { interacting },
+            ) {
+                super::log::log_at(
+                    "child",
+                    format_args!("ConsentWindowInteractive send failed: {err}"),
+                );
+            } else {
+                self.last_reported_interacting = interacting;
             }
         }
 

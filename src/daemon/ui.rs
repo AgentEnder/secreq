@@ -315,6 +315,25 @@ impl ConsentWindowState {
         self.current_tab = Tab::Audit;
     }
 
+    /// `true` when the Pending tab is the active tab. The child reads
+    /// this each frame to compute its "interacting" signal for the
+    /// daemon (`focused && !on_pending_tab()`): the auto-hide gate
+    /// suppresses hiding only when the user is busy on Rules / Audit,
+    /// not when they're idling on the empty Pending tab.
+    pub fn on_pending_tab(&self) -> bool {
+        self.current_tab == Tab::Pending
+    }
+
+    /// Harness support: mark the viewer-mode rising edge (which lands a
+    /// fresh `secreq view` window on the Audit tab) as already consumed,
+    /// so a fixture can render the Pending tab inside a viewer-mode
+    /// window — the state a user reaches by opening `secreq view` and
+    /// then clicking Pending. Without this the first frame would jump
+    /// the tab to Audit.
+    pub fn mark_viewer_rising_edge_consumed(&mut self) {
+        self.last_viewer_mode = true;
+    }
+
     /// Pre-populate the Audit-tab search query. Used by the screenshot
     /// harness to capture the "search is filtering" visual state; the
     /// production keypress path mutates the field through the
@@ -934,6 +953,7 @@ pub fn render_consent_panel(
                     &mut window_state.collapsed,
                     actions_out,
                     &window_state.audit,
+                    viewer_mode,
                 );
             }
             Tab::Rules => {
@@ -1475,9 +1495,10 @@ fn render_pending_page(
     collapsed: &mut HashMap<(u32, u64), bool>,
     actions: &mut Vec<PendingAction>,
     audit: &AuditCache,
+    viewer_mode: bool,
 ) {
     if tree.roots.is_empty() {
-        render_empty_state(ui);
+        render_empty_state(ui, viewer_mode);
         return;
     }
     egui::ScrollArea::vertical()
@@ -3064,7 +3085,7 @@ fn audit_day_bucket(ts_unix: u64, now: u64) -> String {
     }
 }
 
-fn render_empty_state(ui: &mut egui::Ui) {
+fn render_empty_state(ui: &mut egui::Ui, viewer_mode: bool) {
     ui.vertical_centered(|ui| {
         ui.add_space(40.0);
         paint_empty_state_badge(ui, 72.0);
@@ -3081,13 +3102,21 @@ fn render_empty_state(ui: &mut egui::Ui) {
                 .size(13.0)
                 .color(COLOR_MUTED),
         );
-        ui.add_space(8.0);
-        ui.label(
-            egui::RichText::new("This window will hide shortly")
-                .size(11.0)
-                .italics()
-                .color(COLOR_FOOTNOTE),
-        );
+        // The "will hide shortly" hint is only honest for a decision
+        // window: viewer-mode windows (`secreq view`) are deliberately
+        // opened to browse and never auto-hide, so promising otherwise
+        // would be a lie. A decision window on this (empty Pending) tab
+        // is not "interacting", so it genuinely does hide after the
+        // grace period — see `daemon::mod::run`'s auto-hide gate.
+        if !viewer_mode {
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new("This window will hide shortly")
+                    .size(11.0)
+                    .italics()
+                    .color(COLOR_FOOTNOTE),
+            );
+        }
     });
 }
 
@@ -4149,6 +4178,18 @@ mod tests {
         ws.observe_pending(&one_ask(), true);
         assert_eq!(ws.pending_pulse, 0.0);
         assert_eq!(ws.current_tab, Tab::Pending);
+    }
+
+    #[test]
+    fn on_pending_tab_tracks_active_tab() {
+        // Drives the child's "interacting" signal: true only off the
+        // Pending tab. A fresh window starts on Pending.
+        let mut ws = ConsentWindowState::new();
+        assert!(ws.on_pending_tab());
+        ws.focus_audit_tab();
+        assert!(!ws.on_pending_tab());
+        ws.focus_rules_tab();
+        assert!(!ws.on_pending_tab());
     }
 
     #[test]
