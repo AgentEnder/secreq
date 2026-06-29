@@ -315,18 +315,29 @@ pub fn ensure_consent_window(state: &state::SharedState) -> Result<()> {
     if guard.is_consent_restart_pending() {
         return Ok(());
     }
+    // Float the window over other apps when it was opened to demand a
+    // decision (an Ask from a wrap run or an SSH-agent sign) — those are
+    // interruptions the user needs to see now. When it was opened by
+    // `secreq view` (viewer mode), it's a passive inspection surface the
+    // user chose to open, so leave it as a normal window.
+    let always_on_top = !guard.viewer_mode();
     let exe = std::env::current_exe().context("locate current executable")?;
     log::log_at(
         "spawn",
         format_args!(
-            "spawning consent-window child: {} consent-window",
-            exe.display()
+            "spawning consent-window child: {} consent-window{}",
+            exe.display(),
+            if always_on_top { " --always-on-top" } else { "" }
         ),
     );
     guard.mark_consent_spawn_in_flight();
     drop(guard);
-    std::process::Command::new(exe)
-        .arg("consent-window")
+    let mut command = std::process::Command::new(exe);
+    command.arg("consent-window");
+    if always_on_top {
+        command.arg("--always-on-top");
+    }
+    command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())

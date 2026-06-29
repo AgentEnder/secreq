@@ -134,7 +134,13 @@ enum Command {
     /// consent UI. Not meant to be invoked by users directly — if
     /// the daemon isn't running, this will fail to connect.
     #[command(hide = true)]
-    ConsentWindow,
+    ConsentWindow {
+        /// Open the window floating above other apps. The daemon sets
+        /// this when the window is spawned to demand a decision (a wrap
+        /// run or an SSH-agent sign), and omits it for `secreq view`.
+        #[arg(long)]
+        always_on_top: bool,
+    },
 
     /// Internal: run the always-on-top pending-requests badge child.
     /// The daemon spawns one of these whenever requests are awaiting a
@@ -364,7 +370,9 @@ pub fn run() -> i32 {
             Some(RulesAction::Disable { target }) => commands::rules_set_enabled(&target, false),
             Some(RulesAction::Rm { target }) => commands::rules_rm(&target),
         },
-        Some(Command::ConsentWindow) => crate::daemon::child::run(),
+        Some(Command::ConsentWindow { always_on_top }) => {
+            crate::daemon::child::run(always_on_top)
+        }
         Some(Command::PendingBadge) => crate::daemon::badge::run(),
         Some(Command::X { wrap, args }) => commands::wrap_run(
             &wrap,

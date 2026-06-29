@@ -26,10 +26,19 @@ use super::server;
 use super::state::{QueueRow, QueueSnapshot};
 
 /// Entry point for `secreq consent-window`.
-pub fn run() -> Result<i32> {
+///
+/// `always_on_top` is set by the daemon when the window is spawned to
+/// demand a decision (a wrap run or an SSH-agent sign) so the prompt
+/// floats over whatever the user is doing; it's left unset for
+/// `secreq view`, where the user deliberately opened a passive
+/// inspection surface and a normal window is friendlier.
+pub fn run(always_on_top: bool) -> Result<i32> {
     super::log::log_at(
         "child",
-        format_args!("consent-window child starting (pid={})", std::process::id()),
+        format_args!(
+            "consent-window child starting (pid={}, always_on_top={always_on_top})",
+            std::process::id()
+        ),
     );
 
     // Opt out of macOS App Nap. macOS throttles the run loop of
@@ -105,7 +114,7 @@ pub fn run() -> Result<i32> {
         last_reported_focused: true,
     };
 
-    let viewport = egui::ViewportBuilder::default()
+    let mut viewport = egui::ViewportBuilder::default()
         .with_title("secreq")
         // Bumped from 520x480 when the Rules tab was added — three
         // tabs need more horizontal room, and the rule form needs
@@ -113,6 +122,18 @@ pub fn run() -> Result<i32> {
         // text area.
         .with_inner_size([760.0, 560.0])
         .with_decorations(true);
+    if always_on_top {
+        if super::always_on_top_supported() {
+            viewport = viewport.with_always_on_top();
+        } else {
+            super::log::log_at(
+                "child",
+                format_args!(
+                    "always-on-top requested but unavailable (Wayland?); opening a normal window"
+                ),
+            );
+        }
+    }
     let native_opts = eframe::NativeOptions {
         viewport,
         ..Default::default()
