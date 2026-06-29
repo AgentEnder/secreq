@@ -370,9 +370,7 @@ pub fn run() -> i32 {
             Some(RulesAction::Disable { target }) => commands::rules_set_enabled(&target, false),
             Some(RulesAction::Rm { target }) => commands::rules_rm(&target),
         },
-        Some(Command::ConsentWindow { always_on_top }) => {
-            crate::daemon::child::run(always_on_top)
-        }
+        Some(Command::ConsentWindow { always_on_top }) => crate::daemon::child::run(always_on_top),
         Some(Command::PendingBadge) => crate::daemon::badge::run(),
         Some(Command::X { wrap, args }) => commands::wrap_run(
             &wrap,

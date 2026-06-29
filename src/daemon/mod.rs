@@ -327,7 +327,11 @@ pub fn ensure_consent_window(state: &state::SharedState) -> Result<()> {
         format_args!(
             "spawning consent-window child: {} consent-window{}",
             exe.display(),
-            if always_on_top { " --always-on-top" } else { "" }
+            if always_on_top {
+                " --always-on-top"
+            } else {
+                ""
+            }
         ),
     );
     guard.mark_consent_spawn_in_flight();
