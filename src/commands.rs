@@ -151,6 +151,168 @@ pub fn wrap_run(
     crate::exec::run(&command, &env_overrides, &secrets_for_masking, &cwd)
 }
 
+/// Merge env-file pairs UNDER the inherited environment (inherited wins).
+fn effective_env(
+    inherited: &[(String, String)],
+    envfile: &[(String, String)],
+) -> BTreeMap<String, String> {
+    let mut eff: BTreeMap<String, String> = BTreeMap::new();
+    for (k, v) in envfile {
+        eff.insert(k.clone(), v.clone());
+    }
+    for (k, v) in inherited {
+        eff.insert(k.clone(), v.clone()); // inherited wins
+    }
+    eff
+}
+
+/// Compute the overrides for [`crate::exec::run`]. The child already
+/// inherits the process env, so we only emit: (a) keys present in the
+/// effective env but not inherited (file-only plain vars), and (b) every
+/// resolved ref (replacing its `secret://…` placeholder with the real
+/// value).
+fn build_overrides(
+    eff: &BTreeMap<String, String>,
+    inherited: &[(String, String)],
+    resolved: &[(String, String)],
+) -> Vec<(String, String)> {
+    use std::collections::HashSet;
+    let inherited_keys: HashSet<&str> = inherited.iter().map(|(k, _)| k.as_str()).collect();
+    let resolved_keys: HashSet<&str> = resolved.iter().map(|(k, _)| k.as_str()).collect();
+    let mut out: Vec<(String, String)> = resolved.to_vec();
+    for (k, v) in eff {
+        if resolved_keys.contains(k.as_str()) {
+            continue; // already carried by `resolved`
+        }
+        if !inherited_keys.contains(k.as_str()) {
+            out.push((k.clone(), v.clone())); // file-only plain var
+        }
+    }
+    out
+}
+
+/// `secreq run [--env-file PATH]… -- <cmd>` — the ambient mirror of `x`.
+/// Resolve `secret://provider/locator` references found in the inherited
+/// environment (and any `--env-file`) through the consent daemon, then exec
+/// `<cmd>` with the resolved values injected and output masked.
+///
+/// Only wired into the CLI by Task 5; `pub fn` items in this lib aren't
+/// dead-code-flagged (cf. `wrap_run`), so no `allow(dead_code)` is needed.
+pub fn run(
+    command: &[String],
+    env_files: &[PathBuf],
+    opts: WrapRunOpts,
+    config_path: Option<&Path>,
+) -> Result<i32> {
+    if command.is_empty() {
+        bail!(
+            "secreq run: no command given (usage: secreq run [--env-file PATH]… -- <cmd> [args…])"
+        );
+    }
+    let config = load_config_or_default(config_path)?;
+
+    // Recursion guard: if we're already inside secreq's own resolution,
+    // just exec the command without re-resolving (mirrors `wrap_run`). A
+    // provider CLI invoked during resolution can't trigger a second consent.
+    if std::env::var_os(crate::RESOLVING_ENV).is_some() {
+        let cwd = std::env::current_dir().context("could not determine current directory")?;
+        return crate::exec::run(command, &[], &[], &cwd);
+    }
+
+    // 1. Effective env = inherited, with --env-file layered underneath.
+    let inherited: Vec<(String, String)> = std::env::vars().collect();
+    let mut envfile_pairs = Vec::new();
+    for path in env_files {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("could not read env file {}", path.display()))?;
+        envfile_pairs.extend(crate::dotenv::parse(&text));
+    }
+    let eff = effective_env(&inherited, &envfile_pairs);
+
+    // 2. Scan for secret:// references. A value that looks like a ref but
+    // doesn't parse is a hard error here, before any exec.
+    let eff_pairs: Vec<(String, String)> =
+        eff.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let scanned = scan_env_refs(&eff_pairs)?;
+    let refs: Vec<(String, Reference)> =
+        scanned.into_iter().map(|r| (r.name, r.reference)).collect();
+
+    let cwd = std::env::current_dir().context("could not determine current directory")?;
+
+    // 3. Nothing to resolve → exec directly with the file-only plain vars.
+    // No daemon contact, no consent (honest "nothing to resolve" fast path).
+    if refs.is_empty() {
+        let overrides = build_overrides(&eff, &inherited, &[]);
+        return crate::exec::run(command, &overrides, &[], &cwd);
+    }
+
+    // 4 + 5. Consent + resolve (daemon, or client-side under --yes).
+    let callers = provenance::caller_chain();
+    let names: Vec<String> = refs.iter().map(|(n, _)| n.clone()).collect();
+    let resolved: Vec<(String, SecretValue)> = if opts.assume_yes {
+        let _ = audit::append(&AuditEntry::new(
+            "run",
+            command,
+            &callers,
+            &names,
+            Decision::Approve,
+        ));
+        resolve_refs_client_side(&config, &refs, None)?
+    } else {
+        let ask = build_ask(
+            AskSpec {
+                dedupe_wrap: "run".to_owned(),
+                command: command.to_vec(),
+                refs: &refs,
+                reason: None,
+                allow_remember: false,
+            },
+            &callers,
+            &cwd,
+            &config,
+        );
+        let outcome = daemon_client::request_consent(ask, config.wait_indicator_enabled())
+            .context("daemon consent request failed")?;
+        let _ = audit::append(
+            &AuditEntry::new("run", command, &callers, &names, outcome.decision)
+                .with_rule_id(outcome.rule_id.clone()),
+        );
+        if !outcome.decision.approved() {
+            // Mirror `wrap_run`'s deny messaging.
+            if outcome.decision == Decision::DenyAuto {
+                let rule_name = outcome.rule_name.as_deref().unwrap_or("(unknown)");
+                match outcome.deny_message.as_deref() {
+                    Some(msg) => eprintln!("secreq: denied by rule '{rule_name}': {msg}"),
+                    None => eprintln!("secreq: denied by rule '{rule_name}'"),
+                }
+            } else {
+                eprintln!("secreq: denied — command not run");
+            }
+            return Ok(1);
+        }
+        outcome
+            .secrets
+            .into_iter()
+            .map(|(name, value)| (name, SecretValue::new(value)))
+            .collect()
+    };
+
+    // 6. Substitute resolved values into the env; build the overrides.
+    let resolved_plain: Vec<(String, String)> = resolved
+        .iter()
+        .map(|(name, value)| (name.clone(), value.expose().to_owned()))
+        .collect();
+    let env_overrides = build_overrides(&eff, &inherited, &resolved_plain);
+
+    // 7. Exec with masking (unless --raw).
+    let secrets_for_masking: Vec<SecretValue> = if opts.raw {
+        Vec::new()
+    } else {
+        resolved.into_iter().map(|(_, v)| v).collect()
+    };
+    crate::exec::run(command, &env_overrides, &secrets_for_masking, &cwd)
+}
+
 /// `secreq init` — interactive first-time setup. Picks the shim dir,
 /// optionally adds it to the shell's PATH config, and writes a minimal
 /// `wraps.json5`.
@@ -2455,6 +2617,41 @@ mod tests {
         let err = scan_env_refs(&env).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("BAD"), "error should name the var: {msg}");
+    }
+
+    #[test]
+    fn effective_env_layers_envfile_under_inherited() {
+        let inherited = vec![("A".to_owned(), "from_env".to_owned())];
+        let envfile = vec![
+            ("A".to_owned(), "from_file".to_owned()), // inherited wins
+            ("B".to_owned(), "secret://op/x".to_owned()), // file-only
+        ];
+        let eff = effective_env(&inherited, &envfile);
+        assert_eq!(eff.get("A").map(String::as_str), Some("from_env"));
+        assert_eq!(eff.get("B").map(String::as_str), Some("secret://op/x"));
+    }
+
+    #[test]
+    fn overrides_carry_filed_plain_vars_and_resolved_refs_only() {
+        // Given the effective env + resolved values, the overrides passed to
+        // exec::run must be: file-only plain vars + every resolved ref.
+        // Inherited plain vars are NOT re-emitted (the child inherits them).
+        let inherited = vec![("PATH".to_owned(), "/usr/bin".to_owned())];
+        let envfile = vec![
+            ("PLAIN".to_owned(), "hello".to_owned()),
+            ("TOKEN".to_owned(), "secret://op/x".to_owned()),
+        ];
+        let eff = effective_env(&inherited, &envfile);
+        let resolved = vec![("TOKEN".to_owned(), "real-token".to_owned())];
+        let mut overrides = build_overrides(&eff, &inherited, &resolved);
+        overrides.sort();
+        assert_eq!(
+            overrides,
+            vec![
+                ("PLAIN".to_owned(), "hello".to_owned()),
+                ("TOKEN".to_owned(), "real-token".to_owned()),
+            ]
+        );
     }
 
     fn make_executable(path: &Path) {
