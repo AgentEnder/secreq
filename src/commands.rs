@@ -222,12 +222,21 @@ pub fn run(
     }
 
     // 1. Effective env = inherited, with --env-file layered underneath.
+    // `dotenvy` does the real `.env` parsing (quoting, escapes, `export`,
+    // `${VAR}` substitution against the process env), yielding processed
+    // pairs *without* mutating our own environment — we layer them
+    // explicitly so the inherited-wins precedence stays ours, not
+    // dotenvy's. A malformed line is a hard error before any exec.
     let inherited: Vec<(String, String)> = std::env::vars().collect();
     let mut envfile_pairs = Vec::new();
     for path in env_files {
-        let text = std::fs::read_to_string(path)
+        let iter = dotenvy::from_path_iter(path)
             .with_context(|| format!("could not read env file {}", path.display()))?;
-        envfile_pairs.extend(crate::dotenv::parse(&text));
+        for item in iter {
+            let (key, value) =
+                item.with_context(|| format!("malformed entry in env file {}", path.display()))?;
+            envfile_pairs.push((key, value));
+        }
     }
     let eff = effective_env(&inherited, &envfile_pairs);
 

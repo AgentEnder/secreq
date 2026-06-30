@@ -46,9 +46,9 @@ the way out. `run` is that path.
 - **No manifest / groups / `--only` / eager required-set.** Ambient refs
   only. (The original design's manifest stays retired — that's varlock's
   space.)
-- **No `.env` *migration*** (`import`/`add`/write-capabilities). The new
-  `dotenv` parser only *reads* `KEY=value` lines; it never writes or
-  scrubs.
+- **No `.env` *migration*** (`import`/`add`/write-capabilities). We parse
+  `--env-file` with `dotenvy`'s non-mutating `from_path_iter` only; we
+  never write, scrub, or load into our own process env.
 - **No new resolution, caching, or masking machinery.** `run` is a thin
   front end over machinery that already exists and is tested.
 - **No `SECREQ_SESSION`/`SECREQ_DEPTH` nesting markers** — substitution
@@ -170,7 +170,7 @@ output, including the inner `run`'s.
 
 | Item | Kind | Notes |
 |---|---|---|
-| `src/dotenv.rs` | **new, small** | `KEY=value` parser for `--env-file`. Comments (`#`), blank lines, `=`-in-value. **Read-only** — no scrub/migration. |
+| `dotenvy` dependency | **new dep** | `.env` parsing for `--env-file` (quoting, escapes, `export`, `${VAR}` substitution). We use only its non-mutating `from_path_iter`; `run` layers the processed pairs itself (inherited-wins). |
 | `src/commands.rs::run` | **new** | Orchestrator mirroring `wrap_run`: scan → Ask → consent → substitute → `exec::run`. |
 | `Ask.allow_remember: bool` | **new field** | Proto change, `serde` default `true`. `false` only for `run`. |
 | `state.rs:891` approval-write guard | **change** | Add `&& representative.allow_remember` so a `run` ask never persists an approval. The single load-bearing enforcement point. |
@@ -196,8 +196,10 @@ Reused unchanged: `exec::run`, `reference.rs`, `resolve.rs` /
 ## 10. Testing & docs obligations
 
 **Unit / integration tests:**
-- `dotenv` parser: comments, blanks, `=`-in-value, inherited-wins
-  layering.
+- `--env-file` end-to-end: a ref from a file resolves; `dotenvy`'s
+  richer parsing (`export`, double-quotes) is exercised so a regression
+  to a naive splitter would fail. Inherited-wins layering covered by the
+  `effective_env` unit test.
 - Ambient scan: only `secret://` *values* become refs; everything else
   passes through untouched.
 - Substitution + masking-set population.

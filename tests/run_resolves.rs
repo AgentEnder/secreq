@@ -175,3 +175,55 @@ fn run_resolves_ref_from_an_env_file() {
         "the child must see the value resolved from the --env-file ref",
     );
 }
+
+#[test]
+fn run_uses_dotenvy_parsing_for_export_and_quotes() {
+    // The env file is parsed by `dotenvy`, not a naive `KEY=value` splitter:
+    // a leading `export ` prefix is stripped and surrounding double quotes
+    // are honored. A line splitter would have produced a key of
+    // `export FROM_FILE` and a quoted value, breaking resolution — so this
+    // proves the real parser is in the path.
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config/secreq/wraps.json5");
+    write_config(&config, fake_provider_config());
+    let env_file = dir.path().join("the.env");
+    fs::write(
+        &env_file,
+        "# a comment\nexport FROM_FILE=\"secret://fake/file-secret\"\n",
+    )
+    .unwrap();
+    let outfile = dir.path().join("captured");
+
+    let out = Command::new(bin())
+        .args([
+            "--yes",
+            "--config",
+            config.to_str().unwrap(),
+            "run",
+            "--env-file",
+            env_file.to_str().unwrap(),
+            "--",
+            "sh",
+            "-c",
+            &format!("printf '%s' \"$FROM_FILE\" > {}", outfile.display()),
+        ])
+        .env("XDG_CONFIG_HOME", dir.path().join("config"))
+        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env_remove("SECREQ_CONSENT_SOCK")
+        .env("SECREQ_NO_DAEMON", "1")
+        .output()
+        .unwrap();
+
+    assert!(
+        out.status.success(),
+        "secreq run failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+
+    let captured = fs::read_to_string(&outfile).unwrap();
+    assert_eq!(
+        captured, "resolved-file-secret",
+        "dotenvy must strip `export` and quotes so the ref resolves",
+    );
+}

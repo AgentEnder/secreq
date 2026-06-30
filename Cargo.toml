@@ -52,6 +52,10 @@ ssh-encoding = "0.2"
 # the same rsa::pkcs1v15 path it uses internally to select the hash. Pinned
 # to the version ssh-key resolves; re-exports `sha2` and `signature`.
 rsa = { version = "0.9", features = ["sha2"] }
+# `.env` parsing for `secreq run --env-file` (quoting, escapes, `export`,
+# `${VAR}` substitution). We use its non-mutating `from_path_iter`, never
+# the env-loading entry points.
+dotenvy = "0.15"
 
 # macOS-only.
 #
