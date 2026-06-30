@@ -628,6 +628,8 @@ fn sign_ask(
         // cache; the `ssh.is_some()` guard already skips the cache write, so
         // this value is moot for SSH asks. Keep it `true` for consistency.
         allow_remember: true,
+        // SSH signs are never `secreq run`; nested-run cache-skip is moot.
+        nested_run: false,
     }
 }
 

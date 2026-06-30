@@ -4138,6 +4138,7 @@ mod tests {
                 },
                 ssh: None,
                 allow_remember: true,
+                nested_run: false,
             },
             waiter_count: 1,
             first_seen: Instant::now() - Duration::from_secs(secs_ago),

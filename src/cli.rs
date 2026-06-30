@@ -178,6 +178,20 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
+
+    /// `op read`, but for every secret store: resolve one or more secret
+    /// references and print their values as a JSON object. Each reference is
+    /// `secret://provider/locator` or the bare `provider/locator` shorthand.
+    /// Output is always a JSON object keyed by each ref exactly as typed —
+    /// even for a single ref — so it pipes cleanly into `jq`. Resolution
+    /// always goes through the consent daemon (every read is prompted and
+    /// audited); there is no `--yes` bypass, by design.
+    Read {
+        /// The references to resolve, e.g. `secret://op/Work/key` or
+        /// `op/Work/key`. At least one is required.
+        #[arg(value_name = "REF", required = true)]
+        refs: Vec<String>,
+    },
 }
 
 /// Subcommands under `secreq ssh …`: configure an identity, wire clients to
@@ -411,6 +425,10 @@ pub fn run() -> i32 {
             },
             config,
         ),
+        // `read` is always daemon-gated: `cli.yes` is intentionally not
+        // threaded through, so there is no client-side bypass for a raw
+        // secret read.
+        Some(Command::Read { refs }) => commands::read(&refs, config),
         None => {
             // `secreq` with no args: short usage hint.
             eprintln!("secreq: missing command. Try `secreq --help` or `secreq x <binary>`.");

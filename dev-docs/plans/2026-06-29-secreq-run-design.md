@@ -155,16 +155,40 @@ widening. So **`run` disables remember entirely**:
 `--no-remember` on the CLI is thus a no-op for `run` (already the
 default behavior).
 
-## 7. Nested `run` is correct for free
+## 7. Nested `run`
 
-`secreq run -- script` where `script` itself runs `secreq run -- thing`
-works without session markers. After step 6, the outer `run` has already
-replaced every `secret://` ref in the child env with a plain resolved
-value. The inner `run` therefore scans an environment with **no
-`secret://` refs remaining** → empty ref set → it just execs (step 3).
-"A secret crosses the consent boundary once" falls out of substitution.
-Output masking composes: the outer PTY masks the entire child subtree's
-output, including the inner `run`'s.
+Two cases, both handled:
+
+**Refs the outer already resolved — free via substitution.** After step
+6 the outer `run` has replaced every `secret://` ref in the child env
+with a plain resolved value. An inner `run` therefore scans an
+environment with **no `secret://` refs remaining** → empty ref set → it
+just execs (step 3). "A secret crosses the consent boundary once" falls
+out of substitution. Output masking composes: the outer PTY masks the
+entire child subtree's output, including the inner `run`'s.
+
+**Refs the inner re-introduces — the session marker + cache skip.** If a
+nested command sets a *fresh* `secret://` ref (one the outer didn't have)
+and runs `secreq run`, the inner run has something to resolve. To avoid
+re-prompting for values already released to this run tree, the outer run
+stamps a session marker (`SECREQ_RUN_SESSION`, env var) on its child env;
+the inner run detects it and sets `Ask.nested_run = true`. The daemon
+then serves the ask **without showing the window iff it is fully cached**
+(`nested_run_fully_cached = nested_run && ask_fully_cached`) — every
+value already in the secret cache, so no provider runs. Any **uncached**
+ref makes that false, so the inner run still prompts (for the whole ask).
+A **top-level** run never inherits the marker, so `nested_run` is false
+and it **always prompts**, regardless of cache warmth — the load-bearing
+invariant, locked by a unit test. The marker is forgeable (same trust
+model as `SECREQ_RESOLVING`), but a forged marker only suppresses a
+prompt for values already consented to a run once, and every run is
+still audited.
+
+> Scope note: the fully-cached check reads the **global** value cache
+> `(wrap="run", provider, locator)`, so a nested run can ride a value
+> cached by any prior consented resolution (this session or earlier), not
+> strictly one resolved within the current session. Tightening to
+> per-session would need session-scoped cache tracking; deferred (YAGNI).
 
 ## 8. New / changed code
 
@@ -174,6 +198,8 @@ output, including the inner `run`'s.
 | `src/commands.rs::run` | **new** | Orchestrator mirroring `wrap_run`: scan → Ask → consent → substitute → `exec::run`. |
 | `Ask.allow_remember: bool` | **new field** | Proto change, `serde` default `true`. `false` only for `run`. |
 | `state.rs:891` approval-write guard | **change** | Add `&& representative.allow_remember` so a `run` ask never persists an approval. The single load-bearing enforcement point. |
+| `Ask.nested_run: bool` + `RUN_SESSION_ENV` | **new field + env var** | The outer run stamps `SECREQ_RUN_SESSION` on its child env; a nested run sets `nested_run = true`. `serde` default `false`. |
+| `state.rs::nested_run_fully_cached` + `server.rs::handle_ask` branch | **new** | The sole window-skip for `run`: serve from cache (no prompt) iff `nested_run && ask_fully_cached`. Top-level run never qualifies → always prompts. |
 | `src/cli.rs` `Run { env_file, command }` | **new subcommand** | Wires `--env-file` (repeatable) + trailing command; dispatches to `commands::run`. |
 
 Reused unchanged: `exec::run`, `reference.rs`, `resolve.rs` /

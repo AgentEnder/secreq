@@ -1340,6 +1340,18 @@ pub(super) fn ask_fully_cached(ask: &Ask, cache: &Arc<Mutex<SecretCache>>) -> bo
     })
 }
 
+/// Should a nested `run` be served straight from the secret cache without
+/// showing the consent window? True **only** when the ask is marked
+/// `nested_run` (an inner `run` that detected an ancestor run's session
+/// marker) **and** every value is already cached, so resolution invokes
+/// no provider. An unnested run (`nested_run == false`) or any uncached
+/// secret returns false → the ask prompts. This is the sole window-skip
+/// for `run`: gating it on nesting guarantees a fresh top-level run
+/// always prompts, no matter how warm the cache is.
+pub(super) fn nested_run_fully_cached(ask: &Ask, cache: &Arc<Mutex<SecretCache>>) -> bool {
+    ask.nested_run && ask_fully_cached(ask, cache)
+}
+
 /// `pub(super)` so the auto-rule path in `server.rs` can call this
 /// directly — auto-decisions bypass the queue, so they don't go
 /// through `State::resolve`.
@@ -1620,6 +1632,7 @@ mod tests {
             dedupe_key,
             ssh: None,
             allow_remember: true,
+            nested_run: false,
         }
     }
 
@@ -1968,7 +1981,59 @@ mod tests {
             },
             ssh: None,
             allow_remember: true,
+            nested_run: false,
         }
+    }
+
+    #[test]
+    fn nested_run_skips_window_only_when_nested_and_fully_cached() {
+        // The value the ask needs, cached under (wrap="run", fake, x) —
+        // the key `ask_with_secret` produces.
+        let cache = Arc::new(Mutex::new(SecretCache::new()));
+        cache.lock().unwrap().put(
+            CacheKey {
+                wrap: "run".to_owned(),
+                provider: "fake".to_owned(),
+                locator: "x".to_owned(),
+            },
+            "cached-value",
+        );
+
+        // Unnested run, even fully cached → must NOT skip. This is the
+        // load-bearing invariant: a top-level run always prompts.
+        let mut unnested = ask_with_secret("run", &["run", "cmd"], "TOKEN");
+        unnested.nested_run = false;
+        assert!(
+            !nested_run_fully_cached(&unnested, &cache),
+            "an unnested run must always prompt, even when fully cached"
+        );
+
+        // Nested + fully cached → skip the window.
+        let mut nested = ask_with_secret("run", &["run", "cmd"], "TOKEN");
+        nested.nested_run = true;
+        assert!(
+            nested_run_fully_cached(&nested, &cache),
+            "a nested, fully-cached run should resolve without prompting"
+        );
+
+        // Nested but one secret uncached → must NOT skip (prompts for the
+        // uncached var).
+        let mut nested_uncached = ask_with_secret("run", &["run", "cmd"], "TOKEN");
+        nested_uncached.nested_run = true;
+        nested_uncached
+            .secrets
+            .push(super::super::proto::SecretAsk {
+                name: "OTHER".to_owned(),
+                provider: "fake".to_owned(),
+                locator: "uncached".to_owned(),
+                default: None,
+                description: None,
+                reason: None,
+            });
+        assert!(
+            !nested_run_fully_cached(&nested_uncached, &cache),
+            "a nested run with any uncached secret must still prompt"
+        );
     }
 
     #[test]
@@ -2101,6 +2166,7 @@ mod tests {
             },
             ssh: None,
             allow_remember: true,
+            nested_run: false,
         };
 
         let state = State::new();

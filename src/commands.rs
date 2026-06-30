@@ -221,6 +221,16 @@ pub fn run(
         return crate::exec::run(command, &[], &[], &cwd);
     }
 
+    // Nesting: this run is nested if an ancestor run already set the
+    // session marker — detect that BEFORE we set it for our own children.
+    // A nested run that turns out fully cached resolves without prompting
+    // (the daemon gates on `nested_run`); a top-level run never sees the
+    // marker, so it always prompts. We propagate the existing token (or
+    // mint one from our pid) so a whole run tree shares a single session.
+    let nested = std::env::var_os(crate::RUN_SESSION_ENV).is_some();
+    let session =
+        std::env::var(crate::RUN_SESSION_ENV).unwrap_or_else(|_| std::process::id().to_string());
+
     // 1. Effective env = inherited, with --env-file layered underneath.
     // `dotenvy` does the real `.env` parsing (quoting, escapes, `export`,
     // `${VAR}` substitution against the process env), yielding processed
@@ -253,7 +263,8 @@ pub fn run(
     // 3. Nothing to resolve → exec directly with the file-only plain vars.
     // No daemon contact, no consent (honest "nothing to resolve" fast path).
     if refs.is_empty() {
-        let overrides = build_overrides(&eff, &inherited, &[]);
+        let mut overrides = build_overrides(&eff, &inherited, &[]);
+        overrides.push((crate::RUN_SESSION_ENV.to_owned(), session));
         return crate::exec::run(command, &overrides, &[], &cwd);
     }
 
@@ -270,7 +281,7 @@ pub fn run(
         ));
         resolve_refs_client_side(&config, &refs, None)?
     } else {
-        let ask = build_ask(
+        let mut ask = build_ask(
             AskSpec {
                 dedupe_wrap: "run".to_owned(),
                 command: command.to_vec(),
@@ -282,6 +293,9 @@ pub fn run(
             &cwd,
             &config,
         );
+        // A nested run may skip the prompt when fully cached; a top-level
+        // run leaves this false, so the daemon always shows the window.
+        ask.nested_run = nested;
         let outcome = daemon_client::request_consent(ask, config.wait_indicator_enabled())
             .context("daemon consent request failed")?;
         let _ = audit::append(
@@ -313,7 +327,10 @@ pub fn run(
         .iter()
         .map(|(name, value)| (name.clone(), value.expose().to_owned()))
         .collect();
-    let env_overrides = build_overrides(&eff, &inherited, &resolved_plain);
+    let mut env_overrides = build_overrides(&eff, &inherited, &resolved_plain);
+    // Establish/propagate the run-session marker so a nested run can be
+    // detected (and, when fully cached, skip its prompt).
+    env_overrides.push((crate::RUN_SESSION_ENV.to_owned(), session));
 
     // 7. Exec with masking (unless --raw).
     let secrets_for_masking: Vec<SecretValue> = if opts.raw {
@@ -322,6 +339,127 @@ pub fn run(
         resolved.into_iter().map(|(_, v)| v).collect()
     };
     crate::exec::run(command, &env_overrides, &secrets_for_masking, &cwd)
+}
+
+/// `secreq read <ref>…` — resolve one or more secret references and print
+/// their values as a JSON object, mirroring `op read` but for every store.
+///
+/// Each `<ref>` is either a full `secret://provider/locator` reference or the
+/// bare `provider/locator` shorthand. Resolution **always** goes through the
+/// consent daemon — there is deliberately no `--yes` bypass: a `read` is a
+/// raw secret exfiltration primitive, so every call must be gated and audited.
+/// The output is always a JSON object keyed by each ref exactly as typed
+/// (even for a single ref), so callers can pipe it straight into `jq`.
+pub fn read(refs: &[String], config_path: Option<&Path>) -> Result<i32> {
+    if refs.is_empty() {
+        bail!("secreq read: no references given (usage: secreq read <ref>… )");
+    }
+
+    // Re-entrancy guard: we're inside secreq's own resolution (a provider CLI
+    // the daemon spawned has `SECREQ_RESOLVING` set). Calling back into the
+    // daemon now would deadlock, and unlike `run` there is no client-side
+    // path to fall through to — so refuse, fail-closed.
+    if std::env::var_os(crate::RESOLVING_ENV).is_some() {
+        bail!("secreq read: refusing to run during secret resolution (re-entrant call)");
+    }
+
+    let config = load_config_or_default(config_path)?;
+
+    // Parse every arg up front so a malformed ref fails before any daemon
+    // contact. Dedupe by the typed string (preserving order) so a repeated
+    // ref can't produce duplicate JSON keys.
+    let mut parsed: Vec<(String, Reference)> = Vec::with_capacity(refs.len());
+    let mut seen: Vec<String> = Vec::new();
+    for raw in refs {
+        let reference = Reference::parse_arg(raw).with_context(|| {
+            format!("`{raw}` is not a valid reference (expected `secret://provider/locator` or `provider/locator`)")
+        })?;
+        if seen.contains(raw) {
+            continue;
+        }
+        seen.push(raw.clone());
+        parsed.push((raw.clone(), reference));
+    }
+
+    let cwd = std::env::current_dir().context("could not determine current directory")?;
+    let callers = provenance::caller_chain();
+
+    // The argv shown in the consent prompt: `read` plus the refs (locators,
+    // never values — safe to display).
+    let mut command = vec!["read".to_owned()];
+    command.extend(seen.iter().cloned());
+
+    let ask = build_ask(
+        AskSpec {
+            dedupe_wrap: "read".to_owned(),
+            command: command.clone(),
+            refs: &parsed,
+            reason: None,
+            allow_remember: false,
+        },
+        &callers,
+        &cwd,
+        &config,
+    );
+    let outcome = daemon_client::request_consent(ask, config.wait_indicator_enabled())
+        .context("daemon consent request failed")?;
+    let _ = audit::append(
+        &AuditEntry::new("read", &command, &callers, &seen, outcome.decision)
+            .with_rule_id(outcome.rule_id.clone()),
+    );
+
+    if !outcome.decision.approved() {
+        if outcome.decision == Decision::DenyAuto {
+            let rule_name = outcome.rule_name.as_deref().unwrap_or("(unknown)");
+            match outcome.deny_message.as_deref() {
+                Some(msg) => eprintln!("secreq: denied by rule '{rule_name}': {msg}"),
+                None => eprintln!("secreq: denied by rule '{rule_name}'"),
+            }
+        } else {
+            eprintln!("secreq: denied");
+        }
+        return Ok(1);
+    }
+
+    // Assemble `(ref-as-typed, value)` pairs in input order. The daemon errors
+    // out (surfaced as `Err` above) on any resolution failure, so on approval
+    // every requested name must be present; a gap is an internal invariant
+    // break, not a user-facing "not found".
+    let mut pairs: Vec<(String, String)> = Vec::with_capacity(parsed.len());
+    for (typed, _) in &parsed {
+        let value = outcome.secrets.get(typed).with_context(|| {
+            format!("internal: daemon approved but returned no value for `{typed}`")
+        })?;
+        pairs.push((typed.clone(), value.clone()));
+    }
+
+    print!("{}", render_read_json(&pairs));
+    Ok(0)
+}
+
+/// Render resolved `(ref-as-typed, value)` pairs as a pretty JSON object,
+/// preserving input order (a plain `serde_json::Map` would sort keys, since
+/// the crate isn't built with `preserve_order`). Keys and values are escaped
+/// by `serde_json::to_string`, which never fails for a `String`.
+fn render_read_json(pairs: &[(String, String)]) -> String {
+    if pairs.is_empty() {
+        return "{}\n".to_owned();
+    }
+    let mut out = String::from("{\n");
+    for (i, (key, value)) in pairs.iter().enumerate() {
+        let key_json = serde_json::to_string(key).expect("String always serializes");
+        let value_json = serde_json::to_string(value).expect("String always serializes");
+        out.push_str("  ");
+        out.push_str(&key_json);
+        out.push_str(": ");
+        out.push_str(&value_json);
+        if i + 1 < pairs.len() {
+            out.push(',');
+        }
+        out.push('\n');
+    }
+    out.push_str("}\n");
+    out
 }
 
 /// `secreq init` — interactive first-time setup. Picks the shim dir,
@@ -2041,6 +2179,9 @@ pub(crate) fn build_ask(
         // agent path sets this.
         ssh: None,
         allow_remember: spec.allow_remember,
+        // Default to false (always-prompt). The `run` path sets it on the
+        // returned ask when it detects it's nested under another run.
+        nested_run: false,
     }
 }
 
@@ -2564,6 +2705,36 @@ mod prompt {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn render_read_json_emits_object_even_for_a_single_ref() {
+        let out = render_read_json(&[("op/Work/key".to_owned(), "s3cr3t".to_owned())]);
+        assert_eq!(out, "{\n  \"op/Work/key\": \"s3cr3t\"\n}\n");
+        // Round-trips through a real JSON parser.
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["op/Work/key"], "s3cr3t");
+    }
+
+    #[test]
+    fn render_read_json_preserves_input_order_not_sorted() {
+        // Keys deliberately out of sorted order; output must keep input order.
+        let out = render_read_json(&[
+            ("zeta/b".to_owned(), "1".to_owned()),
+            ("alpha/a".to_owned(), "2".to_owned()),
+        ]);
+        let zeta = out.find("zeta/b").unwrap();
+        let alpha = out.find("alpha/a").unwrap();
+        assert!(zeta < alpha, "input order must be preserved, got: {out}");
+    }
+
+    #[test]
+    fn render_read_json_escapes_keys_and_values() {
+        // A value with a quote, backslash, and newline must be valid JSON.
+        let out =
+            render_read_json(&[("secret://op/a\"b".to_owned(), "line1\nline2\"\\".to_owned())]);
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["secret://op/a\"b"], "line1\nline2\"\\");
+    }
 
     #[test]
     fn build_ask_sets_identity_command_and_remember() {

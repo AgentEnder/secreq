@@ -714,6 +714,29 @@ fn handle_ask(ask: Ask, state: SharedState) -> DaemonMsg {
             return handle_rule_hit(ask, hit, cache, in_flight, state);
         }
     }
+    // Nested-run fast path: a `run` invoked under an already-consented
+    // run (it carries `nested_run`) whose every value is already cached
+    // resolves silently — "a secret crosses the consent boundary once per
+    // run session." Any uncached secret makes `nested_run_fully_cached`
+    // false, so the ask falls through to the prompt below; and an
+    // unnested run never sets the flag, so it always prompts. Checked
+    // after the rules pass so a deny rule still wins over the skip.
+    {
+        let guard = state.lock().expect("state mutex");
+        let cache = guard.secret_cache_arc();
+        let in_flight = guard.in_flight_arc();
+        drop(guard);
+        if super::state::nested_run_fully_cached(&ask, &cache) {
+            let reply = resolve_approved_with_pending(
+                &ask,
+                crate::consent::Decision::ApproveCached,
+                cache,
+                in_flight,
+                &state,
+            );
+            return waiter_reply_to_daemon_msg(reply);
+        }
+    }
     // Slow path: enqueue and park on the reply channel.
     let (tx, rx) = mpsc::channel();
     let is_new = {

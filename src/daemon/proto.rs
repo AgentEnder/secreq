@@ -209,6 +209,16 @@ pub struct Ask {
     /// back-compatible: an older peer omits the field and decodes `true`.
     #[serde(default = "default_true")]
     pub allow_remember: bool,
+    /// `true` when this ask is a `secreq run` invoked under an already-
+    /// consented run (the inner run saw the [`crate::RUN_SESSION_ENV`]
+    /// marker its parent set). The daemon may then serve the ask straight
+    /// from the secret cache without showing the consent window — but
+    /// *only* when every value is already cached (`ask_fully_cached`), so
+    /// any uncached secret still prompts. A top-level run never sets this,
+    /// so it always prompts. `#[serde(default)]` decodes older peers as
+    /// `false` (the never-skip, always-prompt default).
+    #[serde(default)]
+    pub nested_run: bool,
 }
 
 fn default_true() -> bool {

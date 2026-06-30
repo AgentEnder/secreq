@@ -110,6 +110,7 @@ fn submit(
         dedupe_key,
         ssh: None,
         allow_remember: true,
+        nested_run: false,
     };
     let (tx, rx) = mpsc::channel();
     state.lock().unwrap().submit_ask(ask, tx);
@@ -142,6 +143,7 @@ fn submit_run(
         dedupe_key,
         ssh: None,
         allow_remember: false,
+        nested_run: false,
     };
     let (tx, rx) = mpsc::channel();
     state.lock().unwrap().submit_ask(ask, tx);
@@ -182,6 +184,7 @@ fn submit_ssh(
             reason: reason.map(str::to_owned),
         }),
         allow_remember: true,
+        nested_run: false,
     };
     let (tx, rx) = mpsc::channel();
     state.lock().unwrap().submit_ask(ask, tx);
@@ -214,6 +217,7 @@ fn pending(
         dedupe_key,
         ssh: None,
         allow_remember: true,
+        nested_run: false,
     };
     state.lock().unwrap().begin_pending(ask);
 }

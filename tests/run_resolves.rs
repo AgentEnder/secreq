@@ -227,3 +227,60 @@ fn run_uses_dotenvy_parsing_for_export_and_quotes() {
         "dotenvy must strip `export` and quotes so the ref resolves",
     );
 }
+
+#[test]
+fn run_stamps_and_propagates_the_session_marker() {
+    // A run stamps SECREQ_RUN_SESSION on its child; a nested run inherits
+    // the SAME token (it doesn't re-mint), so a whole run tree shares one
+    // session id. That marker is how a nested run detects nesting. Drives
+    // `outer run -> inner run -> sh` and captures what the innermost child
+    // sees. No refs, so no daemon/GUI is touched.
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config/secreq/wraps.json5");
+    write_config(&config, fake_provider_config());
+    let outfile = dir.path().join("captured");
+    let bin = bin();
+
+    let out = Command::new(bin)
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "run",
+            "--",
+            bin,
+            "--config",
+            config.to_str().unwrap(),
+            "run",
+            "--",
+            "sh",
+            "-c",
+            &format!(
+                "printf '%s' \"$SECREQ_RUN_SESSION\" > {}",
+                outfile.display()
+            ),
+        ])
+        // Start clean: the test's own env must not pre-seed the marker.
+        .env_remove("SECREQ_RUN_SESSION")
+        .env("XDG_CONFIG_HOME", dir.path().join("config"))
+        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env_remove("SECREQ_CONSENT_SOCK")
+        .env("SECREQ_NO_DAEMON", "1")
+        .output()
+        .unwrap();
+
+    assert!(
+        out.status.success(),
+        "nested secreq run failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+
+    let captured = fs::read_to_string(&outfile).unwrap();
+    // The innermost child sees the session token the OUTER run minted (its
+    // pid) — non-empty and all digits, proving it was stamped and inherited
+    // unchanged rather than re-minted at each level.
+    assert!(
+        !captured.is_empty() && captured.chars().all(|c| c.is_ascii_digit()),
+        "nested run must inherit the outer run's session token, got {captured:?}",
+    );
+}

@@ -1062,3 +1062,79 @@ fn daemon_log_path_prints_state_dir_path_without_spawning() {
     // It must not have created the file or a daemon socket — pure print.
     assert!(!expected.exists(), "log-path must not create the log file");
 }
+
+#[test]
+fn read_with_no_refs_is_a_usage_error() {
+    let (dir, _config) = sandbox();
+    // clap enforces `required = true` on the refs, so this exits 2 with a
+    // usage message — before any daemon contact.
+    let out = run_secreq(dir.path(), &["read"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "missing refs should be usage err"
+    );
+}
+
+#[test]
+fn read_refuses_re_entrant_call_during_resolution() {
+    let (dir, config) = sandbox();
+    write_config(
+        &config,
+        r#"{ providers: { op: { retrieve: ["printf", "%s", "{locator}"] } } }"#,
+    );
+    // Simulate being spawned by the daemon mid-resolution: SECREQ_RESOLVING is
+    // set. `read` must refuse rather than deadlock on a second daemon round.
+    let out = Command::new(bin())
+        .args(["read", "op/Work/key"])
+        .env("XDG_CONFIG_HOME", dir.path().join("config"))
+        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env_remove("SECREQ_CONSENT_SOCK")
+        .env("SECREQ_NO_DAEMON", "1")
+        .env("SECREQ_RESOLVING", "1")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "re-entrant read should exit 1");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("re-entrant"), "stderr: {stderr}");
+}
+
+#[test]
+fn read_rejects_a_malformed_reference_before_daemon_contact() {
+    let (dir, config) = sandbox();
+    // A provider that would echo the locator — proves we never reach it.
+    write_config(
+        &config,
+        r#"{ providers: { op: { retrieve: ["printf", "%s", "{locator}"] } } }"#,
+    );
+    // `noslash` has no `/`, so it can't be a `provider/locator`.
+    let out = run_secreq(dir.path(), &["read", "noslash"]);
+    assert_eq!(out.status.code(), Some(1), "malformed ref should exit 1");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("not a valid reference"), "stderr: {stderr}");
+}
+
+#[test]
+fn read_is_denied_when_the_daemon_is_disabled() {
+    let (dir, config) = sandbox();
+    write_config(
+        &config,
+        r#"{ providers: { op: { retrieve: ["printf", "%s", "{locator}"] } } }"#,
+    );
+    // `run_secreq` sets SECREQ_NO_DAEMON=1, so consent fails closed: a well
+    // formed ref parses and reaches the consent boundary, which denies. This
+    // proves `read` has no client-side bypass — there is no `--yes` to add.
+    let out = run_secreq(dir.path(), &["read", "op/Work/key"]);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "no-daemon read should be denied"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("denied"), "stderr: {stderr}");
+    // Nothing leaked to stdout.
+    assert!(
+        String::from_utf8_lossy(&out.stdout).trim().is_empty(),
+        "denied read must print no value to stdout"
+    );
+}

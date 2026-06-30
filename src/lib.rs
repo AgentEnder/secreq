@@ -29,6 +29,18 @@
 /// same trust model as [`daemon::client::NO_DAEMON_ENV`].
 pub const RESOLVING_ENV: &str = "SECREQ_RESOLVING";
 
+/// Marks a child process tree as running under a `secreq run`. The outer
+/// run sets it on the command it execs (to its own session token); a
+/// nested `run` detects it and tells the daemon the ask is nested
+/// ([`daemon::proto::Ask::nested_run`]), which lets a *fully-cached*
+/// nested run resolve without re-prompting — "a secret crosses the
+/// consent boundary once per run session." A fresh top-level run never
+/// inherits it, so it always prompts. Like [`RESOLVING_ENV`] this is not
+/// a security boundary: any same-user process could set it, but the
+/// trust model is awareness + audit, and a forged marker only suppresses
+/// a prompt for values *already* released to a run once.
+pub const RUN_SESSION_ENV: &str = "SECREQ_RUN_SESSION";
+
 /// Build identity stamped at compile time by `build.rs`:
 /// `<git-short-sha>[-dirty] +<build-unix-seconds>`. The daemon reports it
 /// over the `Hello` handshake and the CLI compares it against its own; a
