@@ -214,6 +214,8 @@ pub fn run(
     // Recursion guard: if we're already inside secreq's own resolution,
     // just exec the command without re-resolving (mirrors `wrap_run`). A
     // provider CLI invoked during resolution can't trigger a second consent.
+    // This is a bare passthrough — `--env-file` entries (even plain ones)
+    // are intentionally not applied in this pathological re-entry case.
     if std::env::var_os(crate::RESOLVING_ENV).is_some() {
         let cwd = std::env::current_dir().context("could not determine current directory")?;
         return crate::exec::run(command, &[], &[], &cwd);
@@ -1929,12 +1931,7 @@ fn resolve_config_path(config_path: Option<&Path>) -> Result<PathBuf> {
 }
 
 /// A parsed env reference: the variable name and its `secret://` target.
-///
-/// Only the `run` orchestrator (next task) calls `scan_env_refs`; until it
-/// lands, the non-test lib build sees this as unused. The `#[cfg(test)]`
-/// scan tests exercise it today.
 #[derive(Debug)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct EnvRef {
     pub name: String,
     pub reference: Reference,
@@ -1945,7 +1942,6 @@ pub(crate) struct EnvRef {
 /// not parse is a hard error, naming the variable — we never silently pass
 /// a literal `secret://…` to the child. Values that don't look like a
 /// reference at all pass through untouched (not returned here).
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn scan_env_refs(env: &[(String, String)]) -> Result<Vec<EnvRef>> {
     let mut refs = Vec::new();
     for (name, value) in env {
