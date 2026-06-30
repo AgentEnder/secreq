@@ -888,7 +888,10 @@ impl State {
         // (keyed on the anchor, inserted on the SSH path); the wrap approvals
         // cache is never read for them, so skip the insert to avoid polluting
         // it with dead entries.
-        if decision == Decision::ApproveRemember && entry.representative.ssh.is_none() {
+        if decision == Decision::ApproveRemember
+            && entry.representative.ssh.is_none()
+            && entry.representative.allow_remember
+        {
             let new = ApprovalEntry {
                 wrap: key.wrap.clone(),
                 ppid: scope.pid,
@@ -1616,6 +1619,7 @@ mod tests {
             providers: HashMap::new(),
             dedupe_key,
             ssh: None,
+            allow_remember: true,
         }
     }
 
@@ -1711,6 +1715,31 @@ mod tests {
             );
             assert_eq!(guard.approvals[0].wrap, "gh");
         }
+    }
+
+    #[test]
+    fn ask_with_allow_remember_false_does_not_persist_approval() {
+        // A `run` ask (allow_remember = false) given ApproveRemember must
+        // NOT write the approvals cache — every run re-prompts.
+        use std::sync::mpsc;
+
+        let shared: SharedState = Arc::new(Mutex::new(State::new()));
+        let scope = ApprovalScope {
+            pid: 4242,
+            start_time: 1_700_000_000,
+        };
+
+        let mut ask = mk_ask("run", vec![(4242, 1_700_000_000)]);
+        ask.allow_remember = false;
+        let key = ask.dedupe_key.clone();
+        let (tx, _rx) = mpsc::channel();
+        let mut guard = shared.lock().expect("state mutex");
+        guard.submit_ask(ask, tx);
+        guard.resolve(&key, Decision::ApproveRemember, scope, &shared);
+        assert!(
+            guard.approvals.is_empty(),
+            "a run ask must not persist an approval even on ApproveRemember"
+        );
     }
 
     #[test]
@@ -1938,6 +1967,7 @@ mod tests {
                 parent_start_time: 0,
             },
             ssh: None,
+            allow_remember: true,
         }
     }
 
@@ -2070,6 +2100,7 @@ mod tests {
                 parent_start_time: 0,
             },
             ssh: None,
+            allow_remember: true,
         };
 
         let state = State::new();

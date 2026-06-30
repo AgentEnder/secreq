@@ -1838,6 +1838,9 @@ fn obtain_wrap_consent(
         // Wrap runs are never SSH sign asks; only the in-process SSH agent
         // path sets this.
         ssh: None,
+        // Wrap (`x`) asks may persist a remembered approval; only `secreq
+        // run` disables this.
+        allow_remember: true,
     };
 
     daemon_client::request_consent(ask, config.wait_indicator_enabled())

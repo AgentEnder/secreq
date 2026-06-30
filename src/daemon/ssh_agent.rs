@@ -624,6 +624,10 @@ fn sign_ask(
             fingerprint: identity.fingerprint.clone(),
             reason: identity.reason.clone(),
         }),
+        // SSH grants are remembered via `SshGrant`, not the wrap approvals
+        // cache; the `ssh.is_some()` guard already skips the cache write, so
+        // this value is moot for SSH asks. Keep it `true` for consistency.
+        allow_remember: true,
     }
 }
 

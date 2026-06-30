@@ -109,6 +109,7 @@ fn submit(
         providers: HashMap::new(),
         dedupe_key,
         ssh: None,
+        allow_remember: true,
     };
     let (tx, rx) = mpsc::channel();
     state.lock().unwrap().submit_ask(ask, tx);
@@ -148,6 +149,7 @@ fn submit_ssh(
             fingerprint: fingerprint.to_owned(),
             reason: reason.map(str::to_owned),
         }),
+        allow_remember: true,
     };
     let (tx, rx) = mpsc::channel();
     state.lock().unwrap().submit_ask(ask, tx);
@@ -179,6 +181,7 @@ fn pending(
         providers: HashMap::new(),
         dedupe_key,
         ssh: None,
+        allow_remember: true,
     };
     state.lock().unwrap().begin_pending(ask);
 }

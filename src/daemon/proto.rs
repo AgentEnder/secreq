@@ -201,6 +201,18 @@ pub struct Ask {
     /// not the `wraps.json5` config schema.
     #[serde(default)]
     pub ssh: Option<SshAskInfo>,
+    /// Whether an `ApproveRemember` decision on this ask may persist a
+    /// remembered approval. `true` for wrap (`x`) asks; `false` for
+    /// `secreq run`, whose fixed `"run"` identity would otherwise let one
+    /// remembered approval cover any later command in the same shell.
+    /// `#[serde(default = "default_true")]` keeps the attach protocol
+    /// back-compatible: an older peer omits the field and decodes `true`.
+    #[serde(default = "default_true")]
+    pub allow_remember: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// SSH-specific metadata carried on an [`Ask`] so the consent window can
