@@ -1,12 +1,15 @@
 # CLI reference
 
-`secreq` has admin subcommands (configuration) and a wrap-and-run verb
-(`x`, invoked when a PATH shim runs a wrapped binary). The wrap-and-run
-path is what fires when a PATH shim invokes `secreq x <WRAP> "$@"`.
+`secreq` has admin subcommands (configuration) and two run verbs: `x`
+(wrap-and-run, invoked when a PATH shim runs a wrapped binary) and `run`
+(resolve ambient `secret://` refs for an arbitrary command). The
+wrap-and-run path is what fires when a PATH shim invokes
+`secreq x <WRAP> "$@"`.
 
 ```
-secreq [GLOBAL OPTIONS] <ADMIN VERB> ...    # init, wrap, unwrap, wraps, check, doctor, edit, ssh
-secreq [GLOBAL OPTIONS] x <WRAP> [ARGS...]  # wrap-and-run
+secreq [GLOBAL OPTIONS] <ADMIN VERB> ...      # init, wrap, unwrap, wraps, check, doctor, edit, ssh
+secreq [GLOBAL OPTIONS] x <WRAP> [ARGS...]    # wrap-and-run
+secreq [GLOBAL OPTIONS] run [--env-file F]… -- <CMD> [ARGS...]   # resolve ambient refs
 ```
 
 ## Global options
@@ -14,8 +17,8 @@ secreq [GLOBAL OPTIONS] x <WRAP> [ARGS...]  # wrap-and-run
 | Flag | Effect |
 |---|---|
 | `--config <PATH>` | Use this config instead of `$XDG_CONFIG_HOME/secreq/wraps.json5`. |
-| `--raw` | Disable output masking for the wrap-and-run path. |
-| `-y`, `--yes` | Auto-approve without prompting. Bypasses the daemon entirely; intended for scripted/CI runs. |
+| `--raw` | Disable output masking for the `x` / `run` paths. |
+| `-y`, `--yes` | Auto-approve without prompting (resolves client-side, no daemon); intended for scripted/CI runs. |
 | `-h`, `--help` | Print help. |
 | `-V`, `--version` | Print version. |
 
@@ -336,6 +339,82 @@ through us.
 | 1 | Consent denied, or provider resolution failed. |
 | 2 | `secreq` invoked with no command. |
 | child's | Otherwise the child's exit code propagates. |
+
+### `run`
+
+```
+secreq run [--env-file PATH]… [--] <CMD> [ARGS...]
+```
+
+`op run`, but for every secret store. Where `x` injects a *declared* env
+map for a *known binary* (a `wraps.json5` entry), `run` resolves
+*ambient* `secret://provider/locator` references found in the
+environment for an *arbitrary* command — no wrap entry required. The
+references describe the secrets inline, so there's nothing to configure
+first.
+
+| Flag | Meaning |
+|---|---|
+| `--env-file <PATH>` | Repeatable. Load `NAME=value` lines and layer them **under** the inherited environment (inherited wins on conflict, matching `op run --env-file`). Values may be `secret://…` references or plaintext. The file holds **refs, not secrets**, so it's safe to commit. |
+
+The global `--raw` (skip output masking) and `--yes` (auto-approve,
+resolve client-side) apply. `--no-remember` is a no-op for `run` — it
+already never persists approvals (see below).
+
+#### Flow
+
+1. Build the effective environment: the inherited env, with any
+   `--env-file` entries layered **under** it.
+2. Scan every variable whose **value** is a well-formed
+   `secret://provider/locator` reference. Plain `NAME=value` entries pass
+   through untouched. A value that starts with `secret://` but doesn't
+   parse is a **hard error** before the command runs (it names the
+   offending variable) — a literal `secret://…` never reaches the child.
+3. **No references → fast path.** Exec `<CMD>` with the effective env
+   directly: no daemon contact, no consent prompt.
+4. Otherwise hand off to the consent daemon (the same path as `x`):
+   consent prompt, rules engine, the in-memory value cache, and batched
+   provider unlocks (one biometric per provider with ≥2 misses). Under
+   `--yes` this resolves client-side instead, with no daemon.
+5. On approve, substitute each reference with its resolved value and exec
+   `<CMD>` in a PTY (or piped if non-tty), masking the resolved values on
+   stdout/stderr unless `--raw`.
+
+The consent window shows `secreq run` as what's asking, plus the actual
+`<CMD> [args…]` and the caller chain. It never shows secret values.
+
+#### Trust model
+
+`run` presents a **fixed identity** (`run`) for every invocation, and it
+**does not persist remembered approvals** — every `run` re-prompts for
+consent. The re-prompt is cheap: because all `run` invocations share one
+value-cache bucket, a reference that's already been resolved is served
+from the cache with **no provider call and no biometric** — the prompt is
+a single approve click, not an unlock. (A rule on the Rules tab can
+auto-approve `run` for a given set of providers if you want to skip the
+click entirely.)
+
+Nested `run` is correct without any special handling: the outer `run`
+has already replaced every reference in the child environment with a
+plain value, so an inner `run` sees no `secret://` refs and just execs.
+
+#### Example
+
+```sh
+# A committable, refs-only .env (no plaintext secrets):
+#   DATABASE_URL=secret://op/Work/Postgres/url
+#   STRIPE_KEY=secret://keychain/stripe-live
+secreq run --env-file .env -- ./deploy.sh
+```
+
+`./deploy.sh` runs with `DATABASE_URL` and `STRIPE_KEY` set to their
+resolved values; both are redacted in anything the script prints.
+
+#### Exit codes
+
+Same as `x`: `0` on a clean child exit, `1` on denied consent or
+resolution failure (including a malformed `secret://` value), `2` when no
+command was given, otherwise the child's exit code.
 
 ## Environment variables `secreq` reads or sets
 

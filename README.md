@@ -32,6 +32,18 @@ gh repo list      # invokes secreq via PATH shim → consent → real gh
 aws s3 ls         # same; one biometric for both keys (retrieve_batch)
 ```
 
+For an *arbitrary* command (no wrap entry), `secreq run` is `op run` for
+every store — it resolves `secret://` refs found in the environment (and
+in any `--env-file`), then execs your command with the values injected
+and masked:
+
+```sh
+# .env holds refs, not secrets — safe to commit:
+#   DATABASE_URL=secret://op/Work/Postgres/url
+#   STRIPE_KEY=secret://keychain/stripe-live
+secreq run --env-file .env -- ./deploy.sh
+```
+
 | Command | Purpose |
 |---|---|
 | `secreq init` | First-time setup: pick a shim dir and (optionally) wire it into PATH. |
@@ -41,6 +53,7 @@ aws s3 ls         # same; one biometric for both keys (retrieve_batch)
 | `secreq check` / `doctor` | Validate config / verify provider CLIs. |
 | `secreq edit` | Open the config in `$EDITOR`. |
 | `secreq x <bin> [args…]` | Wrap-and-run path. The shim invokes this. |
+| `secreq run [--env-file F]… -- <cmd>` | `op run`, but for every store: resolve ambient `secret://` refs, then exec `<cmd>`. |
 
 Built-in providers: `op` (with `retrieve_batch` — one biometric per
 multi-secret invocation), `keychain` (macOS), `lastpass`, `pass` (Unix).
