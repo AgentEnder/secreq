@@ -44,6 +44,7 @@ pub mod cli;
 pub mod commands;
 pub mod consent;
 pub mod daemon;
+pub mod dotenv;
 pub mod exec;
 pub mod manifest;
 pub mod mask;
