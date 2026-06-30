@@ -159,6 +159,25 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+
+    /// `op run`, but for every secret store: resolve every
+    /// `secret://provider/locator` reference found in the environment —
+    /// the inherited environment plus any `--env-file` — through the
+    /// consent daemon, then run the command with the resolved values
+    /// injected and its output masked. Plain `NAME=value` entries pass
+    /// through unchanged. Unlike `x`, no wrap entry is required: the
+    /// references describe the secrets inline.
+    Run {
+        /// Load `NAME=value` lines from this file, layered *under* the
+        /// inherited environment (inherited wins on conflict). Values may
+        /// be `secret://provider/locator` references or plaintext.
+        /// Repeatable.
+        #[arg(long = "env-file", value_name = "PATH")]
+        env_file: Vec<PathBuf>,
+        /// The command to run, followed by its arguments.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
 }
 
 /// Subcommands under `secreq ssh …`: configure an identity, wire clients to
@@ -375,6 +394,16 @@ pub fn run() -> i32 {
         Some(Command::X { wrap, args }) => commands::wrap_run(
             &wrap,
             &args,
+            WrapRunOpts {
+                raw: cli.raw,
+                no_remember: cli.no_remember,
+                assume_yes: cli.yes,
+            },
+            config,
+        ),
+        Some(Command::Run { env_file, command }) => commands::run(
+            &command,
+            &env_file,
             WrapRunOpts {
                 raw: cli.raw,
                 no_remember: cli.no_remember,
