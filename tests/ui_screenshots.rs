@@ -116,6 +116,38 @@ fn submit(
     rx
 }
 
+/// Submit a `secreq run` ask. Mirrors `submit` but pins the dedupe
+/// identity to the fixed `"run"` wrap and sets `allow_remember = false`
+/// — the two things that distinguish a `run` consent from a wrap (`x`)
+/// consent. `allow_remember = false` has no visual effect (the card
+/// can't tell), but it keeps the fixture honest to the production ask
+/// the `run` orchestrator builds.
+fn submit_run(
+    state: &SharedState,
+    command: Vec<&str>,
+    callers: Vec<Caller>,
+    secrets: Vec<SecretAsk>,
+) -> mpsc::Receiver<secreq::daemon::state::WaiterReply> {
+    let dedupe_key = DedupeKey {
+        wrap: "run".to_owned(),
+        ppid: callers.first().map(|c| c.pid).unwrap_or(0),
+        parent_start_time: callers.first().map(|c| c.start_time).unwrap_or(0),
+    };
+    let ask = Ask {
+        command: command.into_iter().map(String::from).collect(),
+        cwd: "/Users/example/project".to_owned(),
+        callers,
+        secrets,
+        providers: HashMap::new(),
+        dedupe_key,
+        ssh: None,
+        allow_remember: false,
+    };
+    let (tx, rx) = mpsc::channel();
+    state.lock().unwrap().submit_ask(ask, tx);
+    rx
+}
+
 /// Submit an SSH-sign ask — the in-process consent prompt the SSH agent
 /// raises on a cache-miss SIGN_REQUEST. Mirrors the daemon's `sign_ask`:
 /// the `wrap` is `ssh:<key_id>`, the command is the synthetic
@@ -449,6 +481,32 @@ fn single_pending() {
                 "op",
                 "op://Personal/GitHub/credential",
             )],
+        )]
+    });
+}
+
+#[test]
+#[ignore = "screenshot harness"]
+fn run_consent_card() {
+    // A `secreq run` consent: the ambient mirror of `x`. Instead of a
+    // named wrap, the dedupe identity is the fixed `"run"` and the card
+    // headlines the free-form command the user typed (`./deploy.sh
+    // --prod`). The two secrets were discovered by scanning the ambient
+    // environment for `secret://provider/locator` references —
+    // `DATABASE_URL` (1Password) and `STRIPE_KEY` (macOS keychain) — so
+    // this fixture exercises the wrap card with a mixed-provider secret
+    // list. `allow_remember = false` (set by `submit_run`) means the
+    // approval is never remembered; it has no visual signature, but the
+    // fixture stays faithful to the production ask.
+    render_fixture("run-consent", vec![], |state| {
+        vec![submit_run(
+            state,
+            vec!["./deploy.sh", "--prod"],
+            vec![caller(7926, "zsh", 1_700_000_000)],
+            vec![
+                secret("DATABASE_URL", "op", "Work/PG/url"),
+                secret("STRIPE_KEY", "keychain", "stripe-key"),
+            ],
         )]
     });
 }
