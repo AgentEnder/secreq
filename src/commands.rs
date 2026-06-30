@@ -1766,58 +1766,93 @@ fn resolve_config_path(config_path: Option<&Path>) -> Result<PathBuf> {
         .context("could not determine config path (no XDG_CONFIG_HOME / no $HOME?)")
 }
 
-/// Build a consent ask, send it to the daemon, and return its decision +
-/// daemon-resolved secret values. The daemon does the resolution itself so
-/// a parallel burst of N asks triggers exactly one provider call per
-/// secret — fixing the "50 Touch ID prompts from 50 `gh api` calls"
-/// problem the file-lock approach couldn't.
-fn obtain_wrap_consent(
-    wrap: &Wrap,
-    callers: &[provenance::Caller],
-    args: &[String],
-) -> Result<daemon_client::ConsentOutcome> {
-    // No direct parent ⇒ the dedupe key would be meaningless. Synthetic
-    // invocations (e.g. some test harnesses) land here. Fail closed.
-    let Some(parent) = callers.first() else {
-        bail!("could not determine direct parent process; refusing to request consent");
-    };
+/// A parsed env reference: the variable name and its `secret://` target.
+///
+/// Only the `run` orchestrator (next task) calls `scan_env_refs`; until it
+/// lands, the non-test lib build sees this as unused. The `#[cfg(test)]`
+/// scan tests exercise it today.
+#[derive(Debug)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct EnvRef {
+    pub name: String,
+    pub reference: Reference,
+}
 
-    let cwd = std::env::current_dir().context("could not determine current directory")?;
-    let mut command = vec![wrap.name.clone()];
-    command.extend(args.iter().cloned());
-
-    // Build the secrets list. Bare-locator wraps (no `secret://...` prefix)
-    // never made it through `wraps::parse`, so we can assume `Reference::parse`
-    // succeeds — but if it doesn't, surface the malformed ref early instead
-    // of sending a junk ask the daemon would reject at resolution time.
-    let config = load_config_or_default(None)?;
-    let mut providers = HashMap::new();
-    let mut secrets: Vec<proto::SecretAsk> = Vec::new();
-    for (env_name, ref_str) in &wrap.env {
-        let reference = Reference::parse(ref_str).with_context(|| {
+/// Scan `(name, value)` env pairs for `secret://provider/locator` values.
+/// A value that *looks* like a reference (starts with the scheme) but does
+/// not parse is a hard error, naming the variable — we never silently pass
+/// a literal `secret://…` to the child. Values that don't look like a
+/// reference at all pass through untouched (not returned here).
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn scan_env_refs(env: &[(String, String)]) -> Result<Vec<EnvRef>> {
+    let mut refs = Vec::new();
+    for (name, value) in env {
+        if !Reference::looks_like_ref(value) {
+            continue;
+        }
+        let reference = Reference::parse(value).with_context(|| {
             format!(
-                "wrap `{}`.env.{env_name}: `{ref_str}` is not a valid `secret://provider/locator` reference",
-                wrap.name
+                "env var `{name}`: `{value}` is not a valid `secret://provider/locator` reference"
             )
         })?;
-        let provider_name = reference.provider.clone();
+        refs.push(EnvRef {
+            name: name.clone(),
+            reference,
+        });
+    }
+    Ok(refs)
+}
+
+/// Explicit inputs to [`build_ask`]. Lets the `x` consent path and the
+/// `run` path share one Ask builder while supplying their own identity,
+/// command, and remember policy.
+pub(crate) struct AskSpec<'a> {
+    /// `dedupe_key.wrap` — the wrap name for `x`, the fixed `"run"` for run.
+    pub dedupe_wrap: String,
+    /// Argv shown in the consent prompt (never values).
+    pub command: Vec<String>,
+    /// The `(env name, reference)` pairs to inject.
+    pub refs: &'a [(String, Reference)],
+    /// `$reason` carried onto each `SecretAsk`.
+    pub reason: Option<String>,
+    /// Whether `ApproveRemember` may persist an approval (`true` for `x`).
+    pub allow_remember: bool,
+}
+
+/// Build the daemon [`proto::Ask`] from explicit pieces. Pure — no I/O
+/// beyond reading the providers snapshot already loaded into `config`.
+///
+/// Note the `ppid`/`parent_start_time` fall back to `0` when the caller
+/// chain is empty. The `x` path guards against that case *before* calling
+/// here (a meaningless dedupe key is a fail-closed condition for `x`); a
+/// future `run` caller is the only one that would ever rely on the fallback.
+pub(crate) fn build_ask(
+    spec: AskSpec<'_>,
+    callers: &[provenance::Caller],
+    cwd: &Path,
+    config: &WrapsConfig,
+) -> proto::Ask {
+    let mut providers = HashMap::new();
+    let mut secrets: Vec<proto::SecretAsk> = Vec::new();
+    for (name, reference) in spec.refs {
         // Include the provider definition the daemon will run. Built-ins
         // are overlaid by `load_config_or_default`, so they're in here too.
-        if let Some(p) = config.providers.get(&provider_name) {
-            providers.insert(provider_name.clone(), to_wire_provider(p));
+        if let Some(p) = config.providers.get(&reference.provider) {
+            providers.insert(reference.provider.clone(), to_wire_provider(p));
         }
         secrets.push(proto::SecretAsk {
-            name: env_name.clone(),
-            provider: provider_name,
-            locator: reference.locator,
+            name: name.clone(),
+            provider: reference.provider.clone(),
+            locator: reference.locator.clone(),
             default: None,
             description: None,
-            reason: wrap.reason.clone(),
+            reason: spec.reason.clone(),
         });
     }
 
-    let ask = proto::Ask {
-        command,
+    let parent = callers.first();
+    proto::Ask {
+        command: spec.command,
         cwd: cwd.display().to_string(),
         callers: callers
             .iter()
@@ -1831,20 +1866,80 @@ fn obtain_wrap_consent(
         secrets,
         providers,
         dedupe_key: proto::DedupeKey {
-            wrap: wrap.name.clone(),
-            ppid: parent.pid,
-            parent_start_time: parent.start_time,
+            wrap: spec.dedupe_wrap,
+            ppid: parent.map(|p| p.pid).unwrap_or(0),
+            parent_start_time: parent.map(|p| p.start_time).unwrap_or(0),
         },
-        // Wrap runs are never SSH sign asks; only the in-process SSH agent
-        // path sets this.
+        // Wrap / run asks are never SSH sign asks; only the in-process SSH
+        // agent path sets this.
         ssh: None,
-        // Wrap (`x`) asks may persist a remembered approval; only `secreq
-        // run` disables this.
-        allow_remember: true,
-    };
+        allow_remember: spec.allow_remember,
+    }
+}
+
+/// Build a consent ask, send it to the daemon, and return its decision +
+/// daemon-resolved secret values. The daemon does the resolution itself so
+/// a parallel burst of N asks triggers exactly one provider call per
+/// secret — fixing the "50 Touch ID prompts from 50 `gh api` calls"
+/// problem the file-lock approach couldn't.
+fn obtain_wrap_consent(
+    wrap: &Wrap,
+    callers: &[provenance::Caller],
+    args: &[String],
+) -> Result<daemon_client::ConsentOutcome> {
+    // No direct parent ⇒ the dedupe key would be meaningless. Synthetic
+    // invocations (e.g. some test harnesses) land here. Fail closed before
+    // building an ask with a zeroed-out parent. (`build_ask` tolerates an
+    // empty chain for `run`; `x` must not.)
+    if callers.is_empty() {
+        bail!("could not determine direct parent process; refusing to request consent");
+    }
+
+    let cwd = std::env::current_dir().context("could not determine current directory")?;
+    let mut command = vec![wrap.name.clone()];
+    command.extend(args.iter().cloned());
+
+    // Parse the wrap's env into references. Bare-locator wraps (no
+    // `secret://...` prefix) never made it through `wraps::parse`, so we can
+    // assume `Reference::parse` succeeds — but if it doesn't, surface the
+    // malformed ref early instead of sending a junk ask the daemon would
+    // reject at resolution time.
+    let config = load_config_or_default(None)?;
+    let refs = parse_wrap_refs(wrap)?;
+
+    let ask = build_ask(
+        AskSpec {
+            dedupe_wrap: wrap.name.clone(),
+            command,
+            refs: &refs,
+            reason: wrap.reason.clone(),
+            // Wrap (`x`) asks may persist a remembered approval; only
+            // `secreq run` disables this.
+            allow_remember: true,
+        },
+        callers,
+        &cwd,
+        &config,
+    );
 
     daemon_client::request_consent(ask, config.wait_indicator_enabled())
         .context("daemon consent request failed")
+}
+
+/// Parse a wrap's `env` map into `(name, Reference)` pairs, surfacing a
+/// malformed `secret://` ref with the wrap-specific error message.
+fn parse_wrap_refs(wrap: &Wrap) -> Result<Vec<(String, Reference)>> {
+    let mut refs = Vec::with_capacity(wrap.env.len());
+    for (env_name, ref_str) in &wrap.env {
+        let reference = Reference::parse(ref_str).with_context(|| {
+            format!(
+                "wrap `{}`.env.{env_name}: `{ref_str}` is not a valid `secret://provider/locator` reference",
+                wrap.name
+            )
+        })?;
+        refs.push((env_name.clone(), reference));
+    }
+    Ok(refs)
 }
 
 fn to_wire_provider(p: &crate::manifest::Provider) -> proto::WireProvider {
@@ -1862,6 +1957,19 @@ fn to_wire_provider(p: &crate::manifest::Provider) -> proto::WireProvider {
 /// resolve grouping/batching machinery by building a one-shot manifest with
 /// the wrap's env as eager secrets.
 fn resolve_wrap_env(config: &WrapsConfig, wrap: &Wrap) -> Result<Vec<(String, SecretValue)>> {
+    let refs = parse_wrap_refs(wrap)?;
+    resolve_refs_client_side(config, &refs, wrap.reason.as_deref())
+}
+
+/// Resolve a set of references client-side (the `--yes` path — no daemon, no
+/// coalescing). Reuses [`resolve::resolve_all`] for batching/grouping by
+/// adapting the providers into a one-shot manifest with each ref as an eager
+/// secret.
+pub(crate) fn resolve_refs_client_side(
+    config: &WrapsConfig,
+    refs: &[(String, Reference)],
+    reason: Option<&str>,
+) -> Result<Vec<(String, SecretValue)>> {
     // Adapt the WrapsConfig.providers into a Manifest so we can reuse
     // resolve::resolve_all (which already handles batching, defaults,
     // grouped invocations).
@@ -1870,25 +1978,19 @@ fn resolve_wrap_env(config: &WrapsConfig, wrap: &Wrap) -> Result<Vec<(String, Se
         providers: config.providers.clone(),
     };
 
-    let mut requests = Vec::with_capacity(wrap.env.len());
-    for (env_name, ref_str) in &wrap.env {
-        let reference = Reference::parse(ref_str).with_context(|| {
-            format!(
-                "wrap `{}`.env.{}: `{}` is not a valid `secret://provider/locator` reference",
-                wrap.name, env_name, ref_str
-            )
-        })?;
-        requests.push(SecretRequest {
-            name: env_name.clone(),
-            provider: reference.provider,
-            locator: reference.locator,
+    let requests = refs
+        .iter()
+        .map(|(name, reference)| SecretRequest {
+            name: name.clone(),
+            provider: reference.provider.clone(),
+            locator: reference.locator.clone(),
             group: None,
-            reason: wrap.reason.clone(),
+            reason: reason.map(|s| s.to_owned()),
             description: None,
             default: None,
             source: Source::Eager,
-        });
-    }
+        })
+        .collect();
     let plan = resolve::ResolutionPlan { requests };
     let resolved = resolve::resolve_all(&manifest, &plan)?;
     Ok(resolved.into_iter().map(|r| (r.name, r.value)).collect())
@@ -2295,6 +2397,65 @@ mod prompt {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn build_ask_sets_identity_command_and_remember() {
+        use crate::reference::Reference;
+        let refs = vec![(
+            "DATABASE_URL".to_owned(),
+            Reference::parse("secret://op/Work/PG/url").unwrap(),
+        )];
+        let callers = vec![provenance::Caller {
+            pid: 42,
+            name: "zsh".to_owned(),
+            command: "zsh".to_owned(),
+            exe: None,
+            start_time: 7,
+        }];
+        let config = WrapsConfig::default(); // providers map may be empty here
+        let ask = build_ask(
+            AskSpec {
+                dedupe_wrap: "run".to_owned(),
+                command: vec!["./deploy.sh".to_owned(), "--prod".to_owned()],
+                refs: &refs,
+                reason: None,
+                allow_remember: false,
+            },
+            &callers,
+            std::path::Path::new("/tmp/proj"),
+            &config,
+        );
+        assert_eq!(ask.dedupe_key.wrap, "run");
+        assert_eq!(ask.command, vec!["./deploy.sh", "--prod"]);
+        assert!(!ask.allow_remember);
+        assert_eq!(ask.secrets.len(), 1);
+        assert_eq!(ask.secrets[0].name, "DATABASE_URL");
+        assert_eq!(ask.secrets[0].provider, "op");
+        assert_eq!(ask.secrets[0].locator, "Work/PG/url");
+        assert_eq!(ask.dedupe_key.ppid, 42);
+    }
+
+    #[test]
+    fn scan_env_refs_returns_only_well_formed_refs() {
+        let env = vec![
+            ("PLAIN".to_owned(), "hello".to_owned()),
+            ("DB".to_owned(), "secret://op/Work/PG/url".to_owned()),
+            ("PG".to_owned(), "postgres://host/db".to_owned()),
+        ];
+        let refs = scan_env_refs(&env).unwrap();
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "DB");
+        assert_eq!(refs[0].reference.provider, "op");
+        assert_eq!(refs[0].reference.locator, "Work/PG/url");
+    }
+
+    #[test]
+    fn scan_env_refs_errors_on_a_malformed_ref_naming_the_var() {
+        let env = vec![("BAD".to_owned(), "secret://noslash".to_owned())];
+        let err = scan_env_refs(&env).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("BAD"), "error should name the var: {msg}");
+    }
 
     fn make_executable(path: &Path) {
         let mut perms = std::fs::metadata(path).unwrap().permissions();
