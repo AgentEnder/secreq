@@ -518,6 +518,46 @@ fn run_consent_card() {
 
 #[test]
 #[ignore = "screenshot harness"]
+fn run_session_card() {
+    // A *coalesced* `secreq run` session: three sibling `run` asks land
+    // under the same process (the same first caller → the same dedupe
+    // key), so they merge into one card. The representative's secret list
+    // is the *union* of what each sibling requested, and each entry
+    // remembers the command that asked for it via `← command` provenance:
+    //   • DATABASE_URL (op)       ← ./migrate
+    //   • STRIPE_KEY   (keychain) ← ./worker
+    //   • REDIS_URL    (op)       ← ./worker
+    // Three waiters → the `×3 waiting` pill. One `Approve all` / `Deny`
+    // covers the whole session. Because coalescing (union + provenance
+    // stamping) happens inside `submit_ask`, we simply submit the three
+    // asks through `submit_run` and let the real merge path build the card.
+    render_fixture("run-session-card", vec![], |state| {
+        let sibling_caller = || caller(6042, "deploy.sh", 1_700_000_000);
+        vec![
+            submit_run(
+                state,
+                vec!["./migrate"],
+                vec![sibling_caller()],
+                vec![secret("DATABASE_URL", "op", "Work/PG/url")],
+            ),
+            submit_run(
+                state,
+                vec!["./worker"],
+                vec![sibling_caller()],
+                vec![secret("STRIPE_KEY", "keychain", "stripe-live")],
+            ),
+            submit_run(
+                state,
+                vec!["./worker"],
+                vec![sibling_caller()],
+                vec![secret("REDIS_URL", "op", "Work/Redis/url")],
+            ),
+        ]
+    });
+}
+
+#[test]
+#[ignore = "screenshot harness"]
 fn gate_only_pending() {
     // A *gate-only* wrap: `op` has no secret to inject, so the request
     // exists purely to require consent before the command runs. The card

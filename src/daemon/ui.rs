@@ -3534,8 +3534,20 @@ fn render_wrap_card_body(
     // inject — the prompt is purely a consent gate, e.g. for `op`) ──
     if !row.representative.secrets.is_empty() {
         ui.add_space(6.0);
+        // Per-secret `← command` provenance only earns its space when the
+        // card aggregates *more than one* command (a coalesced run session).
+        // On a single-command card the header already names the command, so
+        // repeating it on every secret is noise — suppress it there.
+        let distinct_commands: std::collections::HashSet<&str> = row
+            .representative
+            .secrets
+            .iter()
+            .flat_map(|s| s.requested_by.iter())
+            .map(String::as_str)
+            .collect();
+        let show_provenance = distinct_commands.len() > 1;
         for s in &row.representative.secrets {
-            render_card_secret(ui, s);
+            render_card_secret(ui, s, show_provenance);
         }
     } else {
         render_card_gate_only(ui);
@@ -3702,7 +3714,7 @@ fn render_ssh_card_body(
 }
 
 /// One secret-row inside a wrap card.
-fn render_card_secret(ui: &mut egui::Ui, s: &SecretAsk) {
+fn render_card_secret(ui: &mut egui::Ui, s: &SecretAsk, show_provenance: bool) {
     ui.horizontal(|ui| {
         ui.add_space(2.0);
         ui.label(egui::RichText::new("●").size(7.0).color(COLOR_ACCENT));
@@ -3727,6 +3739,28 @@ fn render_card_secret(ui: &mut egui::Ui, s: &SecretAsk) {
             );
             if loc_shown.len() < s.locator.len() {
                 resp.on_hover_text(&s.locator);
+            }
+        }
+        // Session provenance: on a multi-command coalesced run session,
+        // show which sibling command asked for this secret. Suppressed on
+        // single-command cards (`show_provenance == false`) — the header
+        // already names the command — and always empty for a plain wrap
+        // (`x`) or SSH ask, so those render exactly as before, no arrow.
+        if show_provenance && !s.requested_by.is_empty() {
+            let joined = s
+                .requested_by
+                .iter()
+                .map(|c| c.strip_prefix("run ").unwrap_or(c))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let label = truncate_for_display(&joined, 30);
+            let resp = ui.label(
+                egui::RichText::new(format!("← {label}"))
+                    .font(egui::FontId::monospace(11.0))
+                    .color(COLOR_MUTED),
+            );
+            if label.chars().count() < joined.chars().count() {
+                resp.on_hover_text(&joined);
             }
         }
     });
