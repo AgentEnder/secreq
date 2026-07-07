@@ -192,8 +192,10 @@ fn build_overrides(
 }
 
 /// Keep only the resolved entries whose name this run actually requested.
-/// Defense-in-depth: the daemon already slices per-waiter, but a bug there
-/// must never let a sibling's secret reach this child's env.
+/// Defense-in-depth against a daemon bug: this filters by *name*, so it
+/// catches a sibling's differently-named secret leaking in. It cannot
+/// catch a same-name value swap (A's `FOO` populated with B's value) —
+/// the daemon's `(provider, locator)` keying is the guarantor there.
 fn filter_to_refs(
     resolved: HashMap<String, String>,
     refs: &[(String, Reference)],
@@ -336,7 +338,8 @@ pub fn run(
             return Ok(1);
         }
         // Defense-in-depth: inject only secrets this run actually requested,
-        // so a daemon bug can never leak a sibling session's secret here.
+        // so a daemon bug can't leak a sibling's differently-named secret
+        // here (the daemon's per-(provider,locator) slice guards same-name).
         filter_to_refs(outcome.secrets, &refs)
     };
 

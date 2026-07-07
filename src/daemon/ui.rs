@@ -3534,10 +3534,11 @@ fn render_wrap_card_body(
     // inject — the prompt is purely a consent gate, e.g. for `op`) ──
     if !row.representative.secrets.is_empty() {
         ui.add_space(6.0);
-        // Per-secret `← command` provenance only earns its space when the
-        // card aggregates *more than one* command (a coalesced run session).
-        // On a single-command card the header already names the command, so
-        // repeating it on every secret is noise — suppress it there.
+        // Per-secret `← command` provenance only earns its space on a
+        // coalesced `run` *session* card aggregating *more than one*
+        // command. On a single-command card the header already names the
+        // command (noise to repeat it), and a coalesced `x` card isn't a
+        // session — so gate on the `run` wrap identity too.
         let distinct_commands: std::collections::HashSet<&str> = row
             .representative
             .secrets
@@ -3545,7 +3546,8 @@ fn render_wrap_card_body(
             .flat_map(|s| s.requested_by.iter())
             .map(String::as_str)
             .collect();
-        let show_provenance = distinct_commands.len() > 1;
+        let show_provenance =
+            row.representative.dedupe_key.wrap == "run" && distinct_commands.len() > 1;
         for s in &row.representative.secrets {
             render_card_secret(ui, s, show_provenance);
         }
