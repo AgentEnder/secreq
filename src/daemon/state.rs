@@ -1030,16 +1030,37 @@ impl State {
             let shared = shared.clone();
             let key = key.clone();
             std::thread::spawn(move || {
-                let reply =
-                    resolve_for_ask(&entry.representative, cache, in_flight).map_decision(|d| {
-                        if d == Decision::Approve {
-                            decision
-                        } else {
-                            d
-                        }
-                    });
+                // Resolve the union once (singleflight dedupes provider
+                // calls across the batch), keyed by (provider, locator).
+                let union = resolve_union(&entry.representative, cache, in_flight);
+                // Then hand each waiter back ONLY the secrets its own ask
+                // requested — looked up by (provider, locator) so a
+                // same-name-different-ref sibling never leaks in. A waiter
+                // whose full slice resolved gets Decision; one missing any
+                // of its keys gets Err (per-waiter, not all-or-nothing).
                 for w in &entry.waiters {
-                    let _ = w.sender.send(reply.clone());
+                    let mut secrets = HashMap::new();
+                    let mut failure: Option<String> = None;
+                    for s in &w.requested {
+                        match union.get(&(s.provider.clone(), s.locator.clone())) {
+                            Some(Ok(value)) => {
+                                secrets.insert(s.name.clone(), value.clone());
+                            }
+                            Some(Err(msg)) => {
+                                failure.get_or_insert_with(|| msg.clone());
+                            }
+                            None => {
+                                failure.get_or_insert_with(|| {
+                                    format!("secret `{}` was not resolved for this session", s.name)
+                                });
+                            }
+                        }
+                    }
+                    let reply = match failure {
+                        Some(message) => WaiterReply::Err { message },
+                        None => WaiterReply::Decision { decision, secrets },
+                    };
+                    let _ = w.sender.send(reply);
                 }
                 // Clear the "Resolving…" card now that the value is
                 // cached (or the resolve failed). Skipped when warm
@@ -1595,6 +1616,175 @@ pub(super) fn resolve_for_ask(
             WaiterReply::Err { message: msg }
         }
     }
+}
+
+/// Resolve the distinct `(provider, locator)` pairs of `rep`'s secrets,
+/// returning a map keyed by `(provider, locator)` so the caller can hand
+/// each waiter back exactly the values *it* asked for. The key isolation
+/// primitive for session aggregation: a name-keyed map would collapse two
+/// union entries that share a name but differ by ref (`FOO=…/a` vs
+/// `FOO=…/b`); `(provider, locator)` keeps them distinct.
+///
+/// Reuses the same cache + singleflight machinery as [`resolve_for_ask`]
+/// (the cache key is already `(wrap, provider, locator)`): a hit
+/// short-circuits, a miss acquires the singleflight slot, and this thread's
+/// resolver-owned keys batch into one `resolve::resolve_all` invocation.
+/// Never resolves a `(provider, locator)` more than once even if several
+/// union entries share it — distinct pairs are collected up front.
+///
+/// Each entry in the returned map is `Ok(value)` or `Err(message)` for that
+/// specific pair, so a caller can succeed a waiter whose slice resolved
+/// cleanly while erroring only the waiters that needed a failed pair.
+fn resolve_union(
+    rep: &Ask,
+    cache: Arc<Mutex<SecretCache>>,
+    in_flight: Arc<InFlightMap>,
+) -> HashMap<(String, String), Result<String, String>> {
+    let wrap = rep.dedupe_key.wrap.clone();
+
+    // Collect the distinct (provider, locator) pairs, remembering the first
+    // SecretAsk seen for each so provider-facing metadata (reason,
+    // description, default) is preserved. Insertion order is stable so the
+    // resolve batch mirrors arrival order.
+    let mut order: Vec<(String, String)> = Vec::new();
+    let mut first_ask: HashMap<(String, String), &super::proto::SecretAsk> = HashMap::new();
+    for s in &rep.secrets {
+        let pl = (s.provider.clone(), s.locator.clone());
+        first_ask.entry(pl.clone()).or_insert_with(|| {
+            order.push(pl);
+            s
+        });
+    }
+
+    let mut out: HashMap<(String, String), Result<String, String>> = HashMap::new();
+    // Keys this thread owns the singleflight slot for, paired with the
+    // synthetic request name we resolve them under (unique per pair, so a
+    // shared user-facing name never collapses two pairs in the resolver
+    // output map).
+    let mut needs_resolve: Vec<((String, String), String)> = Vec::new();
+    let mut guards: Vec<InFlightGuard> = Vec::new();
+
+    for pl in &order {
+        let (provider, locator) = pl;
+        let key = CacheKey {
+            wrap: wrap.clone(),
+            provider: provider.clone(),
+            locator: locator.clone(),
+        };
+        // Cache check — held only for the lookup.
+        {
+            let guard = cache.lock().expect("secret cache mutex");
+            if let Some(value) = guard.get(&key) {
+                out.insert(pl.clone(), Ok((*value).clone()));
+                continue;
+            }
+        }
+        // Miss → singleflight.
+        match in_flight.acquire(&key) {
+            Acquired::Resolver(g) => {
+                // Unique synthetic name so `resolve_all`'s name-keyed output
+                // can't collapse two same-user-name pairs.
+                let req_name = format!("{}\u{0}{}", provider, locator);
+                needs_resolve.push((pl.clone(), req_name));
+                guards.push(g);
+            }
+            Acquired::Ready => {
+                let guard = cache.lock().expect("secret cache mutex");
+                match guard.get(&key) {
+                    Some(value) => {
+                        out.insert(pl.clone(), Ok((*value).clone()));
+                    }
+                    None => {
+                        // Ready-but-empty: treat as a per-pair failure. Do
+                        // NOT fail this thread's other guards — those pairs
+                        // may still resolve fine; the batch runs below.
+                        out.insert(
+                            pl.clone(),
+                            Err(format!(
+                                "in-flight slot for {provider}/{locator} signalled ready but cache was empty",
+                            )),
+                        );
+                    }
+                }
+            }
+            Acquired::Failed(msg) => {
+                out.insert(pl.clone(), Err(msg));
+            }
+        }
+    }
+
+    if needs_resolve.is_empty() {
+        return out;
+    }
+
+    let manifest = build_manifest(&rep.providers);
+    let plan = ResolutionPlan {
+        requests: needs_resolve
+            .iter()
+            .map(|((provider, locator), req_name)| {
+                let ask = first_ask[&(provider.clone(), locator.clone())];
+                SecretRequest {
+                    name: req_name.clone(),
+                    provider: provider.clone(),
+                    locator: locator.clone(),
+                    group: None,
+                    reason: ask.reason.clone(),
+                    description: ask.description.clone(),
+                    default: ask.default.clone(),
+                    source: Source::Eager,
+                }
+            })
+            .collect(),
+    };
+    match resolve::resolve_all(&manifest, &plan) {
+        Ok(resolved) => {
+            let by_req: HashMap<String, _> =
+                resolved.into_iter().map(|r| (r.name, r.value)).collect();
+            let mut guard = cache.lock().expect("secret cache mutex");
+            for ((provider, locator), req_name) in &needs_resolve {
+                let pl = (provider.clone(), locator.clone());
+                match by_req.get(req_name) {
+                    Some(value) => {
+                        let exposed = value.expose().to_owned();
+                        guard.put(
+                            CacheKey {
+                                wrap: wrap.clone(),
+                                provider: provider.clone(),
+                                locator: locator.clone(),
+                            },
+                            &exposed,
+                        );
+                        out.insert(pl, Ok(exposed));
+                    }
+                    None => {
+                        out.insert(
+                            pl,
+                            Err(format!(
+                                "provider {provider} returned no value for {locator}"
+                            )),
+                        );
+                    }
+                }
+            }
+            drop(guard);
+            // Cache populated → wake parked waiters (also drops the slots).
+            for g in guards {
+                g.mark_ready();
+            }
+        }
+        Err(err) => {
+            let msg = format!("{err:#}");
+            // The whole batch failed: every resolver-owned pair failed.
+            // Fail the slots so concurrent waiters on those keys see a real
+            // error rather than the "did not signal" default.
+            fail_guards(guards, &msg);
+            for ((provider, locator), _req_name) in &needs_resolve {
+                out.insert((provider.clone(), locator.clone()), Err(msg.clone()));
+            }
+        }
+    }
+
+    out
 }
 
 /// Resolve a **single** secret through the shared encrypted cache + the
@@ -2474,6 +2664,184 @@ mod tests {
             invocations, 1,
             "provider must be invoked once; the second sign must hit the cache, got {invocations}"
         );
+    }
+
+    /// A `WireProvider` map with a single `fake` provider whose `retrieve`
+    /// echoes `resolved-<locator>`. Lets per-waiter resolution tests drive
+    /// the real `resolve` path (submit → approve → recv) without a cache
+    /// pre-seed, so each `(provider, locator)` is genuinely resolved.
+    fn fake_echo_providers() -> HashMap<String, WireProvider> {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "fake".to_owned(),
+            WireProvider {
+                name: "fake".to_owned(),
+                retrieve: vec![
+                    "sh".to_owned(),
+                    "-c".to_owned(),
+                    "echo resolved-{locator}".to_owned(),
+                ],
+                retrieve_batch: None,
+            },
+        );
+        providers
+    }
+
+    /// Build a `run` ask carrying one secret `{name = provider/locator}`
+    /// wired to [`fake_echo_providers`], with an explicit dedupe key so
+    /// siblings coalesce.
+    fn run_ask_with_secret(
+        argv: &[&str],
+        name: &str,
+        provider: &str,
+        locator: &str,
+        key: DedupeKey,
+    ) -> Ask {
+        let mut ask = ask_with_secret_named("run", argv, name, provider, locator);
+        ask.providers = fake_echo_providers();
+        ask.dedupe_key = key;
+        ask
+    }
+
+    /// Session dedupe key shared by coalescing siblings in the tests below.
+    fn session_key() -> DedupeKey {
+        DedupeKey {
+            wrap: "run".to_owned(),
+            ppid: 6042,
+            parent_start_time: 12345,
+        }
+    }
+
+    #[test]
+    fn each_waiter_receives_only_its_own_secret() {
+        // A wants DB (fake/pg), B wants API (fake/stripe); same session key
+        // → they coalesce. On approve, A's reply must carry DB and NOT API;
+        // B's must carry API and NOT DB.
+        let shared: SharedState = Arc::new(Mutex::new(State::new()));
+        let key = session_key();
+        let a = run_ask_with_secret(&["run", "./migrate"], "DB", "fake", "pg", key.clone());
+        let b = run_ask_with_secret(&["run", "./worker"], "API", "fake", "stripe", key.clone());
+
+        let (tx_a, rx_a) = mpsc::channel();
+        let (tx_b, rx_b) = mpsc::channel();
+        {
+            let mut guard = shared.lock().expect("state mutex");
+            guard.submit_ask(a, tx_a);
+            guard.submit_ask(b, tx_b);
+            guard.resolve(
+                &key,
+                Decision::Approve,
+                ApprovalScope {
+                    pid: 6042,
+                    start_time: 12345,
+                },
+                &shared,
+            );
+        }
+
+        let reply_a = rx_a.recv().expect("A reply");
+        let reply_b = rx_b.recv().expect("B reply");
+
+        let secrets_a = match reply_a {
+            WaiterReply::Decision { secrets, .. } => secrets,
+            WaiterReply::Err { message } => panic!("A got err: {message}"),
+        };
+        let secrets_b = match reply_b {
+            WaiterReply::Decision { secrets, .. } => secrets,
+            WaiterReply::Err { message } => panic!("B got err: {message}"),
+        };
+
+        // The load-bearing isolation assertions: each waiter sees only its
+        // own secret, never the sibling's.
+        assert_eq!(secrets_a.get("DB").map(String::as_str), Some("resolved-pg"));
+        assert!(
+            !secrets_a.contains_key("API"),
+            "A must NOT receive B's secret"
+        );
+        assert_eq!(
+            secrets_b.get("API").map(String::as_str),
+            Some("resolved-stripe")
+        );
+        assert!(
+            !secrets_b.contains_key("DB"),
+            "B must NOT receive A's secret"
+        );
+    }
+
+    #[test]
+    fn x_style_identical_asks_each_get_the_full_set() {
+        // Two asks with the SAME secret {TOKEN = fake/t} coalesce → both
+        // replies carry TOKEN. Proves no regression for wrap coalescing.
+        let shared: SharedState = Arc::new(Mutex::new(State::new()));
+        let key = session_key();
+        let a = run_ask_with_secret(&["run", "./a"], "TOKEN", "fake", "t", key.clone());
+        let b = run_ask_with_secret(&["run", "./b"], "TOKEN", "fake", "t", key.clone());
+
+        let (tx_a, rx_a) = mpsc::channel();
+        let (tx_b, rx_b) = mpsc::channel();
+        {
+            let mut guard = shared.lock().expect("state mutex");
+            guard.submit_ask(a, tx_a);
+            guard.submit_ask(b, tx_b);
+            guard.resolve(
+                &key,
+                Decision::Approve,
+                ApprovalScope {
+                    pid: 6042,
+                    start_time: 12345,
+                },
+                &shared,
+            );
+        }
+
+        for rx in [rx_a, rx_b] {
+            match rx.recv().expect("reply") {
+                WaiterReply::Decision { secrets, .. } => {
+                    assert_eq!(secrets.get("TOKEN").map(String::as_str), Some("resolved-t"));
+                }
+                WaiterReply::Err { message } => panic!("unexpected err: {message}"),
+            }
+        }
+    }
+
+    #[test]
+    fn same_name_different_ref_across_siblings_stays_isolated() {
+        // A wants FOO = fake/a, B wants FOO = fake/b (same name, different
+        // ref!). Each waiter's FOO must be its own value — keying by
+        // (provider, locator) keeps the same-name union entries distinct.
+        let shared: SharedState = Arc::new(Mutex::new(State::new()));
+        let key = session_key();
+        let a = run_ask_with_secret(&["run", "./a"], "FOO", "fake", "a", key.clone());
+        let b = run_ask_with_secret(&["run", "./b"], "FOO", "fake", "b", key.clone());
+
+        let (tx_a, rx_a) = mpsc::channel();
+        let (tx_b, rx_b) = mpsc::channel();
+        {
+            let mut guard = shared.lock().expect("state mutex");
+            guard.submit_ask(a, tx_a);
+            guard.submit_ask(b, tx_b);
+            guard.resolve(
+                &key,
+                Decision::Approve,
+                ApprovalScope {
+                    pid: 6042,
+                    start_time: 12345,
+                },
+                &shared,
+            );
+        }
+
+        let secrets_a = match rx_a.recv().expect("A reply") {
+            WaiterReply::Decision { secrets, .. } => secrets,
+            WaiterReply::Err { message } => panic!("A got err: {message}"),
+        };
+        let secrets_b = match rx_b.recv().expect("B reply") {
+            WaiterReply::Decision { secrets, .. } => secrets,
+            WaiterReply::Err { message } => panic!("B got err: {message}"),
+        };
+
+        assert_eq!(secrets_a.get("FOO").map(String::as_str), Some("resolved-a"));
+        assert_eq!(secrets_b.get("FOO").map(String::as_str), Some("resolved-b"));
     }
 
     #[test]
