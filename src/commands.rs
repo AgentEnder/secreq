@@ -228,8 +228,7 @@ pub fn run(
     // marker, so it always prompts. We propagate the existing token (or
     // mint one from our pid) so a whole run tree shares a single session.
     let nested = std::env::var_os(crate::RUN_SESSION_ENV).is_some();
-    let session =
-        std::env::var(crate::RUN_SESSION_ENV).unwrap_or_else(|_| std::process::id().to_string());
+    let session = std::env::var(crate::RUN_SESSION_ENV).unwrap_or_else(|_| mint_session_token());
 
     // 1. Effective env = inherited, with --env-file layered underneath.
     // `dotenvy` does the real `.env` parsing (quoting, escapes, `export`,
@@ -296,6 +295,11 @@ pub fn run(
         // A nested run may skip the prompt when fully cached; a top-level
         // run leaves this false, so the daemon always shows the window.
         ask.nested_run = nested;
+        if nested {
+            if let Some(key) = session_dedupe_key(&session) {
+                ask.dedupe_key = key;
+            }
+        }
         let outcome = daemon_client::request_consent(ask, config.wait_indicator_enabled())
             .context("daemon consent request failed")?;
         let _ = audit::append(
@@ -2108,6 +2112,27 @@ pub(crate) fn scan_env_refs(env: &[(String, String)]) -> Result<Vec<EnvRef>> {
     Ok(refs)
 }
 
+/// Mint a run-session token for a root run: `"<pid>:<nonce>"`. The pid
+/// aids debugging; the random nonce guarantees two trees never collide
+/// (and one tree always coalesces, since descendants inherit it verbatim).
+fn mint_session_token() -> String {
+    use rand::RngCore;
+    let nonce = rand::thread_rng().next_u64();
+    format!("{}:{}", std::process::id(), nonce)
+}
+
+/// Parse a session token into the dedupe key every descendant run of the
+/// tree shares. `parent_start_time` holds the nonce — opaque to the
+/// daemon, used only to group same-session asks into one queue entry.
+fn session_dedupe_key(token: &str) -> Option<proto::DedupeKey> {
+    let (pid, nonce) = token.split_once(':')?;
+    Some(proto::DedupeKey {
+        wrap: "run".to_owned(),
+        ppid: pid.parse().ok()?,
+        parent_start_time: nonce.parse().ok()?,
+    })
+}
+
 /// Explicit inputs to [`build_ask`]. Lets the `x` consent path and the
 /// `run` path share one Ask builder while supplying their own identity,
 /// command, and remember policy.
@@ -2734,6 +2759,30 @@ mod tests {
             render_read_json(&[("secret://op/a\"b".to_owned(), "line1\nline2\"\\".to_owned())]);
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["secret://op/a\"b"], "line1\nline2\"\\");
+    }
+
+    #[test]
+    fn session_token_round_trips_to_a_dedupe_key() {
+        // "pid:nonce" → DedupeKey { wrap:"run", ppid:pid, parent_start_time:nonce }
+        let key = session_dedupe_key("6042:12345678901234567890");
+        assert_eq!(
+            key,
+            Some(proto::DedupeKey {
+                wrap: "run".to_owned(),
+                ppid: 6042,
+                parent_start_time: 12345678901234567890,
+            })
+        );
+        assert_eq!(session_dedupe_key("garbage"), None);
+        assert_eq!(session_dedupe_key("6042"), None); // needs both halves
+    }
+
+    #[test]
+    fn minted_session_token_parses_back() {
+        let token = mint_session_token();
+        let key = session_dedupe_key(&token).expect("minted token must parse");
+        assert_eq!(key.wrap, "run");
+        assert_eq!(key.ppid, std::process::id());
     }
 
     #[test]

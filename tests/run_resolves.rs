@@ -276,11 +276,19 @@ fn run_stamps_and_propagates_the_session_marker() {
     );
 
     let captured = fs::read_to_string(&outfile).unwrap();
-    // The innermost child sees the session token the OUTER run minted (its
-    // pid) — non-empty and all digits, proving it was stamped and inherited
-    // unchanged rather than re-minted at each level.
+    // The innermost child sees the session token the OUTER run minted
+    // (`"<pid>:<nonce>"`) — a digit-only pid and nonce joined by a single
+    // colon, proving it was stamped and inherited unchanged rather than
+    // re-minted at each level.
+    let (pid, nonce) = captured
+        .split_once(':')
+        .unwrap_or_else(|| panic!("session token must be \"pid:nonce\", got {captured:?}"));
     assert!(
-        !captured.is_empty() && captured.chars().all(|c| c.is_ascii_digit()),
-        "nested run must inherit the outer run's session token, got {captured:?}",
+        !pid.is_empty() && pid.chars().all(|c| c.is_ascii_digit()),
+        "session token pid half must be all digits, got {captured:?}",
+    );
+    assert!(
+        !nonce.is_empty() && nonce.chars().all(|c| c.is_ascii_digit()),
+        "session token nonce half must be all digits, got {captured:?}",
     );
 }
