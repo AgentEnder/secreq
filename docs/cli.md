@@ -398,6 +398,11 @@ Nested `run` is correct without any special handling: the outer `run`
 has already replaced every reference in the child environment with a
 plain value, so an inner `run` sees no `secret://` refs and just execs.
 
+Concurrent `run` invocations in one process tree share **one** consent
+prompt. The daemon unions their secret requests into a single card (each
+secret annotated with the command that asked for it), you approve once,
+and each command receives **only its own** secrets — never a sibling's.
+
 #### Example
 
 ```sh

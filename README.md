@@ -44,6 +44,10 @@ and masked:
 secreq run --env-file .env -- ./deploy.sh
 ```
 
+Concurrent `secreq run` invocations in one process tree share a single
+consent prompt: the daemon unions their secret requests into one card,
+you approve once, and each command receives only its own secrets.
+
 | Command | Purpose |
 |---|---|
 | `secreq init` | First-time setup: pick a shim dir and (optionally) wire it into PATH. |

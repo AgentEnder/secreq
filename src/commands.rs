@@ -191,6 +191,22 @@ fn build_overrides(
     out
 }
 
+/// Keep only the resolved entries whose name this run actually requested.
+/// Defense-in-depth: the daemon already slices per-waiter, but a bug there
+/// must never let a sibling's secret reach this child's env.
+fn filter_to_refs(
+    resolved: HashMap<String, String>,
+    refs: &[(String, Reference)],
+) -> Vec<(String, SecretValue)> {
+    use std::collections::HashSet;
+    let requested: HashSet<&str> = refs.iter().map(|(name, _)| name.as_str()).collect();
+    resolved
+        .into_iter()
+        .filter(|(name, _)| requested.contains(name.as_str()))
+        .map(|(name, value)| (name, SecretValue::new(value)))
+        .collect()
+}
+
 /// `secreq run [--env-file PATH]… -- <cmd>` — the ambient mirror of `x`.
 /// Resolve `secret://provider/locator` references found in the inherited
 /// environment (and any `--env-file`) through the consent daemon, then exec
@@ -319,11 +335,9 @@ pub fn run(
             }
             return Ok(1);
         }
-        outcome
-            .secrets
-            .into_iter()
-            .map(|(name, value)| (name, SecretValue::new(value)))
-            .collect()
+        // Defense-in-depth: inject only secrets this run actually requested,
+        // so a daemon bug can never leak a sibling session's secret here.
+        filter_to_refs(outcome.secrets, &refs)
     };
 
     // 6. Substitute resolved values into the env; build the overrides.
@@ -2730,6 +2744,7 @@ mod prompt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
@@ -2760,6 +2775,42 @@ mod tests {
             render_read_json(&[("secret://op/a\"b".to_owned(), "line1\nline2\"\\".to_owned())]);
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["secret://op/a\"b"], "line1\nline2\"\\");
+    }
+
+    #[test]
+    fn filter_to_refs_drops_unrequested_keys() {
+        use crate::reference::Reference;
+        let refs = vec![
+            (
+                "DATABASE_URL".to_owned(),
+                Reference::parse("secret://op/Work/PG/url").unwrap(),
+            ),
+            (
+                "API_KEY".to_owned(),
+                Reference::parse("secret://op/Work/Stripe/key").unwrap(),
+            ),
+        ];
+        let mut outcome: HashMap<String, String> = HashMap::new();
+        outcome.insert("DATABASE_URL".to_owned(), "db-secret".to_owned());
+        outcome.insert("API_KEY".to_owned(), "api-secret".to_owned());
+        // A sibling's secret the daemon should never have sent, but might
+        // due to a bug — the client filter must drop it.
+        outcome.insert("SIBLING_TOKEN".to_owned(), "leaked".to_owned());
+
+        let kept = filter_to_refs(outcome, &refs);
+        let names: HashSet<&str> = kept.iter().map(|(n, _)| n.as_str()).collect();
+        // Both requested names are kept…
+        assert!(names.contains("DATABASE_URL"));
+        assert!(names.contains("API_KEY"));
+        // …and the unrequested sibling secret is dropped.
+        assert!(!names.contains("SIBLING_TOKEN"));
+        assert_eq!(kept.len(), 2);
+        // Values survive intact for the kept entries.
+        let db = kept
+            .iter()
+            .find(|(n, _)| n == "DATABASE_URL")
+            .map(|(_, v)| v.expose());
+        assert_eq!(db, Some("db-secret"));
     }
 
     #[test]
