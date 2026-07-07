@@ -685,6 +685,29 @@ impl State {
         }
     }
 
+    /// Close the consent window *immediately* on drain when the user did
+    /// nothing but approve/deny this session. Called right after the
+    /// queue-empty timestamp is refreshed on the resolve path.
+    ///
+    /// The main loop's [`AUTO_HIDE_GRACE`](super::AUTO_HIDE_GRACE) exists
+    /// to leave a confirmation on screen for a beat — but there's nothing
+    /// to confirm for a window the user only ever clicked Approve/Deny in,
+    /// so lingering just reads as sluggish. We skip the grace and send the
+    /// exit here. A window the user browsed away from (Rules/Audit) is
+    /// left for the grace-timed path so we never yank one they were using;
+    /// likewise a pinned `viewer_mode` window and any not-yet-drained
+    /// queue. No subscribers attached → nothing to close (the broadcast is
+    /// a no-op and leaves the grace clock armed as a fallback).
+    fn maybe_immediate_auto_hide(&mut self) {
+        if self.viewer_mode || self.any_consent_ever_interacted() {
+            return;
+        }
+        if self.queue_empty_since.is_none() {
+            return;
+        }
+        self.broadcast_consent_exit_please();
+    }
+
     /// True if a `Command::spawn` is in flight and we shouldn't
     /// start another. Stale entries auto-clear after
     /// `CONSENT_SPAWN_TIMEOUT`.
@@ -849,6 +872,7 @@ impl State {
             self.last_activity = Instant::now();
             self.broadcast_consent_update();
             self.refresh_queue_empty_since();
+            self.maybe_immediate_auto_hide();
         }
     }
 
@@ -861,12 +885,34 @@ impl State {
         self.queue_empty_since = None;
         let key = ask.dedupe_key.clone();
         let is_new = !self.queue.contains_key(&key);
+        // Command label stamped onto each merged secret's provenance. The
+        // plan uses the full joined command; the UI truncates it.
+        let command_label = ask.command.join(" ");
         let entry = self.queue.entry(key.clone()).or_insert_with(|| QueueEntry {
             key: key.clone(),
-            representative: ask.clone(),
+            // Build the representative's secrets by folding the creating
+            // ask's own secrets through `merge_secret`, so even the first
+            // ask's secrets carry `← command` provenance.
+            representative: Ask {
+                secrets: {
+                    let mut rep = Vec::new();
+                    for s in &ask.secrets {
+                        merge_secret(&mut rep, s, &command_label);
+                    }
+                    rep
+                },
+                ..ask.clone()
+            },
             waiters: Vec::new(),
             first_seen: Instant::now(),
         });
+        if !is_new {
+            // Coalesce: union this ask's secrets into the growing
+            // representative, stamping each with this ask's command.
+            for s in &ask.secrets {
+                merge_secret(&mut entry.representative.secrets, s, &command_label);
+            }
+        }
         entry.waiters.push(Waiter {
             sender: waiter,
             requested: ask.secrets.clone(),
@@ -926,6 +972,7 @@ impl State {
         let Some(entry) = self.queue.remove(key) else {
             self.broadcast_consent_update();
             self.refresh_queue_empty_since();
+            self.maybe_immediate_auto_hide();
             return;
         };
 
@@ -968,6 +1015,10 @@ impl State {
         // resolving card is up). Main loop reads this each tick and
         // broadcasts `ConsentExitPlease` once the grace elapses.
         self.refresh_queue_empty_since();
+        // For a decision-only window, skip the grace entirely and close
+        // now. A cold approve keeps a resolving card up (queue not yet
+        // "empty"), so this fires from `end_pending` once the value lands.
+        self.maybe_immediate_auto_hide();
 
         if decision.approved() {
             // Resolution lives off-thread so the UI never blocks on a
@@ -1333,6 +1384,28 @@ fn now_unix_secs() -> u64 {
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// Merge `incoming` into the union `rep`, deduped by `(name, provider,
+/// locator)`. A duplicate appends `command` to the existing entry's
+/// `requested_by` (deduped); a new secret is pushed, stamped with
+/// `command`.
+fn merge_secret(
+    rep: &mut Vec<super::proto::SecretAsk>,
+    incoming: &super::proto::SecretAsk,
+    command: &str,
+) {
+    if let Some(existing) = rep.iter_mut().find(|s| {
+        s.name == incoming.name && s.provider == incoming.provider && s.locator == incoming.locator
+    }) {
+        if !existing.requested_by.iter().any(|c| c == command) {
+            existing.requested_by.push(command.to_owned());
+        }
+    } else {
+        let mut secret = incoming.clone();
+        secret.requested_by = vec![command.to_owned()];
+        rep.push(secret);
+    }
 }
 
 fn has_entry(approvals: &[ApprovalEntry], wrap: &str, scope: ApprovalScope) -> bool {
@@ -2017,6 +2090,7 @@ mod tests {
                 default: None,
                 description: None,
                 reason: None,
+                requested_by: vec![],
             }],
             providers: HashMap::new(),
             dedupe_key: DedupeKey {
@@ -2028,6 +2102,29 @@ mod tests {
             allow_remember: true,
             nested_run: false,
         }
+    }
+
+    /// Like [`ask_with_secret`] but with an explicit `(provider, locator)`
+    /// so two asks can carry *distinct* secrets that still coalesce (when
+    /// keyed the same). Used to exercise the union merge.
+    fn ask_with_secret_named(
+        wrap: &str,
+        argv: &[&str],
+        name: &str,
+        provider: &str,
+        locator: &str,
+    ) -> Ask {
+        let mut ask = ask_with_secret(wrap, argv, name);
+        ask.secrets[0].provider = provider.to_owned();
+        ask.secrets[0].locator = locator.to_owned();
+        ask
+    }
+
+    /// Override an ask's dedupe key (so a sibling coalesces into an
+    /// existing entry).
+    fn with_dedupe_key(mut ask: Ask, key: DedupeKey) -> Ask {
+        ask.dedupe_key = key;
+        ask
     }
 
     #[test]
@@ -2055,6 +2152,38 @@ mod tests {
             .collect();
         assert_eq!(recorded, expected);
         assert_eq!(entry.waiters[0].command, ask.command);
+    }
+
+    #[test]
+    fn coalescing_unions_heterogeneous_secrets_with_provenance() {
+        let mut state = State::new();
+        let a = ask_with_secret_named("run", &["run", "./migrate"], "DB", "op", "pg");
+        let b = ask_with_secret_named("run", &["run", "./worker"], "API", "op", "stripe");
+        // Same dedupe key (same session) so they coalesce:
+        let b = with_dedupe_key(b, a.dedupe_key.clone());
+        let (tx1, _r1) = mpsc::channel();
+        let (tx2, _r2) = mpsc::channel();
+        state.submit_ask(a.clone(), tx1);
+        state.submit_ask(b.clone(), tx2);
+        let entry = state.queue_entry_for_test(&a.dedupe_key).unwrap();
+        let names: Vec<&str> = entry
+            .representative
+            .secrets
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["DB", "API"],
+            "union preserves both, in arrival order"
+        );
+        // provenance stamped with each requesting command:
+        assert!(entry.representative.secrets[0]
+            .requested_by
+            .contains(&"run ./migrate".to_owned()));
+        assert!(entry.representative.secrets[1]
+            .requested_by
+            .contains(&"run ./worker".to_owned()));
     }
 
     #[test]
@@ -2101,6 +2230,7 @@ mod tests {
                 default: None,
                 description: None,
                 reason: None,
+                requested_by: vec![],
             });
         assert!(
             !nested_run_fully_cached(&nested_uncached, &cache),
@@ -2229,6 +2359,7 @@ mod tests {
                 default: None,
                 description: None,
                 reason: None,
+                requested_by: vec![],
             }],
             providers: providers.clone(),
             dedupe_key: DedupeKey {
@@ -2576,5 +2707,100 @@ mod tests {
         state.set_consent_interacting(9999, false);
         // The real subscriber's `interacting = true` survives.
         assert!(state.any_consent_interacting());
+    }
+
+    /// `ever_interacted` is sticky: once the user visits a non-Pending
+    /// tab it stays latched even after they return to Pending. This is
+    /// what lets the drain path tell "only ever approved/denied" apart
+    /// from "browsed Rules/Audit at some point".
+    #[test]
+    fn set_consent_interacting_latches_ever_interacted() {
+        let mut state = State::new();
+        let (tx, _rx) = mpsc::channel();
+        let (id, _snap) = state.attach_consent_window(4242, tx);
+        assert!(!state.any_consent_ever_interacted());
+
+        state.set_consent_interacting(id, true);
+        assert!(state.any_consent_ever_interacted());
+
+        // Back to Pending: momentary flag clears, sticky one does not.
+        state.set_consent_interacting(id, false);
+        assert!(!state.any_consent_interacting());
+        assert!(state.any_consent_ever_interacted());
+    }
+
+    /// A window that only ever approved/denied is told to exit the
+    /// instant the queue drains — we don't wait out the main-loop grace
+    /// for a confirmation nobody needs.
+    #[test]
+    fn resolve_draining_queue_exits_window_immediately_when_only_decisions_made() {
+        let shared: SharedState = Arc::new(Mutex::new(State::new()));
+        let (tx, rx) = mpsc::channel();
+        let ask = mk_ask("gh", vec![(100, 1_700_000_000)]);
+        let key = ask.dedupe_key.clone();
+        {
+            let mut guard = shared.lock().expect("state mutex");
+            guard.attach_consent_window(321, tx);
+            let (wtx, _wrx) = mpsc::channel();
+            guard.submit_ask(ask, wtx);
+            guard.resolve(
+                &key,
+                Decision::Deny,
+                ApprovalScope {
+                    pid: 100,
+                    start_time: 1_700_000_000,
+                },
+                &shared,
+            );
+        }
+
+        let mut saw_exit = false;
+        while let Ok(msg) = rx.try_recv() {
+            if matches!(msg, crate::daemon::proto::DaemonMsg::ConsentExitPlease) {
+                saw_exit = true;
+            }
+        }
+        assert!(
+            saw_exit,
+            "a decision-only window must be asked to exit the instant the queue drains"
+        );
+    }
+
+    /// A window the user browsed away from (Rules/Audit) must NOT be
+    /// yanked on drain — it defers to the main loop's grace period. The
+    /// grace clock stays armed so the main loop can honour it.
+    #[test]
+    fn resolve_draining_queue_defers_to_grace_when_user_browsed_other_tabs() {
+        let shared: SharedState = Arc::new(Mutex::new(State::new()));
+        let (tx, rx) = mpsc::channel();
+        let ask = mk_ask("gh", vec![(100, 1_700_000_000)]);
+        let key = ask.dedupe_key.clone();
+        {
+            let mut guard = shared.lock().expect("state mutex");
+            let (id, _snap) = guard.attach_consent_window(321, tx);
+            // Visited the Audit tab, then returned to Pending.
+            guard.set_consent_interacting(id, true);
+            guard.set_consent_interacting(id, false);
+            let (wtx, _wrx) = mpsc::channel();
+            guard.submit_ask(ask, wtx);
+            guard.resolve(
+                &key,
+                Decision::Deny,
+                ApprovalScope {
+                    pid: 100,
+                    start_time: 1_700_000_000,
+                },
+                &shared,
+            );
+        }
+
+        while let Ok(msg) = rx.try_recv() {
+            assert!(
+                !matches!(msg, crate::daemon::proto::DaemonMsg::ConsentExitPlease),
+                "a browsed window must linger through the grace period, not exit on drain"
+            );
+        }
+        // The grace clock is armed for the main loop to time out.
+        assert!(shared.lock().unwrap().queue_empty_since().is_some());
     }
 }

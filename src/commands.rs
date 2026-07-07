@@ -2177,6 +2177,7 @@ pub(crate) fn build_ask(
             default: None,
             description: None,
             reason: spec.reason.clone(),
+            requested_by: vec![],
         });
     }
 

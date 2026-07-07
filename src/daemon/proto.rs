@@ -277,6 +277,11 @@ pub struct SecretAsk {
     pub default: Option<String>,
     pub description: Option<String>,
     pub reason: Option<String>,
+    /// Commands that requested this secret, for the session card's
+    /// `← command` provenance. Empty from the client; the daemon stamps
+    /// it as asks merge. `#[serde(default)]`.
+    #[serde(default)]
+    pub requested_by: Vec<String>,
 }
 
 /// Wire-form provider definition. Mirrors [`crate::manifest::Provider`]

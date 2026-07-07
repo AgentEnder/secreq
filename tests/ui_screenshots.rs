@@ -82,6 +82,7 @@ fn secret(name: &str, provider: &str, locator: &str) -> SecretAsk {
         default: None,
         description: None,
         reason: None,
+        requested_by: vec![],
     }
 }
 
