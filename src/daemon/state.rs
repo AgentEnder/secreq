@@ -41,10 +41,20 @@ pub struct QueueEntry {
     /// with the same key are assumed to be equivalent (same wrap, same
     /// providers); we keep their reply channels but not their Asks.
     pub representative: Ask,
-    /// Senders, one per still-waiting client.
-    pub waiters: Vec<mpsc::Sender<WaiterReply>>,
+    /// One per still-waiting client — each carries its own reply channel
+    /// plus the secrets and command that client asked for.
+    pub waiters: Vec<Waiter>,
     /// When this entry was first inserted — drives the UI's "Xs ago" label.
     pub first_seen: Instant,
+}
+
+/// One parked client on a queue entry: where to send its reply, the
+/// secrets *it* asked for (so a per-waiter slice can be handed back), and
+/// the command it's running (for the card's per-secret provenance).
+pub struct Waiter {
+    pub sender: mpsc::Sender<WaiterReply>,
+    pub requested: Vec<super::proto::SecretAsk>,
+    pub command: Vec<String>,
 }
 
 impl QueueEntry {
@@ -274,6 +284,16 @@ struct ConsentSubscriber {
     /// child reports transitions via `ClientMsg::ConsentWindowInteractive`.
     /// Defaults to `false`: a fresh decision window opens on Pending.
     interacting: bool,
+    /// Sticky record of whether the user has *ever* interacted with a
+    /// non-Pending tab during this window's life. Latched `true` the
+    /// first time `interacting` is reported `true` and never reset for
+    /// the subscriber's lifetime. Unlike the momentary `interacting`,
+    /// this distinguishes "the user only ever approved/denied" (exit
+    /// the moment the queue drains) from "the user browsed Rules/Audit
+    /// at some point" (linger with the auto-hide grace so we don't yank
+    /// a window they were using). Reset naturally: a new batch of asks
+    /// spawns a fresh window and thus a fresh subscriber.
+    ever_interacted: bool,
 }
 
 /// One attached pending-badge child. Deliberately leaner than
@@ -365,6 +385,7 @@ impl State {
             tx: sender,
             focused: true,
             interacting: false,
+            ever_interacted: false,
         });
         super::log::log_at(
             "state",
@@ -586,6 +607,9 @@ impl State {
         for s in &mut self.consent_subscribers {
             if s.id == id {
                 s.interacting = interacting;
+                // Latch the sticky record: once the user has visited a
+                // non-Pending tab we linger on drain instead of vanishing.
+                s.ever_interacted |= interacting;
                 return;
             }
         }
@@ -599,6 +623,15 @@ impl State {
     /// be yanked out from under them.
     pub fn any_consent_interacting(&self) -> bool {
         self.consent_subscribers.iter().any(|s| s.interacting)
+    }
+
+    /// `true` if any attached consent window has *ever* interacted with
+    /// a non-Pending tab this session (see [`ConsentSubscriber::ever_interacted`]).
+    /// Gates the immediate auto-hide: a window that only ever approved or
+    /// denied has nothing worth lingering over, so it exits the moment the
+    /// queue drains; one the user browsed away from keeps the grace period.
+    pub fn any_consent_ever_interacted(&self) -> bool {
+        self.consent_subscribers.iter().any(|s| s.ever_interacted)
     }
 
     /// One-shot toast push for an auto-deny event. Best-effort —
@@ -834,7 +867,11 @@ impl State {
             waiters: Vec::new(),
             first_seen: Instant::now(),
         });
-        entry.waiters.push(waiter);
+        entry.waiters.push(Waiter {
+            sender: waiter,
+            requested: ask.secrets.clone(),
+            command: ask.command.clone(),
+        });
         self.show_window();
         self.broadcast_consent_update();
         if is_new {
@@ -842,6 +879,14 @@ impl State {
         } else {
             SubmitResult::Coalesced
         }
+    }
+
+    /// Read a queue entry by key. Test-only: lets the state tests inspect
+    /// the parked waiters (their recorded `requested` / `command`) without
+    /// exposing the private `queue` map in production.
+    #[cfg(test)]
+    fn queue_entry_for_test(&self, key: &DedupeKey) -> Option<&QueueEntry> {
+        self.queue.get(key)
     }
 
     /// Resolve a queue entry. **Returns immediately** — the UI must not
@@ -943,7 +988,7 @@ impl State {
                         }
                     });
                 for w in &entry.waiters {
-                    let _ = w.send(reply.clone());
+                    let _ = w.sender.send(reply.clone());
                 }
                 // Clear the "Resolving…" card now that the value is
                 // cached (or the resolve failed). Skipped when warm
@@ -962,7 +1007,7 @@ impl State {
                 secrets: HashMap::new(),
             };
             for w in &entry.waiters {
-                let _ = w.send(reply.clone());
+                let _ = w.sender.send(reply.clone());
             }
         }
     }
@@ -1983,6 +2028,33 @@ mod tests {
             allow_remember: true,
             nested_run: false,
         }
+    }
+
+    #[test]
+    fn submit_ask_records_waiter_requested_and_command() {
+        let mut state = State::new();
+        let ask = ask_with_secret("run", &["run", "./worker"], "TOKEN");
+        let (tx, _rx) = mpsc::channel();
+        state.submit_ask(ask.clone(), tx);
+        let entry = state
+            .queue_entry_for_test(&ask.dedupe_key)
+            .expect("entry exists after submit_ask");
+        assert_eq!(entry.waiters.len(), 1);
+        // `SecretAsk` has no `PartialEq`; compare by identity fields
+        // (name / provider / locator) — enough to prove the waiter
+        // recorded its own requested set rather than an empty one.
+        let recorded: Vec<(&str, &str, &str)> = entry.waiters[0]
+            .requested
+            .iter()
+            .map(|s| (s.name.as_str(), s.provider.as_str(), s.locator.as_str()))
+            .collect();
+        let expected: Vec<(&str, &str, &str)> = ask
+            .secrets
+            .iter()
+            .map(|s| (s.name.as_str(), s.provider.as_str(), s.locator.as_str()))
+            .collect();
+        assert_eq!(recorded, expected);
+        assert_eq!(entry.waiters[0].command, ask.command);
     }
 
     #[test]
