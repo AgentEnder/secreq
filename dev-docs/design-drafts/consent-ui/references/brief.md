@@ -37,6 +37,8 @@ Current axes: **page** (prompt / audit / rules) × **os** (macos / windows / lin
 
 **Prompt rework requirements from review:** tighten proportions and spacing; give the provenance block real structure (an inset well, not a loose grid); and render the caller as a **process tree with argv per process** — "right now it's hard to identify which process is asking for something since you can't see argv." The argv-bearing tree is a must-include on every prompt page.
 
+**Approved for implementation (second-round review, 2026-07-09)** with two additions: truncated argv shows the full string on hover; and appearance is not a user setting — light/dark follows the OS theme.
+
 ## Reference inspiration
 
 See `references/links.md` and `references/inspiration/` for the source material.
