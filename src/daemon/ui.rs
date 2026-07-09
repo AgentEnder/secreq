@@ -1,37 +1,18 @@
-//! egui-based consent UI.
+//! Shared egui building blocks for the consent surfaces.
 //!
-//! Hidden by default. The socket thread calls `State::show_window()` (and
-//! `ctx.request_repaint()`) when a new ask arrives; this app reads
-//! `window_visible` every frame and toggles the OS window via egui's
-//! viewport command stream.
+//! The window-level renderers live elsewhere — the transient prompt in
+//! [`super::prompt_ui`], the persistent Rules + Audit manager in
+//! [`super::manager_ui`], the "N pending" pill in [`super::badge`].
+//! This module owns what they share:
 //!
-//! ## Visual language
-//!
-//! The UI is a **process tree**, rendered as a single pane with classic
-//! `pstree`-style connectors (`├──`, `└──`, `│`). Roots are the outermost
-//! ancestors of any currently-pending ask; their descendants nest below;
-//! the wraps the user is being asked about hang off the direct-parent
-//! nodes as leaves.
-//!
-//! Every node in the tree carries `[Approve all]` / `[Deny all]`
-//! buttons. Clicking at a given node applies the decision to every wrap
-//! in its subtree, *and* writes the approval-cache entry at that node's
-//! scope — so any future ask from any descendant of that node will hit
-//! the cache without re-prompting. That's the load-bearing capability:
-//! "Approve all from Superset.app" once and you never see Superset ask
-//! again for the wraps it currently has queued, no matter how deep the
-//! intermediate shells/scripts get.
-//!
-//! Per-leaf rows still have their own `[Approve]` / `[Deny]` buttons as
-//! a one-shot escape hatch.
-//!
-//! ## Audit history
-//!
-//! Each wrap leaf is annotated with a one-line summary read from
-//! `audit.log`: when the same wrap last ran from the same direct caller,
-//! and how many grants vs. denies happened in the last 30 days. "First
-//! request from this caller" for fresh combinations. A last-decision of
-//! "deny" gets a warning tint so the user notices before approving.
+//! - the style/font installer ([`install_style`]) that maps the
+//!   [`super::theme`] tokens onto egui's stock widgets;
+//! - the audit-log cache ([`AuditCache`]) plus the history summarizer
+//!   the prompt's HISTORY row and the manager's Audit page both read;
+//! - the Rules page (list, suggestions, rule form) and the Audit page,
+//!   rendered inside the manager's chrome;
+//! - small drawn primitives (app icon, pills, search glyph) and text
+//!   helpers (width-measured truncation, durations).
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -40,11 +21,12 @@ use eframe::egui;
 
 use crate::audit::{self, AuditCaller, AuditEntry};
 use crate::consent::Decision;
-use crate::recommendations::{self, Suggestion, SuggestionDecision, SuggestionSort};
+use crate::recommendations::{Suggestion, SuggestionDecision, SuggestionSort};
 use crate::rules::{Pattern, Rule, RuleDecision, RuleMatch};
 
-use super::proto::{Caller, DedupeKey, RowStatus, SecretAsk, SshAskInfo};
-use super::state::{ApprovalScope, QueueRow, QueueSnapshot, SharedState};
+use super::manager_ui::ManagerView;
+use super::proto::DedupeKey;
+use super::state::ApprovalScope;
 use super::theme::{OsFlavor, Theme};
 
 /// How often the UI re-reads the audit log to refresh the per-wrap history
@@ -71,272 +53,22 @@ const AUDIT_HISTORY_LIMIT: usize = 5_000;
 // override), light/dark from egui's resolved theme, which follows the
 // OS under `ThemePreference::System`.
 
-/// Outer window inset. Big enough to keep right-aligned buttons from
-/// kissing the window edge and the title from sitting under the
-/// macOS traffic-light row.
-const WINDOW_INSET_X: i8 = 20;
-const WINDOW_INSET_Y: i8 = 14;
-/// Title-bar chrome height. Tuned to give the macOS traffic lights
-/// enough clearance + room for the title row inside.
-const TITLE_BAR_HEIGHT: f32 = 56.0;
-/// Standard card corner radius. Used for wrap-leaf cards, audit
-/// entries, decision pills, and the count badge so everything in the
-/// app shares one corner language.
-const CARD_CORNER_RADIUS: u8 = 8;
-/// Horizontal indent step per tree depth level. Tuned to be tighter
-/// than the macOS Finder default (32) but visible enough to read as
-/// nesting; the left guide rail does the heavy lifting visually.
-const INDENT_UNIT: f32 = 22.0;
-/// Vertical gap between consecutive cards on the Pending tab.
-const CARD_VERTICAL_GAP: f32 = 10.0;
-/// Vertical gap between consecutive audit cards on the Audit tab.
-const AUDIT_CARD_GAP: f32 = 8.0;
-/// Reserved width of the right-hand verdict column in an audit card.
-/// A *real* reservation now (the command label is measured to fit the
+/// Reserved width of the right-hand verdict column in an audit row.
+/// A *real* reservation (the command label is measured to fit the
 /// remaining space) rather than a budget subtraction. Clamped to a
-/// fraction of the row on narrow windows so the verdict pill never
+/// fraction of the row on narrow windows so the verdict indicator never
 /// crowds the command off-screen.
 const AUDIT_VERDICT_COL_WIDTH: f32 = 132.0;
 
 /// One pending decision queued for after the render pass. Carries the
-/// scope so a bulk-approve at an ancestor writes the approval entry at
-/// that ancestor's `(pid, start_time)`, not the leaf's direct parent.
-/// Public because the consent-window child process collects these and
-/// ships them back to the daemon over the socket.
+/// scope so the approval entry is written at the intended
+/// `(pid, start_time)`. Public because the prompt-window child process
+/// collects these and ships them back to the daemon over the socket.
 #[derive(Debug, Clone)]
 pub struct PendingAction {
     pub key: DedupeKey,
     pub decision: Decision,
     pub scope: ApprovalScope,
-}
-
-/// How long the "a new ask just arrived" highlight takes to fade from
-/// peak back to rest. Long enough to catch the eye after the badge
-/// count ticks up, short enough not to linger while the user triages.
-const PENDING_PULSE_SECS: f32 = 1.1;
-
-/// State that lives across the lifetime of one consent-window
-/// **session** (open → close), and persists into the next session.
-/// The consent-window child process owns one of these; the
-/// screenshot harness owns one too.
-pub struct ConsentWindowState {
-    /// Per-node collapsed state. Keyed on `(pid, start_time)` so it
-    /// survives across queue churn for the same process.
-    collapsed: HashMap<(u32, u64), bool>,
-    /// Parsed view of `audit.log`. Refreshed when the file's mtime
-    /// moves (or once every `AUDIT_REFRESH_SECS`).
-    audit: AuditCache,
-    /// Which page the UI is currently showing. Pending is the
-    /// default because the window is most often shown in response
-    /// to a fresh ask; `secreq view` rises the tab to Audit on entry.
-    current_tab: Tab,
-    /// Rising-edge tracker for viewer mode so we can switch the
-    /// default tab to Audit exactly once when `secreq view` opens us.
-    last_viewer_mode: bool,
-    /// `Some` while the rule form modal is open (creating or
-    /// editing); `None` while the list view is on the Rules tab.
-    rules_draft: Option<RuleDraft>,
-    /// Suggestion keys ([`Suggestion::key`]) the user has dismissed in
-    /// this session. Session-scoped on purpose: a fresh consent-window
-    /// process resurfaces them so a user who's never opened the
-    /// Rules tab still sees what the engine thinks.
-    dismissed_suggestions: HashSet<String>,
-    /// How the Rules tab orders the suggestion cards. Flipped by the
-    /// segmented toggle in the "Suggested rules" header; session-scoped
-    /// like the dismissals above.
-    suggestion_sort: SuggestionSort,
-    /// How the Rules tab orders the saved-rule rows — by auto-fire count
-    /// or recency. Flipped by the toggle in the rules-list header;
-    /// session-scoped.
-    rule_sort: RuleSort,
-    /// Live query for the Audit tab's search bar. Empty string ⇒ no
-    /// filter; otherwise we keep only entries whose wrap / args /
-    /// caller names / secret names / decision contain it
-    /// (case-insensitive substring). Session-scoped — fresh windows
-    /// start with a clean slate.
-    audit_search: String,
-    /// Set the next time Cmd/Ctrl+F fires; consumed by
-    /// `render_audit_page` to call `Response::request_focus()` on
-    /// the search input and then reset to false. Carries the
-    /// keypress's effect across the render boundary because focus
-    /// only takes hold during the actual widget pass.
-    audit_search_focus_pending: bool,
-    /// Pending-queue dedupe keys observed on the previous frame. `None`
-    /// until the first observation so a freshly-opened window — which
-    /// already lands on Pending showing the initial asks — doesn't fire
-    /// the new-ask highlight on its very first frame. Diffed every frame
-    /// by [`observe_pending`] to spot genuinely-new asks.
-    seen_pending: Option<HashSet<DedupeKey>>,
-    /// Intensity (0.0 = rest, 1.0 = peak) of the "a new ask arrived"
-    /// highlight on the title-bar count badge and the Pending tab. Set
-    /// to 1.0 when a new ask lands while the window is focused; wound
-    /// back to 0 over [`PENDING_PULSE_SECS`] by the child's frame loop.
-    pending_pulse: f32,
-}
-
-impl ConsentWindowState {
-    pub fn new() -> ConsentWindowState {
-        ConsentWindowState {
-            collapsed: HashMap::new(),
-            audit: AuditCache::new(),
-            current_tab: Tab::Pending,
-            last_viewer_mode: false,
-            rules_draft: None,
-            dismissed_suggestions: HashSet::new(),
-            suggestion_sort: SuggestionSort::default(),
-            rule_sort: RuleSort::default(),
-            audit_search: String::new(),
-            audit_search_focus_pending: false,
-            seen_pending: None,
-            pending_pulse: 0.0,
-        }
-    }
-
-    /// Reconcile the live pending queue against what we saw last frame
-    /// and react to genuinely-new asks. Called once per frame, before
-    /// the chrome is painted.
-    ///
-    /// - **Focused** — the user is looking at the window — flash the
-    ///   count badge and the Pending tab instead of yanking them off
-    ///   whatever tab they're on. Draws the eye without stealing context.
-    /// - **Unfocused** — the window is backgrounded (or about to be
-    ///   raised for this ask) — pin the active tab to Pending so the
-    ///   surface they see when it comes forward is the fresh request,
-    ///   not a stale Rules/Audit view.
-    ///
-    /// The first observation never fires: a freshly-spawned window is
-    /// already on Pending, so its initial asks aren't "new".
-    pub fn observe_pending(&mut self, snapshot: &QueueSnapshot, focused: bool) {
-        let current: HashSet<DedupeKey> = snapshot.entries.iter().map(|r| r.key.clone()).collect();
-        self.react_to_pending(current, focused);
-    }
-
-    /// Core of [`observe_pending`], split out so the new-ask reaction can
-    /// be unit-tested without constructing a full [`QueueSnapshot`].
-    fn react_to_pending(&mut self, current: HashSet<DedupeKey>, focused: bool) {
-        let has_new = match &self.seen_pending {
-            None => false,
-            Some(prev) => current.iter().any(|k| !prev.contains(k)),
-        };
-        self.seen_pending = Some(current);
-        if !has_new {
-            return;
-        }
-        if focused {
-            self.pending_pulse = 1.0;
-        } else {
-            self.current_tab = Tab::Pending;
-        }
-    }
-
-    /// Advance the new-ask highlight toward rest by `dt` seconds. Returns
-    /// `true` while the flash is still animating (so the caller keeps
-    /// requesting repaints) and `false` once it has settled.
-    pub fn decay_pending_pulse(&mut self, dt: f32) -> bool {
-        if self.pending_pulse <= 0.0 {
-            return false;
-        }
-        self.pending_pulse = (self.pending_pulse - dt / PENDING_PULSE_SECS).max(0.0);
-        self.pending_pulse > 0.0
-    }
-
-    /// Pin the new-ask highlight intensity directly. Used by the
-    /// screenshot harness to capture the peak-flash visual
-    /// deterministically; production drives this through
-    /// [`observe_pending`] + [`decay_pending_pulse`].
-    pub fn set_pending_pulse(&mut self, intensity: f32) {
-        self.pending_pulse = intensity.clamp(0.0, 1.0);
-    }
-
-    /// Switch to the Rules tab in list mode. Clears any open form so
-    /// the caller doesn't inherit stale draft state from a previous
-    /// session. Used by the screenshot harness and available to
-    /// future entry points (e.g. a CLI verb that opens straight to
-    /// the Rules tab).
-    pub fn focus_rules_tab(&mut self) {
-        self.current_tab = Tab::Rules;
-        self.rules_draft = None;
-    }
-
-    /// Switch to the Audit tab. Distinct from viewer-mode (which
-    /// rising-edge-pins the tab AND swaps the title-bar subtitle to
-    /// "Audit timeline · pinned"): this method only flips the active
-    /// tab, leaving the daemon's pending/viewer state alone. Used by
-    /// the screenshot harness to land on Audit without the pinned
-    /// framing, and available to future entry points that want the
-    /// same.
-    pub fn focus_audit_tab(&mut self) {
-        self.current_tab = Tab::Audit;
-    }
-
-    /// `true` when the Pending tab is the active tab. The child reads
-    /// this each frame to compute its "interacting" signal for the
-    /// daemon (`focused && !on_pending_tab()`): the auto-hide gate
-    /// suppresses hiding only when the user is busy on Rules / Audit,
-    /// not when they're idling on the empty Pending tab.
-    pub fn on_pending_tab(&self) -> bool {
-        self.current_tab == Tab::Pending
-    }
-
-    /// Harness support: mark the viewer-mode rising edge (which lands a
-    /// fresh `secreq view` window on the Audit tab) as already consumed,
-    /// so a fixture can render the Pending tab inside a viewer-mode
-    /// window — the state a user reaches by opening `secreq view` and
-    /// then clicking Pending. Without this the first frame would jump
-    /// the tab to Audit.
-    pub fn mark_viewer_rising_edge_consumed(&mut self) {
-        self.last_viewer_mode = true;
-    }
-
-    /// Pre-populate the Audit-tab search query. Used by the screenshot
-    /// harness to capture the "search is filtering" visual state; the
-    /// production keypress path mutates the field through the
-    /// `TextEdit` widget directly.
-    pub fn set_audit_search(&mut self, query: &str) {
-        self.audit_search.clear();
-        self.audit_search.push_str(query);
-    }
-
-    /// Set how the Rules tab orders its suggestion cards. Used by the
-    /// screenshot harness to capture the "Recent" sort state; the
-    /// production path mutates this through the header toggle.
-    pub fn set_suggestion_sort(&mut self, sort: SuggestionSort) {
-        self.suggestion_sort = sort;
-    }
-
-    /// Set how the Rules tab orders its saved-rule rows. Used by the
-    /// screenshot harness to capture the "Recent" sort state; production
-    /// mutates this through the rules-list header toggle.
-    pub fn set_rule_sort(&mut self, sort: RuleSort) {
-        self.rule_sort = sort;
-    }
-
-    /// Switch to the Rules tab and open a blank rule form. Equivalent
-    /// to clicking "+ New rule" in the list view.
-    pub fn open_new_rule_form(&mut self) {
-        self.current_tab = Tab::Rules;
-        self.rules_draft = Some(RuleDraft::fresh());
-    }
-
-    /// Switch to the Rules tab and open the edit form pre-filled
-    /// from `rule`. Equivalent to clicking the per-row "Edit" button.
-    pub fn open_edit_rule_form(&mut self, rule: &Rule) {
-        self.current_tab = Tab::Rules;
-        self.rules_draft = Some(RuleDraft::from_rule(rule));
-    }
-}
-
-impl Default for ConsentWindowState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Tab {
-    Pending,
-    Rules,
-    Audit,
 }
 
 /// Form-state for the rule create/edit modal. Holds raw strings so
@@ -346,7 +78,7 @@ enum Tab {
 ///
 /// `id == None` ⇒ creating; `id == Some` ⇒ editing an existing rule.
 #[derive(Debug, Clone, Default)]
-struct RuleDraft {
+pub(crate) struct RuleDraft {
     id: Option<String>,
     name: String,
     enabled: bool,
@@ -390,7 +122,7 @@ impl From<RuleDecisionDraft> for RuleDecision {
 }
 
 impl RuleDraft {
-    fn fresh() -> RuleDraft {
+    pub(crate) fn fresh() -> RuleDraft {
         RuleDraft {
             enabled: true,
             ..RuleDraft::default()
@@ -471,7 +203,7 @@ impl RuleDraft {
         }
     }
 
-    fn from_rule(rule: &Rule) -> RuleDraft {
+    pub(crate) fn from_rule(rule: &Rule) -> RuleDraft {
         RuleDraft {
             id: Some(rule.id.clone()),
             name: rule.name.clone(),
@@ -715,14 +447,14 @@ pub fn badge_clear_color() -> [f32; 4] {
 // full reparse, and good enough since "history" is only consulted while
 // the window is visible.
 
-struct AuditCache {
+pub(crate) struct AuditCache {
     entries: Vec<AuditEntry>,
     last_load: Option<Instant>,
     last_mtime: Option<SystemTime>,
 }
 
 impl AuditCache {
-    fn new() -> AuditCache {
+    pub(crate) fn new() -> AuditCache {
         AuditCache {
             entries: Vec::new(),
             last_load: None,
@@ -730,7 +462,7 @@ impl AuditCache {
         }
     }
 
-    fn refresh_if_stale(&mut self) {
+    pub(crate) fn refresh_if_stale(&mut self) {
         let now = Instant::now();
         let due = self
             .last_load
@@ -752,13 +484,20 @@ impl AuditCache {
         self.last_mtime = mtime;
     }
 
-    fn summarize(&self, wrap: &str, caller_name: Option<&str>) -> WrapHistorySummary {
+    pub(crate) fn summarize(&self, wrap: &str, caller_name: Option<&str>) -> WrapHistorySummary {
         summarize_history(&self.entries, wrap, caller_name, now_unix())
+    }
+
+    /// The parsed entries, newest last (file order). The manager's
+    /// Rules view feeds these to the suggestion engine and the
+    /// per-rule usage index.
+    pub(crate) fn entries(&self) -> &[AuditEntry] {
+        &self.entries
     }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct WrapHistorySummary {
+pub(crate) struct WrapHistorySummary {
     /// Decision string from the most recent matching audit entry, verbatim
     /// (one of "approve", "approve+remember", "approve+cached", "deny").
     last_decision: Option<String>,
@@ -816,456 +555,19 @@ fn summarize_history(
     out
 }
 
-fn now_unix() -> u64 {
+pub(crate) fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
 }
 
-/// Render one frame of the consent UI into the given `Ui`.
-///
-/// Decisions the user makes (clicks, keyboard shortcuts) are appended
-/// to `actions_out` for the caller to dispatch — the renderer
-/// deliberately doesn't know how to deliver them. The consent-window
-/// child process ships them over the socket as `ConsentDecision`
-/// messages; the screenshot harness drops them on the floor.
-#[allow(clippy::too_many_arguments)] // The panel renderer is the single entry point — bundling these into one struct would just push the unpacking work to every call site.
-pub fn render_consent_panel(
-    ctx: &egui::Context,
-    ui: &mut egui::Ui,
-    snapshot: &QueueSnapshot,
-    viewer_mode: bool,
-    rules: &[Rule],
-    auto_deny_toast: Option<&AutoDenyToastView>,
-    window_state: &mut ConsentWindowState,
-    actions_out: &mut Vec<PendingAction>,
-    rule_actions_out: &mut Vec<RuleAction>,
-) {
-    let th = Theme::of(ctx);
-    // Rising-edge tab switch for viewer mode (`secreq view` lands on
-    // the Audit tab the first time, then leaves the tab alone).
-    if viewer_mode && !window_state.last_viewer_mode {
-        window_state.current_tab = Tab::Audit;
-    }
-    window_state.last_viewer_mode = viewer_mode;
-
-    // React to a newly-arrived ask: flash the badge + Pending tab when
-    // focused (don't yank the user's tab), or pin the active tab to
-    // Pending when backgrounded so the raised window opens on the fresh
-    // request. The decay back to rest happens in the child's frame loop.
-    let focused = ctx.input(|i| i.focused);
-    window_state.observe_pending(snapshot, focused);
-
-    window_state.audit.refresh_if_stale();
-    let tree = build_tree(snapshot);
-
-    // ── Keyboard ─────────────────────────────────────────────────
-    if window_state.current_tab == Tab::Pending {
-        if let Some(&top_root) = tree.roots.first() {
-            ctx.input(|i| {
-                if i.key_pressed(egui::Key::Enter) {
-                    collect_subtree_actions(
-                        &tree,
-                        top_root,
-                        Decision::ApproveRemember,
-                        actions_out,
-                    );
-                } else if i.key_pressed(egui::Key::Escape) {
-                    collect_subtree_actions(&tree, top_root, Decision::Deny, actions_out);
-                }
-            });
-        }
-    }
-    // Cmd/Ctrl+F from any tab — switch to Audit and focus the
-    // search input. Mirrors the platform convention (Find) and
-    // also serves as the discoverable entry point if the user
-    // hasn't noticed the always-visible search bar yet.
-    let find_pressed = ctx.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.command);
-    if find_pressed {
-        window_state.current_tab = Tab::Audit;
-        window_state.audit_search_focus_pending = true;
-    }
-
-    // ── Render ───────────────────────────────────────────────────
-    ui.painter().rect_filled(ui.max_rect(), 0.0, th.panel);
-    let body_inset = egui::Margin {
-        left: WINDOW_INSET_X,
-        right: WINDOW_INSET_X,
-        top: WINDOW_INSET_Y,
-        bottom: WINDOW_INSET_Y,
-    };
-    paint_title_bar(ui, &tree, viewer_mode, window_state.pending_pulse);
-    let audit_len = window_state.audit.entries.len();
-    let pending_pulse = window_state.pending_pulse;
-    egui::Frame::NONE.inner_margin(body_inset).show(ui, |ui| {
-        render_tab_bar(
-            ui,
-            &mut window_state.current_tab,
-            &tree,
-            audit_len,
-            rules.len(),
-            pending_pulse,
-        );
-        ui.add_space(14.0);
-        match window_state.current_tab {
-            Tab::Pending => {
-                if let Some(toast) = auto_deny_toast {
-                    render_auto_deny_toast(ui, toast);
-                    ui.add_space(8.0);
-                }
-                render_pending_page(
-                    ui,
-                    &tree,
-                    &mut window_state.collapsed,
-                    actions_out,
-                    &window_state.audit,
-                    viewer_mode,
-                );
-            }
-            Tab::Rules => {
-                // Recompute on every Rules-tab paint. Cheap (one
-                // linear pass over the capped audit cache) and keeps
-                // the suggestions in lockstep with whatever new asks
-                // landed since the last frame, without us having to
-                // explicitly invalidate anything on rule edits.
-                let now = now_unix();
-                let all = recommendations::suggest(&window_state.audit.entries, rules, now);
-                let mut visible: Vec<Suggestion> = all
-                    .into_iter()
-                    .filter(|s| !window_state.dismissed_suggestions.contains(&s.key))
-                    .collect();
-                // Re-order the filtered list per the user's toggle.
-                // `suggest()` hands back a MostUsed default; this applies
-                // MostRecent when selected (and is a cheap no-op-shaped
-                // re-sort otherwise).
-                window_state.suggestion_sort.sort(&mut visible);
-                // Per-rule auto-fire stats from the same audit cache,
-                // then order the rows per the user's rule-sort toggle.
-                let usage = rule_usage_index(&window_state.audit.entries);
-                let mut rule_rows: Vec<(&Rule, RuleUsage)> = rules
-                    .iter()
-                    .map(|r| (r, usage.get(&r.id).copied().unwrap_or_default()))
-                    .collect();
-                window_state.rule_sort.sort(&mut rule_rows);
-                let mut rules_ui = RulesUi {
-                    draft: &mut window_state.rules_draft,
-                    dismissed: &mut window_state.dismissed_suggestions,
-                    suggestion_sort: &mut window_state.suggestion_sort,
-                    rule_sort: &mut window_state.rule_sort,
-                };
-                render_rules_page(ui, &rule_rows, &visible, &mut rules_ui, rule_actions_out)
-            }
-            Tab::Audit => render_audit_page(
-                ctx,
-                ui,
-                &window_state.audit,
-                &mut window_state.rules_draft,
-                &mut window_state.current_tab,
-                &mut window_state.audit_search,
-                &mut window_state.audit_search_focus_pending,
-            ),
-        }
-    });
-}
-
-// ── Process tree model ───────────────────────────────────────────────────
-
-/// A node in the process tree we render. Owns the metadata we need to
-/// draw and to dispatch actions; rendering walks `children` recursively.
-#[derive(Debug, Clone)]
-struct TreeNode {
-    pid: u32,
-    start_time: u64,
-    /// Display info for this process. Pulled from the first `Caller` we
-    /// saw at this position in any chain — they all agree on name/command.
-    caller: Option<Caller>,
-    children: Vec<usize>,
-    /// Wraps where THIS node is the direct parent. Direct-parent rows
-    /// hang as leaves off the bottommost ancestor we have info for.
-    rows: Vec<QueueRow>,
-    /// Oldest `first_seen` anywhere in the subtree. Drives root order.
-    oldest_seen: Instant,
-}
-
-impl TreeNode {
-    fn scope(&self) -> ApprovalScope {
-        ApprovalScope {
-            pid: self.pid,
-            start_time: self.start_time,
-        }
-    }
-}
-
-#[derive(Debug)]
-struct ProcessTree {
-    nodes: Vec<TreeNode>,
-    roots: Vec<usize>,
-}
-
-impl ProcessTree {
-    fn total_leaf_rows(&self) -> usize {
-        self.nodes.iter().map(|n| n.rows.len()).sum()
-    }
-}
-
-fn build_tree(snapshot: &QueueSnapshot) -> ProcessTree {
-    let mut tree = ProcessTree {
-        nodes: Vec::new(),
-        roots: Vec::new(),
-    };
-
-    for row in &snapshot.entries {
-        // `callers` is nearest-first (direct parent at index 0). Walking
-        // outermost → direct parent makes "drill down" the natural
-        // direction for tree insertion.
-        let chain: Vec<&Caller> = row.representative.callers.iter().rev().collect();
-        if chain.is_empty() {
-            // No ancestor info — orphan as a synthetic root keyed on the
-            // dedupe_key's parent identity so it can still be approved.
-            let key = (row.key.ppid, row.key.parent_start_time);
-            let idx = ensure_root(&mut tree, key, None, row.first_seen);
-            tree.nodes[idx].rows.push(row.clone());
-            continue;
-        }
-
-        let root_caller = chain[0];
-        let root_key = (root_caller.pid, root_caller.start_time);
-        let root_idx = ensure_root(&mut tree, root_key, Some(root_caller), row.first_seen);
-        update_oldest(&mut tree.nodes[root_idx], row.first_seen);
-
-        let mut current = root_idx;
-        for caller in chain.iter().skip(1) {
-            let key = (caller.pid, caller.start_time);
-            current = ensure_child(&mut tree, current, key, Some(*caller), row.first_seen);
-            update_oldest(&mut tree.nodes[current], row.first_seen);
-        }
-        tree.nodes[current].rows.push(row.clone());
-    }
-
-    // Roots: oldest-first (matches the snapshot's own ordering).
-    tree.roots.sort_by_key(|&i| tree.nodes[i].oldest_seen);
-    // Children at every level: same ordering, so the visual tree is
-    // stable across re-renders.
-    for i in 0..tree.nodes.len() {
-        let mut children = std::mem::take(&mut tree.nodes[i].children);
-        children.sort_by_key(|&c| tree.nodes[c].oldest_seen);
-        tree.nodes[i].children = children;
-    }
-
-    tree
-}
-
-fn ensure_root(
-    tree: &mut ProcessTree,
-    key: (u32, u64),
-    caller: Option<&Caller>,
-    seen: Instant,
-) -> usize {
-    if let Some(&idx) = tree.roots.iter().find(|&&i| tree.nodes[i].key() == key) {
-        return idx;
-    }
-    let idx = tree.nodes.len();
-    tree.nodes.push(TreeNode {
-        pid: key.0,
-        start_time: key.1,
-        caller: caller.cloned(),
-        children: Vec::new(),
-        rows: Vec::new(),
-        oldest_seen: seen,
-    });
-    tree.roots.push(idx);
-    idx
-}
-
-fn ensure_child(
-    tree: &mut ProcessTree,
-    parent: usize,
-    key: (u32, u64),
-    caller: Option<&Caller>,
-    seen: Instant,
-) -> usize {
-    if let Some(&idx) = tree.nodes[parent]
-        .children
-        .iter()
-        .find(|&&i| tree.nodes[i].key() == key)
-    {
-        return idx;
-    }
-    let idx = tree.nodes.len();
-    tree.nodes.push(TreeNode {
-        pid: key.0,
-        start_time: key.1,
-        caller: caller.cloned(),
-        children: Vec::new(),
-        rows: Vec::new(),
-        oldest_seen: seen,
-    });
-    tree.nodes[parent].children.push(idx);
-    idx
-}
-
-fn update_oldest(node: &mut TreeNode, seen: Instant) {
-    if seen < node.oldest_seen {
-        node.oldest_seen = seen;
-    }
-}
-
-impl TreeNode {
-    fn key(&self) -> (u32, u64) {
-        (self.pid, self.start_time)
-    }
-}
-
-/// Walk a subtree and emit `PendingAction`s for every leaf row, all
-/// scoped to the node we started at. Used by the bulk Approve/Deny
-/// buttons and by the keyboard shortcuts.
-fn collect_subtree_actions(
-    tree: &ProcessTree,
-    node_idx: usize,
-    decision: Decision,
-    out: &mut Vec<PendingAction>,
-) {
-    let scope = tree.nodes[node_idx].scope();
-    walk_subtree(tree, node_idx, |row| {
-        // Resolving rows are already authorized — a decision on them is
-        // a no-op in `State::resolve` (the key isn't in the queue), but
-        // skip them so a mixed "Approve all" only touches awaiting rows.
-        if row.status == RowStatus::Resolving {
-            return;
-        }
-        out.push(PendingAction {
-            key: row.key.clone(),
-            decision,
-            scope,
-        });
-    });
-}
-
-/// True if a node's subtree contains rows and *all* of them are
-/// resolving — used to drop the node-level Approve/Deny buttons, which
-/// would otherwise offer a decision on something already authorized.
-fn subtree_all_resolving(tree: &ProcessTree, node_idx: usize) -> bool {
-    let mut any = false;
-    let mut all = true;
-    walk_subtree(tree, node_idx, |row| {
-        any = true;
-        if row.status != RowStatus::Resolving {
-            all = false;
-        }
-    });
-    any && all
-}
-
-fn walk_subtree<F: FnMut(&QueueRow)>(tree: &ProcessTree, node_idx: usize, mut f: F) {
-    fn inner<F: FnMut(&QueueRow)>(tree: &ProcessTree, idx: usize, f: &mut F) {
-        for row in &tree.nodes[idx].rows {
-            f(row);
-        }
-        for &c in &tree.nodes[idx].children {
-            inner(tree, c, f);
-        }
-    }
-    inner(tree, node_idx, &mut f);
-}
-
-fn count_leaf_rows(tree: &ProcessTree, node_idx: usize) -> usize {
-    let mut total = tree.nodes[node_idx].rows.len();
-    for &c in &tree.nodes[node_idx].children {
-        total += count_leaf_rows(tree, c);
-    }
-    total
-}
-
 // ── Rendering ─────────────────────────────────────────────────────────────
-
-/// Paint the full-width title bar at the top of the window.
-///
-/// - Full-bleed `th.raised` background strip, `TITLE_BAR_HEIGHT` tall.
-/// - 30px app-icon badge on the left (drawn from primitives — a soft
-///   accent rounded square with a stylised key glyph). Provides the
-///   "branding" that lifts the chrome from "egui app" to "designed
-///   product".
-/// - Two-line title block: `secreq` as a bold 18pt wordmark,
-///   `Consent requests` / `Audit timeline · pinned` as a 11pt
-///   footnote subtitle.
-/// - Right-aligned count badge — a rounded `th.raised` pill
-///   with a small accent dot + plain-English count. Hidden when the
-///   queue is empty so the chrome reads calm in the no-news state.
-fn paint_title_bar(ui: &mut egui::Ui, tree: &ProcessTree, viewer_mode: bool, pulse: f32) {
-    let th = Theme::of(ui.ctx());
-    let pending = tree.total_leaf_rows();
-    let process_count = tree.roots.len();
-
-    let available = ui.available_rect_before_wrap();
-    let bar_rect = egui::Rect::from_min_size(
-        available.min,
-        egui::vec2(available.width(), TITLE_BAR_HEIGHT),
-    );
-
-    ui.painter().rect_filled(bar_rect, 0.0, th.raised);
-    let hairline_y = bar_rect.bottom() - 0.5;
-    ui.painter().hline(
-        bar_rect.x_range(),
-        hairline_y,
-        egui::Stroke::new(1.0, th.rule),
-    );
-
-    // Defensive: when the window is dragged narrower than two title-bar
-    // insets, the naive `bar_rect.right() - inset` calculation produces
-    // `inner_rect.max.x < inner_rect.min.x`, which is an invalid
-    // `Rect`. Passing that to `scope_builder` (or computing child
-    // layouts from it) panics deep in egui. Clamp by collapsing
-    // toward zero-width — the chrome strip still paints; the title
-    // content just disappears off the right edge.
-    let inset_x = (WINDOW_INSET_X as f32).min(bar_rect.width() * 0.5);
-    let inner_left = bar_rect.left() + inset_x;
-    let inner_right = (bar_rect.right() - inset_x).max(inner_left);
-    let inner_rect = egui::Rect::from_min_max(
-        egui::pos2(inner_left, bar_rect.top() + 10.0),
-        egui::pos2(inner_right, bar_rect.bottom() - 8.0),
-    );
-    if inner_rect.width() < 1.0 {
-        ui.allocate_rect(bar_rect, egui::Sense::hover());
-        return;
-    }
-    ui.scope_builder(
-        egui::UiBuilder::new()
-            .max_rect(inner_rect)
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
-        |ui| {
-            paint_app_icon(ui, 30.0);
-            ui.add_space(12.0);
-            ui.vertical(|ui| {
-                ui.add_space(2.0);
-                ui.label(
-                    egui::RichText::new("secreq")
-                        .size(18.0)
-                        .strong()
-                        .color(th.fg),
-                );
-                let subtitle = if viewer_mode {
-                    "Audit timeline · pinned"
-                } else {
-                    "Consent requests"
-                };
-                ui.label(egui::RichText::new(subtitle).size(11.0).color(th.faint));
-            });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if pending > 0 {
-                    paint_count_badge(ui, pending, process_count, pulse);
-                }
-            });
-        },
-    );
-
-    ui.allocate_rect(bar_rect, egui::Sense::hover());
-}
 
 /// Draw the small app-logo badge — accent-soft rounded square with a
 /// thin accent border and a stylised key shape inside. Built from
 /// primitives so it scales cleanly across DPRs.
-fn paint_app_icon(ui: &mut egui::Ui, size: f32) {
+pub(crate) fn paint_app_icon(ui: &mut egui::Ui, size: f32) {
     let th = Theme::of(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     let painter = ui.painter();
@@ -1307,11 +609,12 @@ fn paint_app_icon(ui: &mut egui::Ui, size: f32) {
     );
 }
 
-/// Paint a small magnifier glyph for the search bar — a hollow ring
+/// Paint a small magnifier glyph for the search field — a hollow ring
 /// with a short diagonal handle. Hand-painted because the bundled font
 /// stack has no search glyph (and the UI avoids emoji), the same reason
-/// the app logo and key are drawn from primitives.
-fn paint_search_glyph(ui: &mut egui::Ui, color: egui::Color32) {
+/// the app logo and key are drawn from primitives. Used by the manager
+/// window's header search box.
+pub(crate) fn paint_search_glyph(ui: &mut egui::Ui, color: egui::Color32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(15.0, 16.0), egui::Sense::hover());
     let painter = ui.painter();
     let lens_center = egui::pos2(rect.left() + 6.0, rect.center().y - 1.0);
@@ -1325,186 +628,18 @@ fn paint_search_glyph(ui: &mut egui::Ui, color: egui::Color32) {
     painter.line_segment([handle_start, handle_end], stroke);
 }
 
-/// Linear interpolate between two colours, component-wise on the
-/// straight (un-premultiplied) channels. `t` is clamped to `0..=1`, and
-/// `t == 0` returns `a` byte-for-byte — which is what keeps the resting
-/// (`pulse == 0`) chrome pixel-identical to before the highlight existed.
-fn lerp_color(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {
-    let t = t.clamp(0.0, 1.0);
-    let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
-    egui::Color32::from_rgba_unmultiplied(
-        mix(a.r(), b.r()),
-        mix(a.g(), b.g()),
-        mix(a.b(), b.b()),
-        mix(a.a(), b.a()),
-    )
-}
-
-/// `pulse` (0.0 = rest, 1.0 = peak) flashes the badge when a new ask just
-/// arrived: the soft pill fills to solid accent with near-white text, then
-/// the child's frame loop decays it back to rest.
-fn paint_count_badge(ui: &mut egui::Ui, pending: usize, process_count: usize, pulse: f32) {
-    let th = Theme::of(ui.ctx());
-    let label = if process_count > 1 {
-        format!("{pending} pending · {process_count} apps")
-    } else {
-        format!("{pending} pending")
-    };
-    let fill = lerp_color(th.raised, th.accent, pulse);
-    let stroke = lerp_color(th.accent, th.fg, pulse * 0.5);
-    let text = lerp_color(th.accent_text, th.fg, pulse);
-    egui::Frame::new()
-        .fill(fill)
-        .corner_radius(egui::CornerRadius::same(10))
-        .inner_margin(egui::Margin::symmetric(10, 5))
-        .stroke(egui::Stroke::new(1.0, stroke))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("●").size(8.0).color(text));
-                ui.label(egui::RichText::new(label).size(11.0).strong().color(text));
-            });
-        });
-}
-
-fn render_tab_bar(
-    ui: &mut egui::Ui,
-    current: &mut Tab,
-    tree: &ProcessTree,
-    audit_count: usize,
-    rule_count: usize,
-    pending_pulse: f32,
-) {
-    let pending = tree.total_leaf_rows();
-    ui.horizontal(|ui| {
-        let pending_label = if pending > 0 {
-            format!("Pending  {pending}")
-        } else {
-            "Pending".to_owned()
-        };
-        render_tab(
-            ui,
-            &pending_label,
-            *current == Tab::Pending,
-            pending_pulse,
-            || {
-                *current = Tab::Pending;
-            },
-        );
-        ui.add_space(6.0);
-        let rules_label = if rule_count > 0 {
-            format!("Rules  {rule_count}")
-        } else {
-            "Rules".to_owned()
-        };
-        render_tab(ui, &rules_label, *current == Tab::Rules, 0.0, || {
-            *current = Tab::Rules;
-        });
-        ui.add_space(6.0);
-        let audit_label = if audit_count > 0 {
-            format!("Audit log  {audit_count}")
-        } else {
-            "Audit log".to_owned()
-        };
-        render_tab(ui, &audit_label, *current == Tab::Audit, 0.0, || {
-            *current = Tab::Audit;
-        });
-    });
-}
-
-/// One underline-style tab. Active tab gets accent text + a 2px
-/// accent underline; inactive tab uses muted text with no underline.
-/// Both are clickable. Cheaper-looking than egui's stock
-/// `selectable_label` pill, and reads as a proper top-of-page tab bar
-/// rather than two adjacent buttons.
-///
-/// `highlight` (0.0 = none) flashes an *inactive* tab toward the active
-/// look — used by the Pending tab when a new ask arrives while the user
-/// is on another tab. At `0.0` the inactive colours are unchanged.
-fn render_tab(
-    ui: &mut egui::Ui,
-    label: &str,
-    active: bool,
-    highlight: f32,
-    mut on_click: impl FnMut(),
-) {
-    let th = Theme::of(ui.ctx());
-    let (text_color, underline_color) = if active {
-        (th.fg, th.accent)
-    } else {
-        (
-            lerp_color(th.dim, th.accent_text, highlight),
-            lerp_color(egui::Color32::TRANSPARENT, th.accent, highlight),
-        )
-    };
-    let text = egui::RichText::new(label)
-        .size(13.0)
-        .color(text_color)
-        .strong();
-    let resp = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
-    // 2px underline 4px below the text baseline. We paint it ourselves
-    // (rather than relying on egui's underline styling) so it can be
-    // accent-coloured on active tabs only, and stays a constant 2px
-    // even when egui's animation system would otherwise fade it.
-    let underline_y = resp.rect.bottom() + 4.0;
-    let stroke = egui::Stroke::new(2.0, underline_color);
-    ui.painter().hline(resp.rect.x_range(), underline_y, stroke);
-    if resp.clicked() {
-        on_click();
-    }
-    if resp.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
-}
-
-fn render_pending_page(
-    ui: &mut egui::Ui,
-    tree: &ProcessTree,
-    collapsed: &mut HashMap<(u32, u64), bool>,
-    actions: &mut Vec<PendingAction>,
-    audit: &AuditCache,
-    viewer_mode: bool,
-) {
-    if tree.roots.is_empty() {
-        render_empty_state(ui, viewer_mode);
-        return;
-    }
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            let last_root_idx = tree.roots.len().saturating_sub(1);
-            for (i, &root_idx) in tree.roots.iter().enumerate() {
-                // Each root is its own tree with no parent — start
-                // with an empty `last_path`. The top root keeps the
-                // keyboard-accelerator emphasis (no border anymore,
-                // accent-coloured name instead).
-                render_node(
-                    ui,
-                    tree,
-                    root_idx,
-                    i == 0,
-                    0,
-                    &[],
-                    collapsed,
-                    actions,
-                    audit,
-                );
-                if i < last_root_idx {
-                    ui.add_space(6.0);
-                    ui.separator();
-                    ui.add_space(6.0);
-                }
-            }
-        });
-}
-
-fn render_audit_page(
+/// The Audit page body, rendered inside the manager window below its
+/// header chrome. The search *input* lives in that header (bound to
+/// `ManagerWindowState::audit_search`); this page receives the query
+/// read-only and does the filtering, the day-bucketed timeline, and
+/// the "Create rule from this ask…" hand-off into the Rules view.
+pub(crate) fn render_audit_page(
     ctx: &egui::Context,
     ui: &mut egui::Ui,
     audit: &AuditCache,
     rules_draft: &mut Option<RuleDraft>,
-    current_tab: &mut Tab,
-    search: &mut String,
-    search_focus_pending: &mut bool,
+    view: &mut ManagerView,
+    search: &str,
 ) {
     let th = Theme::of(ctx);
     if audit.entries.is_empty() {
@@ -1537,8 +672,18 @@ fn render_audit_page(
         .take(200)
         .collect();
 
-    render_audit_search_bar(ctx, ui, search, search_focus_pending, filtered.len(), total);
-    ui.add_space(10.0);
+    // Match count while a query is active — the header's search box is
+    // pure input, so the "N of M" feedback renders with the results.
+    if !query.is_empty() {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+            ui.label(
+                egui::RichText::new(format!("{} of {total}", filtered.len()))
+                    .size(11.0)
+                    .color(th.dim),
+            );
+        });
+        ui.add_space(4.0);
+    }
 
     if filtered.is_empty() {
         ui.vertical_centered(|ui| {
@@ -1563,13 +708,19 @@ fn render_audit_page(
         .show(ui, |ui| {
             // Newest first — that's what you want to scan in a console
             // session. Day-bucket headers give the eye an anchor while
-            // scanning.
+            // scanning; a 1px hairline separates consecutive entries
+            // (flat rows, not bordered cards).
             let mut last_bucket: Option<String> = None;
+            let mut first = true;
             for entry in &filtered {
                 let bucket = audit_day_bucket(entry.ts_unix, now);
-                if last_bucket.as_deref() != Some(bucket.as_str()) {
+                let new_bucket = last_bucket.as_deref() != Some(bucket.as_str());
+                if !first && !new_bucket {
+                    audit_row_separator(ui, &th);
+                }
+                if new_bucket {
                     if last_bucket.is_some() {
-                        ui.add_space(6.0);
+                        ui.add_space(10.0);
                     }
                     ui.label(
                         egui::RichText::new(&bucket)
@@ -1580,78 +731,19 @@ fn render_audit_page(
                     ui.add_space(4.0);
                     last_bucket = Some(bucket);
                 }
-                render_audit_entry(ui, entry, now, rules_draft, current_tab);
+                render_audit_entry(ui, entry, now, rules_draft, view);
+                first = false;
             }
         });
 }
 
-/// Search-bar row at the top of the Audit tab. Always visible (no
-/// modal toggle). The whole row is wrapped in a card frame so it sits
-/// in the same design language as the rule-form inputs and the entry
-/// cards below it, rather than floating as a bare egui text box. The
-/// input is frameless inside the card; the right edge carries a muted
-/// match count and a faint shortcut-hint chip. Cmd/Ctrl+F focuses it.
-fn render_audit_search_bar(
-    ctx: &egui::Context,
-    ui: &mut egui::Ui,
-    search: &mut String,
-    focus_pending: &mut bool,
-    matches: usize,
-    total: usize,
-) {
-    let th = Theme::of(ctx);
-    let shortcut_label = match ctx.os() {
-        // Space between the glyph and the key: the ⌘ and F otherwise
-        // kern almost on top of each other in the keycap chip.
-        egui::os::OperatingSystem::Mac => "⌘ F",
-        _ => "Ctrl+F",
-    };
-    let count_label = if search.trim().is_empty() {
-        format!("{total} {}", if total == 1 { "entry" } else { "entries" })
-    } else {
-        format!("{matches} of {total}")
-    };
-    egui::Frame::new()
-        .fill(th.well)
-        .stroke(egui::Stroke::new(1.0, th.well_border))
-        .corner_radius(egui::CornerRadius::same(8))
-        .inner_margin(egui::Margin::symmetric(12, 7))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                // A leading magnifier glyph reads as "search" without an
-                // emoji; painted from primitives since the font stack
-                // has no search glyph.
-                paint_search_glyph(ui, th.dim);
-                ui.add_space(4.0);
-                // The input flexes to fill the row; reserve room on the
-                // right for the count + shortcut chip.
-                let resp = ui.add(
-                    egui::TextEdit::singleline(search)
-                        .frame(egui::Frame::NONE)
-                        .hint_text("Search wrap, args, ancestor, secret, decision…")
-                        .desired_width(ui.available_width() - 150.0),
-                );
-                if *focus_pending {
-                    resp.request_focus();
-                    *focus_pending = false;
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    egui::Frame::new()
-                        .fill(th.raised)
-                        .corner_radius(egui::CornerRadius::same(5))
-                        .inner_margin(egui::Margin::symmetric(6, 2))
-                        .show(ui, |ui| {
-                            ui.label(
-                                egui::RichText::new(shortcut_label)
-                                    .color(th.faint)
-                                    .size(10.0),
-                            );
-                        });
-                    ui.add_space(8.0);
-                    ui.label(egui::RichText::new(count_label).color(th.dim).size(11.0));
-                });
-            });
-        });
+/// 1px `th.rule` hairline between two flat audit rows.
+fn audit_row_separator(ui: &mut egui::Ui, th: &Theme) {
+    ui.add_space(7.0);
+    let y = ui.cursor().min.y;
+    ui.painter()
+        .hline(ui.max_rect().x_range(), y, egui::Stroke::new(1.0, th.rule));
+    ui.add_space(8.0);
 }
 
 /// Pure predicate: does `entry` match `query`? The query is split into
@@ -1692,23 +784,23 @@ fn audit_entry_matches(entry: &AuditEntry, query: &str) -> bool {
         .all(|term| fields.iter().any(|field| field.contains(term)))
 }
 
-// ── Rules tab ────────────────────────────────────────────────────────────
+// ── Rules page ───────────────────────────────────────────────────────────
 //
 // Two modes: list (the default) and form (visible while
-// `window_state.rules_draft` is `Some`). The form covers both Create
-// and Edit; the `id` field of the draft discriminates which.
+// `rules_draft` is `Some`). The form covers both Create and Edit; the
+// `id` field of the draft discriminates which.
 
 /// Mutable UI state the rules page threads into its sub-renderers.
 /// Bundled so the render fns stay under the argument-count lint while
-/// each field still maps 1:1 onto a `ConsentWindowState` slot.
-struct RulesUi<'a> {
-    draft: &'a mut Option<RuleDraft>,
-    dismissed: &'a mut HashSet<String>,
-    suggestion_sort: &'a mut SuggestionSort,
-    rule_sort: &'a mut RuleSort,
+/// each field still maps 1:1 onto a `ManagerWindowState` slot.
+pub(crate) struct RulesUi<'a> {
+    pub(crate) draft: &'a mut Option<RuleDraft>,
+    pub(crate) dismissed: &'a mut HashSet<String>,
+    pub(crate) suggestion_sort: &'a mut SuggestionSort,
+    pub(crate) rule_sort: &'a mut RuleSort,
 }
 
-fn render_rules_page(
+pub(crate) fn render_rules_page(
     ui: &mut egui::Ui,
     rule_rows: &[(&Rule, RuleUsage)],
     suggestions: &[Suggestion],
@@ -1867,15 +959,16 @@ fn render_suggestion_card(
     let th = Theme::of(ui.ctx());
     egui::Frame::new()
         .fill(th.well)
-        .stroke(egui::Stroke::new(1.0, th.raised))
+        .stroke(egui::Stroke::new(1.0, th.well_border))
         .inner_margin(egui::Margin::same(12))
-        .corner_radius(egui::CornerRadius::same(8))
+        .corner_radius(egui::CornerRadius::same(th.well_radius))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                let (pill_fg, pill_bg, pill_text) = match s.decide {
-                    SuggestionDecision::Approve => (th.ok, COLOR_APPROVE_SOFT, "approve"),
-                    SuggestionDecision::Deny => (th.danger, COLOR_DENY_SOFT, "deny"),
+                let (pill_fg, pill_text) = match s.decide {
+                    SuggestionDecision::Approve => (th.ok, "approve"),
+                    SuggestionDecision::Deny => (th.danger, "deny"),
                 };
+                let pill_bg = soft_fill(pill_fg);
                 render_pill(ui, pill_text, pill_fg, pill_bg);
                 ui.add_space(8.0);
                 // Explicit th.fg: `.strong()` alone resolves through
@@ -1937,7 +1030,7 @@ fn recency_label(last_ts_unix: u64, now_unix: u64) -> String {
 /// most recent fire, or `None` for a rule that has never fired (within
 /// the audit cache's retained window).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct RuleUsage {
+pub(crate) struct RuleUsage {
     count: usize,
     last_ts_unix: Option<u64>,
 }
@@ -1945,7 +1038,7 @@ struct RuleUsage {
 /// One pass over the audit cache, bucketing fires by `rule_id`. Rules
 /// that never fired simply won't appear in the map; the caller defaults
 /// them to `RuleUsage::default()` (count 0, no last-fire).
-fn rule_usage_index(entries: &[AuditEntry]) -> HashMap<String, RuleUsage> {
+pub(crate) fn rule_usage_index(entries: &[AuditEntry]) -> HashMap<String, RuleUsage> {
     let mut map: HashMap<String, RuleUsage> = HashMap::new();
     for e in entries {
         let Some(id) = &e.rule_id else {
@@ -1976,7 +1069,7 @@ pub enum RuleSort {
 impl RuleSort {
     /// Order `rows` (rule + its usage) in place. Stable and total: ties
     /// fall through to the other key, then to the rule name, then id.
-    fn sort(self, rows: &mut [(&Rule, RuleUsage)]) {
+    pub(crate) fn sort(self, rows: &mut [(&Rule, RuleUsage)]) {
         match self {
             RuleSort::MostUsed => rows.sort_by(|a, b| {
                 b.1.count
@@ -2040,7 +1133,7 @@ fn render_rules_row(
         .fill(th.well)
         .stroke(egui::Stroke::new(1.0, th.well_border))
         .inner_margin(egui::Margin::same(12))
-        .corner_radius(egui::CornerRadius::same(8))
+        .corner_radius(egui::CornerRadius::same(th.well_radius))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 // Enable toggle — emits SetEnabled the moment it
@@ -2057,10 +1150,11 @@ fn render_rules_row(
                 // disabled rule fades the pill to a neutral grey chip
                 // so the live semantic colour is reserved for rules
                 // that can actually fire.
-                let (pill_fg, pill_bg, pill_text) = match rule.decide {
-                    RuleDecision::Approve => (th.ok, COLOR_APPROVE_SOFT, "approve"),
-                    RuleDecision::Deny => (th.danger, COLOR_DENY_SOFT, "deny"),
+                let (pill_fg, pill_text) = match rule.decide {
+                    RuleDecision::Approve => (th.ok, "approve"),
+                    RuleDecision::Deny => (th.danger, "deny"),
                 };
+                let pill_bg = soft_fill(pill_fg);
                 if rule.enabled {
                     render_pill(ui, pill_text, pill_fg, pill_bg);
                 } else {
@@ -2167,11 +1261,11 @@ fn render_rule_form(
                 .color(th.fg),
         );
         ui.add_space(8.0);
-        let (pill_fg, pill_bg, pill_text) = match draft.decide {
-            RuleDecisionDraft::Approve => (th.ok, COLOR_APPROVE_SOFT, "approve"),
-            RuleDecisionDraft::Deny => (th.danger, COLOR_DENY_SOFT, "deny"),
+        let (pill_fg, pill_text) = match draft.decide {
+            RuleDecisionDraft::Approve => (th.ok, "approve"),
+            RuleDecisionDraft::Deny => (th.danger, "deny"),
         };
-        render_pill(ui, pill_text, pill_fg, pill_bg);
+        render_pill(ui, pill_text, pill_fg, soft_fill(pill_fg));
     });
     ui.add_space(10.0);
 
@@ -2408,7 +1502,7 @@ fn render_form_section_card<F: FnOnce(&mut egui::Ui)>(ui: &mut egui::Ui, title: 
     egui::Frame::new()
         .fill(th.well)
         .stroke(egui::Stroke::new(1.0, th.well_border))
-        .corner_radius(egui::CornerRadius::same(CARD_CORNER_RADIUS))
+        .corner_radius(egui::CornerRadius::same(th.well_radius))
         .inner_margin(egui::Margin::symmetric(14, 12))
         .show(ui, |ui| {
             ui.label(
@@ -2443,11 +1537,11 @@ fn render_form_field<R, F: FnOnce(&mut egui::Ui) -> R>(
 }
 
 /// Segmented two-option toggle for the rule's decide direction. The
-/// active option is filled with its semantic-soft colour
-/// (`th.raised` for approve, `COLOR_DENY_SOFT` for deny);
-/// the inactive option is a muted chip. Clicking either switches the
-/// draft. Reads as "this rule will approve / this rule will deny"
-/// without needing to parse the bullet-radio convention.
+/// active option is filled with its semantic-soft colour (`th.raised`
+/// for approve, a soft `th.danger` tint for deny); the inactive option
+/// is a muted chip. Clicking either switches the draft. Reads as "this
+/// rule will approve / this rule will deny" without needing to parse
+/// the bullet-radio convention.
 fn render_decide_toggle(ui: &mut egui::Ui, decide: &mut RuleDecisionDraft) -> egui::Response {
     let th = Theme::of(ui.ctx());
     ui.horizontal(|ui| {
@@ -2466,8 +1560,8 @@ fn render_decide_toggle(ui: &mut egui::Ui, decide: &mut RuleDecisionDraft) -> eg
             ui,
             "deny",
             *decide == RuleDecisionDraft::Deny,
-            COLOR_DENY_SOFT,
-            COLOR_DENY_HINT,
+            soft_fill(th.danger),
+            th.danger,
         );
         if deny_resp.clicked() {
             *decide = RuleDecisionDraft::Deny;
@@ -2485,7 +1579,7 @@ fn render_decide_segment(
 ) -> egui::Response {
     let th = Theme::of(ui.ctx());
     let (fill, stroke_color, text_color) = if active {
-        (active_fill, active_stroke, egui::Color32::WHITE)
+        (active_fill, active_stroke, th.fg)
     } else {
         (th.raised, th.well_border, th.dim)
     };
@@ -2515,8 +1609,8 @@ fn render_decide_segment(
 fn render_form_error_banner(ui: &mut egui::Ui, msg: &str) {
     let th = Theme::of(ui.ctx());
     egui::Frame::new()
-        .fill(COLOR_DENY_SOFT)
-        .stroke(egui::Stroke::new(1.0, COLOR_DENY_HINT))
+        .fill(soft_fill(th.danger))
+        .stroke(egui::Stroke::new(1.0, th.danger))
         .corner_radius(egui::CornerRadius::same(6))
         .inner_margin(egui::Margin::symmetric(12, 7))
         .show(ui, |ui| {
@@ -2610,11 +1704,11 @@ fn render_trained_secrets_chip(ui: &mut egui::Ui, trained: &std::collections::BT
 /// Render the transient banner that appears at the top of the
 /// Pending tab when an auto-deny rule fires. Caller is responsible
 /// for fading it out by passing `None` once it has expired.
-fn render_auto_deny_toast(ui: &mut egui::Ui, toast: &AutoDenyToastView) {
+pub(crate) fn render_auto_deny_toast(ui: &mut egui::Ui, toast: &AutoDenyToastView) {
     let th = Theme::of(ui.ctx());
     egui::Frame::new()
-        .fill(COLOR_DENY_SOFT)
-        .stroke(egui::Stroke::new(1.0, COLOR_DENY_HINT))
+        .fill(soft_fill(th.danger))
+        .stroke(egui::Stroke::new(1.0, th.danger))
         .corner_radius(egui::CornerRadius::same(6))
         .inner_margin(egui::Margin::symmetric(12, 8))
         .show(ui, |ui| {
@@ -2628,6 +1722,15 @@ fn render_auto_deny_toast(ui: &mut egui::Ui, toast: &AutoDenyToastView) {
                 ui.label(egui::RichText::new(msg).color(th.dim).size(11.0));
             }
         });
+}
+
+/// Soft translucent tint of a semantic status colour (`th.ok` /
+/// `th.danger`), used as the fill behind text drawn in the
+/// full-strength colour. Replaces the old hardcoded `COLOR_*_SOFT`
+/// constants so the tint tracks the flavor's own status tokens in both
+/// light and dark.
+fn soft_fill(color: egui::Color32) -> egui::Color32 {
+    color.gamma_multiply(0.18)
 }
 
 /// Decision pill for the Rules tab (approve / deny status badge).
@@ -2653,63 +1756,56 @@ fn render_pill(ui: &mut egui::Ui, label: &str, fg: egui::Color32, bg: egui::Colo
         });
 }
 
+/// One audit entry as a flat, hairline-separated row (the separator is
+/// the page loop's job). No card frame — the timeline reads as a list,
+/// not a stack of boxes.
 fn render_audit_entry(
     ui: &mut egui::Ui,
     entry: &AuditEntry,
     now: u64,
     rules_draft: &mut Option<RuleDraft>,
-    current_tab: &mut Tab,
+    view: &mut ManagerView,
 ) {
     let th = Theme::of(ui.ctx());
-    egui::Frame::new()
-        .fill(th.well)
-        .stroke(egui::Stroke::new(1.0, th.well_border))
-        .corner_radius(egui::CornerRadius::same(CARD_CORNER_RADIUS))
-        .inner_margin(egui::Margin::symmetric(14, 10))
-        .show(ui, |ui| {
-            render_audit_card_body(ui, entry, now);
-            // "Create rule from this ask…" — small affordance at the
-            // bottom of each audit card. We deliberately don't make
-            // it a context-menu (would require right-click discovery)
-            // or hover-only (would hide a not-obvious feature).
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let resp = ui.add(
-                        egui::Label::new(
-                            egui::RichText::new("Create rule from this ask…")
-                                .color(th.accent_text)
-                                .size(11.0),
-                        )
-                        .sense(egui::Sense::click()),
-                    );
-                    if resp.clicked() {
-                        *rules_draft = Some(RuleDraft::from_audit_entry(entry));
-                        *current_tab = Tab::Rules;
-                    }
-                    if resp.hovered() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                    }
-                });
-            });
+    render_audit_row_body(ui, entry, now);
+    // "Create rule from this ask…" — small affordance at the bottom of
+    // each row. We deliberately don't make it a context-menu (would
+    // require right-click discovery) or hover-only (would hide a
+    // not-obvious feature).
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let resp = ui.add(
+                egui::Label::new(
+                    egui::RichText::new("Create rule from this ask…")
+                        .color(th.accent_text)
+                        .size(11.0),
+                )
+                .sense(egui::Sense::click()),
+            );
+            if resp.clicked() {
+                *rules_draft = Some(RuleDraft::from_audit_entry(entry));
+                *view = ManagerView::Rules;
+            }
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
         });
-    // Gap painted *after* the frame (mirrors the Pending tab's
-    // `add_space(CARD_VERTICAL_GAP)`), avoiding an i8 outer-margin cast.
-    ui.add_space(AUDIT_CARD_GAP);
+    });
 }
 
-/// Three-tier audit card body:
+/// Three-tier audit row body:
 ///
 /// 1. **Command** (mono bold, measured-width truncation) on the left,
-///    a stable right-aligned verdict pill column on the right. The
-///    optional "remembered" tag is a *separate* accent pill so it can
-///    never widen the verdict pill or shove its leading dot — the core
-///    fix for the jittering verdict column.
+///    a stable right-aligned verdict column on the right — a small
+///    colored dot + colored verb, no background fill. The optional
+///    "remembered"/"auto"/"cached" tag is a *separate* accent pill so
+///    it can never shove the verdict's dot.
 /// 2. **Secret names** (never values) on their own wrapped line.
 /// 3. **Provenance footer** — `from <caller> · N more · .../cwd · ago`,
 ///    all footnote-tier, with the full caller chain + cwd in a hover
 ///    tooltip.
-fn render_audit_card_body(ui: &mut egui::Ui, entry: &AuditEntry, now: u64) {
+fn render_audit_row_body(ui: &mut egui::Ui, entry: &AuditEntry, now: u64) {
     let th = Theme::of(ui.ctx());
     let wrap = if entry.wrap.is_empty() {
         "(?)"
@@ -2742,11 +1838,11 @@ fn render_audit_card_body(ui: &mut egui::Ui, entry: &AuditEntry, now: u64) {
             resp.on_hover_text(&full);
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            render_verdict_indicator(ui, verdict);
             if let Some(tag) = verdict.tag {
-                paint_pill(ui, tag, th.accent_text, th.raised);
                 ui.add_space(4.0);
+                paint_pill(ui, tag, th.accent_text, th.raised);
             }
-            paint_verdict_pill(ui, verdict);
         });
     });
 
@@ -2802,15 +1898,14 @@ fn render_audit_card_body(ui: &mut egui::Ui, entry: &AuditEntry, now: u64) {
 }
 
 /// Normalized view of an audit decision string. Carries the verb, an
-/// optional separate tag ("remembered"), and the fg/bg colours for the
-/// verdict pill. Computing this once keeps the renderer free of inline
-/// decision matching and lets the "remembered" tag ride on its own pill.
+/// optional separate tag ("remembered"), and the indicator colour.
+/// Computing this once keeps the renderer free of inline decision
+/// matching and lets the tag ride on its own pill.
 #[derive(Clone, Copy)]
 struct AuditVerdict {
     label: &'static str,
     tag: Option<&'static str>,
-    fg: egui::Color32,
-    bg: egui::Color32,
+    color: egui::Color32,
 }
 
 impl AuditVerdict {
@@ -2819,20 +1914,17 @@ impl AuditVerdict {
             "deny" => AuditVerdict {
                 label: "denied",
                 tag: None,
-                fg: th.danger,
-                bg: COLOR_DENY_SOFT,
+                color: th.danger,
             },
             "approve" => AuditVerdict {
                 label: "approved",
                 tag: None,
-                fg: th.ok,
-                bg: COLOR_APPROVE_SOFT,
+                color: th.ok,
             },
             "approve+remember" => AuditVerdict {
                 label: "approved",
                 tag: Some("remembered"),
-                fg: th.ok,
-                bg: COLOR_APPROVE_SOFT,
+                color: th.ok,
             },
             // The daemon's approvals cache short-circuited the prompt
             // — distinguished from "approve" so the audit log shows
@@ -2840,8 +1932,7 @@ impl AuditVerdict {
             "approve+cached" => AuditVerdict {
                 label: "approved",
                 tag: Some("cached"),
-                fg: th.ok,
-                bg: COLOR_APPROVE_SOFT,
+                color: th.ok,
             },
             // An enabled auto-rule fired. Same colour as a hand-clicked
             // approve so the row scans the same at a glance; the "auto"
@@ -2849,45 +1940,40 @@ impl AuditVerdict {
             "approve+auto" => AuditVerdict {
                 label: "approved",
                 tag: Some("auto"),
-                fg: th.ok,
-                bg: COLOR_APPROVE_SOFT,
+                color: th.ok,
             },
             "deny+auto" => AuditVerdict {
                 label: "denied",
                 tag: Some("auto"),
-                fg: th.danger,
-                bg: COLOR_DENY_SOFT,
+                color: th.danger,
             },
             // Unknown decisions map to a static "seen" so `label`
             // stays `&'static` (no borrow of `decision`).
             _ => AuditVerdict {
                 label: "seen",
                 tag: None,
-                fg: th.dim,
-                bg: th.raised,
+                color: th.faint,
             },
         }
     }
 }
 
-/// Verdict pill: a soft-filled rounded chip with a leading status dot
-/// and the verb. The "remembered" tag is deliberately NOT drawn here —
-/// the caller paints it as a separate accent pill, so this pill keeps a
+/// Verdict indicator: a small colored dot + the verb in the same
+/// semantic colour, no background fill — the flat-row counterpart of
+/// the old verdict pill. The tag is deliberately NOT drawn here — the
+/// caller paints it as a separate accent pill, so the indicator keeps a
 /// fixed shape and its dot never jitters between rows.
-fn paint_verdict_pill(ui: &mut egui::Ui, v: AuditVerdict) -> egui::Response {
-    egui::Frame::new()
-        .fill(v.bg)
-        .stroke(egui::Stroke::new(1.0, v.fg))
-        .corner_radius(egui::CornerRadius::same(8))
-        .inner_margin(egui::Margin::symmetric(8, 2))
-        .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.x = 5.0;
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("\u{25cf}").size(7.0).color(v.fg));
-                ui.label(egui::RichText::new(v.label).size(11.0).strong().color(v.fg));
-            });
-        })
-        .response
+fn render_verdict_indicator(ui: &mut egui::Ui, v: AuditVerdict) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 5.0;
+        ui.label(egui::RichText::new("\u{25cf}").size(7.0).color(v.color));
+        ui.label(
+            egui::RichText::new(v.label)
+                .size(11.0)
+                .strong()
+                .color(v.color),
+        );
+    });
 }
 
 /// Truncate `text` to the widest prefix (plus an ellipsis) that fits
@@ -3031,727 +2117,7 @@ fn audit_day_bucket(ts_unix: u64, now: u64) -> String {
     }
 }
 
-fn render_empty_state(ui: &mut egui::Ui, viewer_mode: bool) {
-    let th = Theme::of(ui.ctx());
-    ui.vertical_centered(|ui| {
-        ui.add_space(40.0);
-        paint_empty_state_badge(ui, 72.0);
-        ui.add_space(16.0);
-        ui.label(
-            egui::RichText::new("All clear")
-                .size(20.0)
-                .strong()
-                .color(th.fg),
-        );
-        ui.add_space(4.0);
-        ui.label(
-            egui::RichText::new("No pending consent requests.")
-                .size(13.0)
-                .color(th.dim),
-        );
-        // The "will hide shortly" hint is only honest for a decision
-        // window: viewer-mode windows (`secreq view`) are deliberately
-        // opened to browse and never auto-hide, so promising otherwise
-        // would be a lie. A decision window on this (empty Pending) tab
-        // is not "interacting", so it genuinely does hide after the
-        // grace period — see `daemon::mod::run`'s auto-hide gate.
-        if !viewer_mode {
-            ui.add_space(8.0);
-            ui.label(
-                egui::RichText::new("This window will hide shortly")
-                    .size(11.0)
-                    .italics()
-                    .color(th.faint),
-            );
-        }
-    });
-}
-
-/// Big drawn circular "all clear" badge: a soft accent-green ring with
-/// a check mark stroked inside. Built from circles + a polyline so it
-/// renders at any DPR and doesn't depend on font glyph coverage.
-fn paint_empty_state_badge(ui: &mut egui::Ui, size: f32) {
-    let th = Theme::of(ui.ctx());
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
-    let painter = ui.painter();
-    let center = rect.center();
-    let radius = size * 0.5;
-    // Outer soft ring fill (very low alpha to avoid loud).
-    let ring_fill = egui::Color32::from_rgba_unmultiplied(38, 158, 88, 36);
-    painter.circle_filled(center, radius, ring_fill);
-    // Crisp 1.5px stroke ring in approve green.
-    painter.circle_stroke(center, radius - 1.0, egui::Stroke::new(1.5, th.ok));
-    // Check mark — three points (left-arm start, dip, right-arm end)
-    // proportioned so the shape reads as a confident tick at this
-    // size. Drawn as a connected stroked polyline.
-    let arm_l = egui::pos2(center.x - radius * 0.36, center.y + radius * 0.02);
-    let dip = egui::pos2(center.x - radius * 0.05, center.y + radius * 0.32);
-    let arm_r = egui::pos2(center.x + radius * 0.42, center.y - radius * 0.26);
-    painter.add(egui::Shape::line(
-        vec![arm_l, dip, arm_r],
-        egui::Stroke::new(4.0, th.ok),
-    ));
-}
-
-/// If `top_idx` is the start of a run of single-child, no-leaf, same-
-/// display-name nodes, return the deepest node in the run plus the run
-/// length. Otherwise returns `(top_idx, 1)`.
-///
-/// Why: deeply-recursive wraps (e.g. a `gh` invocation that internally
-/// shells out to another `gh`) can stack 10+ identical rows in the
-/// chain. Folding the run into a single row with a `× N` badge keeps
-/// the UI legible and lets the user approve at the outermost scope
-/// (which subsumes all the inner ones anyway).
-fn fold_run(tree: &ProcessTree, top_idx: usize) -> (usize, usize) {
-    let top_name = node_display_name(&tree.nodes[top_idx]);
-    let mut current = top_idx;
-    let mut count = 1;
-    loop {
-        let node = &tree.nodes[current];
-        if !node.rows.is_empty() {
-            break;
-        }
-        if node.children.len() != 1 {
-            break;
-        }
-        let child_idx = node.children[0];
-        if node_display_name(&tree.nodes[child_idx]) != top_name {
-            break;
-        }
-        current = child_idx;
-        count += 1;
-    }
-    (current, count)
-}
-
-fn node_display_name(node: &TreeNode) -> String {
-    node.caller
-        .as_ref()
-        .map(|c| {
-            if c.command.is_empty() {
-                c.name.clone()
-            } else {
-                c.command.clone()
-            }
-        })
-        .unwrap_or_else(|| format!("(process {})", node.pid))
-}
-
-// ── Tree connector glyphs ────────────────────────────────────────────────
-//
-// Tree visuals: depth-based indentation. The pre-card design used
-// `pstree`-style ASCII connectors (`├──`, `└──`, `│  `) plumbed
-// through a `last_path: &[bool]` argument. Cards replaced that
-// scheme — nesting is communicated via card indentation alone — so
-// the `last_path` parameter is now unused but still threaded through
-// for back-compat in case the daemon ever wants the row-tree view
-// again. The `tree_prefix` / `continuation_prefix` helpers and
-// their tests went away with the redesign.
-
-#[allow(clippy::too_many_arguments)]
-fn render_node(
-    ui: &mut egui::Ui,
-    tree: &ProcessTree,
-    node_idx: usize,
-    is_top_root: bool,
-    depth: usize,
-    last_path: &[bool],
-    collapsed: &mut HashMap<(u32, u64), bool>,
-    actions: &mut Vec<PendingAction>,
-    audit: &AuditCache,
-) {
-    // node_idx supplies the approval scope (outermost in any fold).
-    // child_iter_idx supplies the children/rows to recurse into (the
-    // deepest in the fold). When there's no run, they're the same.
-    let (child_iter_idx, run_count) = fold_run(tree, node_idx);
-    let key = tree.nodes[node_idx].key();
-    let is_collapsed = *collapsed.get(&key).unwrap_or(&false);
-
-    render_node_header(
-        ui,
-        tree,
-        node_idx,
-        child_iter_idx,
-        run_count,
-        is_top_root,
-        depth,
-        last_path,
-        collapsed,
-        actions,
-    );
-    if !is_collapsed {
-        render_children_and_rows(
-            ui,
-            tree,
-            child_iter_idx,
-            depth + 1,
-            last_path,
-            collapsed,
-            actions,
-            audit,
-        );
-    }
-}
-
-/// `bottom_idx` is the bottom of any single-child same-name run starting
-/// at `node_idx`. Used to decide whether to show the "▾/▸" disclosure
-/// (based on whether the *bottom* has descendants) and what subtree to
-/// recurse into.
-#[allow(clippy::too_many_arguments)]
-fn render_node_header(
-    ui: &mut egui::Ui,
-    tree: &ProcessTree,
-    node_idx: usize,
-    bottom_idx: usize,
-    run_count: usize,
-    is_top_root: bool,
-    depth: usize,
-    last_path: &[bool],
-    collapsed: &mut HashMap<(u32, u64), bool>,
-    actions: &mut Vec<PendingAction>,
-) {
-    let th = Theme::of(ui.ctx());
-    let node = &tree.nodes[node_idx];
-    let bottom = &tree.nodes[bottom_idx];
-    let key = node.key();
-    let is_collapsed = *collapsed.get(&key).unwrap_or(&false);
-    let has_descendants = !bottom.children.is_empty() || !bottom.rows.is_empty();
-    let descendant_count = count_leaf_rows(tree, bottom_idx);
-
-    // Suppress the `last_path` arg — it's still passed by callers for
-    // backwards compatibility but the new visual language uses
-    // depth-based indentation and a left guide rail instead of
-    // ASCII connectors.
-    let _ = last_path;
-    ui.horizontal(|ui| {
-        ui.add_space(depth as f32 * INDENT_UNIT);
-
-        // Disclosure chevron. Drawn from primitives — a right-pointing
-        // triangle (collapsed) or down-pointing (expanded) — so it
-        // looks like a native disclosure widget rather than a Unicode
-        // glyph. Always reserves the same width so siblings align even
-        // when one has no descendants.
-        if has_descendants {
-            let clicked = paint_disclosure_chevron(ui, !is_collapsed);
-            if clicked {
-                collapsed.insert(key, !is_collapsed);
-            }
-        } else {
-            ui.add_space(14.0);
-        }
-
-        let display = node_display_name(node);
-        let display_shown = truncate_for_display(&display, 56);
-        // Process names get a slightly lighter weight than the wrap
-        // commands inside — they're section headers, not the primary
-        // content. The top root still gets accent colour to signal
-        // "Enter/Esc act here".
-        let mut name_text = egui::RichText::new(&display_shown)
-            .font(egui::FontId::monospace(13.0))
-            .strong()
-            .color(th.fg);
-        if is_top_root && depth == 0 {
-            name_text = name_text.color(th.accent_text);
-        }
-        let label_resp = ui.label(name_text);
-        if display_shown.len() < display.len() {
-            label_resp.on_hover_text(display);
-        }
-        ui.label(
-            egui::RichText::new(format!("pid {}", node.pid))
-                .size(11.0)
-                .color(th.faint),
-        );
-        if run_count > 1 {
-            paint_pill(ui, &format!("×{run_count}"), th.accent, th.raised).on_hover_text(format!(
-                "Folded a chain of {run_count} processes with the same command, \
-                 from pid {} (outermost) to pid {} (innermost). Approving here \
-                 applies to all of them.",
-                node.pid, bottom.pid
-            ));
-        }
-        if is_collapsed && descendant_count > 0 {
-            ui.label(
-                egui::RichText::new(format!("· {descendant_count} hidden"))
-                    .size(11.0)
-                    .color(th.faint),
-            );
-        }
-
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // A node whose whole subtree is resolving has nothing to
-            // decide — drop the Approve all / Deny all buttons so the
-            // header reads as status, not a prompt.
-            if subtree_all_resolving(tree, node_idx) {
-                return;
-            }
-            let deny_label = if is_top_root && depth == 0 {
-                "Deny all  Esc"
-            } else {
-                "Deny all"
-            };
-            if styled_button(ui, deny_label, ButtonRole::Deny).clicked() {
-                collect_subtree_actions(tree, node_idx, Decision::Deny, actions);
-            }
-            ui.add_space(6.0);
-            let approve_label = if is_top_root && depth == 0 {
-                "Approve all  ↵"
-            } else {
-                "Approve all"
-            };
-            if styled_button(ui, approve_label, ButtonRole::Approve).clicked() {
-                collect_subtree_actions(tree, node_idx, Decision::ApproveRemember, actions);
-            }
-        });
-    });
-}
-
-#[allow(clippy::too_many_arguments)]
-fn render_children_and_rows(
-    ui: &mut egui::Ui,
-    tree: &ProcessTree,
-    node_idx: usize,
-    depth: usize,
-    parent_last_path: &[bool],
-    collapsed: &mut HashMap<(u32, u64), bool>,
-    actions: &mut Vec<PendingAction>,
-    audit: &AuditCache,
-) {
-    let node = &tree.nodes[node_idx];
-    let total = node.children.len() + node.rows.len();
-    // Children first, wraps last — children are intermediate processes
-    // (folders), wraps are the actual asks (leaves), so wraps anchoring
-    // the bottom of the tree feels most natural to read.
-    let mut i = 0;
-    for &child in &node.children {
-        let is_last = i + 1 == total;
-        let mut next_path = parent_last_path.to_vec();
-        next_path.push(is_last);
-        ui.add_space(2.0);
-        render_node(
-            ui, tree, child, false, depth, &next_path, collapsed, actions, audit,
-        );
-        i += 1;
-    }
-    if !node.rows.is_empty() {
-        let scope = node.scope();
-        for row in &node.rows {
-            let is_last = i + 1 == total;
-            let mut next_path = parent_last_path.to_vec();
-            next_path.push(is_last);
-            ui.add_space(CARD_VERTICAL_GAP);
-            render_wrap_leaf(ui, row, scope, depth, &next_path, actions, audit);
-            i += 1;
-        }
-    }
-}
-
-/// Render one pending wrap request as a card.
-///
-/// Card layout (bg `th.well`, 1px `th.well_border` border, 8px
-/// rounded, 14×10 inner padding):
-///
-/// - **Top row.** Command in monospace bold (the load-bearing "what is
-///   about to run"), optional waiter-count pill, then right-aligned
-///   `<n>s ago` footnote and `Approve` / `Deny` action buttons.
-/// - **Audit history.** Italic footnote-tier line summarising prior
-///   decisions; tinted orange when the last decision was a deny.
-/// - **Secret list.** One row per requested secret with a soft dot,
-///   the env-var name in bold mono, provider in accent, locator in
-///   footnote.
-/// - **cwd line.** Smallest tier — visible at a glance for
-///   provenance but never competes for the eye.
-fn render_wrap_leaf(
-    ui: &mut egui::Ui,
-    row: &QueueRow,
-    scope: ApprovalScope,
-    depth: usize,
-    _last_path: &[bool],
-    actions: &mut Vec<PendingAction>,
-    audit: &AuditCache,
-) {
-    let th = Theme::of(ui.ctx());
-    let indent = (depth as f32 * INDENT_UNIT).min(120.0) as i8;
-    egui::Frame::new()
-        .fill(th.well)
-        .stroke(egui::Stroke::new(1.0, th.well_border))
-        .corner_radius(egui::CornerRadius::same(CARD_CORNER_RADIUS))
-        .inner_margin(egui::Margin::symmetric(14, 10))
-        .outer_margin(egui::Margin {
-            left: indent,
-            right: 0,
-            top: 0,
-            bottom: 0,
-        })
-        .show(ui, |ui| {
-            render_wrap_card_body(ui, row, scope, actions, audit);
-        });
-}
-
-fn render_wrap_card_body(
-    ui: &mut egui::Ui,
-    row: &QueueRow,
-    scope: ApprovalScope,
-    actions: &mut Vec<PendingAction>,
-    audit: &AuditCache,
-) {
-    let th = Theme::of(ui.ctx());
-    // SSH sign asks render a distinct card — a key identity + fingerprint
-    // instead of a wrap command + secret list. The approve/deny/remember
-    // buttons and the provenance tree are identical; only the body differs.
-    if let Some(ssh) = &row.representative.ssh {
-        render_ssh_card_body(ui, row, ssh, scope, actions);
-        return;
-    }
-    // ── Card header row: command + actions ──
-    ui.horizontal(|ui| {
-        let cmd = row.representative.command.join(" ");
-        let truncated = truncate_for_display(&cmd, 50);
-        let resp = ui.label(
-            egui::RichText::new(&truncated)
-                .font(egui::FontId::monospace(13.5))
-                .strong()
-                .color(th.fg),
-        );
-        if truncated.len() < cmd.len() {
-            resp.on_hover_text(cmd);
-        }
-        if row.waiter_count > 1 {
-            paint_pill(
-                ui,
-                &format!("×{} waiting", row.waiter_count),
-                th.accent,
-                th.raised,
-            );
-        }
-
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            match row.status {
-                RowStatus::Resolving => {
-                    // Already authorized; the provider call (and any
-                    // biometric prompt) is in flight. Read-only — no
-                    // Approve/Deny — so the card is purely provenance
-                    // for the prompt the user is being asked to satisfy.
-                    paint_pill(ui, "Resolving…", th.accent_text, th.raised);
-                }
-                RowStatus::Awaiting => {
-                    if small_button(ui, "Deny", ButtonRole::Deny).clicked() {
-                        actions.push(PendingAction {
-                            key: row.key.clone(),
-                            decision: Decision::Deny,
-                            scope,
-                        });
-                    }
-                    ui.add_space(4.0);
-                    if small_button(ui, "Approve", ButtonRole::Approve).clicked() {
-                        actions.push(PendingAction {
-                            key: row.key.clone(),
-                            decision: Decision::Approve,
-                            scope,
-                        });
-                    }
-                }
-            }
-            ui.add_space(10.0);
-            ui.label(
-                egui::RichText::new(format!(
-                    "{} ago",
-                    humanize_duration(row.first_seen.elapsed())
-                ))
-                .size(11.0)
-                .color(th.faint),
-            );
-        });
-    });
-    ui.add_space(4.0);
-
-    // ── Audit history line ──
-    let direct_caller = row.representative.callers.first().map(|c| c.name.as_str());
-    let summary = audit.summarize(&row.key.wrap, direct_caller);
-    let (text, color) = format_audit_line(&summary, now_unix(), &th);
-    ui.label(egui::RichText::new(text).size(11.0).italics().color(color));
-
-    // ── Secret list (or the gate-only marker when there's nothing to
-    // inject — the prompt is purely a consent gate, e.g. for `op`) ──
-    if !row.representative.secrets.is_empty() {
-        ui.add_space(6.0);
-        // Per-secret `← command` provenance only earns its space on a
-        // coalesced `run` *session* card aggregating *more than one*
-        // command. On a single-command card the header already names the
-        // command (noise to repeat it), and a coalesced `x` card isn't a
-        // session — so gate on the `run` wrap identity too.
-        let distinct_commands: std::collections::HashSet<&str> = row
-            .representative
-            .secrets
-            .iter()
-            .flat_map(|s| s.requested_by.iter())
-            .map(String::as_str)
-            .collect();
-        let show_provenance =
-            row.representative.dedupe_key.wrap == "run" && distinct_commands.len() > 1;
-        for s in &row.representative.secrets {
-            render_card_secret(ui, s, show_provenance);
-        }
-    } else {
-        render_card_gate_only(ui);
-    }
-
-    // ── cwd line ──
-    if !row.representative.cwd.is_empty() {
-        ui.add_space(6.0);
-        let cwd_shown = truncate_for_display(&row.representative.cwd, 70);
-        let resp = ui.label(
-            egui::RichText::new(format!("in  {cwd_shown}"))
-                .size(10.0)
-                .color(th.faint),
-        );
-        if cwd_shown.len() < row.representative.cwd.len() {
-            resp.on_hover_text(&row.representative.cwd);
-        }
-    }
-}
-
-/// Render the body of an SSH-sign consent card. Distinct from a wrap card:
-/// the request is for a *key*, not a command, so we show
-///
-/// 1. an **"SSH key request"** label + the identity name (`ssh.<key_id>`)
-///    in the header, with the same Approve / Deny / Resolving controls a
-///    wrap card carries (so the decision semantics are identical);
-/// 2. the key's **SHA256 fingerprint** in a monospace footnote (what
-///    `ssh-add -l` prints — lets the user match it to a key they know);
-/// 3. the configured **`$reason`**, if present, in the italic footnote tier;
-/// 4. **no** "secrets to be injected" list and **no** "gate only" marker —
-///    an SSH sign releases a signature, never an env var, so neither is
-///    meaningful here.
-///
-/// The caller chain / provenance is rendered by the surrounding process
-/// tree exactly as for a wrap, so it isn't repeated in the card body.
-fn render_ssh_card_body(
-    ui: &mut egui::Ui,
-    row: &QueueRow,
-    ssh: &SshAskInfo,
-    scope: ApprovalScope,
-    actions: &mut Vec<PendingAction>,
-) {
-    let th = Theme::of(ui.ctx());
-    // ── Header row: "SSH key request" + identity, then actions ──
-    ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new("SSH key request")
-                .font(egui::FontId::proportional(13.5))
-                .strong()
-                .color(th.fg),
-        );
-        ui.add_space(6.0);
-        ui.label(
-            egui::RichText::new(&ssh.key_id)
-                .font(egui::FontId::monospace(12.5))
-                .color(th.accent_text),
-        );
-        if row.waiter_count > 1 {
-            paint_pill(
-                ui,
-                &format!("×{} waiting", row.waiter_count),
-                th.accent,
-                th.raised,
-            );
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // A sign offers more than approve/deny: the user can grant a
-            // session window so they're not re-prompted on every push. Those
-            // buttons don't fit beside the identity label, so the header only
-            // carries the "Signing…" pill (while resolving) and the age; the
-            // action buttons render in a dedicated row below.
-            if row.status == RowStatus::Resolving {
-                paint_pill(ui, "Signing…", th.accent_text, th.raised);
-                ui.add_space(10.0);
-            }
-            ui.label(
-                egui::RichText::new(format!(
-                    "{} ago",
-                    humanize_duration(row.first_seen.elapsed())
-                ))
-                .size(11.0)
-                .color(th.faint),
-            );
-        });
-    });
-
-    // ── Fingerprint row ──
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        ui.add_space(2.0);
-        ui.label(egui::RichText::new("\u{25cf}").size(7.0).color(th.accent));
-        ui.label(egui::RichText::new("sign with").size(11.0).color(th.dim));
-        let fp_shown = truncate_for_display(&ssh.fingerprint, 60);
-        let resp = ui.label(
-            egui::RichText::new(&fp_shown)
-                .font(egui::FontId::monospace(11.5))
-                .color(th.fg),
-        );
-        if fp_shown.len() < ssh.fingerprint.len() {
-            resp.on_hover_text(&ssh.fingerprint);
-        }
-    });
-
-    // ── Reason (optional) ──
-    if let Some(reason) = ssh.reason.as_deref().filter(|r| !r.is_empty()) {
-        ui.horizontal(|ui| {
-            ui.add_space(18.0);
-            ui.label(
-                egui::RichText::new(reason)
-                    .size(11.0)
-                    .italics()
-                    .color(th.faint),
-            );
-        });
-    }
-
-    // ── Action row ──
-    // Only when awaiting a decision (a resolving sign is read-only; its
-    // provider call is already in flight). Four choices: a one-shot approve,
-    // two session grants ("this key" / "all keys" for the session TTL), and
-    // deny. In a right-to-left layout the first-added button sits rightmost,
-    // so adding Deny first then the approves yields the visual left-to-right
-    // order: Approve once · Approve 30m · Approve all keys 30m · Deny.
-    if row.status == RowStatus::Awaiting {
-        ui.add_space(10.0);
-        // The outer `horizontal` pins the row to a single button-height; a
-        // bare `with_layout(right_to_left, Align::Center)` on the card body
-        // would inherit the card's full available height and vertically
-        // centre the buttons in a tall void.
-        ui.horizontal(|ui| {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let mut push = |decision: Decision| {
-                    actions.push(PendingAction {
-                        key: row.key.clone(),
-                        decision,
-                        scope,
-                    });
-                };
-                if small_button(ui, "Deny", ButtonRole::Deny).clicked() {
-                    push(Decision::Deny);
-                }
-                ui.add_space(4.0);
-                if small_button(ui, "Approve all keys 30m", ButtonRole::Approve).clicked() {
-                    push(Decision::ApproveSshSessionAll);
-                }
-                ui.add_space(4.0);
-                if small_button(ui, "Approve 30m", ButtonRole::Approve).clicked() {
-                    push(Decision::ApproveSshSession);
-                }
-                ui.add_space(4.0);
-                if small_button(ui, "Approve once", ButtonRole::Approve).clicked() {
-                    push(Decision::Approve);
-                }
-            });
-        });
-    }
-}
-
-/// One secret-row inside a wrap card.
-fn render_card_secret(ui: &mut egui::Ui, s: &SecretAsk, show_provenance: bool) {
-    let th = Theme::of(ui.ctx());
-    ui.horizontal(|ui| {
-        ui.add_space(2.0);
-        ui.label(egui::RichText::new("●").size(7.0).color(th.accent));
-        ui.label(
-            egui::RichText::new(&s.name)
-                .font(egui::FontId::monospace(12.0))
-                .strong()
-                .color(th.fg),
-        );
-        ui.add_space(2.0);
-        ui.label(
-            egui::RichText::new(&s.provider)
-                .font(egui::FontId::monospace(11.0))
-                .color(th.accent_text),
-        );
-        if !s.locator.is_empty() {
-            let loc_shown = truncate_for_display(&s.locator, 42);
-            let resp = ui.label(
-                egui::RichText::new(&loc_shown)
-                    .font(egui::FontId::monospace(11.0))
-                    .color(th.faint),
-            );
-            if loc_shown.len() < s.locator.len() {
-                resp.on_hover_text(&s.locator);
-            }
-        }
-        // Session provenance: on a multi-command coalesced run session,
-        // show which sibling command asked for this secret. Suppressed on
-        // single-command cards (`show_provenance == false`) — the header
-        // already names the command — and always empty for a plain wrap
-        // (`x`) or SSH ask, so those render exactly as before, no arrow.
-        if show_provenance && !s.requested_by.is_empty() {
-            let joined = s
-                .requested_by
-                .iter()
-                .map(|c| c.strip_prefix("run ").unwrap_or(c))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let label = truncate_for_display(&joined, 30);
-            let resp = ui.label(
-                egui::RichText::new(format!("← {label}"))
-                    .font(egui::FontId::monospace(11.0))
-                    .color(th.dim),
-            );
-            if label.chars().count() < joined.chars().count() {
-                resp.on_hover_text(&joined);
-            }
-        }
-    });
-    let why = s
-        .description
-        .as_deref()
-        .or(s.reason.as_deref())
-        .unwrap_or("");
-    if !why.is_empty() {
-        ui.horizontal(|ui| {
-            ui.add_space(18.0);
-            ui.label(
-                egui::RichText::new(why)
-                    .size(11.0)
-                    .italics()
-                    .color(th.faint),
-            );
-        });
-    }
-}
-
-/// Marker shown in place of the secret list for a *gate-only* wrap — one
-/// with no secrets to inject. The request is a pure consent gate (e.g.
-/// `op`), so we say so explicitly rather than render an empty gap the
-/// user might read as "secrets failed to load".
-fn render_card_gate_only(ui: &mut egui::Ui) {
-    let th = Theme::of(ui.ctx());
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        ui.add_space(2.0);
-        ui.label(egui::RichText::new("●").size(7.0).color(th.dim));
-        ui.label(
-            egui::RichText::new("Gate only — no secrets injected")
-                .size(11.5)
-                .italics()
-                .color(th.dim),
-        );
-    });
-}
-
-/// One-line summary derived from `audit.log` history for this wrap +
-/// caller. Empty history reads as "first request from this caller", a
-/// reassuring counterpoint to wrap-rerun fatigue ("oh, I've approved
-/// this 12 times before"). Color-coded only for the case worth a
-/// second look: the last decision was a deny.
-const COLOR_DENY_HINT: egui::Color32 = egui::Color32::from_rgb(220, 130, 110);
-
-/// Soft fills behind the audit verdict pills — dim, desaturated
-/// tints of the approve/deny semantics so the badge reads as a calm
-/// status chip rather than a button. Cool-dark, macOS-native feel.
-const COLOR_APPROVE_SOFT: egui::Color32 = egui::Color32::from_rgb(24, 48, 36);
-const COLOR_DENY_SOFT: egui::Color32 = egui::Color32::from_rgb(54, 30, 34);
-
-fn format_audit_line(
+pub(crate) fn format_audit_line(
     summary: &WrapHistorySummary,
     now: u64,
     th: &Theme,
@@ -3765,7 +2131,7 @@ fn format_audit_line(
     // Color only the deny case — approve/approve+remember is the
     // expected path and shouldn't draw the eye.
     let (verb, color) = match summary.last_decision.as_deref() {
-        Some("deny") => ("denied", COLOR_DENY_HINT),
+        Some("deny") => ("denied", th.danger),
         Some("approve") | Some("approve+remember") | Some("approve+cached") => ("approved", th.dim),
         _ => ("seen", th.dim),
     };
@@ -3781,45 +2147,6 @@ fn format_audit_line(
 }
 
 // ── Drawn primitives ─────────────────────────────────────────────────────
-
-/// Disclosure chevron — a small triangle, pointing right when
-/// collapsed and down when expanded. Drawn from primitives because
-/// the Unicode `▾` glyph reads as a font character (a bit awkward
-/// inside a "real app" header row).
-///
-/// Returns whether the chevron was clicked this frame.
-fn paint_disclosure_chevron(ui: &mut egui::Ui, expanded: bool) -> bool {
-    let th = Theme::of(ui.ctx());
-    let size = 14.0;
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
-    // Triangle, 8x8, centred. Right-pointing when collapsed, down-
-    // pointing when expanded.
-    let c = rect.center();
-    let r = 4.0;
-    let points = if expanded {
-        vec![
-            egui::pos2(c.x - r, c.y - r / 2.0),
-            egui::pos2(c.x + r, c.y - r / 2.0),
-            egui::pos2(c.x, c.y + r / 2.0 + 1.5),
-        ]
-    } else {
-        vec![
-            egui::pos2(c.x - r / 2.0, c.y - r),
-            egui::pos2(c.x - r / 2.0, c.y + r),
-            egui::pos2(c.x + r / 2.0 + 1.5, c.y),
-        ]
-    };
-    let colour = if resp.hovered() { th.fg } else { th.dim };
-    ui.painter().add(egui::Shape::convex_polygon(
-        points,
-        colour,
-        egui::Stroke::NONE,
-    ));
-    if resp.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
-    resp.clicked()
-}
 
 /// Small inline pill — a rounded rect with a tinted fill, a thin
 /// stroke in the foreground accent colour, and a label. Used for
@@ -3841,72 +2168,9 @@ fn paint_pill(
         .response
 }
 
-// ── Buttons ───────────────────────────────────────────────────────────────
-
-#[derive(Clone, Copy)]
-enum ButtonRole {
-    Approve,
-    Deny,
-}
-
-fn styled_button(ui: &mut egui::Ui, text: &str, role: ButtonRole) -> egui::Response {
-    let th = Theme::of(ui.ctx());
-    let (fill, hover, text_color) = button_colors(role, &th);
-    let button = egui::Button::new(egui::RichText::new(text).color(text_color))
-        .fill(fill)
-        .min_size(egui::Vec2::new(0.0, 26.0));
-    let resp = ui.add(button);
-    if resp.hovered() {
-        paint_hover(ui, &resp, hover, text, text_color);
-    }
-    resp
-}
-
-fn small_button(ui: &mut egui::Ui, text: &str, role: ButtonRole) -> egui::Response {
-    let th = Theme::of(ui.ctx());
-    let (fill, hover, text_color) = button_colors(role, &th);
-    let button = egui::Button::new(egui::RichText::new(text).color(text_color).size(11.0))
-        .fill(fill)
-        .min_size(egui::Vec2::new(0.0, 20.0));
-    let resp = ui.add(button);
-    if resp.hovered() {
-        paint_hover(ui, &resp, hover, text, text_color);
-    }
-    resp
-}
-
-fn button_colors(role: ButtonRole, th: &Theme) -> (egui::Color32, egui::Color32, egui::Color32) {
-    match role {
-        ButtonRole::Approve => (th.ok, th.ok.gamma_multiply(1.1), egui::Color32::WHITE),
-        ButtonRole::Deny => (
-            th.danger,
-            th.danger.gamma_multiply(1.1),
-            egui::Color32::WHITE,
-        ),
-    }
-}
-
-fn paint_hover(
-    ui: &mut egui::Ui,
-    resp: &egui::Response,
-    hover: egui::Color32,
-    text: &str,
-    text_color: egui::Color32,
-) {
-    let corner_radius = ui.visuals().widgets.hovered.corner_radius;
-    ui.painter().rect_filled(resp.rect, corner_radius, hover);
-    ui.painter().text(
-        resp.rect.center(),
-        egui::Align2::CENTER_CENTER,
-        text,
-        egui::FontId::default(),
-        text_color,
-    );
-}
-
 // ── Formatting helpers ────────────────────────────────────────────────────
 
-fn humanize_duration(d: Duration) -> String {
+pub(crate) fn humanize_duration(d: Duration) -> String {
     let secs = d.as_secs();
     if secs < 60 {
         format!("{secs}s")
@@ -3932,27 +2196,10 @@ fn short_cwd(cwd: &str) -> String {
     }
 }
 
-fn truncate_for_display(s: &str, max_chars: usize) -> String {
-    let count = s.chars().count();
-    if count <= max_chars {
-        return s.to_owned();
-    }
-    let mut out: String = s.chars().take(max_chars.saturating_sub(1)).collect();
-    out.push('…');
-    out
-}
-
-#[allow(dead_code)]
-pub fn snapshot_for_test(state: &SharedState) -> QueueSnapshot {
-    state.lock().expect("state mutex").snapshot()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::audit::AuditCaller;
-    use crate::daemon::proto::Ask;
-    use std::collections::HashMap;
 
     // ── audit_entry_matches ──────────────────────────────────────
 
@@ -4091,262 +2338,6 @@ mod tests {
         assert!(audit_entry_matches(&e, "   "));
     }
 
-    fn mk_row(wrap: &str, ppid: u32, start: u64, secs_ago: u64, callers: Vec<Caller>) -> QueueRow {
-        QueueRow {
-            key: DedupeKey {
-                wrap: wrap.to_owned(),
-                ppid,
-                parent_start_time: start,
-            },
-            representative: Ask {
-                command: vec![wrap.to_owned()],
-                cwd: String::new(),
-                callers,
-                secrets: vec![],
-                providers: HashMap::new(),
-                dedupe_key: DedupeKey {
-                    wrap: wrap.to_owned(),
-                    ppid,
-                    parent_start_time: start,
-                },
-                ssh: None,
-                allow_remember: true,
-                nested_run: false,
-            },
-            waiter_count: 1,
-            first_seen: Instant::now() - Duration::from_secs(secs_ago),
-            status: RowStatus::Awaiting,
-        }
-    }
-
-    fn caller(pid: u32, name: &str, start_time: u64) -> Caller {
-        Caller {
-            pid,
-            name: name.to_owned(),
-            command: name.to_owned(),
-            start_time,
-        }
-    }
-
-    // ── new-ask highlight (observe_pending / decay) ──────────────
-
-    fn snap(rows: Vec<QueueRow>) -> QueueSnapshot {
-        QueueSnapshot { entries: rows }
-    }
-
-    fn one_ask() -> QueueSnapshot {
-        snap(vec![mk_row("gh", 1, 1, 1, vec![caller(1, "zsh", 1)])])
-    }
-
-    fn two_asks() -> QueueSnapshot {
-        snap(vec![
-            mk_row("gh", 1, 1, 1, vec![caller(1, "zsh", 1)]),
-            mk_row("aws", 2, 2, 1, vec![caller(2, "zsh", 2)]),
-        ])
-    }
-
-    #[test]
-    fn first_pending_observation_does_not_flash() {
-        // A freshly-opened window already shows Pending with its initial
-        // asks — those aren't "new", so the very first frame is silent.
-        let mut ws = ConsentWindowState::new();
-        ws.observe_pending(&one_ask(), true);
-        assert_eq!(ws.pending_pulse, 0.0);
-        assert_eq!(ws.current_tab, Tab::Pending);
-    }
-
-    #[test]
-    fn on_pending_tab_tracks_active_tab() {
-        // Drives the child's "interacting" signal: true only off the
-        // Pending tab. A fresh window starts on Pending.
-        let mut ws = ConsentWindowState::new();
-        assert!(ws.on_pending_tab());
-        ws.focus_audit_tab();
-        assert!(!ws.on_pending_tab());
-        ws.focus_rules_tab();
-        assert!(!ws.on_pending_tab());
-    }
-
-    #[test]
-    fn new_ask_while_focused_flashes_without_switching_tab() {
-        let mut ws = ConsentWindowState::new();
-        ws.focus_audit_tab();
-        ws.observe_pending(&one_ask(), true); // baseline
-        assert_eq!(ws.pending_pulse, 0.0);
-
-        ws.observe_pending(&two_asks(), true); // a genuinely-new ask
-        assert_eq!(ws.pending_pulse, 1.0);
-        assert_eq!(ws.current_tab, Tab::Audit); // not yanked away
-    }
-
-    #[test]
-    fn new_ask_while_unfocused_switches_to_pending() {
-        let mut ws = ConsentWindowState::new();
-        ws.focus_audit_tab();
-        ws.observe_pending(&one_ask(), false); // baseline
-        ws.observe_pending(&two_asks(), false);
-        assert_eq!(ws.current_tab, Tab::Pending);
-        assert_eq!(ws.pending_pulse, 0.0); // no flash when unfocused
-    }
-
-    #[test]
-    fn unchanged_pending_set_does_not_reflash() {
-        let mut ws = ConsentWindowState::new();
-        ws.observe_pending(&one_ask(), true);
-        ws.observe_pending(&one_ask(), true);
-        assert_eq!(ws.pending_pulse, 0.0);
-    }
-
-    #[test]
-    fn decay_winds_the_pulse_down_to_zero() {
-        let mut ws = ConsentWindowState::new();
-        ws.set_pending_pulse(1.0);
-        assert!(ws.decay_pending_pulse(PENDING_PULSE_SECS / 2.0));
-        assert!(ws.pending_pulse > 0.0 && ws.pending_pulse < 1.0);
-        // Overshoot the remaining time → clamps to 0 and reports settled.
-        assert!(!ws.decay_pending_pulse(PENDING_PULSE_SECS));
-        assert_eq!(ws.pending_pulse, 0.0);
-        // Already at rest → no-op, still settled.
-        assert!(!ws.decay_pending_pulse(0.1));
-    }
-
-    #[test]
-    fn tree_groups_descendants_under_their_shared_ancestor() {
-        // Two zsh shells (different pids) both descended from a single
-        // Superset.app. Tree should have one root (Superset), with two
-        // zsh children, each carrying its respective wrap leaf.
-        let snapshot = QueueSnapshot {
-            entries: vec![
-                mk_row(
-                    "gh",
-                    7926,
-                    100,
-                    30,
-                    vec![
-                        caller(7926, "zsh-A", 1_000),
-                        caller(2831, "Superset.app", 500),
-                    ],
-                ),
-                mk_row(
-                    "aws",
-                    7927,
-                    101,
-                    20,
-                    vec![
-                        caller(7927, "zsh-B", 1_001),
-                        caller(2831, "Superset.app", 500),
-                    ],
-                ),
-            ],
-        };
-        let tree = build_tree(&snapshot);
-        assert_eq!(tree.roots.len(), 1, "single shared root");
-        let root_idx = tree.roots[0];
-        assert_eq!(tree.nodes[root_idx].pid, 2831);
-        assert_eq!(tree.nodes[root_idx].children.len(), 2);
-        // Each zsh child has one leaf row.
-        for &child in &tree.nodes[root_idx].children {
-            assert_eq!(tree.nodes[child].rows.len(), 1);
-            assert_eq!(tree.nodes[child].children.len(), 0);
-        }
-        assert_eq!(tree.total_leaf_rows(), 2);
-    }
-
-    #[test]
-    fn tree_keeps_unrelated_processes_as_separate_roots() {
-        let snapshot = QueueSnapshot {
-            entries: vec![
-                mk_row("gh", 7926, 100, 30, vec![caller(7926, "zsh", 1_000)]),
-                mk_row("aws", 4001, 50, 10, vec![caller(4001, "npm", 800)]),
-            ],
-        };
-        let tree = build_tree(&snapshot);
-        assert_eq!(tree.roots.len(), 2);
-    }
-
-    #[test]
-    fn collect_subtree_actions_uses_the_node_scope_for_every_leaf() {
-        // Approving at the SHARED ancestor should write actions whose
-        // `scope` is the ancestor's (pid, start_time) — that's the
-        // load-bearing property: future descendants ride this approval.
-        let snapshot = QueueSnapshot {
-            entries: vec![
-                mk_row(
-                    "gh",
-                    7926,
-                    100,
-                    30,
-                    vec![
-                        caller(7926, "zsh", 1_000),
-                        caller(2831, "Superset.app", 500),
-                    ],
-                ),
-                mk_row(
-                    "aws",
-                    7927,
-                    101,
-                    20,
-                    vec![
-                        caller(7927, "zsh", 1_001),
-                        caller(2831, "Superset.app", 500),
-                    ],
-                ),
-            ],
-        };
-        let tree = build_tree(&snapshot);
-        let root = tree.roots[0];
-        let mut actions = vec![];
-        collect_subtree_actions(&tree, root, Decision::ApproveRemember, &mut actions);
-        assert_eq!(actions.len(), 2);
-        for a in &actions {
-            assert_eq!(a.scope.pid, 2831);
-            assert_eq!(a.scope.start_time, 500);
-        }
-    }
-
-    #[test]
-    fn collect_subtree_at_a_zsh_node_only_includes_its_own_subtree() {
-        // Approving at one zsh shouldn't affect the other.
-        let snapshot = QueueSnapshot {
-            entries: vec![
-                mk_row(
-                    "gh",
-                    7926,
-                    100,
-                    30,
-                    vec![
-                        caller(7926, "zsh-A", 1_000),
-                        caller(2831, "Superset.app", 500),
-                    ],
-                ),
-                mk_row(
-                    "aws",
-                    7927,
-                    101,
-                    20,
-                    vec![
-                        caller(7927, "zsh-B", 1_001),
-                        caller(2831, "Superset.app", 500),
-                    ],
-                ),
-            ],
-        };
-        let tree = build_tree(&snapshot);
-        let root = tree.roots[0];
-        // Find the zsh-A child of Superset.
-        let zsh_a = tree.nodes[root]
-            .children
-            .iter()
-            .copied()
-            .find(|&i| tree.nodes[i].pid == 7926)
-            .expect("zsh-A child");
-        let mut actions = vec![];
-        collect_subtree_actions(&tree, zsh_a, Decision::ApproveRemember, &mut actions);
-        assert_eq!(actions.len(), 1);
-        assert_eq!(actions[0].key.wrap, "gh");
-        assert_eq!(actions[0].scope.pid, 7926);
-    }
-
     #[test]
     fn humanize_buckets_into_s_m_h() {
         assert_eq!(humanize_duration(Duration::from_secs(0)), "0s");
@@ -4481,16 +2472,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn truncate_keeps_short_strings_as_is_and_ellipsizes_long_ones() {
-        assert_eq!(truncate_for_display("hi", 10), "hi");
-        assert_eq!(truncate_for_display("1234567890", 5), "1234…");
-        let s = "café-au-lait-très-longue";
-        let t = truncate_for_display(s, 8);
-        assert!(t.ends_with('…'));
-        assert!(t.chars().count() == 8);
-    }
-
     fn mk_audit(ts: u64, wrap: &str, caller: &str, decision: &str) -> AuditEntry {
         AuditEntry {
             ts_unix: ts,
@@ -4591,9 +2572,6 @@ mod tests {
         };
         let (text, color) = format_audit_line(&denied, now, &th);
         assert!(text.contains("denied"));
-        assert_eq!(
-            color, COLOR_DENY_HINT,
-            "denied last must use the warn color"
-        );
+        assert_eq!(color, th.danger, "denied last must use the danger token");
     }
 }

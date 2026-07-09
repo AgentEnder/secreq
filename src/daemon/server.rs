@@ -105,6 +105,18 @@ fn handle_connection(stream: UnixStream, state: SharedState) -> Result<()> {
         return Ok(());
     }
 
+    // Branch: streaming manager-window attach — the persistent Rules +
+    // Audit surface. Same push-stream shape; its read loop handles rule
+    // mutations and detach.
+    if let ClientMsg::ManagerWindowAttach { pid } = msg {
+        super::log::log_at(
+            "server",
+            format_args!("← ClientMsg::ManagerWindowAttach (pid={pid})"),
+        );
+        handle_manager_window_connection(reader, stream, state, pid)?;
+        return Ok(());
+    }
+
     // Branch: streaming pending-badge attach. Same push-stream shape as
     // the consent window but a leaner read loop (no decisions / rules —
     // only a click-to-raise nudge and detach).
@@ -120,17 +132,30 @@ fn handle_connection(stream: UnixStream, state: SharedState) -> Result<()> {
     // `Ask` blocks `handle_message` until the user decides, so the
     // spawn-the-consent-window step is done *inside* `handle_ask`
     // before it parks on the reply channel — see the comment there.
-    // For the non-blocking show-the-window verbs, spawn after we've
+    // For the non-blocking show-a-window verbs, spawn after we've
     // replied so the client doesn't wait on `Command::spawn`.
-    let needs_spawn = matches!(&msg, ClientMsg::ShowWindow | ClientMsg::ShowViewer);
+    // `ShowWindow` raises the prompt; `ShowViewer` opens the manager
+    // on the Audit view.
+    let spawn_prompt = matches!(&msg, ClientMsg::ShowWindow);
+    let spawn_manager = matches!(&msg, ClientMsg::ShowViewer);
     let reply = handle_message(msg, state.clone());
     let mut writer = stream;
     write_reply(&mut writer, &reply)?;
-    if needs_spawn {
+    if spawn_prompt {
         if let Err(err) = super::ensure_consent_window(&state) {
             super::log::log_at(
                 "server",
                 format_args!("ensure_consent_window failed: {err:#}"),
+            );
+        }
+    }
+    if spawn_manager {
+        if let Err(err) =
+            super::ensure_manager_window(&state, Some(super::proto::ManagerFocus::Audit))
+        {
+            super::log::log_at(
+                "server",
+                format_args!("ensure_manager_window failed: {err:#}"),
             );
         }
     }
@@ -290,15 +315,17 @@ fn handle_consent_window_connection(
                     .expect("state mutex")
                     .set_consent_focused(subscriber_id, focused);
             }
-            ClientMsg::ConsentWindowInteractive { interacting } => {
+            ClientMsg::OpenManager { focus } => {
                 super::log::log_at(
                     "server",
-                    format_args!("← ConsentWindowInteractive interacting={interacting}"),
+                    format_args!("← OpenManager focus={focus:?} (prompt link)"),
                 );
-                state
-                    .lock()
-                    .expect("state mutex")
-                    .set_consent_interacting(subscriber_id, interacting);
+                if let Err(err) = super::ensure_manager_window(&state, Some(focus)) {
+                    super::log::log_at(
+                        "server",
+                        format_args!("open-manager ensure_manager_window failed: {err:#}"),
+                    );
+                }
             }
             // Rule mutations from the Rules tab. They arrive over the
             // streaming socket because that's the connection the
@@ -369,6 +396,112 @@ fn handle_consent_window_connection(
     } else {
         state.lock().expect("state mutex").hide_window();
     }
+    Ok(())
+}
+
+/// Streaming connection for a manager-window child. Mirrors
+/// [`handle_consent_window_connection`]'s writer-thread + read-loop
+/// shape (and its exact detach-ordering contract). The manager's read
+/// loop handles rule mutations (its Rules view is the primary editor)
+/// and detach-by-socket-drop; it never sends decisions, never reports
+/// focus, and never receives `ConsentExitPlease` — it closes when the
+/// user closes it or when the daemon process exits (socket drop).
+fn handle_manager_window_connection(
+    reader: BufReader<UnixStream>,
+    socket: UnixStream,
+    state: SharedState,
+    pid: u32,
+) -> Result<()> {
+    let (tx, rx) = mpsc::channel::<DaemonMsg>();
+
+    let (subscriber_id, initial_snapshot) = state
+        .lock()
+        .expect("state mutex")
+        .attach_manager_window(pid, tx.clone());
+
+    let writer_socket = socket
+        .try_clone()
+        .context("clone socket for manager writer")?;
+    let writer_handle = thread::Builder::new()
+        .name("manager-window-writer".to_owned())
+        .spawn(move || {
+            let mut writer = writer_socket;
+            while let Ok(msg) = rx.recv() {
+                let json = match serde_json::to_string(&msg) {
+                    Ok(j) => j,
+                    Err(err) => {
+                        eprintln!("secreqd: serialize manager update: {err}");
+                        return;
+                    }
+                };
+                if writeln!(writer, "{json}").is_err() {
+                    return; // Socket closed.
+                }
+            }
+        })
+        .context("spawn manager-window writer thread")?;
+
+    // Eager initial push so the manager can paint its first frame.
+    let _ = tx.send(DaemonMsg::ConsentUpdate {
+        snapshot: initial_snapshot,
+    });
+
+    let mut reader = reader;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = match reader.read_line(&mut line) {
+            Ok(n) => n,
+            Err(_) => break,
+        };
+        if n == 0 {
+            super::log::log_at(
+                "server",
+                format_args!("manager-window socket closed by child"),
+            );
+            break;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let msg: ClientMsg = match serde_json::from_str(trimmed) {
+            Ok(m) => m,
+            Err(err) => {
+                super::log::log_at(
+                    "server",
+                    format_args!("manager-window: malformed msg: {err}; line=[{trimmed}]"),
+                );
+                continue;
+            }
+        };
+        match msg {
+            ClientMsg::AddRule { .. }
+            | ClientMsg::UpdateRule { .. }
+            | ClientMsg::DeleteRule { .. }
+            | ClientMsg::SetRuleEnabled { .. } => {
+                apply_streaming_rule_msg(&state, msg);
+            }
+            other => {
+                super::log::log_at(
+                    "server",
+                    format_args!("manager-window sent unexpected message: {other:?}"),
+                );
+            }
+        }
+    }
+
+    // Same detach-order contract as the consent window: remove the
+    // subscriber before dropping our local tx so the writer thread's
+    // `rx.recv()` returns `Err` and we can join without deadlocking.
+    // `detach_manager_window` also clears viewer mode when this was
+    // the last manager.
+    state
+        .lock()
+        .expect("state mutex")
+        .detach_manager_window(subscriber_id);
+    drop(tx);
+    let _ = writer_handle.join();
     Ok(())
 }
 
@@ -510,7 +643,8 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
         ClientMsg::ConsentDecision { .. } => "ConsentDecision",
         ClientMsg::ConsentWindowDetach => "ConsentWindowDetach",
         ClientMsg::ConsentWindowFocus { .. } => "ConsentWindowFocus",
-        ClientMsg::ConsentWindowInteractive { .. } => "ConsentWindowInteractive",
+        ClientMsg::ManagerWindowAttach { .. } => "ManagerWindowAttach",
+        ClientMsg::OpenManager { .. } => "OpenManager",
         ClientMsg::BadgeWindowAttach { .. } => "BadgeWindowAttach",
         ClientMsg::BadgeWindowDetach => "BadgeWindowDetach",
         ClientMsg::RaiseConsentRequested => "RaiseConsentRequested",
@@ -572,14 +706,17 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
             }
         }
         ClientMsg::ShowViewer => {
+            // `secreq view` opens the *manager* window on the Audit
+            // view. No kill-and-respawn: the manager is a persistent
+            // browsing surface, so an existing one is left alone and
+            // its pid handed back for CLI-side activation. The spawn
+            // (if needed) happens after the reply, in
+            // `handle_connection`.
             let mut guard = state.lock().expect("state mutex");
             guard.enter_viewer_mode();
-            if !guard.any_consent_focused() {
-                guard.initiate_consent_restart();
-            }
             guard.touch();
             DaemonMsg::WindowOpened {
-                child_pid: guard.consent_child_pid(),
+                child_pid: guard.manager_child_pid(),
             }
         }
         ClientMsg::Ask(ask) => handle_ask(ask, state),
@@ -587,16 +724,18 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
             state.lock().expect("state mutex").request_shutdown();
             DaemonMsg::Ok
         }
-        // The streaming consent-window messages must arrive on the
-        // streaming connection path (`handle_consent_window_connection`,
-        // added below). Seeing them on the one-shot path means the
-        // child connected without `ConsentWindowAttach` first; reply
-        // with an error so the child doesn't deadlock.
+        // The streaming window messages must arrive on the streaming
+        // connection paths (`handle_consent_window_connection` /
+        // `handle_manager_window_connection` / the badge handler).
+        // Seeing them on the one-shot path means the child connected
+        // without its Attach message first; reply with an error so the
+        // child doesn't deadlock.
         ClientMsg::ConsentWindowAttach { .. }
         | ClientMsg::ConsentDecision { .. }
         | ClientMsg::ConsentWindowDetach
         | ClientMsg::ConsentWindowFocus { .. }
-        | ClientMsg::ConsentWindowInteractive { .. }
+        | ClientMsg::ManagerWindowAttach { .. }
+        | ClientMsg::OpenManager { .. }
         | ClientMsg::BadgeWindowAttach { .. }
         | ClientMsg::BadgeWindowDetach
         | ClientMsg::RaiseConsentRequested => DaemonMsg::Err {

@@ -25,7 +25,9 @@ pub mod child;
 pub mod client;
 pub mod in_flight;
 pub mod log;
+pub mod manager_ui;
 pub mod peercred;
+pub mod prompt_ui;
 pub mod proto;
 pub mod server;
 pub mod ssh_agent;
@@ -199,37 +201,28 @@ pub fn run() -> Result<i32> {
         }
 
         let mut guard = state.lock().expect("state mutex");
-        if guard.consent_subscriber_count() > 0 {
-            // While a consent window is on screen the user might be
-            // browsing the audit log indefinitely — keep the daemon
-            // alive by resetting the idle clock every tick.
+        let ui_attached =
+            guard.consent_subscriber_count() > 0 || guard.manager_subscriber_count() > 0;
+        if ui_attached {
+            // While a prompt or manager window is on screen the user
+            // might be browsing indefinitely — keep the daemon alive by
+            // resetting the idle clock every tick.
             guard.touch();
 
-            // Auto-hide: if the queue has been empty for the grace
-            // period AND we're not in viewer mode AND the user isn't
-            // currently focused on the window, tell the consent
-            // window to exit. The "All clear" state has been on screen
-            // long enough that the user has seen the confirmation;
-            // hanging the window indefinitely after a single approval
-            // is noisy desktop clutter.
-            //
-            // Skip the auto-hide only when the user is interacting with
-            // a non-Pending tab (Rules / Audit) — e.g. scrolling the
-            // audit log after clearing the queue — where yanking the
-            // window away mid-scroll is exactly the surprise we want to
-            // avoid. A window focused on the empty Pending tab ("All
-            // clear") is NOT interacting, so it still hides: there's
-            // nothing there to interrupt. The grace clock isn't reset;
-            // the next tick after the user leaves the other tab (or the
-            // window loses focus) resumes the countdown.
-            let should_auto_hide = !guard.viewer_mode()
-                && !guard.any_consent_interacting()
+            // Auto-hide applies to the *prompt* only: if the queue has
+            // been empty for the grace period, tell the prompt window
+            // to exit. The "All clear" state has been on screen long
+            // enough that the user has seen the confirmation; hanging
+            // the window indefinitely after a single approval is noisy
+            // desktop clutter. The manager window is never touched by
+            // this — it's a browsing surface the user closes themselves.
+            let should_auto_hide = guard.consent_subscriber_count() > 0
                 && guard
                     .queue_empty_since()
                     .is_some_and(|t| t.elapsed() >= AUTO_HIDE_GRACE);
             if should_auto_hide {
                 log::log(format_args!(
-                    "queue drained {}s ago and not in viewer mode; auto-hiding consent window",
+                    "queue drained {}s ago; auto-hiding consent prompt",
                     AUTO_HIDE_GRACE.as_secs()
                 ));
                 guard.broadcast_consent_exit_please();
@@ -319,12 +312,12 @@ pub fn ensure_consent_window(state: &state::SharedState) -> Result<()> {
     if guard.is_consent_restart_pending() {
         return Ok(());
     }
-    // Float the window over other apps when it was opened to demand a
-    // decision (an Ask from a wrap run or an SSH-agent sign) — those are
-    // interruptions the user needs to see now. When it was opened by
-    // `secreq view` (viewer mode), it's a passive inspection surface the
-    // user chose to open, so leave it as a normal window.
-    let always_on_top = !guard.viewer_mode();
+    // The prompt only ever exists to demand a decision (an Ask from a
+    // wrap run or an SSH-agent sign) — an interruption the user needs
+    // to see now — so it always floats over other apps. The passive
+    // browsing surface (`secreq view`) is the manager window, which is
+    // spawned by `ensure_manager_window` and never on top.
+    let always_on_top = true;
     let exe = std::env::current_exe().context("locate current executable")?;
     log::log_at(
         "spawn",
@@ -351,6 +344,64 @@ pub fn ensure_consent_window(state: &state::SharedState) -> Result<()> {
         .stderr(std::process::Stdio::inherit())
         .spawn()
         .context("spawn consent-window child")?;
+    Ok(())
+}
+
+/// Spawn a `secreq manager-window` child process if one isn't already
+/// attached and we aren't already mid-spawn. Mirrors
+/// [`ensure_consent_window`], but the manager is never always-on-top
+/// and is never subject to the kill-and-respawn raise: if a manager is
+/// already attached we simply leave it alone (a `secreq view` still
+/// gets the existing manager's pid back for CLI-side activation).
+///
+/// `focus` selects the view a *freshly spawned* manager opens on,
+/// passed through as `--view rules|audit` so the spawn is inspectable
+/// in `ps`. `None` lets the child pick (Rules, or Audit when the
+/// first snapshot carries `viewer_mode`).
+pub fn ensure_manager_window(
+    state: &state::SharedState,
+    focus: Option<proto::ManagerFocus>,
+) -> Result<()> {
+    let mut guard = state.lock().expect("state mutex");
+    if !guard.needs_manager_window() {
+        // A manager is already attached. Raising it would require the
+        // same kill-and-respawn dance as the prompt; for now we log and
+        // rely on the CLI-side activation path (`WindowOpened` pid).
+        log::log_at(
+            "spawn",
+            format_args!("manager window already attached; not spawning another"),
+        );
+        return Ok(());
+    }
+    if guard.manager_spawn_in_flight() {
+        return Ok(());
+    }
+    let exe = std::env::current_exe().context("locate current executable")?;
+    let view_arg = focus.map(|f| match f {
+        proto::ManagerFocus::Rules => "rules",
+        proto::ManagerFocus::Audit => "audit",
+    });
+    log::log_at(
+        "spawn",
+        format_args!(
+            "spawning manager-window child: {} manager-window{}",
+            exe.display(),
+            view_arg.map(|v| format!(" --view {v}")).unwrap_or_default(),
+        ),
+    );
+    guard.mark_manager_spawn_in_flight();
+    drop(guard);
+    let mut command = std::process::Command::new(exe);
+    command.arg("manager-window");
+    if let Some(v) = view_arg {
+        command.arg("--view").arg(v);
+    }
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .context("spawn manager-window child")?;
     Ok(())
 }
 

@@ -27,6 +27,18 @@ use serde::{Deserialize, Serialize};
 use crate::consent::Decision;
 use crate::rules::Rule;
 
+/// Which manager view a window should open on. Carried on the wire when
+/// the prompt's "Open Manager…" affordance is clicked
+/// ([`ClientMsg::OpenManager`]) and by the `secreq manager-window
+/// --view` flag the daemon passes at spawn time. Lives in proto because
+/// it crosses the socket; the UI modules re-export it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagerFocus {
+    Rules,
+    Audit,
+}
+
 /// One message from client → daemon.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -40,9 +52,10 @@ pub enum ClientMsg {
     /// Returns [`DaemonMsg::Ok`] immediately. The window will auto-hide
     /// once the queue empties (after a short grace period).
     ShowWindow,
-    /// "Show the window in viewer mode" — same as `ShowWindow` but the
-    /// auto-hide is suppressed so the user can browse the audit log.
-    /// Used by `secreq view`. Viewer mode clears on manual close.
+    /// "Open the manager window on the audit log." Used by `secreq
+    /// view`. Sets `viewer_mode` (which tells a freshly-attached
+    /// manager child to start on the Audit view) and spawns/raises the
+    /// manager window. Viewer mode clears when the manager closes.
     ShowViewer,
     /// "Are you alive?" Used by the auto-spawn poll loop. Replies with `Ok`.
     Ping,
@@ -123,27 +136,33 @@ pub enum ClientMsg {
     /// but the user has tabbed away." Used to skip the kill-and-respawn
     /// raise on a new ask when the existing window is already focused
     /// (the streaming snapshot already paints the new entry — no need to
-    /// disrupt the user). The auto-hide grace exit is gated separately by
-    /// [`ConsentWindowInteractive`].
+    /// disrupt the user).
     ///
     /// Default at attach is `focused = true`: a freshly-spawned child
     /// gets foreground intent on macOS, so until we hear otherwise the
     /// safe assumption is that it's in front.
     ConsentWindowFocus { focused: bool },
-    /// "Whether the user is interacting with a non-Pending tab just
-    /// changed." Sent by the consent-window child whenever
-    /// `focused && current_tab != Pending` transitions. This is a
-    /// narrower signal than [`ConsentWindowFocus`] and exists only to
-    /// gate the auto-hide grace exit: a window focused on the empty
-    /// Pending tab ("All clear") should still hide after the grace
-    /// period, but one the user is actively browsing (Rules / Audit)
-    /// must not be yanked away mid-scroll. Kept separate from `focused`
-    /// because that bit still drives the kill-and-respawn raise, which
-    /// wants true OS focus regardless of tab.
-    ///
-    /// Default at attach is `interacting = false`: a fresh decision
-    /// window opens on the Pending tab.
-    ConsentWindowInteractive { interacting: bool },
+
+    // ── Streaming protocol for the manager-window child process ──
+    //
+    // The manager is the persistent Rules + Audit surface, a separate
+    // child process from the transient prompt. It subscribes to the
+    // same `ConsentUpdate` snapshot stream (it needs live rules and the
+    // viewer-mode flag) but is never subject to the prompt's auto-hide
+    // or kill-and-respawn raise machinery: it closes when the user
+    // closes it, or on daemon shutdown.
+    /// "I'm the manager-window child process; subscribe me to snapshot
+    /// updates and accept rule mutations from me." Daemon replies with
+    /// an immediate `ConsentUpdate` carrying the current snapshot.
+    /// `pid` serves the same CLI-activation purpose as
+    /// [`ConsentWindowAttach`]'s.
+    ManagerWindowAttach { pid: u32 },
+    /// "The user clicked 'Open Manager…' in the prompt." The daemon
+    /// spawns a manager-window child (opening on `focus`) if none is
+    /// attached; if one is already up, the request is logged and the
+    /// existing window is left alone (raising it is the CLI's job on
+    /// the `secreq view` path).
+    OpenManager { focus: ManagerFocus },
 
     // ── Auto-rules management ─────────────────────────────────────
     //
