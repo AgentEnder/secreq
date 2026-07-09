@@ -1,0 +1,12 @@
+{
+  "$schema": "https://design-drafts.dev/schemas/draft-manifest.schema.json",
+  "name": "secreq-consent-ui",
+  "prompt": "",
+  "pages": [
+    {
+      "coordinates": {},
+      "path": "index.html"
+    }
+  ],
+  "createdAt": "2026-07-09T17:27:32.634Z"
+}
