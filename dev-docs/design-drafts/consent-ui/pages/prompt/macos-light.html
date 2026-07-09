@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en" class="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>secreq drafts — prompt / macOS / light</title>
+<link rel="stylesheet" href="../../shared/styles/base.css">
+<link rel="stylesheet" href="../../shared/styles/macos.css">
+</head>
+<body>
+<div class="stage">
+  <main class="panel" data-annotate-id="prompt-window" aria-label="secreq consent prompt">
+    <header class="panel-head" data-annotate-id="header">
+      <span class="glyph" aria-hidden="true">
+        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+          <circle cx="8.5" cy="8.5" r="4.25"/>
+          <path d="M11.5 11.5 L20 20 M16.5 16.5 L18.5 14.5 M13.5 19.5 L15.5 17.5"/>
+        </svg>
+      </span>
+      <div>
+        <h1 data-annotate-id="ask-summary"><code>gh</code> wants to use <code>GITHUB_TOKEN</code></h1>
+        <p class="sub"><code>gh api /repos/acme/web/issues</code></p>
+      </div>
+    </header>
+
+    <div class="well" data-annotate-id="evidence-well">
+      <div class="wrow" data-annotate-id="secrets">
+        <span class="wlabel">Secret</span>
+        <span class="secretline"><span class="sname">GITHUB_TOKEN</span><span class="uri">op://Personal/GitHub/credential</span></span>
+      </div>
+      <div class="wrow" data-annotate-id="process-tree">
+        <span class="wlabel">Asked by</span>
+        <div class="tree">
+          <div class="proc">
+            <span class="pname">Superset.app</span>
+            <code class="pargv">/Applications/Superset.app/Contents/MacOS/Superset</code>
+            <span class="pid">3287</span>
+          </div>
+          <div class="proc d1">
+            <span class="twig">└</span><span class="pname">zsh</span>
+            <code class="pargv">-zsh -il</code>
+            <span class="pid">3410</span>
+          </div>
+          <div class="proc d2 leaf">
+            <span class="twig">└</span><span class="pname">gh</span>
+            <code class="pargv">gh api /repos/acme/web/issues</code>
+            <span class="pid">48112</span>
+          </div>
+        </div>
+      </div>
+      <div class="wrow">
+        <span class="wlabel">In</span>
+        <span class="mono">~/repos/acme-web</span>
+      </div>
+      <div class="wrow" data-annotate-id="history">
+        <span class="wlabel">History</span>
+        <span class="hint">First request from this caller.</span>
+      </div>
+    </div>
+
+    <footer class="panel-foot" data-annotate-id="decision-surface">
+      <button class="manager-link" data-annotate-id="manager-affordance">Open Manager…</button>
+      <span class="queue" data-annotate-id="queue">2 more waiting</span>
+      <span class="spring"></span>
+      <button class="btn"><span class="mn">D</span>eny</button>
+      <button class="btn default"><span class="mn">A</span>pprove</button>
+    </footer>
+  </main>
+
+  <p class="spec"><b>prompt · macOS · light</b> — alert panel with the evidence set as an inset well; the caller is a process tree with argv per process, leaf highlighted. Hotkeys live in the button labels as underlined mnemonics.</p>
+</div>
+<script src="https://unpkg.com/@design-drafts/toolbar@0/dist/toolbar.js" defer></script>
+<script src="https://unpkg.com/@design-drafts/annotate@0/dist/annotate.js" defer></script>
+</body>
+</html>

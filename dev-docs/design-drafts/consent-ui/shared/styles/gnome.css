@@ -1,0 +1,197 @@
+/* Sentinel on GNOME — libadwaita idiom: AdwMessageDialog for the prompt
+   (centered heading, boxed-list evidence, full-width hairline-separated
+   response row), headerbar + boxed lists for the manager.
+   Adwaita Sans is an Inter fork, so Inter is the authentic web stand-in.
+   Appearance follows <html class="light|dark">. */
+
+html.dark {
+  --desktop: #1e1e1e;
+  --panel: #383838;
+  --well: #303030;
+  --well-border: rgba(255, 255, 255, 0.08);
+  --headerbar: #303030;
+  --fg: #ffffff;
+  --dim: #9a9996;
+  --faint: #77767b;
+  --rule: rgba(255, 255, 255, 0.1);
+  --accent: #3584e4;
+  --accent-fg: #ffffff;
+  --accent-text: #78aeed;
+  --btn: #45454a;
+  --btn-fg: #ffffff;
+  --green: #8ff0a4;
+  --red: #ff7b63;
+  --shadow: 0 20px 44px -12px rgba(0, 0, 0, 0.65);
+  --spec: #77767b;
+}
+html.light {
+  --desktop: #cfcdc9;
+  --panel: #fafafa;
+  --well: #ffffff;
+  --well-border: rgba(0, 0, 0, 0.09);
+  --headerbar: #f0f0f0;
+  --fg: #26262b;
+  --dim: #77767b;
+  --faint: #a4a3a8;
+  --rule: rgba(0, 0, 0, 0.11);
+  --accent: #3584e4;
+  --accent-fg: #ffffff;
+  --accent-text: #1c71d8;
+  --btn: #eaeaec;
+  --btn-fg: #26262b;
+  --green: #26a269;
+  --red: #c01c28;
+  --shadow: 0 20px 40px -12px rgba(0, 0, 0, 0.3);
+  --spec: #8f8e93;
+}
+
+body {
+  font-family: "Adwaita Sans", "Inter", "Cantarell", system-ui, sans-serif;
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+:root { --mono: "Adwaita Mono", "Source Code Pro", "Liberation Mono", ui-monospace, monospace; }
+
+/* Consent prompt: AdwMessageDialog */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  width: min(460px, 94vw);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.panel-body { padding: 24px 24px 16px; }
+.panel-head { text-align: center; }
+.panel-head h1 { font-size: 17px; font-weight: 700; line-height: 1.3; }
+.panel-head h1 code { font-size: 15px; font-weight: 700; }
+.panel-head .sub { color: var(--dim); margin-top: 4px; }
+
+/* Evidence as an Adwaita boxed list */
+.well {
+  background: var(--well);
+  border: 1px solid var(--well-border);
+  border-radius: 12px;
+  margin-top: 16px;
+  padding: 0 14px;
+  text-align: left;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+.well .wrow { padding: 10px 0; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.well .wrow + .wrow { border-top: 1px solid var(--well-border); }
+.well .wlabel { font-size: 11px; font-weight: 700; color: var(--faint); text-transform: uppercase; letter-spacing: 0.05em; }
+.well .secretline { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.well .secretline .sname { font-weight: 700; font-family: var(--mono); }
+.well .secretline .uri { color: var(--dim); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.well .hint { color: var(--dim); }
+
+.meta-line { display: flex; gap: 10px; justify-content: center; margin-top: 14px; }
+.queue { color: var(--dim); }
+.manager-link { background: none; border: none; font: inherit; color: var(--accent-text); cursor: pointer; padding: 0; }
+.manager-link:hover { text-decoration: underline; }
+
+/* Response row: full-width flat segments, hairline separators */
+.panel-foot { display: flex; border-top: 1px solid var(--rule); margin-top: 4px; }
+.panel-foot .resp {
+  flex: 1;
+  font: inherit;
+  background: none;
+  border: none;
+  padding: 12px 0;
+  cursor: pointer;
+  color: var(--fg);
+  font-weight: 600;
+}
+.panel-foot .resp + .resp { border-left: 1px solid var(--rule); }
+.panel-foot .resp:hover { background: rgba(127, 127, 127, 0.08); }
+.panel-foot .resp.suggested { color: var(--accent-text); }
+
+/* Buttons elsewhere (manager): Adwaita pill-ish */
+.btn {
+  font: inherit;
+  border: none;
+  background: var(--btn);
+  color: var(--btn-fg);
+  border-radius: 6px;
+  padding: 5px 16px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.btn:hover { filter: brightness(1.05); }
+.btn.suggested { background: var(--accent); color: var(--accent-fg); }
+
+/* Manager window: headerbar with view switcher + close */
+.window.manager {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  width: min(920px, 96vw);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.headerbar {
+  display: grid;
+  grid-template-columns: 1fr max-content 1fr;
+  align-items: center;
+  background: var(--headerbar);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--rule);
+}
+.headerbar .hb-left { display: flex; gap: 8px; align-items: center; }
+.headerbar .search {
+  background: var(--btn);
+  border: none;
+  border-radius: 6px;
+  color: var(--faint);
+  padding: 4px 12px;
+  min-width: 170px;
+}
+.headerbar .hb-right { display: flex; gap: 10px; align-items: center; justify-self: end; }
+.headerbar .closebtn {
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  background: var(--btn);
+  color: var(--fg);
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-style: normal;
+}
+.viewswitcher { display: inline-flex; background: var(--btn); border-radius: 7px; padding: 2px; }
+.viewswitcher button { font: inherit; border: none; background: transparent; color: var(--dim); padding: 3px 18px; border-radius: 5px; cursor: pointer; font-weight: 600; }
+.viewswitcher button.active { background: var(--panel); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15); }
+
+table.audit { width: 100%; border-collapse: collapse; }
+table.audit th { text-align: left; font-size: 12px; font-weight: 700; color: var(--dim); padding: 10px 14px 8px; border-bottom: 1px solid var(--rule); }
+table.audit td { padding: 7px 14px; vertical-align: baseline; border-bottom: 1px solid var(--well-border); }
+table.audit td.num { color: var(--dim); font-variant-numeric: tabular-nums; }
+.decision { white-space: nowrap; }
+.decision::before { content: "●"; font-size: 8px; vertical-align: 1px; margin-right: 5px; }
+.decision.ok { color: var(--green); }
+.decision.no { color: var(--red); }
+.decision.off { color: var(--faint); }
+.decision .via { color: var(--dim); }
+
+/* Rules as Adwaita boxed lists */
+.group {
+  background: var(--well);
+  border: 1px solid var(--well-border);
+  border-radius: 12px;
+  margin: 14px 16px 0;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+.group > .grouphead { font-size: 11px; font-weight: 700; color: var(--dim); padding: 10px 14px 0; text-transform: uppercase; letter-spacing: 0.05em; }
+.rule { display: grid; grid-template-columns: max-content 1fr max-content; gap: 2px 12px; padding: 11px 14px; align-items: baseline; }
+.rule + .rule { border-top: 1px solid var(--well-border); }
+.rule .name { font-weight: 600; }
+.rule .crit { grid-column: 2; color: var(--dim); }
+.rule .stats { grid-column: 2; color: var(--faint); font-size: 12px; }
+.rule .verdict.ok { color: var(--green); }
+.rule .verdict.no { color: var(--red); }
+.rule .verdict.off { color: var(--faint); }
+.onoff { color: var(--green); }
+.onoff.off { color: var(--faint); }
+.footnote { color: var(--dim); padding: 12px 18px 4px; }
+.windowfoot { display: flex; align-items: center; gap: 10px; padding: 12px 16px 14px; }
+.windowfoot .spring { flex: 1; }

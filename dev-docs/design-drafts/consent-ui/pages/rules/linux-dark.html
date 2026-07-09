@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>secreq drafts — rules / Linux (GNOME) / dark</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../shared/styles/base.css">
+<link rel="stylesheet" href="../../shared/styles/gnome.css">
+</head>
+<body>
+<div class="stage">
+  <main class="window manager" data-annotate-id="manager-window" aria-label="secreq manager, rules view">
+    <header class="headerbar" data-annotate-id="header">
+      <span class="hb-left">
+        <button class="btn" data-annotate-id="new-rule">＋ New Rule</button>
+      </span>
+      <nav class="viewswitcher" data-annotate-id="view-switcher" aria-label="Manager views">
+        <button class="active" aria-current="page">Rules</button>
+        <button>Audit</button>
+      </nav>
+      <span class="hb-right">
+        <span class="search" data-annotate-id="filter">Search</span>
+        <i class="closebtn" aria-hidden="true">✕</i>
+      </span>
+    </header>
+
+    <section class="group" data-annotate-id="rule-list">
+      <h2 class="grouphead">Rules</h2>
+      <div class="rule">
+        <span class="onoff" title="enabled">●</span>
+        <span class="name">Cursor reads via gh</span>
+        <span class="verdict ok">Approve</span>
+        <span class="crit mono">gh api --get /repos/*/pulls* · ancestor code · trained GITHUB_TOKEN</span>
+        <span class="stats">14 auto-fires · last fired today</span>
+      </div>
+      <div class="rule">
+        <span class="onoff" title="enabled">●</span>
+        <span class="name">Block gh destructive ops</span>
+        <span class="verdict no">Deny</span>
+        <span class="crit mono">gh repo delete * · ancestor code</span>
+        <span class="stats">3 auto-fires · last fired 4 days ago</span>
+      </div>
+      <div class="rule">
+        <span class="onoff off" title="disabled">○</span>
+        <span class="name">Old cursor rule</span>
+        <span class="verdict off">Approve</span>
+        <span class="crit mono">gh api · ancestor code</span>
+        <span class="stats">Never fired</span>
+      </div>
+    </section>
+
+    <section class="group" data-annotate-id="suggestions">
+      <h2 class="grouphead">Suggestions</h2>
+      <div class="rule">
+        <span class="onoff off">○</span>
+        <span class="name">gh api reads from GNOME Terminal</span>
+        <button class="btn" style="justify-self:end">Accept</button>
+        <span class="crit mono">gh api --get * · ancestor gnome-terminal · GITHUB_TOKEN</span>
+        <span class="stats">Seen 6 times this week, all approved</span>
+      </div>
+      <div class="rule">
+        <span class="onoff off">○</span>
+        <span class="name">aws from unknown ancestors</span>
+        <button class="btn" style="justify-self:end">Accept</button>
+        <span class="crit mono">aws * · ancestor not in trusted set</span>
+        <span class="stats">Denied 3 times recently</span>
+      </div>
+    </section>
+
+    <p class="footnote" data-annotate-id="explainer">Rules fire before the consent prompt. Deny rules win; most-specific approve wins ties.</p>
+  </main>
+
+  <p class="spec"><b>rules · Linux (GNOME) · dark</b> — Adwaita boxed lists with a headerbar New Rule button; the view switcher sits centered in the headerbar.</p>
+</div>
+<script src="https://unpkg.com/@design-drafts/toolbar@0/dist/toolbar.js" defer></script>
+<script src="https://unpkg.com/@design-drafts/annotate@0/dist/annotate.js" defer></script>
+</body>
+</html>

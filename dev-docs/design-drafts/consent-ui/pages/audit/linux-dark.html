@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>secreq drafts — audit / Linux (GNOME) / dark</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../shared/styles/base.css">
+<link rel="stylesheet" href="../../shared/styles/gnome.css">
+</head>
+<body>
+<div class="stage">
+  <main class="window manager" data-annotate-id="manager-window" aria-label="secreq manager, audit view">
+    <header class="headerbar" data-annotate-id="header">
+      <span class="hb-left">
+        <span class="search" data-annotate-id="filter">Search</span>
+      </span>
+      <nav class="viewswitcher" data-annotate-id="view-switcher" aria-label="Manager views">
+        <button>Rules</button>
+        <button class="active" aria-current="page">Audit</button>
+      </nav>
+      <span class="hb-right">
+        <i class="closebtn" aria-hidden="true">✕</i>
+      </span>
+    </header>
+
+    <table class="audit" data-annotate-id="audit-table">
+      <thead>
+        <tr><th>Time</th><th>Command</th><th>Secret</th><th>Caller</th><th>Decision</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="num">09:41</td>
+          <td><code>gh api /repos/acme/web/issues</code></td>
+          <td class="mono">GITHUB_TOKEN</td>
+          <td>gnome-terminal › bash › gh</td>
+          <td><span class="decision ok">Approved</span></td>
+        </tr>
+        <tr>
+          <td class="num">09:12</td>
+          <td><code>aws s3 ls s3://acme-logs</code></td>
+          <td class="mono">AWS_ACCESS_KEY_ID +1</td>
+          <td>gnome-terminal › bash › aws</td>
+          <td><span class="decision no">Denied</span></td>
+        </tr>
+        <tr>
+          <td class="num">08:57</td>
+          <td><code>psql -h db.internal -U analytics</code></td>
+          <td class="mono">PGPASSWORD</td>
+          <td>node › ./scripts/import.js</td>
+          <td><span class="decision ok">Approved <span class="via">by rule</span></span></td>
+        </tr>
+        <tr>
+          <td class="num">08:31</td>
+          <td><code>ssh:github-deploy sign</code></td>
+          <td class="mono">SHA256:tYk3…9dQw</td>
+          <td>code › git › ssh</td>
+          <td><span class="decision ok">Approved</span></td>
+        </tr>
+        <tr>
+          <td class="num">Jul 8 18:22</td>
+          <td><code>npm run sync</code></td>
+          <td class="mono">GITHUB_TOKEN</td>
+          <td>npm › node</td>
+          <td><span class="decision off">Abandoned</span></td>
+        </tr>
+        <tr>
+          <td class="num">Jul 8 16:04</td>
+          <td><code>gh repo delete acme/tmp-fork</code></td>
+          <td class="mono">GITHUB_TOKEN</td>
+          <td>code › bash › gh</td>
+          <td><span class="decision no">Denied <span class="via">by rule</span></span></td>
+        </tr>
+        <tr>
+          <td class="num">Jul 8 11:47</td>
+          <td><code>cargo publish</code></td>
+          <td class="mono">CARGO_REGISTRY_TOKEN</td>
+          <td>bash › cargo</td>
+          <td><span class="decision ok">Approved</span></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <footer class="windowfoot" data-annotate-id="windowfoot">
+      <span class="queue">7 entries</span>
+      <span class="spring"></span>
+      <button class="btn" data-annotate-id="rule-from-entry">Create Rule from Entry</button>
+    </footer>
+  </main>
+
+  <p class="spec"><b>audit · Linux (GNOME) · dark</b> — headerbar with a centered view switcher and circular close; plain separated rows, decisions as colored dot-and-text.</p>
+</div>
+<script src="https://unpkg.com/@design-drafts/toolbar@0/dist/toolbar.js" defer></script>
+<script src="https://unpkg.com/@design-drafts/annotate@0/dist/annotate.js" defer></script>
+</body>
+</html>

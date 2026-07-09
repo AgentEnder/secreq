@@ -1,7 +1,7 @@
 {
   "$schema": "https://design-drafts.dev/schemas/draft-manifest.schema.json",
   "name": "secreq consent UI restyle",
-  "description": "Two theme lineages (Terminal Ledger, Native Sentinel) crossed with three decision surfaces across the committed Prompt + Manager window split.",
+  "description": "Native Sentinel across three OS idioms (macOS, Windows 11, GNOME) and two appearances, over the committed Prompt + Manager window split. Terminal Ledger was eliminated in first-round review.",
   "prompt": "references/brief.md",
   "axes": [
     {
@@ -9,45 +9,44 @@
       "label": "Page",
       "description": "The three committed surfaces: the transient consent prompt, and the manager window's audit and rules views",
       "choices": [
-        { "name": "prompt", "label": "Prompt", "description": "Focus Stack: one ask at a time" },
-        { "name": "audit", "label": "Audit", "description": "Manifest Rows: scannable table in the manager window" },
-        { "name": "rules", "label": "Rules", "description": "Grouped Inset: System-Settings-style list in the manager window" }
+        { "name": "prompt", "label": "Prompt", "description": "Focus Stack: one ask at a time, with an argv-bearing process tree" },
+        { "name": "audit", "label": "Audit", "description": "Scannable table in the manager window" },
+        { "name": "rules", "label": "Rules", "description": "Grouped list in the manager window" }
       ]
     },
     {
-      "name": "theme",
-      "label": "Theme",
-      "description": "Two lineages of desktop app: terminal program vs OS security surface",
+      "name": "os",
+      "label": "OS",
+      "description": "Each OS gets its native dialog and window idiom, not a reskin",
       "choices": [
-        { "name": "terminal-ledger", "label": "Terminal Ledger", "description": "A first-class TUI with a titlebar; mono, columns, hairlines, one amber accent" },
-        { "name": "sentinel-dark", "label": "Sentinel (dark)", "description": "OS security surface following a dark system appearance" },
-        { "name": "sentinel-light", "label": "Sentinel (light)", "description": "The same Sentinel design following a light system appearance" }
+        { "name": "macos", "label": "macOS", "description": "Alert panel, segmented control, traffic lights" },
+        { "name": "windows", "label": "Windows 11", "description": "ContentDialog footer buttons, SelectorBar tabs, caption buttons" },
+        { "name": "linux", "label": "Linux (GNOME)", "description": "AdwMessageDialog response row, headerbar, boxed lists" }
       ]
     },
     {
-      "name": "decision",
-      "label": "Decision surface",
-      "description": "How approve/deny presents on the prompt; not applicable to manager pages",
+      "name": "appearance",
+      "label": "Appearance",
+      "description": "Sentinel follows the OS appearance; both are first-class",
       "choices": [
-        { "name": "dialog-buttons", "label": "Dialog buttons", "description": "One right-aligned pair, single default action, Enter/Esc" },
-        { "name": "keyboard-first", "label": "Keyboard-first", "description": "Key affordances are the surface; buttons minimal or hover-only" },
-        { "name": "asymmetric-friction", "label": "Asymmetric friction", "description": "Deny is instant; approve costs a deliberate beat" },
-        { "name": "none", "label": "n/a", "description": "Pages without a decision surface" }
+        { "name": "dark", "label": "Dark" },
+        { "name": "light", "label": "Light" }
       ]
     }
   ],
   "pages": [
-    { "coordinates": { "page": "prompt", "theme": "terminal-ledger", "decision": "keyboard-first" }, "path": "pages/prompt/ledger-keyboard.html", "description": "Default: the keybar is the decision surface" },
-    { "coordinates": { "page": "prompt", "theme": "terminal-ledger", "decision": "dialog-buttons" }, "path": "pages/prompt/ledger-dialog.html", "description": "TUI push buttons, amber inverse-video default" },
-    { "coordinates": { "page": "prompt", "theme": "terminal-ledger", "decision": "asymmetric-friction" }, "path": "pages/prompt/ledger-friction.html", "description": "Two-keystroke approve shown in the armed state" },
-    { "coordinates": { "page": "prompt", "theme": "sentinel-dark", "decision": "dialog-buttons" }, "path": "pages/prompt/sentinel-dark-dialog.html", "description": "Chromeless alert panel with one default button" },
-    { "coordinates": { "page": "prompt", "theme": "sentinel-dark", "decision": "keyboard-first" }, "path": "pages/prompt/sentinel-dark-keyboard.html", "description": "Keycap hints at rest; buttons materialize on hover" },
-    { "coordinates": { "page": "prompt", "theme": "sentinel-dark", "decision": "asymmetric-friction" }, "path": "pages/prompt/sentinel-dark-friction.html", "description": "Hold-to-approve; deny stays one click" },
-    { "coordinates": { "page": "prompt", "theme": "sentinel-light", "decision": "dialog-buttons" }, "path": "pages/prompt/sentinel-light-dialog.html", "description": "Sentinel following a light OS appearance" },
-    { "coordinates": { "page": "audit", "theme": "terminal-ledger", "decision": "none" }, "path": "pages/audit/ledger.html", "description": "Manager audit view as a TUI column grid" },
-    { "coordinates": { "page": "audit", "theme": "sentinel-dark", "decision": "none" }, "path": "pages/audit/sentinel-dark.html", "description": "Manager audit view as a striped native table" },
-    { "coordinates": { "page": "rules", "theme": "terminal-ledger", "decision": "none" }, "path": "pages/rules/ledger.html", "description": "Rules as ledger rows under man-page headers" },
-    { "coordinates": { "page": "rules", "theme": "sentinel-dark", "decision": "none" }, "path": "pages/rules/sentinel-dark.html", "description": "Rules as grouped inset lists, System Settings idiom" }
+    { "coordinates": { "page": "prompt", "os": "macos", "appearance": "dark" }, "path": "pages/prompt/macos-dark.html", "description": "Default: refined macOS alert panel with evidence well and process tree" },
+    { "coordinates": { "page": "prompt", "os": "macos", "appearance": "light" }, "path": "pages/prompt/macos-light.html" },
+    { "coordinates": { "page": "prompt", "os": "windows", "appearance": "dark" }, "path": "pages/prompt/windows-dark.html", "description": "Windows 11 ContentDialog idiom" },
+    { "coordinates": { "page": "prompt", "os": "windows", "appearance": "light" }, "path": "pages/prompt/windows-light.html" },
+    { "coordinates": { "page": "prompt", "os": "linux", "appearance": "dark" }, "path": "pages/prompt/linux-dark.html", "description": "GNOME AdwMessageDialog idiom" },
+    { "coordinates": { "page": "prompt", "os": "linux", "appearance": "light" }, "path": "pages/prompt/linux-light.html" },
+    { "coordinates": { "page": "audit", "os": "macos", "appearance": "dark" }, "path": "pages/audit/macos-dark.html" },
+    { "coordinates": { "page": "audit", "os": "windows", "appearance": "dark" }, "path": "pages/audit/windows-dark.html" },
+    { "coordinates": { "page": "audit", "os": "linux", "appearance": "dark" }, "path": "pages/audit/linux-dark.html" },
+    { "coordinates": { "page": "rules", "os": "macos", "appearance": "dark" }, "path": "pages/rules/macos-dark.html" },
+    { "coordinates": { "page": "rules", "os": "windows", "appearance": "dark" }, "path": "pages/rules/windows-dark.html" },
+    { "coordinates": { "page": "rules", "os": "linux", "appearance": "dark" }, "path": "pages/rules/linux-dark.html" }
   ],
-  "createdAt": "2026-07-09T18:52:52.000Z"
+  "createdAt": "2026-07-09T19:15:57.000Z"
 }
