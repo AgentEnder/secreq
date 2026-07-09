@@ -135,37 +135,45 @@ pub fn render_prompt_panel(
         bottom: 0,
     };
 
-    // Reserve the footer band; body gets the rest.
+    // Reserve the footer band; the body gets the rest and scrolls if
+    // an ask outgrows it (deep ancestries, big secret sets) so the
+    // decision row can never be pushed off-window.
     let footer_height = match th.flavor {
         OsFlavor::MacOs => 54.0,
-        OsFlavor::Windows => 64.0,
-        OsFlavor::Gnome => 44.0,
+        OsFlavor::Windows => 84.0,
+        OsFlavor::Gnome => 70.0,
     };
     let body_height = (ui.available_height() - footer_height).max(0.0);
     let body_width = ui.available_width();
 
     ui.allocate_ui(egui::vec2(body_width, body_height), |ui| {
         ui.set_min_height(body_height);
-        egui::Frame::new().inner_margin(inset).show(ui, |ui| {
-            if let Some(toast) = auto_deny_toast {
-                render_auto_deny_toast(ui, toast);
-                ui.add_space(10.0);
-            }
-            match current {
-                None => render_empty_state(ui, &th, &mut out),
-                Some(row) => {
-                    render_header(ui, &th, row);
-                    ui.add_space(12.0);
-                    render_evidence_well(ui, &th, row, state);
-                    if row.representative.ssh.is_some()
-                        && row.status == super::proto::RowStatus::Awaiting
-                    {
-                        ui.add_space(8.0);
-                        render_ssh_session_grants(ui, &th, row, actions_out);
+        egui::ScrollArea::vertical()
+            .id_salt("prompt-body")
+            .max_height(body_height)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Frame::new().inner_margin(inset).show(ui, |ui| {
+                    if let Some(toast) = auto_deny_toast {
+                        render_auto_deny_toast(ui, toast);
+                        ui.add_space(10.0);
                     }
-                }
-            }
-        });
+                    match current {
+                        None => render_empty_state(ui, &th, &mut out),
+                        Some(row) => {
+                            render_header(ui, &th, row);
+                            ui.add_space(12.0);
+                            render_evidence_well(ui, &th, row, state);
+                            if row.representative.ssh.is_some()
+                                && row.status == super::proto::RowStatus::Awaiting
+                            {
+                                ui.add_space(8.0);
+                                render_ssh_session_grants(ui, &th, row, actions_out);
+                            }
+                        }
+                    }
+                });
+            });
     });
 
     if current.is_some() || snapshot.entries.is_empty() {
@@ -411,17 +419,20 @@ fn render_secrets(
         return;
     }
 
-    // Group by the locator's directory prefix; BTreeMap for a stable,
-    // deterministic order (fixtures depend on it).
-    let mut groups: std::collections::BTreeMap<String, Vec<&SecretAsk>> =
+    // Group by the locator's directory prefix. Largest group first —
+    // the bulk grant is what the user is really deciding on — with the
+    // prefix as a deterministic tiebreak.
+    let mut group_map: std::collections::BTreeMap<String, Vec<&SecretAsk>> =
         std::collections::BTreeMap::new();
     for s in secrets {
         let prefix = match s.locator.rsplit_once('/') {
             Some((dir, _)) => format!("{dir}/*"),
             None => s.provider.clone(),
         };
-        groups.entry(prefix).or_default().push(s);
+        group_map.entry(prefix).or_default().push(s);
     }
+    let mut groups: Vec<(String, Vec<&SecretAsk>)> = group_map.into_iter().collect();
+    groups.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
 
     let render_groups = |ui: &mut egui::Ui| {
         for (prefix, members) in &groups {
@@ -540,21 +551,28 @@ fn caller_row(
                 .color(name_color),
         );
         // pid sits at the row's end; the argv label truncates into
-        // whatever width remains.
+        // whatever width remains, left-flush against the name.
         let pid_text = pid.map(|p| p.to_string()).unwrap_or_default();
         let pid_width = if pid_text.is_empty() { 0.0 } else { 44.0 };
         let argv_width = (ui.available_width() - pid_width).max(40.0);
-        ui.add_sized(
-            egui::vec2(argv_width, ui.text_style_height(&egui::TextStyle::Body)),
-            egui::Label::new(
-                egui::RichText::new(argv)
-                    .monospace()
-                    .size(th.body_size - 2.0)
-                    .color(th.dim),
-            )
-            .truncate(),
-        )
-        .on_hover_text(argv);
+        let row_height = ui.text_style_height(&egui::TextStyle::Body);
+        ui.allocate_ui_with_layout(
+            egui::vec2(argv_width, row_height),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.set_max_width(argv_width);
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(argv)
+                            .monospace()
+                            .size(th.body_size - 2.0)
+                            .color(th.dim),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(argv);
+            },
+        );
         if !pid_text.is_empty() {
             ui.label(
                 egui::RichText::new(pid_text)

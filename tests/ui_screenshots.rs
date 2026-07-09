@@ -39,6 +39,7 @@ use secreq::daemon::manager_ui::{render_manager_panel, ManagerWindowState};
 use secreq::daemon::prompt_ui::{render_prompt_panel, PromptWindowState, PROMPT_DEFAULT_SIZE};
 use secreq::daemon::proto::{Ask, Caller, DedupeKey, SecretAsk, SshAskInfo};
 use secreq::daemon::state::{SharedState, State};
+use secreq::daemon::theme::OsFlavor;
 use secreq::daemon::ui::{AutoDenyToastView, RuleAction, RuleSort};
 use secreq::recommendations::SuggestionSort;
 use secreq::rules::{Pattern, Rule, RuleDecision, RuleMatch};
@@ -351,7 +352,23 @@ fn render_prompt_fixture(
     audit_entries: Vec<AuditEntry>,
     setup: impl FnOnce(&SharedState) -> Vec<mpsc::Receiver<secreq::daemon::state::WaiterReply>>,
 ) {
-    render_prompt_fixture_full(name, PROMPT_SIZE, audit_entries, None, setup);
+    render_prompt_fixture_full(name, PROMPT_SIZE, audit_entries, None, MACOS_DARK, setup);
+}
+
+/// `(flavor, dark)` pin for a fixture. Fixtures always pin both so the
+/// PNGs are deterministic regardless of the host OS and the harness's
+/// fallback theme.
+type ThemePin = (OsFlavor, bool);
+const MACOS_DARK: ThemePin = (OsFlavor::MacOs, true);
+
+fn apply_theme_pin(ctx: &egui::Context, pin: ThemePin) {
+    let (flavor, dark) = pin;
+    OsFlavor::install_override(ctx, flavor);
+    ctx.set_theme(if dark {
+        egui::ThemePreference::Dark
+    } else {
+        egui::ThemePreference::Light
+    });
 }
 
 fn render_prompt_fixture_full(
@@ -359,6 +376,7 @@ fn render_prompt_fixture_full(
     size: Vec2,
     audit_entries: Vec<AuditEntry>,
     toast: Option<AutoDenyToastView>,
+    theme_pin: ThemePin,
     setup: impl FnOnce(&SharedState) -> Vec<mpsc::Receiver<secreq::daemon::state::WaiterReply>>,
 ) {
     let tmp = install_audit_log(&audit_entries);
@@ -379,6 +397,7 @@ fn render_prompt_fixture_full(
         .build_ui_state(
             move |ui, ws: &mut PromptWindowState| {
                 let ctx = ui.ctx().clone();
+                apply_theme_pin(&ctx, theme_pin);
                 secreq::daemon::ui::install_style(&ctx);
                 // The screenshot harness ignores action output — no
                 // user is clicking, and we don't need to dispatch
@@ -413,6 +432,9 @@ struct ManagerExtras<'a> {
     /// to focus a specific view, open a rule form, or pre-fill the
     /// audit search. Defaults to no-op.
     window_state: Option<ManagerStateSetup<'a>>,
+    /// `(flavor, dark)` pin; `None` means macOS dark, the canonical
+    /// fixture appearance.
+    theme_pin: Option<ThemePin>,
 }
 
 /// Drive the real `render_manager_panel` for one frame and write a PNG.
@@ -423,7 +445,9 @@ fn render_manager_fixture(name: &str, audit_entries: Vec<AuditEntry>, extras: Ma
         rules,
         viewer_mode,
         window_state,
+        theme_pin,
     } = extras;
+    let theme_pin = theme_pin.unwrap_or(MACOS_DARK);
     let mut initial_state = ManagerWindowState::new();
     if let Some(f) = window_state {
         f(&mut initial_state);
@@ -435,6 +459,7 @@ fn render_manager_fixture(name: &str, audit_entries: Vec<AuditEntry>, extras: Ma
         .build_ui_state(
             move |ui, ws: &mut ManagerWindowState| {
                 let ctx = ui.ctx().clone();
+                apply_theme_pin(&ctx, theme_pin);
                 secreq::daemon::ui::install_style(&ctx);
                 let mut rule_actions: Vec<RuleAction> = Vec::new();
                 render_manager_panel(&ctx, ui, &rules, viewer_mode, ws, &mut rule_actions);
@@ -760,6 +785,7 @@ fn auto_deny_toast_on_pending() {
         PROMPT_SIZE,
         vec![],
         Some(toast),
+        MACOS_DARK,
         |state| {
             vec![submit(
                 state,
@@ -1492,7 +1518,7 @@ fn resize_stress() {
     ];
     for (i, size) in sizes.iter().enumerate() {
         let name = format!("99-resize-{:02}-{}x{}", i, size.x as u32, size.y as u32);
-        render_prompt_fixture_full(&name, *size, vec![], None, |state| {
+        render_prompt_fixture_full(&name, *size, vec![], None, MACOS_DARK, |state| {
             vec![submit(
                 state,
                 "gh",
@@ -1506,4 +1532,221 @@ fn resize_stress() {
             )]
         });
     }
+}
+
+// ── New-surface fixtures: many-secrets, appearance, OS flavors ────────────
+
+/// The `secreq run` 40-plus-vars case: secrets collapse into
+/// locator-prefix groups inside a scroll-capped grid, the count is the
+/// headline, and the well stays legible.
+#[test]
+#[ignore = "screenshot harness"]
+fn prompt_many_secrets() {
+    const WORK: &[&str] = &[
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_REGION",
+        "DATABASE_URL",
+        "PGPASSWORD",
+        "PGUSER",
+        "REDIS_URL",
+        "KAFKA_BROKER_URL",
+        "KAFKA_SASL_PASSWORD",
+        "SENTRY_DSN",
+        "SENTRY_AUTH_TOKEN",
+        "DATADOG_API_KEY",
+        "STRIPE_SECRET_KEY",
+        "STRIPE_WEBHOOK_SECRET",
+        "TWILIO_AUTH_TOKEN",
+        "SENDGRID_API_KEY",
+        "S3_UPLOAD_BUCKET_KEY",
+        "CDN_SIGNING_KEY",
+        "JWT_SIGNING_SECRET",
+        "SESSION_SECRET",
+        "ENCRYPTION_KEY",
+        "ANALYTICS_WRITE_KEY",
+        "FEATURE_FLAG_SDK_KEY",
+        "MAPS_API_KEY",
+        "ELASTIC_CLOUD_ID",
+        "ELASTIC_API_KEY",
+        "SMTP_PASSWORD",
+        "OAUTH_CLIENT_SECRET",
+        "WEBHOOK_HMAC_KEY",
+        "VAULT_ROLE_ID",
+        "VAULT_SECRET_ID",
+    ];
+    const PERSONAL: &[&str] = &[
+        "GITHUB_TOKEN",
+        "NPM_TOKEN",
+        "CARGO_REGISTRY_TOKEN",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "HOMEBREW_GITHUB_TOKEN",
+        "DOCKER_HUB_TOKEN",
+    ];
+    const ENV: &[&str] = &["NODE_ENV", "LOG_LEVEL", "PORT", "CI"];
+    render_prompt_fixture("28-prompt-many-secrets", vec![], |state| {
+        let mut secrets = Vec::new();
+        for name in WORK {
+            secrets.push(secret(name, "op", &format!("op://Work/Acme/{name}")));
+        }
+        for name in PERSONAL {
+            secrets.push(secret(name, "op", &format!("op://Personal/{name}")));
+        }
+        for name in ENV {
+            secrets.push(secret(name, "env", name));
+        }
+        vec![submit_run(
+            state,
+            vec!["secreq", "run", "--", "npm", "run", "dev"],
+            vec![caller(7926, "zsh", 1_700_000_000)],
+            secrets,
+        )]
+    });
+}
+
+/// The same single-pending prompt as fixture 02, following a light OS
+/// appearance — appearance is not a setting; the window tracks the OS.
+#[test]
+#[ignore = "screenshot harness"]
+fn prompt_macos_light() {
+    render_prompt_fixture_full(
+        "29-prompt-macos-light",
+        PROMPT_SIZE,
+        vec![],
+        None,
+        (OsFlavor::MacOs, false),
+        |state| {
+            vec![submit(
+                state,
+                "gh",
+                vec!["gh", "auth", "login"],
+                vec![caller(7926, "zsh", 1_700_000_000)],
+                vec![secret(
+                    "GITHUB_TOKEN",
+                    "op",
+                    "op://Personal/GitHub/credential",
+                )],
+            )]
+        },
+    );
+}
+
+/// The Windows 11 ContentDialog idiom: equal-width footer strip,
+/// affirmative first. Rendered via the fixture flavor override; on a
+/// real Windows build this is the default treatment.
+#[test]
+#[ignore = "screenshot harness"]
+fn prompt_windows_dark() {
+    render_prompt_fixture_full(
+        "30-prompt-windows-dark",
+        PROMPT_SIZE,
+        vec![],
+        None,
+        (OsFlavor::Windows, true),
+        |state| {
+            vec![submit(
+                state,
+                "gh",
+                vec!["gh", "auth", "login"],
+                vec![caller(7926, "pwsh.exe", 1_700_000_000)],
+                vec![secret(
+                    "GITHUB_TOKEN",
+                    "op",
+                    "op://Personal/GitHub/credential",
+                )],
+            )]
+        },
+    );
+}
+
+/// The GNOME AdwMessageDialog idiom: full-width response row with
+/// hairline separators, Approve as the suggested action.
+#[test]
+#[ignore = "screenshot harness"]
+fn prompt_linux_dark() {
+    render_prompt_fixture_full(
+        "31-prompt-linux-dark",
+        PROMPT_SIZE,
+        vec![],
+        None,
+        (OsFlavor::Gnome, true),
+        |state| {
+            vec![submit(
+                state,
+                "gh",
+                vec!["gh", "auth", "login"],
+                vec![caller(7926, "bash", 1_700_000_000)],
+                vec![secret(
+                    "GITHUB_TOKEN",
+                    "op",
+                    "op://Personal/GitHub/credential",
+                )],
+            )]
+        },
+    );
+}
+
+/// Manager audit view in the Windows treatment: SelectorBar tabs with
+/// the accent underline over hairline-separated rows.
+#[test]
+#[ignore = "screenshot harness"]
+fn manager_audit_windows_dark() {
+    let audit = vec![
+        audit_line_traced(
+            60,
+            "gh",
+            &["api", "/repos/acme/web/issues"],
+            &[(52310, "pwsh.exe", "pwsh.exe -NoLogo")],
+            &["GITHUB_TOKEN"],
+            "approve",
+        ),
+        audit_line_traced(
+            60 * 9,
+            "aws",
+            &["s3", "ls", "s3://acme-logs"],
+            &[(52312, "pwsh.exe", "pwsh.exe -NoLogo")],
+            &["AWS_ACCESS_KEY_ID"],
+            "deny",
+        ),
+    ];
+    render_manager_fixture(
+        "32-manager-audit-windows-dark",
+        audit,
+        ManagerExtras {
+            viewer_mode: true,
+            theme_pin: Some((OsFlavor::Windows, true)),
+            ..ManagerExtras::default()
+        },
+    );
+}
+
+/// Manager rules view in the GNOME light treatment: boxed lists on the
+/// Adwaita palette under the headerbar view switcher.
+#[test]
+#[ignore = "screenshot harness"]
+fn manager_rules_gnome_light() {
+    let rules = vec![
+        sample_rule(
+            "01aaa",
+            "Cursor reads via gh",
+            RuleDecision::Approve,
+            Some("gh api --get /repos/*/pulls*"),
+        ),
+        sample_rule(
+            "01bbb",
+            "Block gh destructive ops",
+            RuleDecision::Deny,
+            Some("gh repo delete *"),
+        ),
+    ];
+    render_manager_fixture(
+        "33-manager-rules-gnome-light",
+        vec![],
+        ManagerExtras {
+            rules,
+            theme_pin: Some((OsFlavor::Gnome, false)),
+            ..ManagerExtras::default()
+        },
+    );
 }
