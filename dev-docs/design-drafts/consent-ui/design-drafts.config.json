@@ -10,6 +10,7 @@
       "description": "The three committed surfaces: the transient consent prompt, and the manager window's audit and rules views",
       "choices": [
         { "name": "prompt", "label": "Prompt", "description": "Focus Stack: one ask at a time, with an argv-bearing process tree" },
+        { "name": "prompt-many", "label": "Prompt (42 secrets)", "description": "The secreq-run case: one process requesting 40+ vars" },
         { "name": "audit", "label": "Audit", "description": "Scannable table in the manager window" },
         { "name": "rules", "label": "Rules", "description": "Grouped list in the manager window" }
       ]
@@ -37,6 +38,7 @@
   "pages": [
     { "coordinates": { "page": "prompt", "os": "macos", "appearance": "dark" }, "path": "pages/prompt/macos-dark.html", "description": "Default: refined macOS alert panel with evidence well and process tree" },
     { "coordinates": { "page": "prompt", "os": "macos", "appearance": "light" }, "path": "pages/prompt/macos-light.html" },
+    { "coordinates": { "page": "prompt-many", "os": "macos", "appearance": "dark" }, "path": "pages/prompt/macos-dark-many.html", "description": "42 secrets grouped by provider in a scrollable grid" },
     { "coordinates": { "page": "prompt", "os": "windows", "appearance": "dark" }, "path": "pages/prompt/windows-dark.html", "description": "Windows 11 ContentDialog idiom" },
     { "coordinates": { "page": "prompt", "os": "windows", "appearance": "light" }, "path": "pages/prompt/windows-light.html" },
     { "coordinates": { "page": "prompt", "os": "linux", "appearance": "dark" }, "path": "pages/prompt/linux-dark.html", "description": "GNOME AdwMessageDialog idiom" },

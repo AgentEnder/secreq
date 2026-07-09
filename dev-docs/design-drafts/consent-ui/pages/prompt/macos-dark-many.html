@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>secreq drafts — prompt (many secrets) / macOS / dark</title>
+<link rel="stylesheet" href="../../shared/styles/base.css">
+<link rel="stylesheet" href="../../shared/styles/macos.css">
+<style>
+  /* Many-secrets treatment: group by provider, names in a compact grid,
+     capped height with scroll. The count is the headline. */
+  .secgroup { margin-top: 6px; }
+  .secgroup .ghead { display: flex; gap: 8px; align-items: baseline; }
+  .secgroup .gprefix { font-family: var(--mono); color: var(--dim); font-size: 12px; }
+  .secgroup .gcount { color: var(--faint); font-size: 11px; }
+  .secgrid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px 12px;
+    margin-top: 3px;
+  }
+  .secgrid code { font-size: 11px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sec-scroll { max-height: 168px; overflow-y: auto; }
+  .morehint { color: var(--faint); font-size: 11px; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <main class="panel" data-annotate-id="prompt-window" aria-label="secreq consent prompt">
+    <header class="panel-head" data-annotate-id="header">
+      <span class="glyph" aria-hidden="true">
+        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+          <circle cx="8.5" cy="8.5" r="4.25"/>
+          <path d="M11.5 11.5 L20 20 M16.5 16.5 L18.5 14.5 M13.5 19.5 L15.5 17.5"/>
+        </svg>
+      </span>
+      <div>
+        <h1 data-annotate-id="ask-summary"><code>secreq run</code> wants to use <b>42 secrets</b></h1>
+        <p class="sub"><code>secreq run -- npm run dev</code></p>
+      </div>
+    </header>
+
+    <div class="well" data-annotate-id="evidence-well">
+      <div class="wrow" data-annotate-id="secrets">
+        <span class="wlabel">Secrets · 42</span>
+        <div class="sec-scroll">
+          <div class="secgroup">
+            <div class="ghead"><span class="gprefix">op://Work/Acme/*</span><span class="gcount">31</span></div>
+            <div class="secgrid">
+              <code>AWS_ACCESS_KEY_ID</code><code>AWS_SECRET_ACCESS_KEY</code><code>AWS_REGION</code>
+              <code>DATABASE_URL</code><code>PGPASSWORD</code><code>PGUSER</code>
+              <code>REDIS_URL</code><code>KAFKA_BROKER_URL</code><code>KAFKA_SASL_PASSWORD</code>
+              <code>SENTRY_DSN</code><code>SENTRY_AUTH_TOKEN</code><code>DATADOG_API_KEY</code>
+              <code>STRIPE_SECRET_KEY</code><code>STRIPE_WEBHOOK_SECRET</code><code>TWILIO_AUTH_TOKEN</code>
+              <code>SENDGRID_API_KEY</code><code>S3_UPLOAD_BUCKET_KEY</code><code>CDN_SIGNING_KEY</code>
+              <code>JWT_SIGNING_SECRET</code><code>SESSION_SECRET</code><code>ENCRYPTION_KEY</code>
+              <code>ANALYTICS_WRITE_KEY</code><code>FEATURE_FLAG_SDK_KEY</code><code>MAPS_API_KEY</code>
+              <code>ELASTIC_CLOUD_ID</code><code>ELASTIC_API_KEY</code><code>SMTP_PASSWORD</code>
+              <code>OAUTH_CLIENT_SECRET</code><code>WEBHOOK_HMAC_KEY</code><code>VAULT_ROLE_ID</code>
+              <code>VAULT_SECRET_ID</code>
+            </div>
+          </div>
+          <div class="secgroup">
+            <div class="ghead"><span class="gprefix">op://Personal/*</span><span class="gcount">7</span></div>
+            <div class="secgrid">
+              <code>GITHUB_TOKEN</code><code>NPM_TOKEN</code><code>CARGO_REGISTRY_TOKEN</code>
+              <code>OPENAI_API_KEY</code><code>ANTHROPIC_API_KEY</code><code>HOMEBREW_GITHUB_TOKEN</code>
+              <code>DOCKER_HUB_TOKEN</code>
+            </div>
+          </div>
+          <div class="secgroup">
+            <div class="ghead"><span class="gprefix">env passthrough</span><span class="gcount">4</span></div>
+            <div class="secgrid">
+              <code>NODE_ENV</code><code>LOG_LEVEL</code><code>PORT</code><code>CI</code>
+            </div>
+          </div>
+        </div>
+        <p class="morehint">Scroll for all 42 · grouped by provider</p>
+      </div>
+      <div class="wrow" data-annotate-id="process-tree">
+        <span class="wlabel">Asked by</span>
+        <div class="tree">
+          <div class="proc">
+            <span class="pname">Terminal.app</span>
+            <code class="pargv" title="/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal">/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal</code>
+            <span class="pid">1876</span>
+          </div>
+          <div class="proc d1">
+            <span class="twig">└</span><span class="pname">zsh</span>
+            <code class="pargv" title="-zsh -il">-zsh -il</code>
+            <span class="pid">1912</span>
+          </div>
+          <div class="proc d2 leaf">
+            <span class="twig">└</span><span class="pname">secreq</span>
+            <code class="pargv" title="secreq run -- npm run dev">secreq run -- npm run dev</code>
+            <span class="pid">51230</span>
+          </div>
+        </div>
+      </div>
+      <div class="wrow">
+        <span class="wlabel">In</span>
+        <span class="mono">~/repos/acme-web</span>
+      </div>
+      <div class="wrow" data-annotate-id="history">
+        <span class="wlabel">History</span>
+        <span class="hint">Approved 12 times this month, most recently yesterday.</span>
+      </div>
+    </div>
+
+    <footer class="panel-foot" data-annotate-id="decision-surface">
+      <button class="manager-link" data-annotate-id="manager-affordance">Open Manager…</button>
+      <span class="spring"></span>
+      <button class="btn"><span class="mn">D</span>eny</button>
+      <button class="btn default"><span class="mn">A</span>pprove all 42</button>
+    </footer>
+  </main>
+
+  <p class="spec"><b>prompt (many secrets) · macOS · dark</b> — the 40-plus-vars case: the count is the headline, names grouped by provider in a compact scrollable grid, and the default button says what it grants. Hover a truncated argv for the full string.</p>
+</div>
+<script src="https://unpkg.com/@design-drafts/toolbar@0/dist/toolbar.js" defer></script>
+<script src="https://unpkg.com/@design-drafts/annotate@0/dist/annotate.js" defer></script>
+</body>
+</html>
