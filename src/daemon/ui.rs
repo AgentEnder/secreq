@@ -45,6 +45,7 @@ use crate::rules::{Pattern, Rule, RuleDecision, RuleMatch};
 
 use super::proto::{Caller, DedupeKey, RowStatus, SecretAsk, SshAskInfo};
 use super::state::{ApprovalScope, QueueRow, QueueSnapshot, SharedState};
+use super::theme::{OsFlavor, Theme};
 
 /// How often the UI re-reads the audit log to refresh the per-wrap history
 /// summaries. The log is append-only and small, so re-reading is cheap, but
@@ -64,58 +65,11 @@ const AUDIT_HISTORY_LIMIT: usize = 5_000;
 
 // ── Palette ───────────────────────────────────────────────────────────────
 //
-// Cooled, slightly desaturated dark palette tuned to feel native on
-// macOS Sonoma's translucent dark surfaces. Three background tiers
-// (canvas → card → header) carry the visual depth; text moves through
-// three readability tiers (primary → muted → footnote) so the eye
-// always knows where the most important content lives.
-
-/// Canvas background. The window's primary fill.
-const COLOR_CANVAS: egui::Color32 = egui::Color32::from_rgb(14, 17, 22);
-/// Slightly elevated surface — used for the title-bar chrome strip
-/// and the hover state on cards.
-const COLOR_CHROME: egui::Color32 = egui::Color32::from_rgb(20, 24, 30);
-/// Card fill — the resting surface for wrap requests + audit entries.
-/// One step lighter than `COLOR_CANVAS` so cards read as elevated
-/// content without slamming the eye.
-const COLOR_CARD: egui::Color32 = egui::Color32::from_rgb(24, 29, 36);
-/// Subtle 1px stroke around cards. Same hue as the divider but
-/// designed to wrap a shape rather than draw a line, so very low
-/// alpha to keep cards feeling soft rather than boxed-in.
-const COLOR_CARD_STROKE: egui::Color32 = egui::Color32::from_rgb(38, 45, 54);
-
-/// Approve button — emerald, slightly cooler than the previous
-/// brick-toned forest green. Reads as "go" without the cartoon
-/// saturation of `#2E7D32`.
-const COLOR_APPROVE_BG: egui::Color32 = egui::Color32::from_rgb(38, 158, 88);
-const COLOR_APPROVE_BG_HOVER: egui::Color32 = egui::Color32::from_rgb(54, 178, 105);
-/// Deny button — a more modern Stripe/Linear-style red. The previous
-/// `#B03232` read as a warning banner; this reads as a confirmation
-/// you actually want to make decisively.
-const COLOR_DENY_BG: egui::Color32 = egui::Color32::from_rgb(224, 78, 95);
-const COLOR_DENY_BG_HOVER: egui::Color32 = egui::Color32::from_rgb(238, 100, 116);
-/// Accent — primary interactive blue. Used for active tab underlines,
-/// caller names, the count badge.
-const COLOR_ACCENT: egui::Color32 = egui::Color32::from_rgb(118, 169, 232);
-/// Slightly desaturated accent for badges and pill backgrounds —
-/// lighter than the foreground accent so it can sit behind text
-/// without bleeding into it.
-const COLOR_ACCENT_SOFT: egui::Color32 = egui::Color32::from_rgb(33, 50, 76);
-
-/// Primary text — near-white with the slightest cool tint so it
-/// matches the rest of the palette instead of looking too
-/// fluorescent on a cool background.
-const COLOR_TEXT: egui::Color32 = egui::Color32::from_rgb(235, 238, 244);
-/// One-layer-down text for secondary labels: "from", "via", section
-/// headers above lists, the tab bar's inactive label.
-const COLOR_MUTED: egui::Color32 = egui::Color32::from_gray(150);
-/// Two-layer-down text for tertiary metadata (`pid …`, `cwd …`,
-/// timestamps, locators, the "↳" prefix in audit lines).
-const COLOR_FOOTNOTE: egui::Color32 = egui::Color32::from_gray(120);
-
-/// 1px hairline used between the title bar and the body. Matches
-/// `COLOR_CARD_STROKE` for visual consistency.
-const COLOR_DIVIDER: egui::Color32 = egui::Color32::from_rgb(38, 45, 54);
+// All colors come from the semantic tokens in [`super::theme`]. Each
+// render function resolves the current theme once near its top via
+// `Theme::of(...)` — flavor from the compile target (or the harness
+// override), light/dark from egui's resolved theme, which follows the
+// OS under `ThemePreference::System`.
 
 /// Outer window inset. Big enough to keep right-aligned buttons from
 /// kissing the window edge and the title from sitting under the
@@ -629,11 +583,11 @@ pub struct AutoDenyToastView {
 /// feature, derived from DejaVu Sans Mono) has wide coverage, so we
 /// append it as a Proportional fallback.
 ///
-/// **Visuals.** egui's stock dark theme is a workmanlike grey. We
-/// replace its three background colours with our three-tier palette
-/// (`COLOR_CANVAS` / `COLOR_CHROME` / `COLOR_CARD`), the text colour
-/// with `COLOR_TEXT`, and bump the global corner radii so widgets
-/// look part of one design system instead of a stock egui app.
+/// **Visuals.** Every colour derives from the semantic tokens in
+/// [`super::theme`], resolved per call so an OS light/dark flip (or a
+/// harness flavor override) takes effect on the next frame. Corner
+/// radii come from the flavor's metrics so stock widgets look part of
+/// the same design system as the hand-painted surfaces.
 pub fn install_style(ctx: &egui::Context) {
     // ── Fonts ────────────────────────────────────────────────────
     let mut fonts = egui::FontDefinitions::default();
@@ -645,37 +599,39 @@ pub fn install_style(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 
     // ── Visuals ──────────────────────────────────────────────────
+    let th = Theme::of(ctx);
     ctx.global_style_mut(|style| {
         let v = &mut style.visuals;
-        v.dark_mode = true;
-        v.panel_fill = COLOR_CANVAS;
-        v.window_fill = COLOR_CANVAS;
-        v.extreme_bg_color = COLOR_CHROME;
-        v.faint_bg_color = COLOR_CARD;
-        v.override_text_color = Some(COLOR_TEXT);
+        v.dark_mode = th.dark;
+        v.panel_fill = th.panel;
+        v.window_fill = th.panel;
+        v.extreme_bg_color = th.well;
+        v.faint_bg_color = th.raised;
+        v.override_text_color = Some(th.fg);
         // Widget surface tones. egui uses these for buttons, tabs,
-        // hovered labels, etc.; align them with our palette so
+        // hovered labels, etc.; align them with our tokens so
         // stock widgets we don't custom-paint still feel native.
-        v.widgets.noninteractive.bg_fill = COLOR_CARD;
-        v.widgets.noninteractive.weak_bg_fill = COLOR_CARD;
-        v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, COLOR_CARD_STROKE);
-        v.widgets.inactive.bg_fill = COLOR_CARD;
-        v.widgets.inactive.weak_bg_fill = COLOR_CARD;
-        v.widgets.hovered.bg_fill = COLOR_CHROME;
-        v.widgets.hovered.weak_bg_fill = COLOR_CHROME;
-        v.widgets.active.bg_fill = COLOR_ACCENT_SOFT;
-        v.widgets.active.weak_bg_fill = COLOR_ACCENT_SOFT;
-        // Unified corner radii across egui widgets. egui ships a
-        // smaller default that ends up looking inconsistent next to
-        // our hand-painted 8px cards.
-        let r = egui::CornerRadius::same(6);
+        v.widgets.noninteractive.bg_fill = th.well;
+        v.widgets.noninteractive.weak_bg_fill = th.well;
+        v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, th.rule);
+        v.widgets.inactive.bg_fill = th.btn;
+        v.widgets.inactive.weak_bg_fill = th.btn;
+        v.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, th.btn_border);
+        v.widgets.hovered.bg_fill = th.raised;
+        v.widgets.hovered.weak_bg_fill = th.raised;
+        v.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, th.btn_border);
+        v.widgets.active.bg_fill = th.accent.gamma_multiply(0.35);
+        v.widgets.active.weak_bg_fill = th.accent.gamma_multiply(0.35);
+        // Unified corner radii across egui widgets, from the flavor's
+        // button-radius metric so everything shares one corner language.
+        let r = egui::CornerRadius::same(th.btn_radius);
         v.widgets.noninteractive.corner_radius = r;
         v.widgets.inactive.corner_radius = r;
         v.widgets.hovered.corner_radius = r;
         v.widgets.active.corner_radius = r;
         // Selection chrome — used by text selection, accent fills.
-        v.selection.bg_fill = COLOR_ACCENT_SOFT;
-        v.selection.stroke = egui::Stroke::new(1.0, COLOR_ACCENT);
+        v.selection.bg_fill = th.accent.gamma_multiply(0.35);
+        v.selection.stroke = egui::Stroke::new(1.0, th.accent);
         // Loosen up some default spacing for a calmer rhythm.
         style.spacing.item_spacing = egui::vec2(8.0, 6.0);
         style.spacing.button_padding = egui::vec2(10.0, 6.0);
@@ -689,44 +645,50 @@ pub fn install_fonts(ctx: &egui::Context) {
     install_style(ctx);
 }
 
-/// Alert background for the always-on-top pending badge. A deep,
-/// saturated red so a "N pending" pill reads as "act on me" against an
-/// arbitrary desktop — distinct from the consent window's calm dark
-/// canvas, which the user has to be looking at to see at all.
-const COLOR_BADGE_BG: egui::Color32 = egui::Color32::from_rgb(198, 52, 64);
-
 /// Render the always-on-top pending-requests badge: a compact pill
-/// reading "N pending" with a bright indicator dot. The background is
+/// reading "N pending" with an accent indicator dot. The background is
 /// painted here (not left to the window/panel fill) so the screenshot
-/// fixture renders the exact pixels the production badge window shows.
+/// fixture renders the exact pixels the production badge window shows:
+/// a `th.panel` surface with a 1px `th.rule` border, the count in
+/// `th.accent_text`, and the "pending" label in `th.fg`.
 /// Returns the click response over the whole pill — the badge child
 /// turns a click into a `RaiseConsentRequested`.
 pub fn render_badge(ui: &mut egui::Ui, count: usize) -> egui::Response {
+    let th = Theme::of(ui.ctx());
     let rect = ui.max_rect();
     // Clone so the painter doesn't hold a borrow across `allocate_rect`.
     let painter = ui.painter().clone();
 
-    // Opaque fill of the whole (small, borderless) window.
-    painter.rect_filled(rect, egui::CornerRadius::ZERO, COLOR_BADGE_BG);
+    // Opaque fill of the whole (small, borderless) window, with a
+    // hairline border so the pill reads as a surface over any desktop.
+    painter.rect_filled(rect, egui::CornerRadius::ZERO, th.panel);
+    painter.rect_stroke(
+        rect,
+        egui::CornerRadius::ZERO,
+        egui::Stroke::new(1.0, th.rule),
+        egui::StrokeKind::Inside,
+    );
 
-    // Bright indicator dot, vertically centred, inset from the left.
+    // Accent indicator dot, vertically centred, inset from the left.
     let dot_radius = 5.0;
     let dot_center = egui::pos2(rect.left() + 16.0, rect.center().y);
-    painter.circle_filled(dot_center, dot_radius, COLOR_TEXT);
+    painter.circle_filled(dot_center, dot_radius, th.accent);
 
-    // "N pending" — singular/plural so a single request doesn't read
-    // "1 pendings".
-    let label = if count == 1 {
-        "1 pending".to_owned()
-    } else {
-        format!("{count} pending")
-    };
-    painter.text(
+    // Count in accent text, then the "pending" label in the body tier.
+    let font = egui::FontId::proportional(18.0);
+    let count_rect = painter.text(
         egui::pos2(dot_center.x + dot_radius + 10.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
-        label,
-        egui::FontId::proportional(18.0),
-        COLOR_TEXT,
+        count.to_string(),
+        font.clone(),
+        th.accent_text,
+    );
+    painter.text(
+        egui::pos2(count_rect.right() + 6.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        "pending",
+        font,
+        th.fg,
     );
 
     ui.allocate_rect(rect, egui::Sense::click())
@@ -734,11 +696,15 @@ pub fn render_badge(ui: &mut egui::Ui, count: usize) -> egui::Response {
 
 /// The badge window's clear colour, matching [`render_badge`]'s fill, so
 /// any pixels the painter doesn't cover (sub-pixel edges, the frame
-/// before the first paint) show the alert colour rather than flashing a
-/// stale or black background. Shape matches `eframe::App::clear_color`'s
-/// `[r, g, b, a]` gamma-normalised return.
+/// before the first paint) show the surface colour rather than flashing
+/// a stale or black background. No `egui::Context` is available in
+/// `eframe::App::clear_color`'s caller before the first frame, so this
+/// resolves the host flavor's dark surface directly. Shape matches
+/// `clear_color`'s `[r, g, b, a]` gamma-normalised return.
 pub fn badge_clear_color() -> [f32; 4] {
-    COLOR_BADGE_BG.to_normalized_gamma_f32()
+    Theme::resolve(OsFlavor::current(), true)
+        .panel
+        .to_normalized_gamma_f32()
 }
 
 // ── Audit history cache ──────────────────────────────────────────────────
@@ -876,6 +842,7 @@ pub fn render_consent_panel(
     actions_out: &mut Vec<PendingAction>,
     rule_actions_out: &mut Vec<RuleAction>,
 ) {
+    let th = Theme::of(ctx);
     // Rising-edge tab switch for viewer mode (`secreq view` lands on
     // the Audit tab the first time, then leaves the tab alone).
     if viewer_mode && !window_state.last_viewer_mode {
@@ -921,7 +888,7 @@ pub fn render_consent_panel(
     }
 
     // ── Render ───────────────────────────────────────────────────
-    ui.painter().rect_filled(ui.max_rect(), 0.0, COLOR_CANVAS);
+    ui.painter().rect_filled(ui.max_rect(), 0.0, th.panel);
     let body_inset = egui::Margin {
         left: WINDOW_INSET_X,
         right: WINDOW_INSET_X,
@@ -1214,7 +1181,7 @@ fn count_leaf_rows(tree: &ProcessTree, node_idx: usize) -> usize {
 
 /// Paint the full-width title bar at the top of the window.
 ///
-/// - Full-bleed `COLOR_CHROME` background strip, `TITLE_BAR_HEIGHT` tall.
+/// - Full-bleed `th.raised` background strip, `TITLE_BAR_HEIGHT` tall.
 /// - 30px app-icon badge on the left (drawn from primitives — a soft
 ///   accent rounded square with a stylised key glyph). Provides the
 ///   "branding" that lifts the chrome from "egui app" to "designed
@@ -1222,10 +1189,11 @@ fn count_leaf_rows(tree: &ProcessTree, node_idx: usize) -> usize {
 /// - Two-line title block: `secreq` as a bold 18pt wordmark,
 ///   `Consent requests` / `Audit timeline · pinned` as a 11pt
 ///   footnote subtitle.
-/// - Right-aligned count badge — a rounded `COLOR_ACCENT_SOFT` pill
+/// - Right-aligned count badge — a rounded `th.raised` pill
 ///   with a small accent dot + plain-English count. Hidden when the
 ///   queue is empty so the chrome reads calm in the no-news state.
 fn paint_title_bar(ui: &mut egui::Ui, tree: &ProcessTree, viewer_mode: bool, pulse: f32) {
+    let th = Theme::of(ui.ctx());
     let pending = tree.total_leaf_rows();
     let process_count = tree.roots.len();
 
@@ -1235,12 +1203,12 @@ fn paint_title_bar(ui: &mut egui::Ui, tree: &ProcessTree, viewer_mode: bool, pul
         egui::vec2(available.width(), TITLE_BAR_HEIGHT),
     );
 
-    ui.painter().rect_filled(bar_rect, 0.0, COLOR_CHROME);
+    ui.painter().rect_filled(bar_rect, 0.0, th.raised);
     let hairline_y = bar_rect.bottom() - 0.5;
     ui.painter().hline(
         bar_rect.x_range(),
         hairline_y,
-        egui::Stroke::new(1.0, COLOR_DIVIDER),
+        egui::Stroke::new(1.0, th.rule),
     );
 
     // Defensive: when the window is dragged narrower than two title-bar
@@ -1274,18 +1242,14 @@ fn paint_title_bar(ui: &mut egui::Ui, tree: &ProcessTree, viewer_mode: bool, pul
                     egui::RichText::new("secreq")
                         .size(18.0)
                         .strong()
-                        .color(COLOR_TEXT),
+                        .color(th.fg),
                 );
                 let subtitle = if viewer_mode {
                     "Audit timeline · pinned"
                 } else {
                     "Consent requests"
                 };
-                ui.label(
-                    egui::RichText::new(subtitle)
-                        .size(11.0)
-                        .color(COLOR_FOOTNOTE),
-                );
+                ui.label(egui::RichText::new(subtitle).size(11.0).color(th.faint));
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if pending > 0 {
@@ -1302,14 +1266,15 @@ fn paint_title_bar(ui: &mut egui::Ui, tree: &ProcessTree, viewer_mode: bool, pul
 /// thin accent border and a stylised key shape inside. Built from
 /// primitives so it scales cleanly across DPRs.
 fn paint_app_icon(ui: &mut egui::Ui, size: f32) {
+    let th = Theme::of(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     let painter = ui.painter();
     let radius = egui::CornerRadius::same(7);
-    painter.rect_filled(rect, radius, COLOR_ACCENT_SOFT);
+    painter.rect_filled(rect, radius, th.raised);
     painter.rect_stroke(
         rect,
         radius,
-        egui::Stroke::new(1.0, COLOR_ACCENT),
+        egui::Stroke::new(1.0, th.accent),
         egui::StrokeKind::Inside,
     );
 
@@ -1318,8 +1283,8 @@ fn paint_app_icon(ui: &mut egui::Ui, size: f32) {
     let head_r = inner.width() * 0.34;
     let head_center = egui::pos2(cx, inner.top() + head_r + 1.0);
     // Key bow: hollow circle, with an inner darker dot for depth.
-    painter.circle_stroke(head_center, head_r, egui::Stroke::new(1.6, COLOR_ACCENT));
-    painter.circle_filled(head_center, head_r - 3.0, COLOR_CHROME);
+    painter.circle_stroke(head_center, head_r, egui::Stroke::new(1.6, th.accent));
+    painter.circle_filled(head_center, head_r - 3.0, th.raised);
     // Key shaft.
     let shaft_top = head_center.y + head_r - 1.0;
     let shaft_half_w = 1.2;
@@ -1329,7 +1294,7 @@ fn paint_app_icon(ui: &mut egui::Ui, size: f32) {
             egui::pos2(cx + shaft_half_w, inner.bottom() - 1.0),
         ),
         egui::CornerRadius::same(1),
-        COLOR_ACCENT,
+        th.accent,
     );
     // Key tooth.
     painter.rect_filled(
@@ -1338,7 +1303,7 @@ fn paint_app_icon(ui: &mut egui::Ui, size: f32) {
             egui::pos2(cx + shaft_half_w + 3.5, inner.bottom() - 2.0),
         ),
         egui::CornerRadius::same(1),
-        COLOR_ACCENT,
+        th.accent,
     );
 }
 
@@ -1379,14 +1344,15 @@ fn lerp_color(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {
 /// arrived: the soft pill fills to solid accent with near-white text, then
 /// the child's frame loop decays it back to rest.
 fn paint_count_badge(ui: &mut egui::Ui, pending: usize, process_count: usize, pulse: f32) {
+    let th = Theme::of(ui.ctx());
     let label = if process_count > 1 {
         format!("{pending} pending · {process_count} apps")
     } else {
         format!("{pending} pending")
     };
-    let fill = lerp_color(COLOR_ACCENT_SOFT, COLOR_ACCENT, pulse);
-    let stroke = lerp_color(COLOR_ACCENT, COLOR_TEXT, pulse * 0.5);
-    let text = lerp_color(COLOR_ACCENT, COLOR_TEXT, pulse);
+    let fill = lerp_color(th.raised, th.accent, pulse);
+    let stroke = lerp_color(th.accent, th.fg, pulse * 0.5);
+    let text = lerp_color(th.accent_text, th.fg, pulse);
     egui::Frame::new()
         .fill(fill)
         .corner_radius(egui::CornerRadius::same(10))
@@ -1461,12 +1427,13 @@ fn render_tab(
     highlight: f32,
     mut on_click: impl FnMut(),
 ) {
+    let th = Theme::of(ui.ctx());
     let (text_color, underline_color) = if active {
-        (egui::Color32::from_gray(235), COLOR_ACCENT)
+        (th.fg, th.accent)
     } else {
         (
-            lerp_color(COLOR_MUTED, COLOR_ACCENT, highlight),
-            lerp_color(egui::Color32::TRANSPARENT, COLOR_ACCENT, highlight),
+            lerp_color(th.dim, th.accent_text, highlight),
+            lerp_color(egui::Color32::TRANSPARENT, th.accent, highlight),
         )
     };
     let text = egui::RichText::new(label)
@@ -1539,6 +1506,7 @@ fn render_audit_page(
     search: &mut String,
     search_focus_pending: &mut bool,
 ) {
+    let th = Theme::of(ctx);
     if audit.entries.is_empty() {
         ui.vertical_centered(|ui| {
             ui.add_space(32.0);
@@ -1550,7 +1518,7 @@ fn render_audit_page(
             ui.add_space(4.0);
             ui.label(
                 egui::RichText::new("Every grant decision will land here once you make one.")
-                    .color(COLOR_MUTED),
+                    .color(th.dim),
             );
         });
         return;
@@ -1583,7 +1551,7 @@ fn render_audit_page(
             ui.add_space(4.0);
             ui.label(
                 egui::RichText::new("Try a different search, or clear it to see everything.")
-                    .color(COLOR_MUTED),
+                    .color(th.dim),
             );
         });
         return;
@@ -1607,7 +1575,7 @@ fn render_audit_page(
                         egui::RichText::new(&bucket)
                             .size(11.0)
                             .strong()
-                            .color(COLOR_FOOTNOTE),
+                            .color(th.faint),
                     );
                     ui.add_space(4.0);
                     last_bucket = Some(bucket);
@@ -1631,6 +1599,7 @@ fn render_audit_search_bar(
     matches: usize,
     total: usize,
 ) {
+    let th = Theme::of(ctx);
     let shortcut_label = match ctx.os() {
         // Space between the glyph and the key: the ⌘ and F otherwise
         // kern almost on top of each other in the keycap chip.
@@ -1643,8 +1612,8 @@ fn render_audit_search_bar(
         format!("{matches} of {total}")
     };
     egui::Frame::new()
-        .fill(COLOR_CARD)
-        .stroke(egui::Stroke::new(1.0, COLOR_CARD_STROKE))
+        .fill(th.well)
+        .stroke(egui::Stroke::new(1.0, th.well_border))
         .corner_radius(egui::CornerRadius::same(8))
         .inner_margin(egui::Margin::symmetric(12, 7))
         .show(ui, |ui| {
@@ -1652,7 +1621,7 @@ fn render_audit_search_bar(
                 // A leading magnifier glyph reads as "search" without an
                 // emoji; painted from primitives since the font stack
                 // has no search glyph.
-                paint_search_glyph(ui, COLOR_MUTED);
+                paint_search_glyph(ui, th.dim);
                 ui.add_space(4.0);
                 // The input flexes to fill the row; reserve room on the
                 // right for the count + shortcut chip.
@@ -1668,22 +1637,18 @@ fn render_audit_search_bar(
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     egui::Frame::new()
-                        .fill(COLOR_CHROME)
+                        .fill(th.raised)
                         .corner_radius(egui::CornerRadius::same(5))
                         .inner_margin(egui::Margin::symmetric(6, 2))
                         .show(ui, |ui| {
                             ui.label(
                                 egui::RichText::new(shortcut_label)
-                                    .color(COLOR_FOOTNOTE)
+                                    .color(th.faint)
                                     .size(10.0),
                             );
                         });
                     ui.add_space(8.0);
-                    ui.label(
-                        egui::RichText::new(count_label)
-                            .color(COLOR_MUTED)
-                            .size(11.0),
-                    );
+                    ui.label(egui::RichText::new(count_label).color(th.dim).size(11.0));
                 });
             });
         });
@@ -1764,6 +1729,7 @@ fn render_rules_list(
     state: &mut RulesUi,
     actions_out: &mut Vec<RuleAction>,
 ) {
+    let th = Theme::of(ui.ctx());
     let has_suggestions = !suggestions.is_empty();
     let has_rules = !rule_rows.is_empty();
 
@@ -1777,7 +1743,7 @@ fn render_rules_list(
                 "Rules fire before the consent prompt. Deny rules win; \
                  most-specific approve wins ties.",
             )
-            .color(COLOR_MUTED)
+            .color(th.dim)
             .size(11.0),
         );
     });
@@ -1790,7 +1756,7 @@ fn render_rules_list(
                 egui::RichText::new("No rules yet.")
                     .size(16.0)
                     .strong()
-                    .color(COLOR_TEXT),
+                    .color(th.fg),
             );
             ui.add_space(4.0);
             ui.label(
@@ -1798,7 +1764,7 @@ fn render_rules_list(
                     "Add a rule to auto-approve or auto-deny matching asks \
                      without prompting.",
                 )
-                .color(COLOR_MUTED),
+                .color(th.dim),
             );
         });
         return;
@@ -1817,14 +1783,14 @@ fn render_rules_list(
                         egui::RichText::new("Your rules")
                             .size(12.0)
                             .strong()
-                            .color(COLOR_MUTED),
+                            .color(th.dim),
                     );
                     // Sort toggle lives in the section header, mirroring
                     // the suggestions section's own toggle.
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.selectable_value(state.rule_sort, RuleSort::MostRecent, "Recent");
                         ui.selectable_value(state.rule_sort, RuleSort::MostUsed, "Most used");
-                        ui.label(egui::RichText::new("Sort").size(11.0).color(COLOR_FOOTNOTE));
+                        ui.label(egui::RichText::new("Sort").size(11.0).color(th.faint));
                     });
                 });
                 ui.add_space(8.0);
@@ -1860,12 +1826,13 @@ fn render_suggestions_section(
     dismissed: &mut HashSet<String>,
     sort: &mut SuggestionSort,
 ) {
+    let th = Theme::of(ui.ctx());
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new("Suggested rules")
                 .size(12.0)
                 .strong()
-                .color(COLOR_MUTED),
+                .color(th.dim),
         );
         // Sort toggle, right-aligned on the header row. In a
         // right-to-left layout the first-added widget sits rightmost,
@@ -1873,7 +1840,7 @@ fn render_suggestions_section(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.selectable_value(sort, SuggestionSort::MostRecent, "Recent");
             ui.selectable_value(sort, SuggestionSort::MostUsed, "Most used");
-            ui.label(egui::RichText::new("Sort").size(11.0).color(COLOR_FOOTNOTE));
+            ui.label(egui::RichText::new("Sort").size(11.0).color(th.faint));
         });
     });
     ui.add_space(2.0);
@@ -1882,7 +1849,7 @@ fn render_suggestions_section(
             "Patterns we noticed in your recent decisions. Review one to seed a rule.",
         )
         .size(11.0)
-        .color(COLOR_FOOTNOTE),
+        .color(th.faint),
     );
     ui.add_space(8.0);
     for s in suggestions {
@@ -1897,29 +1864,28 @@ fn render_suggestion_card(
     draft: &mut Option<RuleDraft>,
     dismissed: &mut HashSet<String>,
 ) {
+    let th = Theme::of(ui.ctx());
     egui::Frame::new()
-        .fill(COLOR_CARD)
-        .stroke(egui::Stroke::new(1.0, COLOR_ACCENT_SOFT))
+        .fill(th.well)
+        .stroke(egui::Stroke::new(1.0, th.raised))
         .inner_margin(egui::Margin::same(12))
         .corner_radius(egui::CornerRadius::same(8))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 let (pill_fg, pill_bg, pill_text) = match s.decide {
-                    SuggestionDecision::Approve => {
-                        (COLOR_APPROVE_BG, COLOR_APPROVE_SOFT, "approve")
-                    }
-                    SuggestionDecision::Deny => (COLOR_DENY_BG, COLOR_DENY_SOFT, "deny"),
+                    SuggestionDecision::Approve => (th.ok, COLOR_APPROVE_SOFT, "approve"),
+                    SuggestionDecision::Deny => (th.danger, COLOR_DENY_SOFT, "deny"),
                 };
                 render_pill(ui, pill_text, pill_fg, pill_bg);
                 ui.add_space(8.0);
-                // Explicit COLOR_TEXT: `.strong()` alone resolves through
+                // Explicit th.fg: `.strong()` alone resolves through
                 // `visuals.strong_text_color()` (a widget stroke we don't
                 // override), which renders off-palette against the dark
                 // card. The rule rows set the colour for the same reason.
                 ui.label(
                     egui::RichText::new(format!("{} from {}", s.wrap, s.ancestor))
                         .strong()
-                        .color(COLOR_TEXT),
+                        .color(th.fg),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Dismiss").clicked() {
@@ -1933,7 +1899,7 @@ fn render_suggestion_card(
             ui.add_space(4.0);
             ui.label(
                 egui::RichText::new(suggestion_summary_line(s))
-                    .color(COLOR_MUTED)
+                    .color(th.dim)
                     .size(11.0),
             );
             ui.label(
@@ -1943,7 +1909,7 @@ fn render_suggestion_card(
                     asks = if s.count == 1 { "ask" } else { "asks" },
                     recency = recency_label(s.last_ts_unix, now_unix()),
                 ))
-                .color(COLOR_FOOTNOTE)
+                .color(th.faint)
                 .size(10.0),
             );
         });
@@ -2069,9 +2035,10 @@ fn render_rules_row(
     draft: &mut Option<RuleDraft>,
     actions_out: &mut Vec<RuleAction>,
 ) {
+    let th = Theme::of(ui.ctx());
     egui::Frame::new()
-        .fill(COLOR_CARD)
-        .stroke(egui::Stroke::new(1.0, COLOR_CARD_STROKE))
+        .fill(th.well)
+        .stroke(egui::Stroke::new(1.0, th.well_border))
         .inner_margin(egui::Margin::same(12))
         .corner_radius(egui::CornerRadius::same(8))
         .show(ui, |ui| {
@@ -2091,29 +2058,21 @@ fn render_rules_row(
                 // so the live semantic colour is reserved for rules
                 // that can actually fire.
                 let (pill_fg, pill_bg, pill_text) = match rule.decide {
-                    RuleDecision::Approve => (COLOR_APPROVE_BG, COLOR_APPROVE_SOFT, "approve"),
-                    RuleDecision::Deny => (COLOR_DENY_BG, COLOR_DENY_SOFT, "deny"),
+                    RuleDecision::Approve => (th.ok, COLOR_APPROVE_SOFT, "approve"),
+                    RuleDecision::Deny => (th.danger, COLOR_DENY_SOFT, "deny"),
                 };
                 if rule.enabled {
                     render_pill(ui, pill_text, pill_fg, pill_bg);
                 } else {
-                    render_pill(ui, pill_text, COLOR_MUTED, COLOR_CHROME);
+                    render_pill(ui, pill_text, th.dim, th.raised);
                 }
 
                 ui.add_space(8.0);
-                let name_color = if rule.enabled {
-                    COLOR_TEXT
-                } else {
-                    COLOR_MUTED
-                };
+                let name_color = if rule.enabled { th.fg } else { th.dim };
                 ui.label(egui::RichText::new(&rule.name).strong().color(name_color));
                 if !rule.enabled {
                     ui.add_space(6.0);
-                    ui.label(
-                        egui::RichText::new("disabled")
-                            .size(10.5)
-                            .color(COLOR_FOOTNOTE),
-                    );
+                    ui.label(egui::RichText::new("disabled").size(10.5).color(th.faint));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Delete").clicked() {
@@ -2127,17 +2086,13 @@ fn render_rules_row(
             ui.add_space(4.0);
             ui.label(
                 egui::RichText::new(rule_summary_line(rule))
-                    .color(COLOR_MUTED)
+                    .color(th.dim)
                     .size(11.0),
             );
             // Auto-fire history. A rule that's actually firing gets the
             // brighter muted tone to reward the user's trust in it; a
             // never-fired rule stays in the dim footnote register.
-            let usage_color = if usage.count > 0 {
-                COLOR_MUTED
-            } else {
-                COLOR_FOOTNOTE
-            };
+            let usage_color = if usage.count > 0 { th.dim } else { th.faint };
             ui.label(
                 egui::RichText::new(rule_usage_line(usage, now_unix))
                     .color(usage_color)
@@ -2152,7 +2107,7 @@ fn render_rules_row(
                     .join(", ");
                 ui.label(
                     egui::RichText::new(format!("trained: {trained}"))
-                        .color(COLOR_FOOTNOTE)
+                        .color(th.faint)
                         .size(10.0),
                 )
                 .on_hover_text(
@@ -2187,6 +2142,7 @@ fn render_rule_form(
     draft_slot: &mut Option<RuleDraft>,
     actions_out: &mut Vec<RuleAction>,
 ) {
+    let th = Theme::of(ui.ctx());
     // Pull the draft out of the slot so we can mutate freely and put
     // it back at the end (or drop it on cancel/save). This avoids
     // double-mutable-borrow gymnastics on `*draft_slot`.
@@ -2208,12 +2164,12 @@ fn render_rule_form(
             egui::RichText::new(header_text)
                 .size(16.0)
                 .strong()
-                .color(COLOR_TEXT),
+                .color(th.fg),
         );
         ui.add_space(8.0);
         let (pill_fg, pill_bg, pill_text) = match draft.decide {
-            RuleDecisionDraft::Approve => (COLOR_APPROVE_BG, COLOR_APPROVE_SOFT, "approve"),
-            RuleDecisionDraft::Deny => (COLOR_DENY_BG, COLOR_DENY_SOFT, "deny"),
+            RuleDecisionDraft::Approve => (th.ok, COLOR_APPROVE_SOFT, "approve"),
+            RuleDecisionDraft::Deny => (th.danger, COLOR_DENY_SOFT, "deny"),
         };
         render_pill(ui, pill_text, pill_fg, pill_bg);
     });
@@ -2262,7 +2218,7 @@ fn render_rule_form(
             ui.cursor().left_top(),
             egui::vec2(ui.available_width(), 1.0),
         );
-        ui.painter().rect_filled(sep_rect, 0.0, COLOR_DIVIDER);
+        ui.painter().rect_filled(sep_rect, 0.0, th.rule);
         ui.add_space(10.0);
         if let Err(msg) = &validation {
             render_form_error_banner(ui, msg);
@@ -2312,6 +2268,7 @@ fn render_rule_form(
 /// (enabled + deny_message + trained-on chip). Kept as its own
 /// function so the parent can compose it with a pinned action bar.
 fn render_rule_form_body(ui: &mut egui::Ui, draft: &mut RuleDraft) {
+    let th = Theme::of(ui.ctx());
     // ── Section 1: Basics ──────────────────────────────────
     render_form_section_card(ui, "Basics", |ui| {
         render_form_field(ui, "Name", None, |ui| {
@@ -2412,11 +2369,7 @@ fn render_rule_form_body(ui: &mut egui::Ui, draft: &mut RuleDraft) {
                 } else {
                     "Disabled — rule is saved but the evaluator skips it."
                 })
-                .color(if draft.enabled {
-                    COLOR_TEXT
-                } else {
-                    COLOR_MUTED
-                }),
+                .color(if draft.enabled { th.fg } else { th.dim }),
             );
         });
 
@@ -2451,9 +2404,10 @@ fn render_rule_form_body(ui: &mut egui::Ui, draft: &mut RuleDraft) {
 /// small footnote-tier label so it doesn't compete with field labels;
 /// the body lays out vertically below.
 fn render_form_section_card<F: FnOnce(&mut egui::Ui)>(ui: &mut egui::Ui, title: &str, body: F) {
+    let th = Theme::of(ui.ctx());
     egui::Frame::new()
-        .fill(COLOR_CARD)
-        .stroke(egui::Stroke::new(1.0, COLOR_CARD_STROKE))
+        .fill(th.well)
+        .stroke(egui::Stroke::new(1.0, th.well_border))
         .corner_radius(egui::CornerRadius::same(CARD_CORNER_RADIUS))
         .inner_margin(egui::Margin::symmetric(14, 12))
         .show(ui, |ui| {
@@ -2461,7 +2415,7 @@ fn render_form_section_card<F: FnOnce(&mut egui::Ui)>(ui: &mut egui::Ui, title: 
                 egui::RichText::new(title.to_uppercase())
                     .size(10.5)
                     .strong()
-                    .color(COLOR_FOOTNOTE)
+                    .color(th.faint)
                     .extra_letter_spacing(0.6),
             );
             ui.add_space(8.0);
@@ -2477,35 +2431,32 @@ fn render_form_field<R, F: FnOnce(&mut egui::Ui) -> R>(
     helper: Option<&str>,
     body: F,
 ) -> R {
-    ui.label(
-        egui::RichText::new(label)
-            .size(12.0)
-            .strong()
-            .color(COLOR_TEXT),
-    );
+    let th = Theme::of(ui.ctx());
+    ui.label(egui::RichText::new(label).size(12.0).strong().color(th.fg));
     ui.add_space(3.0);
     let r = body(ui);
     if let Some(h) = helper {
         ui.add_space(3.0);
-        ui.label(egui::RichText::new(h).color(COLOR_FOOTNOTE).size(10.5));
+        ui.label(egui::RichText::new(h).color(th.faint).size(10.5));
     }
     r
 }
 
 /// Segmented two-option toggle for the rule's decide direction. The
 /// active option is filled with its semantic-soft colour
-/// (`COLOR_ACCENT_SOFT` for approve, `COLOR_DENY_SOFT` for deny);
+/// (`th.raised` for approve, `COLOR_DENY_SOFT` for deny);
 /// the inactive option is a muted chip. Clicking either switches the
 /// draft. Reads as "this rule will approve / this rule will deny"
 /// without needing to parse the bullet-radio convention.
 fn render_decide_toggle(ui: &mut egui::Ui, decide: &mut RuleDecisionDraft) -> egui::Response {
+    let th = Theme::of(ui.ctx());
     ui.horizontal(|ui| {
         let approve_resp = render_decide_segment(
             ui,
             "approve",
             *decide == RuleDecisionDraft::Approve,
-            COLOR_ACCENT_SOFT,
-            COLOR_ACCENT,
+            th.raised,
+            th.accent,
         );
         if approve_resp.clicked() {
             *decide = RuleDecisionDraft::Approve;
@@ -2532,10 +2483,11 @@ fn render_decide_segment(
     active_fill: egui::Color32,
     active_stroke: egui::Color32,
 ) -> egui::Response {
+    let th = Theme::of(ui.ctx());
     let (fill, stroke_color, text_color) = if active {
         (active_fill, active_stroke, egui::Color32::WHITE)
     } else {
-        (COLOR_CHROME, COLOR_CARD_STROKE, COLOR_MUTED)
+        (th.raised, th.well_border, th.dim)
     };
     let frame = egui::Frame::new()
         .fill(fill)
@@ -2561,6 +2513,7 @@ fn render_decide_segment(
 /// draft fails to convert into a [`Rule`]. Same accent treatment as
 /// the auto-deny toast so the visual language is consistent.
 fn render_form_error_banner(ui: &mut egui::Ui, msg: &str) {
+    let th = Theme::of(ui.ctx());
     egui::Frame::new()
         .fill(COLOR_DENY_SOFT)
         .stroke(egui::Stroke::new(1.0, COLOR_DENY_HINT))
@@ -2569,22 +2522,23 @@ fn render_form_error_banner(ui: &mut egui::Ui, msg: &str) {
         .show(ui, |ui| {
             ui.label(
                 egui::RichText::new(format!("Can't save: {msg}"))
-                    .color(COLOR_TEXT)
+                    .color(th.fg)
                     .size(11.5),
             );
         });
 }
 
 /// Primary action button — accent-filled, white text. Disabled state
-/// dims the fill and renders the text in COLOR_MUTED. The caller is
+/// dims the fill and renders the text in th.dim. The caller is
 /// responsible for ignoring `clicked()` when `enabled == false`; we
 /// also use `interact` semantics so the click is "absorbed" visually
 /// (no hover cursor) when disabled.
 fn render_primary_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> egui::Response {
+    let th = Theme::of(ui.ctx());
     let (fill, text_color) = if enabled {
-        (COLOR_ACCENT, egui::Color32::WHITE)
+        (th.accent, egui::Color32::WHITE)
     } else {
-        (COLOR_ACCENT_SOFT, COLOR_MUTED)
+        (th.raised, th.dim)
     };
     let btn = egui::Button::new(
         egui::RichText::new(label)
@@ -2606,8 +2560,9 @@ fn render_primary_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> egui:
 /// share visual weight class with `render_primary_button` but lose
 /// the "primary CTA" emphasis.
 fn render_secondary_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    let btn = egui::Button::new(egui::RichText::new(label).color(COLOR_TEXT).size(12.5))
-        .fill(COLOR_CHROME)
+    let th = Theme::of(ui.ctx());
+    let btn = egui::Button::new(egui::RichText::new(label).color(th.fg).size(12.5))
+        .fill(th.raised)
         .min_size(egui::Vec2::new(96.0, 30.0));
     let resp = ui.add(btn);
     if resp.hovered() {
@@ -2620,17 +2575,18 @@ fn render_secondary_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
 /// guard. Replaces the plain inline label so the safety property
 /// reads as a deliberate piece of UI rather than a footnote.
 fn render_trained_secrets_chip(ui: &mut egui::Ui, trained: &std::collections::BTreeSet<String>) {
+    let th = Theme::of(ui.ctx());
     let names = trained.iter().cloned().collect::<Vec<_>>().join(", ");
     egui::Frame::new()
-        .fill(COLOR_CHROME)
-        .stroke(egui::Stroke::new(1.0, COLOR_CARD_STROKE))
+        .fill(th.raised)
+        .stroke(egui::Stroke::new(1.0, th.well_border))
         .corner_radius(egui::CornerRadius::same(5))
         .inner_margin(egui::Margin::symmetric(10, 6))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("trained on")
-                        .color(COLOR_FOOTNOTE)
+                        .color(th.faint)
                         .size(10.5)
                         .strong()
                         .extra_letter_spacing(0.4),
@@ -2638,7 +2594,7 @@ fn render_trained_secrets_chip(ui: &mut egui::Ui, trained: &std::collections::BT
                 ui.add_space(4.0);
                 ui.label(
                     egui::RichText::new(names)
-                        .color(COLOR_TEXT)
+                        .color(th.fg)
                         .size(11.5)
                         .family(egui::FontFamily::Monospace),
                 );
@@ -2655,6 +2611,7 @@ fn render_trained_secrets_chip(ui: &mut egui::Ui, trained: &std::collections::BT
 /// Pending tab when an auto-deny rule fires. Caller is responsible
 /// for fading it out by passing `None` once it has expired.
 fn render_auto_deny_toast(ui: &mut egui::Ui, toast: &AutoDenyToastView) {
+    let th = Theme::of(ui.ctx());
     egui::Frame::new()
         .fill(COLOR_DENY_SOFT)
         .stroke(egui::Stroke::new(1.0, COLOR_DENY_HINT))
@@ -2668,7 +2625,7 @@ fn render_auto_deny_toast(ui: &mut egui::Ui, toast: &AutoDenyToastView) {
             );
             if let Some(msg) = &toast.deny_message {
                 ui.add_space(2.0);
-                ui.label(egui::RichText::new(msg).color(COLOR_MUTED).size(11.0));
+                ui.label(egui::RichText::new(msg).color(th.dim).size(11.0));
             }
         });
 }
@@ -2703,9 +2660,10 @@ fn render_audit_entry(
     rules_draft: &mut Option<RuleDraft>,
     current_tab: &mut Tab,
 ) {
+    let th = Theme::of(ui.ctx());
     egui::Frame::new()
-        .fill(COLOR_CARD)
-        .stroke(egui::Stroke::new(1.0, COLOR_CARD_STROKE))
+        .fill(th.well)
+        .stroke(egui::Stroke::new(1.0, th.well_border))
         .corner_radius(egui::CornerRadius::same(CARD_CORNER_RADIUS))
         .inner_margin(egui::Margin::symmetric(14, 10))
         .show(ui, |ui| {
@@ -2720,7 +2678,7 @@ fn render_audit_entry(
                     let resp = ui.add(
                         egui::Label::new(
                             egui::RichText::new("Create rule from this ask…")
-                                .color(COLOR_ACCENT)
+                                .color(th.accent_text)
                                 .size(11.0),
                         )
                         .sense(egui::Sense::click()),
@@ -2752,12 +2710,13 @@ fn render_audit_entry(
 ///    all footnote-tier, with the full caller chain + cwd in a hover
 ///    tooltip.
 fn render_audit_card_body(ui: &mut egui::Ui, entry: &AuditEntry, now: u64) {
+    let th = Theme::of(ui.ctx());
     let wrap = if entry.wrap.is_empty() {
         "(?)"
     } else {
         entry.wrap.as_str()
     };
-    let verdict = AuditVerdict::from_decision(entry.decision.as_str());
+    let verdict = AuditVerdict::from_decision(entry.decision.as_str(), &th);
 
     // ── Line 1: command (left) + verdict column (right) ──
     ui.horizontal(|ui| {
@@ -2777,14 +2736,14 @@ fn render_audit_card_body(ui: &mut egui::Ui, entry: &AuditEntry, now: u64) {
             egui::RichText::new(&shown)
                 .font(cmd_font)
                 .strong()
-                .color(COLOR_TEXT),
+                .color(th.fg),
         );
         if shown != full {
             resp.on_hover_text(&full);
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if let Some(tag) = verdict.tag {
-                paint_pill(ui, tag, COLOR_ACCENT, COLOR_ACCENT_SOFT);
+                paint_pill(ui, tag, th.accent_text, th.raised);
                 ui.add_space(4.0);
             }
             paint_verdict_pill(ui, verdict);
@@ -2796,16 +2755,12 @@ fn render_audit_card_body(ui: &mut egui::Ui, entry: &AuditEntry, now: u64) {
         ui.add_space(5.0);
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
-            ui.label(
-                egui::RichText::new("\u{25cf}")
-                    .size(7.0)
-                    .color(COLOR_ACCENT),
-            );
+            ui.label(egui::RichText::new("\u{25cf}").size(7.0).color(th.accent));
             for name in &entry.secrets {
                 ui.label(
                     egui::RichText::new(name)
                         .font(egui::FontId::monospace(11.5))
-                        .color(COLOR_MUTED),
+                        .color(th.dim),
                 );
             }
         });
@@ -2833,19 +2788,15 @@ fn render_audit_card_body(ui: &mut egui::Ui, entry: &AuditEntry, now: u64) {
             let cwd_resp = ui.label(
                 egui::RichText::new(format!("in {}", short_cwd(&entry.cwd)))
                     .size(11.0)
-                    .color(COLOR_FOOTNOTE),
+                    .color(th.faint),
             );
             cwd_resp.on_hover_text(&entry.cwd);
-            ui.label(
-                egui::RichText::new("\u{b7}")
-                    .size(11.0)
-                    .color(COLOR_FOOTNOTE),
-            );
+            ui.label(egui::RichText::new("\u{b7}").size(11.0).color(th.faint));
         }
         ui.label(
             egui::RichText::new(format!("{ago} ago"))
                 .size(11.0)
-                .color(COLOR_FOOTNOTE),
+                .color(th.faint),
         );
     });
 }
@@ -2863,24 +2814,24 @@ struct AuditVerdict {
 }
 
 impl AuditVerdict {
-    fn from_decision(decision: &str) -> AuditVerdict {
+    fn from_decision(decision: &str, th: &Theme) -> AuditVerdict {
         match decision {
             "deny" => AuditVerdict {
                 label: "denied",
                 tag: None,
-                fg: COLOR_DENY_BG,
+                fg: th.danger,
                 bg: COLOR_DENY_SOFT,
             },
             "approve" => AuditVerdict {
                 label: "approved",
                 tag: None,
-                fg: COLOR_APPROVE_BG,
+                fg: th.ok,
                 bg: COLOR_APPROVE_SOFT,
             },
             "approve+remember" => AuditVerdict {
                 label: "approved",
                 tag: Some("remembered"),
-                fg: COLOR_APPROVE_BG,
+                fg: th.ok,
                 bg: COLOR_APPROVE_SOFT,
             },
             // The daemon's approvals cache short-circuited the prompt
@@ -2889,7 +2840,7 @@ impl AuditVerdict {
             "approve+cached" => AuditVerdict {
                 label: "approved",
                 tag: Some("cached"),
-                fg: COLOR_APPROVE_BG,
+                fg: th.ok,
                 bg: COLOR_APPROVE_SOFT,
             },
             // An enabled auto-rule fired. Same colour as a hand-clicked
@@ -2898,13 +2849,13 @@ impl AuditVerdict {
             "approve+auto" => AuditVerdict {
                 label: "approved",
                 tag: Some("auto"),
-                fg: COLOR_APPROVE_BG,
+                fg: th.ok,
                 bg: COLOR_APPROVE_SOFT,
             },
             "deny+auto" => AuditVerdict {
                 label: "denied",
                 tag: Some("auto"),
-                fg: COLOR_DENY_BG,
+                fg: th.danger,
                 bg: COLOR_DENY_SOFT,
             },
             // Unknown decisions map to a static "seen" so `label`
@@ -2912,8 +2863,8 @@ impl AuditVerdict {
             _ => AuditVerdict {
                 label: "seen",
                 tag: None,
-                fg: COLOR_MUTED,
-                bg: COLOR_CHROME,
+                fg: th.dim,
+                bg: th.raised,
             },
         }
     }
@@ -2944,15 +2895,13 @@ fn paint_verdict_pill(ui: &mut egui::Ui, v: AuditVerdict) -> egui::Response {
 /// `font` rather than a char-count guess. Binary-searches the prefix
 /// length so a 200-char argv collapses in a handful of layout calls.
 fn truncate_to_width(ui: &egui::Ui, text: &str, font: &egui::FontId, max_width: f32) -> String {
+    let th = Theme::of(ui.ctx());
     if max_width <= 1.0 {
         return String::new();
     }
     let measure = |s: &str| -> f32 {
-        ui.ctx().fonts_mut(|f| {
-            f.layout_no_wrap(s.to_owned(), font.clone(), COLOR_TEXT)
-                .size()
-                .x
-        })
+        ui.ctx()
+            .fonts_mut(|f| f.layout_no_wrap(s.to_owned(), font.clone(), th.fg).size().x)
     };
     if measure(text) <= max_width {
         return text.to_owned();
@@ -2986,6 +2935,7 @@ fn truncate_to_width(ui: &egui::Ui, text: &str, font: &egui::FontId, max_width: 
 /// rest. The command tail is width-truncated (tooltip on overflow) so a
 /// long argv never pushes the card wider than the window.
 fn render_audit_caller_chain(ui: &mut egui::Ui, callers: &[AuditCaller]) {
+    let th = Theme::of(ui.ctx());
     const MAX_DEPTH: usize = 6;
     const INDENT_PX: f32 = 13.0;
     // Storage is nearest-first; reverse to outermost-first for display.
@@ -3006,27 +2956,23 @@ fn render_audit_caller_chain(ui: &mut egui::Ui, callers: &[AuditCaller]) {
             ui.label(
                 egui::RichText::new(glyph)
                     .font(egui::FontId::monospace(11.0))
-                    .color(COLOR_FOOTNOTE),
+                    .color(th.faint),
             );
             ui.label(
                 egui::RichText::new(&c.name)
                     .font(egui::FontId::monospace(11.5))
-                    .color(COLOR_TEXT),
+                    .color(th.fg),
             );
             ui.label(
                 egui::RichText::new(format!("pid {}", c.pid))
                     .size(10.0)
-                    .color(COLOR_FOOTNOTE),
+                    .color(th.faint),
             );
             if !c.command.is_empty() && c.command != c.name {
                 let cmd_font = egui::FontId::monospace(11.0);
                 let avail = (ui.available_width() - 4.0).max(40.0);
                 let shown = truncate_to_width(ui, &c.command, &cmd_font, avail);
-                let resp = ui.label(
-                    egui::RichText::new(&shown)
-                        .font(cmd_font)
-                        .color(COLOR_MUTED),
-                );
+                let resp = ui.label(egui::RichText::new(&shown).font(cmd_font).color(th.dim));
                 if shown != c.command {
                     resp.on_hover_text(&c.command);
                 }
@@ -3052,7 +2998,7 @@ fn render_audit_caller_chain(ui: &mut egui::Ui, callers: &[AuditCaller]) {
             ui.label(
                 egui::RichText::new(format!("\u{2514}\u{2500} \u{2026} {hidden} more"))
                     .font(egui::FontId::monospace(10.0))
-                    .color(COLOR_FOOTNOTE),
+                    .color(th.faint),
             )
             .on_hover_text(summary);
         });
@@ -3086,6 +3032,7 @@ fn audit_day_bucket(ts_unix: u64, now: u64) -> String {
 }
 
 fn render_empty_state(ui: &mut egui::Ui, viewer_mode: bool) {
+    let th = Theme::of(ui.ctx());
     ui.vertical_centered(|ui| {
         ui.add_space(40.0);
         paint_empty_state_badge(ui, 72.0);
@@ -3094,13 +3041,13 @@ fn render_empty_state(ui: &mut egui::Ui, viewer_mode: bool) {
             egui::RichText::new("All clear")
                 .size(20.0)
                 .strong()
-                .color(COLOR_TEXT),
+                .color(th.fg),
         );
         ui.add_space(4.0);
         ui.label(
             egui::RichText::new("No pending consent requests.")
                 .size(13.0)
-                .color(COLOR_MUTED),
+                .color(th.dim),
         );
         // The "will hide shortly" hint is only honest for a decision
         // window: viewer-mode windows (`secreq view`) are deliberately
@@ -3114,7 +3061,7 @@ fn render_empty_state(ui: &mut egui::Ui, viewer_mode: bool) {
                 egui::RichText::new("This window will hide shortly")
                     .size(11.0)
                     .italics()
-                    .color(COLOR_FOOTNOTE),
+                    .color(th.faint),
             );
         }
     });
@@ -3124,6 +3071,7 @@ fn render_empty_state(ui: &mut egui::Ui, viewer_mode: bool) {
 /// a check mark stroked inside. Built from circles + a polyline so it
 /// renders at any DPR and doesn't depend on font glyph coverage.
 fn paint_empty_state_badge(ui: &mut egui::Ui, size: f32) {
+    let th = Theme::of(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     let painter = ui.painter();
     let center = rect.center();
@@ -3132,11 +3080,7 @@ fn paint_empty_state_badge(ui: &mut egui::Ui, size: f32) {
     let ring_fill = egui::Color32::from_rgba_unmultiplied(38, 158, 88, 36);
     painter.circle_filled(center, radius, ring_fill);
     // Crisp 1.5px stroke ring in approve green.
-    painter.circle_stroke(
-        center,
-        radius - 1.0,
-        egui::Stroke::new(1.5, COLOR_APPROVE_BG),
-    );
+    painter.circle_stroke(center, radius - 1.0, egui::Stroke::new(1.5, th.ok));
     // Check mark — three points (left-arm start, dip, right-arm end)
     // proportioned so the shape reads as a confident tick at this
     // size. Drawn as a connected stroked polyline.
@@ -3145,7 +3089,7 @@ fn paint_empty_state_badge(ui: &mut egui::Ui, size: f32) {
     let arm_r = egui::pos2(center.x + radius * 0.42, center.y - radius * 0.26);
     painter.add(egui::Shape::line(
         vec![arm_l, dip, arm_r],
-        egui::Stroke::new(4.0, COLOR_APPROVE_BG),
+        egui::Stroke::new(4.0, th.ok),
     ));
 }
 
@@ -3266,6 +3210,7 @@ fn render_node_header(
     collapsed: &mut HashMap<(u32, u64), bool>,
     actions: &mut Vec<PendingAction>,
 ) {
+    let th = Theme::of(ui.ctx());
     let node = &tree.nodes[node_idx];
     let bottom = &tree.nodes[bottom_idx];
     let key = node.key();
@@ -3304,9 +3249,9 @@ fn render_node_header(
         let mut name_text = egui::RichText::new(&display_shown)
             .font(egui::FontId::monospace(13.0))
             .strong()
-            .color(COLOR_TEXT);
+            .color(th.fg);
         if is_top_root && depth == 0 {
-            name_text = name_text.color(COLOR_ACCENT);
+            name_text = name_text.color(th.accent_text);
         }
         let label_resp = ui.label(name_text);
         if display_shown.len() < display.len() {
@@ -3315,16 +3260,10 @@ fn render_node_header(
         ui.label(
             egui::RichText::new(format!("pid {}", node.pid))
                 .size(11.0)
-                .color(COLOR_FOOTNOTE),
+                .color(th.faint),
         );
         if run_count > 1 {
-            paint_pill(
-                ui,
-                &format!("×{run_count}"),
-                COLOR_ACCENT,
-                COLOR_ACCENT_SOFT,
-            )
-            .on_hover_text(format!(
+            paint_pill(ui, &format!("×{run_count}"), th.accent, th.raised).on_hover_text(format!(
                 "Folded a chain of {run_count} processes with the same command, \
                  from pid {} (outermost) to pid {} (innermost). Approving here \
                  applies to all of them.",
@@ -3335,7 +3274,7 @@ fn render_node_header(
             ui.label(
                 egui::RichText::new(format!("· {descendant_count} hidden"))
                     .size(11.0)
-                    .color(COLOR_FOOTNOTE),
+                    .color(th.faint),
             );
         }
 
@@ -3409,7 +3348,7 @@ fn render_children_and_rows(
 
 /// Render one pending wrap request as a card.
 ///
-/// Card layout (bg `COLOR_CARD`, 1px `COLOR_CARD_STROKE` border, 8px
+/// Card layout (bg `th.well`, 1px `th.well_border` border, 8px
 /// rounded, 14×10 inner padding):
 ///
 /// - **Top row.** Command in monospace bold (the load-bearing "what is
@@ -3431,10 +3370,11 @@ fn render_wrap_leaf(
     actions: &mut Vec<PendingAction>,
     audit: &AuditCache,
 ) {
+    let th = Theme::of(ui.ctx());
     let indent = (depth as f32 * INDENT_UNIT).min(120.0) as i8;
     egui::Frame::new()
-        .fill(COLOR_CARD)
-        .stroke(egui::Stroke::new(1.0, COLOR_CARD_STROKE))
+        .fill(th.well)
+        .stroke(egui::Stroke::new(1.0, th.well_border))
         .corner_radius(egui::CornerRadius::same(CARD_CORNER_RADIUS))
         .inner_margin(egui::Margin::symmetric(14, 10))
         .outer_margin(egui::Margin {
@@ -3455,6 +3395,7 @@ fn render_wrap_card_body(
     actions: &mut Vec<PendingAction>,
     audit: &AuditCache,
 ) {
+    let th = Theme::of(ui.ctx());
     // SSH sign asks render a distinct card — a key identity + fingerprint
     // instead of a wrap command + secret list. The approve/deny/remember
     // buttons and the provenance tree are identical; only the body differs.
@@ -3470,7 +3411,7 @@ fn render_wrap_card_body(
             egui::RichText::new(&truncated)
                 .font(egui::FontId::monospace(13.5))
                 .strong()
-                .color(COLOR_TEXT),
+                .color(th.fg),
         );
         if truncated.len() < cmd.len() {
             resp.on_hover_text(cmd);
@@ -3479,8 +3420,8 @@ fn render_wrap_card_body(
             paint_pill(
                 ui,
                 &format!("×{} waiting", row.waiter_count),
-                COLOR_ACCENT,
-                COLOR_ACCENT_SOFT,
+                th.accent,
+                th.raised,
             );
         }
 
@@ -3491,7 +3432,7 @@ fn render_wrap_card_body(
                     // biometric prompt) is in flight. Read-only — no
                     // Approve/Deny — so the card is purely provenance
                     // for the prompt the user is being asked to satisfy.
-                    paint_pill(ui, "Resolving…", COLOR_ACCENT, COLOR_ACCENT_SOFT);
+                    paint_pill(ui, "Resolving…", th.accent_text, th.raised);
                 }
                 RowStatus::Awaiting => {
                     if small_button(ui, "Deny", ButtonRole::Deny).clicked() {
@@ -3518,7 +3459,7 @@ fn render_wrap_card_body(
                     humanize_duration(row.first_seen.elapsed())
                 ))
                 .size(11.0)
-                .color(COLOR_FOOTNOTE),
+                .color(th.faint),
             );
         });
     });
@@ -3527,7 +3468,7 @@ fn render_wrap_card_body(
     // ── Audit history line ──
     let direct_caller = row.representative.callers.first().map(|c| c.name.as_str());
     let summary = audit.summarize(&row.key.wrap, direct_caller);
-    let (text, color) = format_audit_line(&summary, now_unix());
+    let (text, color) = format_audit_line(&summary, now_unix(), &th);
     ui.label(egui::RichText::new(text).size(11.0).italics().color(color));
 
     // ── Secret list (or the gate-only marker when there's nothing to
@@ -3562,7 +3503,7 @@ fn render_wrap_card_body(
         let resp = ui.label(
             egui::RichText::new(format!("in  {cwd_shown}"))
                 .size(10.0)
-                .color(COLOR_FOOTNOTE),
+                .color(th.faint),
         );
         if cwd_shown.len() < row.representative.cwd.len() {
             resp.on_hover_text(&row.representative.cwd);
@@ -3592,26 +3533,27 @@ fn render_ssh_card_body(
     scope: ApprovalScope,
     actions: &mut Vec<PendingAction>,
 ) {
+    let th = Theme::of(ui.ctx());
     // ── Header row: "SSH key request" + identity, then actions ──
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new("SSH key request")
                 .font(egui::FontId::proportional(13.5))
                 .strong()
-                .color(COLOR_TEXT),
+                .color(th.fg),
         );
         ui.add_space(6.0);
         ui.label(
             egui::RichText::new(&ssh.key_id)
                 .font(egui::FontId::monospace(12.5))
-                .color(COLOR_ACCENT),
+                .color(th.accent_text),
         );
         if row.waiter_count > 1 {
             paint_pill(
                 ui,
                 &format!("×{} waiting", row.waiter_count),
-                COLOR_ACCENT,
-                COLOR_ACCENT_SOFT,
+                th.accent,
+                th.raised,
             );
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -3621,7 +3563,7 @@ fn render_ssh_card_body(
             // carries the "Signing…" pill (while resolving) and the age; the
             // action buttons render in a dedicated row below.
             if row.status == RowStatus::Resolving {
-                paint_pill(ui, "Signing…", COLOR_ACCENT, COLOR_ACCENT_SOFT);
+                paint_pill(ui, "Signing…", th.accent_text, th.raised);
                 ui.add_space(10.0);
             }
             ui.label(
@@ -3630,7 +3572,7 @@ fn render_ssh_card_body(
                     humanize_duration(row.first_seen.elapsed())
                 ))
                 .size(11.0)
-                .color(COLOR_FOOTNOTE),
+                .color(th.faint),
             );
         });
     });
@@ -3639,21 +3581,13 @@ fn render_ssh_card_body(
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.add_space(2.0);
-        ui.label(
-            egui::RichText::new("\u{25cf}")
-                .size(7.0)
-                .color(COLOR_ACCENT),
-        );
-        ui.label(
-            egui::RichText::new("sign with")
-                .size(11.0)
-                .color(COLOR_MUTED),
-        );
+        ui.label(egui::RichText::new("\u{25cf}").size(7.0).color(th.accent));
+        ui.label(egui::RichText::new("sign with").size(11.0).color(th.dim));
         let fp_shown = truncate_for_display(&ssh.fingerprint, 60);
         let resp = ui.label(
             egui::RichText::new(&fp_shown)
                 .font(egui::FontId::monospace(11.5))
-                .color(COLOR_TEXT),
+                .color(th.fg),
         );
         if fp_shown.len() < ssh.fingerprint.len() {
             resp.on_hover_text(&ssh.fingerprint);
@@ -3668,7 +3602,7 @@ fn render_ssh_card_body(
                 egui::RichText::new(reason)
                     .size(11.0)
                     .italics()
-                    .color(COLOR_FOOTNOTE),
+                    .color(th.faint),
             );
         });
     }
@@ -3717,27 +3651,28 @@ fn render_ssh_card_body(
 
 /// One secret-row inside a wrap card.
 fn render_card_secret(ui: &mut egui::Ui, s: &SecretAsk, show_provenance: bool) {
+    let th = Theme::of(ui.ctx());
     ui.horizontal(|ui| {
         ui.add_space(2.0);
-        ui.label(egui::RichText::new("●").size(7.0).color(COLOR_ACCENT));
+        ui.label(egui::RichText::new("●").size(7.0).color(th.accent));
         ui.label(
             egui::RichText::new(&s.name)
                 .font(egui::FontId::monospace(12.0))
                 .strong()
-                .color(COLOR_TEXT),
+                .color(th.fg),
         );
         ui.add_space(2.0);
         ui.label(
             egui::RichText::new(&s.provider)
                 .font(egui::FontId::monospace(11.0))
-                .color(COLOR_ACCENT),
+                .color(th.accent_text),
         );
         if !s.locator.is_empty() {
             let loc_shown = truncate_for_display(&s.locator, 42);
             let resp = ui.label(
                 egui::RichText::new(&loc_shown)
                     .font(egui::FontId::monospace(11.0))
-                    .color(COLOR_FOOTNOTE),
+                    .color(th.faint),
             );
             if loc_shown.len() < s.locator.len() {
                 resp.on_hover_text(&s.locator);
@@ -3759,7 +3694,7 @@ fn render_card_secret(ui: &mut egui::Ui, s: &SecretAsk, show_provenance: bool) {
             let resp = ui.label(
                 egui::RichText::new(format!("← {label}"))
                     .font(egui::FontId::monospace(11.0))
-                    .color(COLOR_MUTED),
+                    .color(th.dim),
             );
             if label.chars().count() < joined.chars().count() {
                 resp.on_hover_text(&joined);
@@ -3778,7 +3713,7 @@ fn render_card_secret(ui: &mut egui::Ui, s: &SecretAsk, show_provenance: bool) {
                 egui::RichText::new(why)
                     .size(11.0)
                     .italics()
-                    .color(COLOR_FOOTNOTE),
+                    .color(th.faint),
             );
         });
     }
@@ -3789,15 +3724,16 @@ fn render_card_secret(ui: &mut egui::Ui, s: &SecretAsk, show_provenance: bool) {
 /// `op`), so we say so explicitly rather than render an empty gap the
 /// user might read as "secrets failed to load".
 fn render_card_gate_only(ui: &mut egui::Ui) {
+    let th = Theme::of(ui.ctx());
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.add_space(2.0);
-        ui.label(egui::RichText::new("●").size(7.0).color(COLOR_MUTED));
+        ui.label(egui::RichText::new("●").size(7.0).color(th.dim));
         ui.label(
             egui::RichText::new("Gate only — no secrets injected")
                 .size(11.5)
                 .italics()
-                .color(COLOR_MUTED),
+                .color(th.dim),
         );
     });
 }
@@ -3815,9 +3751,13 @@ const COLOR_DENY_HINT: egui::Color32 = egui::Color32::from_rgb(220, 130, 110);
 const COLOR_APPROVE_SOFT: egui::Color32 = egui::Color32::from_rgb(24, 48, 36);
 const COLOR_DENY_SOFT: egui::Color32 = egui::Color32::from_rgb(54, 30, 34);
 
-fn format_audit_line(summary: &WrapHistorySummary, now: u64) -> (String, egui::Color32) {
+fn format_audit_line(
+    summary: &WrapHistorySummary,
+    now: u64,
+    th: &Theme,
+) -> (String, egui::Color32) {
     if summary.is_empty() {
-        return ("↳ first request from this caller".to_owned(), COLOR_MUTED);
+        return ("↳ first request from this caller".to_owned(), th.dim);
     }
     let last_ts = summary.last_ts_unix.unwrap_or(now);
     let ago_secs = now.saturating_sub(last_ts);
@@ -3826,10 +3766,8 @@ fn format_audit_line(summary: &WrapHistorySummary, now: u64) -> (String, egui::C
     // expected path and shouldn't draw the eye.
     let (verb, color) = match summary.last_decision.as_deref() {
         Some("deny") => ("denied", COLOR_DENY_HINT),
-        Some("approve") | Some("approve+remember") | Some("approve+cached") => {
-            ("approved", COLOR_MUTED)
-        }
-        _ => ("seen", COLOR_MUTED),
+        Some("approve") | Some("approve+remember") | Some("approve+cached") => ("approved", th.dim),
+        _ => ("seen", th.dim),
     };
     let counts = if summary.total_count > 0 {
         format!(
@@ -3851,6 +3789,7 @@ fn format_audit_line(summary: &WrapHistorySummary, now: u64) -> (String, egui::C
 ///
 /// Returns whether the chevron was clicked this frame.
 fn paint_disclosure_chevron(ui: &mut egui::Ui, expanded: bool) -> bool {
+    let th = Theme::of(ui.ctx());
     let size = 14.0;
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
     // Triangle, 8x8, centred. Right-pointing when collapsed, down-
@@ -3870,11 +3809,7 @@ fn paint_disclosure_chevron(ui: &mut egui::Ui, expanded: bool) -> bool {
             egui::pos2(c.x + r / 2.0 + 1.5, c.y),
         ]
     };
-    let colour = if resp.hovered() {
-        COLOR_TEXT
-    } else {
-        COLOR_MUTED
-    };
+    let colour = if resp.hovered() { th.fg } else { th.dim };
     ui.painter().add(egui::Shape::convex_polygon(
         points,
         colour,
@@ -3915,7 +3850,8 @@ enum ButtonRole {
 }
 
 fn styled_button(ui: &mut egui::Ui, text: &str, role: ButtonRole) -> egui::Response {
-    let (fill, hover, text_color) = button_colors(role);
+    let th = Theme::of(ui.ctx());
+    let (fill, hover, text_color) = button_colors(role, &th);
     let button = egui::Button::new(egui::RichText::new(text).color(text_color))
         .fill(fill)
         .min_size(egui::Vec2::new(0.0, 26.0));
@@ -3927,7 +3863,8 @@ fn styled_button(ui: &mut egui::Ui, text: &str, role: ButtonRole) -> egui::Respo
 }
 
 fn small_button(ui: &mut egui::Ui, text: &str, role: ButtonRole) -> egui::Response {
-    let (fill, hover, text_color) = button_colors(role);
+    let th = Theme::of(ui.ctx());
+    let (fill, hover, text_color) = button_colors(role, &th);
     let button = egui::Button::new(egui::RichText::new(text).color(text_color).size(11.0))
         .fill(fill)
         .min_size(egui::Vec2::new(0.0, 20.0));
@@ -3938,14 +3875,14 @@ fn small_button(ui: &mut egui::Ui, text: &str, role: ButtonRole) -> egui::Respon
     resp
 }
 
-fn button_colors(role: ButtonRole) -> (egui::Color32, egui::Color32, egui::Color32) {
+fn button_colors(role: ButtonRole, th: &Theme) -> (egui::Color32, egui::Color32, egui::Color32) {
     match role {
-        ButtonRole::Approve => (
-            COLOR_APPROVE_BG,
-            COLOR_APPROVE_BG_HOVER,
+        ButtonRole::Approve => (th.ok, th.ok.gamma_multiply(1.1), egui::Color32::WHITE),
+        ButtonRole::Deny => (
+            th.danger,
+            th.danger.gamma_multiply(1.1),
             egui::Color32::WHITE,
         ),
-        ButtonRole::Deny => (COLOR_DENY_BG, COLOR_DENY_BG_HOVER, egui::Color32::WHITE),
     }
 }
 
@@ -4629,7 +4566,8 @@ mod tests {
     #[test]
     fn format_audit_line_handles_empty_and_populated_summaries() {
         let now = 1_000_000;
-        let (empty_text, _) = format_audit_line(&WrapHistorySummary::default(), now);
+        let th = Theme::resolve(OsFlavor::MacOs, true);
+        let (empty_text, _) = format_audit_line(&WrapHistorySummary::default(), now, &th);
         assert!(
             empty_text.contains("first request"),
             "{empty_text:?} should announce a fresh caller"
@@ -4642,7 +4580,7 @@ mod tests {
             deny_count: 1,
             total_count: 6,
         };
-        let (text, _) = format_audit_line(&s, now);
+        let (text, _) = format_audit_line(&s, now, &th);
         assert!(text.contains("approved"), "{text:?}");
         assert!(text.contains("5 grants / 1 denies"), "{text:?}");
 
@@ -4651,7 +4589,7 @@ mod tests {
             last_ts_unix: Some(now - 60),
             ..Default::default()
         };
-        let (text, color) = format_audit_line(&denied, now);
+        let (text, color) = format_audit_line(&denied, now, &th);
         assert!(text.contains("denied"));
         assert_eq!(
             color, COLOR_DENY_HINT,

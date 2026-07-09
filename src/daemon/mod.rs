@@ -31,6 +31,7 @@ pub mod server;
 pub mod ssh_agent;
 pub mod ssh_proto;
 pub mod state;
+pub mod theme;
 pub mod ui;
 
 use std::os::unix::io::AsRawFd;

@@ -149,6 +149,9 @@ pub fn run(always_on_top: bool) -> Result<i32> {
         "secreq consent",
         native_opts,
         Box::new(move |cc| {
+            // Follow the OS appearance; `install_style` re-resolves the
+            // theme tokens from the OS-driven light/dark state.
+            cc.egui_ctx.set_theme(egui::ThemePreference::System);
             super::ui::install_style(&cc.egui_ctx);
             *ctx_slot.lock().expect("egui_ctx mutex") = Some(cc.egui_ctx.clone());
             Ok(Box::new(app))
@@ -314,6 +317,10 @@ struct ConsentChildApp {
 impl eframe::App for ConsentChildApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // Re-derive the style each frame so an OS light/dark flip
+        // mid-session restyles the window immediately (the theme
+        // tokens resolve from egui's OS-followed theme).
+        super::ui::install_style(&ctx);
         self.frame_count = self.frame_count.wrapping_add(1);
 
         // External "please exit" — either the daemon told us to go or
