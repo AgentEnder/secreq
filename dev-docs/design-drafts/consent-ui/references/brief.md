@@ -21,15 +21,21 @@
 - **Layout shape:** Committed: **two-window Prompt + Manager split** (Little Snitch shape). The consent prompt is a small transient panel; Rules and Audit live in a separate manager window. The prompt carries an affordance to open the manager — for the "this ask should've been auto-approved" moment, landing near rule creation. Within the manager: Audit = **Manifest Rows** (scannable table, real columns), Rules = **Grouped Inset** (System-Settings-style grouped list).
 - **Density:** Per-page, not global. Prompt = **Focus Stack**: one ask at a time, rendered like a 1Password/UAC prompt, queue as "2 more waiting" text. Audit = dense table. Rules = grouped list. Rationale: "the main ask resolution matches the focus stack the best, while the audit log and auto-approval configuration pages don't really lend that direction."
 - **Must include:** Every prompt draft must show, or the comparison is dishonest:
-  - the process ancestry chain (e.g. Superset.app → zsh → gh)
+  - the process ancestry as a tree with argv per process (e.g. Superset.app → zsh → gh, each with its command line), so the asking process is identifiable
   - the secret name + provider URI pair (e.g. `GITHUB_TOKEN` / `op://Personal/GitHub/credential`)
   - the "first request from this caller" provenance hint
   - a pending-count indicator
   - the prompt→manager affordance
 
-### Draft grid (agreed during interview)
+### Draft grid (revised after first-round review, 2026-07-09)
 
-Two real axes: **theme** (terminal-ledger, native-sentinel) × **decision-surface** (dialog-buttons, keyboard-first, asymmetric-friction). Decision-surface stays a full axis shown on both themes: "the decision surface will definitely be influenced by the theme, but there are different ways to take it" — each theme renders the same idea in its own accent (asymmetric friction = hold-to-confirm button in Sentinel, two-keystroke confirm in Ledger). Page types: prompt / audit / rules. Sentinel additionally shown in light and dark appearance. Density and layout are settled above and are not axes.
+First round settled the theme: **Terminal Ledger is eliminated; Native Sentinel wins** — its manager pages were approved as-is, but the prompt "could use some work," and single-flavor Sentinel "will look great on macOS but really out of place on Linux and Windows."
+
+Current axes: **page** (prompt / audit / rules) × **os** (macos / windows / linux-GNOME) × **appearance** (light / dark). Each OS renders its native dialog and window idiom, not a reskin: macOS alert panel, Windows 11 ContentDialog (equal-width footer buttons, Segoe, 4px radii), GNOME AdwMessageDialog (centered heading, full-width hairline-separated button row, suggested-action accent). Linux means GNOME/libadwaita specifically.
+
+**Decision surface: committed, no longer an axis.** Native button pairs with the hotkey shown as an underlined mnemonic character in the label (Approve/Deny with underlined A/D). Keyboard-first and asymmetric-friction retired.
+
+**Prompt rework requirements from review:** tighten proportions and spacing; give the provenance block real structure (an inset well, not a loose grid); and render the caller as a **process tree with argv per process** — "right now it's hard to identify which process is asking for something since you can't see argv." The argv-bearing tree is a must-include on every prompt page.
 
 ## Reference inspiration
 
