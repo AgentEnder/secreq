@@ -1,12 +1,53 @@
 {
   "$schema": "https://design-drafts.dev/schemas/draft-manifest.schema.json",
-  "name": "secreq-consent-ui",
+  "name": "secreq consent UI restyle",
+  "description": "Two theme lineages (Terminal Ledger, Native Sentinel) crossed with three decision surfaces across the committed Prompt + Manager window split.",
   "prompt": "references/brief.md",
-  "pages": [
+  "axes": [
     {
-      "coordinates": {},
-      "path": "index.html"
+      "name": "page",
+      "label": "Page",
+      "description": "The three committed surfaces: the transient consent prompt, and the manager window's audit and rules views",
+      "choices": [
+        { "name": "prompt", "label": "Prompt", "description": "Focus Stack: one ask at a time" },
+        { "name": "audit", "label": "Audit", "description": "Manifest Rows: scannable table in the manager window" },
+        { "name": "rules", "label": "Rules", "description": "Grouped Inset: System-Settings-style list in the manager window" }
+      ]
+    },
+    {
+      "name": "theme",
+      "label": "Theme",
+      "description": "Two lineages of desktop app: terminal program vs OS security surface",
+      "choices": [
+        { "name": "terminal-ledger", "label": "Terminal Ledger", "description": "A first-class TUI with a titlebar; mono, columns, hairlines, one amber accent" },
+        { "name": "sentinel-dark", "label": "Sentinel (dark)", "description": "OS security surface following a dark system appearance" },
+        { "name": "sentinel-light", "label": "Sentinel (light)", "description": "The same Sentinel design following a light system appearance" }
+      ]
+    },
+    {
+      "name": "decision",
+      "label": "Decision surface",
+      "description": "How approve/deny presents on the prompt; not applicable to manager pages",
+      "choices": [
+        { "name": "dialog-buttons", "label": "Dialog buttons", "description": "One right-aligned pair, single default action, Enter/Esc" },
+        { "name": "keyboard-first", "label": "Keyboard-first", "description": "Key affordances are the surface; buttons minimal or hover-only" },
+        { "name": "asymmetric-friction", "label": "Asymmetric friction", "description": "Deny is instant; approve costs a deliberate beat" },
+        { "name": "none", "label": "n/a", "description": "Pages without a decision surface" }
+      ]
     }
   ],
-  "createdAt": "2026-07-09T17:27:32.634Z"
+  "pages": [
+    { "coordinates": { "page": "prompt", "theme": "terminal-ledger", "decision": "keyboard-first" }, "path": "pages/prompt/ledger-keyboard.html", "description": "Default: the keybar is the decision surface" },
+    { "coordinates": { "page": "prompt", "theme": "terminal-ledger", "decision": "dialog-buttons" }, "path": "pages/prompt/ledger-dialog.html", "description": "TUI push buttons, amber inverse-video default" },
+    { "coordinates": { "page": "prompt", "theme": "terminal-ledger", "decision": "asymmetric-friction" }, "path": "pages/prompt/ledger-friction.html", "description": "Two-keystroke approve shown in the armed state" },
+    { "coordinates": { "page": "prompt", "theme": "sentinel-dark", "decision": "dialog-buttons" }, "path": "pages/prompt/sentinel-dark-dialog.html", "description": "Chromeless alert panel with one default button" },
+    { "coordinates": { "page": "prompt", "theme": "sentinel-dark", "decision": "keyboard-first" }, "path": "pages/prompt/sentinel-dark-keyboard.html", "description": "Keycap hints at rest; buttons materialize on hover" },
+    { "coordinates": { "page": "prompt", "theme": "sentinel-dark", "decision": "asymmetric-friction" }, "path": "pages/prompt/sentinel-dark-friction.html", "description": "Hold-to-approve; deny stays one click" },
+    { "coordinates": { "page": "prompt", "theme": "sentinel-light", "decision": "dialog-buttons" }, "path": "pages/prompt/sentinel-light-dialog.html", "description": "Sentinel following a light OS appearance" },
+    { "coordinates": { "page": "audit", "theme": "terminal-ledger", "decision": "none" }, "path": "pages/audit/ledger.html", "description": "Manager audit view as a TUI column grid" },
+    { "coordinates": { "page": "audit", "theme": "sentinel-dark", "decision": "none" }, "path": "pages/audit/sentinel-dark.html", "description": "Manager audit view as a striped native table" },
+    { "coordinates": { "page": "rules", "theme": "terminal-ledger", "decision": "none" }, "path": "pages/rules/ledger.html", "description": "Rules as ledger rows under man-page headers" },
+    { "coordinates": { "page": "rules", "theme": "sentinel-dark", "decision": "none" }, "path": "pages/rules/sentinel-dark.html", "description": "Rules as grouped inset lists, System Settings idiom" }
+  ],
+  "createdAt": "2026-07-09T18:52:52.000Z"
 }

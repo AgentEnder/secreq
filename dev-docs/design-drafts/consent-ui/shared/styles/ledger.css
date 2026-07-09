@@ -1,0 +1,197 @@
+/* Terminal Ledger — theme tokens + window scaffolding.
+   Identity: mono, columns, hairline rules. Palette is one representative
+   dark terminal scheme; the structure is the theme, the scheme is swappable. */
+
+:root {
+  --desktop: #0e0c0a;
+  --bg: #16130e;
+  --bg-sel: #221c12;
+  --fg: #cfc5b2;
+  --dim: #8b8170;
+  --faint: #5c5443;
+  --rule: #2c261c;
+  --amber: #e2a238;
+  --green: #9ab56d;
+  --red: #cb7260;
+  --mono: "Berkeley Mono", "JetBrains Mono", "IBM Plex Mono", "SF Mono",
+    ui-monospace, Menlo, monospace;
+}
+
+* { box-sizing: border-box; margin: 0; }
+
+body {
+  background: var(--desktop);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.55;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 48px 24px;
+}
+
+.stage { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+
+.window {
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  width: min(620px, 94vw);
+  box-shadow: 0 28px 56px -28px rgba(0, 0, 0, 0.85);
+  overflow: hidden;
+}
+.window.manager { width: min(900px, 96vw); }
+
+/* TUI header line: app name, hairline fill, right-side status */
+.tui-header {
+  display: flex;
+  align-items: center;
+  gap: 1.5ch;
+  padding: 12px 16px 10px;
+  white-space: nowrap;
+}
+.tui-header .app { font-weight: 700; }
+.tui-header .ctx { color: var(--dim); }
+.tui-header .fill { flex: 1; height: 1px; background: var(--rule); min-width: 4ch; }
+.tui-header .status { color: var(--dim); }
+.tui-header .status b { color: var(--amber); font-weight: 700; }
+
+/* Man-page style sections */
+.section { padding: 10px 16px 2px; }
+.section > h2 {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--faint);
+  margin-bottom: 2px;
+}
+.section .row { display: grid; grid-template-columns: max-content 1fr; gap: 0 3ch; }
+.section .row + .row { margin-top: 1px; }
+
+.cmdline {
+  display: flex;
+  align-items: baseline;
+  gap: 2ch;
+  padding: 6px 16px 2px;
+}
+.cmdline code { font: inherit; font-weight: 700; word-break: break-all; }
+.cmdline .age { color: var(--faint); margin-left: auto; }
+
+.secret-name { font-weight: 700; }
+.provider-uri { color: var(--dim); }
+.chain { color: var(--fg); }
+.chain .sep { color: var(--faint); }
+.meta { color: var(--dim); }
+.hint { color: var(--dim); font-style: italic; }
+.pos { color: var(--green); }
+.neg { color: var(--red); }
+.off { color: var(--faint); }
+
+/* Keybar: k9s-style footer. Keys carry the accent; labels stay dim. */
+.keybar {
+  border-top: 1px solid var(--rule);
+  margin-top: 12px;
+  padding: 10px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 3.5ch;
+  color: var(--dim);
+}
+.keybar b { color: var(--amber); font-weight: 700; }
+.keybar .quiet b { color: var(--dim); }
+
+/* TUI push buttons (dialog-buttons variant): inverse video is the default action */
+.tui-actions {
+  border-top: 1px solid var(--rule);
+  margin-top: 12px;
+  padding: 12px 16px;
+  display: flex;
+  gap: 2ch;
+  justify-content: flex-end;
+  align-items: center;
+}
+.tui-btn {
+  font: inherit;
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--rule);
+  padding: 4px 2ch;
+  cursor: pointer;
+}
+.tui-btn:hover { border-color: var(--dim); }
+.tui-btn .key { color: var(--faint); }
+.tui-btn.default {
+  background: var(--amber);
+  border-color: var(--amber);
+  color: var(--bg);
+  font-weight: 700;
+}
+.tui-btn.default .key { color: rgba(22, 19, 14, 0.65); }
+.tui-btn.default:hover { filter: brightness(1.06); }
+
+/* Armed strip (asymmetric-friction variant): the confirm beat, rendered live */
+.armed {
+  margin-top: 12px;
+  background: var(--amber);
+  color: var(--bg);
+  padding: 8px 16px;
+  font-weight: 700;
+  display: flex;
+  gap: 2ch;
+  align-items: baseline;
+}
+.armed .note { font-weight: 400; color: rgba(22, 19, 14, 0.7); margin-left: auto; }
+
+/* Manager: view switcher line + tables */
+.viewbar {
+  display: flex;
+  gap: 3ch;
+  padding: 2px 16px 8px;
+  color: var(--dim);
+  border-bottom: 1px solid var(--rule);
+}
+.viewbar .view b { color: var(--amber); font-weight: 700; }
+.viewbar .view.active { color: var(--bg); background: var(--dim); padding: 0 1ch; }
+.viewbar .view.active b { color: var(--bg); }
+.viewbar .filter { margin-left: auto; color: var(--faint); }
+.viewbar .filter b { color: var(--amber); }
+
+table.ledger { width: 100%; border-collapse: collapse; }
+table.ledger th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--faint);
+  padding: 8px 1.5ch 4px;
+}
+table.ledger td { padding: 3px 1.5ch; vertical-align: baseline; }
+table.ledger tr.sel td { background: var(--bg-sel); }
+table.ledger td.num { color: var(--faint); }
+table.ledger code { font: inherit; }
+
+.daterow td {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--faint);
+  padding-top: 12px;
+}
+
+/* Rules list rows */
+.rule-row { display: grid; grid-template-columns: 3ch 9ch 1fr max-content; gap: 0 2ch; padding: 3px 16px; }
+.rule-row.sel { background: var(--bg-sel); }
+.rule-row .crit { color: var(--dim); grid-column: 3; }
+.rule-row .stats { color: var(--faint); grid-column: 3; }
+.rule-row .name { font-weight: 700; }
+
+/* Reviewer spec caption on the matte, outside the window */
+.spec { color: #4a4438; font-size: 11px; max-width: 620px; text-align: center; }
+.spec b { color: #6b6252; font-weight: 700; }
+
+:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

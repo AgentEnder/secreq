@@ -1,0 +1,271 @@
+/* Native Sentinel — theme tokens + panel scaffolding.
+   Identity: an OS security surface. System grays that follow the OS
+   appearance; system type; mono strictly for commands, paths, secrets.
+   Both appearances live here; pages opt in via <html class="light|dark">. */
+
+html.dark {
+  --desktop: #1c1c1e;
+  --panel: #2a2a2c;
+  --inset: #232325;
+  --fg: #e9e9eb;
+  --dim: #98989d;
+  --faint: #6a6a70;
+  --rule: #3c3c40;
+  --accent: #0a84ff;
+  --accent-fg: #ffffff;
+  --btn: #48484c;
+  --btn-fg: #e9e9eb;
+  --green: #7fbf6a;
+  --red: #e0705f;
+  --stripe: rgba(255, 255, 255, 0.03);
+  --shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.75);
+}
+html.light {
+  --desktop: #d9d9de;
+  --panel: #f4f4f6;
+  --inset: #ececef;
+  --fg: #1d1d1f;
+  --dim: #6e6e73;
+  --faint: #9d9da3;
+  --rule: #d3d3d8;
+  --accent: #007aff;
+  --accent-fg: #ffffff;
+  --btn: #ffffff;
+  --btn-fg: #1d1d1f;
+  --green: #3f8b34;
+  --red: #c4392e;
+  --stripe: rgba(0, 0, 0, 0.028);
+  --shadow: 0 24px 50px -18px rgba(0, 0, 0, 0.35);
+}
+
+* { box-sizing: border-box; margin: 0; }
+
+body {
+  background: var(--desktop);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+    system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 48px 24px;
+}
+
+code, .mono {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.stage { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+
+/* The consent prompt: a chromeless alert panel, kin to Keychain/1Password */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  width: min(480px, 94vw);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.panel-head {
+  display: flex;
+  gap: 14px;
+  padding: 20px 20px 4px;
+  align-items: flex-start;
+}
+.panel-head .glyph { flex: none; color: var(--dim); margin-top: 2px; }
+.panel-head h1 { font-size: 15px; font-weight: 600; line-height: 1.35; }
+.panel-head h1 code { font-size: 13px; font-weight: 700; }
+.panel-head .sub { color: var(--dim); margin-top: 3px; }
+.panel-head .sub code { color: var(--dim); }
+
+/* Provenance grid: the detail rows */
+.details {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 5px 16px;
+  padding: 16px 20px 4px 66px;
+}
+.details dt { color: var(--dim); text-align: right; grid-column: 1; }
+.details dd { grid-column: 2; min-width: 0; }
+.details dd .uri { color: var(--dim); white-space: nowrap; }
+.details .chain .sep { color: var(--faint); padding: 0 2px; }
+.details .hint { color: var(--dim); }
+
+.panel-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 20px 18px;
+  margin-top: 8px;
+}
+.queue { color: var(--dim); }
+.manager-link {
+  background: none;
+  border: none;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+}
+.manager-link:hover { text-decoration: underline; }
+.panel-foot .spring { flex: 1; }
+
+/* OS-weight buttons: one default action, one plain */
+.btn {
+  font: inherit;
+  border: 1px solid var(--rule);
+  background: var(--btn);
+  color: var(--btn-fg);
+  border-radius: 6px;
+  padding: 4px 14px;
+  cursor: pointer;
+  box-shadow: 0 0.5px 1px rgba(0, 0, 0, 0.15);
+}
+.btn:hover { filter: brightness(1.05); }
+.btn.default {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+}
+.keyhint { color: var(--faint); font-size: 11px; }
+
+/* Keycap chips (keyboard-first variant) */
+.keycap {
+  display: inline-block;
+  border: 1px solid var(--rule);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--inset);
+  padding: 0 6px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  color: var(--dim);
+  min-width: 20px;
+  text-align: center;
+}
+
+/* Manager window: title bar + segmented control + content */
+.window.manager {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  width: min(920px, 96vw);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.titlebar {
+  display: grid;
+  grid-template-columns: 1fr max-content 1fr;
+  align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--rule);
+}
+.titlebar .title { font-weight: 600; color: var(--dim); }
+.titlebar .search {
+  justify-self: end;
+  background: var(--inset);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  color: var(--faint);
+  padding: 3px 10px;
+  min-width: 180px;
+}
+.segmented {
+  display: inline-flex;
+  background: var(--inset);
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  padding: 1px;
+}
+.segmented button {
+  font: inherit;
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  padding: 3px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.segmented button.active {
+  background: var(--btn);
+  color: var(--fg);
+  box-shadow: 0 0.5px 2px rgba(0, 0, 0, 0.2);
+  font-weight: 500;
+}
+
+/* Audit: a real table with alternating rows */
+table.audit { width: 100%; border-collapse: collapse; }
+table.audit th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dim);
+  padding: 8px 12px 6px;
+  border-bottom: 1px solid var(--rule);
+}
+table.audit td { padding: 5px 12px; vertical-align: baseline; }
+table.audit tbody tr:nth-child(even) { background: var(--stripe); }
+table.audit td.num { color: var(--dim); font-variant-numeric: tabular-nums; }
+.decision { white-space: nowrap; }
+.decision::before { content: "●"; font-size: 8px; vertical-align: 1px; margin-right: 5px; }
+.decision.ok { color: var(--green); }
+.decision.no { color: var(--red); }
+.decision.off { color: var(--faint); }
+.decision .via { color: var(--dim); }
+
+/* Rules: grouped inset lists, System Settings idiom */
+.group {
+  background: var(--inset);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  margin: 14px 16px 0;
+  overflow: hidden;
+}
+.group > .grouphead {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dim);
+  padding: 8px 14px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.rule {
+  display: grid;
+  grid-template-columns: max-content 1fr max-content;
+  gap: 2px 12px;
+  padding: 10px 14px;
+  align-items: baseline;
+}
+.rule + .rule { border-top: 1px solid var(--rule); }
+.rule .name { font-weight: 500; }
+.rule .crit { grid-column: 2; color: var(--dim); }
+.rule .stats { grid-column: 2; color: var(--faint); font-size: 12px; }
+.rule .verdict { justify-self: end; }
+.rule .verdict.ok { color: var(--green); }
+.rule .verdict.no { color: var(--red); }
+.rule .verdict.off { color: var(--faint); }
+.footnote { color: var(--dim); padding: 10px 18px 16px; }
+.windowfoot {
+  display: flex;
+  padding: 12px 16px;
+  border-top: 1px solid var(--rule);
+  margin-top: 14px;
+}
+
+/* Toggle checkbox stand-in: native-ish */
+.onoff { color: var(--green); }
+.onoff.off { color: var(--faint); }
+
+.spec { color: color-mix(in srgb, var(--dim) 70%, var(--desktop)); font-size: 11px; max-width: 640px; text-align: center; }
+.spec b { font-weight: 600; }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>secreq drafts — prompt / sentinel-dark / keyboard-first</title>
+<link rel="stylesheet" href="../../shared/styles/sentinel.css">
+<style>
+  /* Buttons materialize on hover; keycap hints are the resting surface */
+  .panel .hover-actions { opacity: 0; transition: opacity 120ms ease; display: flex; gap: 10px; }
+  .panel:hover .hover-actions, .panel:focus-within .hover-actions { opacity: 1; }
+  .resting-hints { display: flex; gap: 14px; align-items: center; color: var(--dim); }
+</style>
+</head>
+<body>
+<div class="stage">
+  <main class="panel" data-annotate-id="prompt-window" aria-label="secreq consent prompt">
+    <header class="panel-head" data-annotate-id="header">
+      <span class="glyph" aria-hidden="true">
+        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+          <circle cx="8.5" cy="8.5" r="4.25"/>
+          <path d="M11.5 11.5 L20 20 M16.5 16.5 L18.5 14.5 M13.5 19.5 L15.5 17.5"/>
+        </svg>
+      </span>
+      <div>
+        <h1 data-annotate-id="ask-summary"><code>gh</code> wants to use <code>GITHUB_TOKEN</code></h1>
+        <p class="sub"><code>gh api /repos/acme/web/issues</code></p>
+      </div>
+    </header>
+
+    <dl class="details" data-annotate-id="details">
+      <dt>Secret</dt>
+      <dd data-annotate-id="secrets"><span class="mono">GITHUB_TOKEN</span> <span class="uri mono">· op://Personal/GitHub/credential</span></dd>
+      <dt>Called by</dt>
+      <dd class="chain" data-annotate-id="caller">Superset.app<span class="sep">›</span>zsh<span class="sep">›</span>gh <span class="uri">(pid 48112)</span></dd>
+      <dt>In</dt>
+      <dd><span class="mono">~/repos/acme-web</span></dd>
+      <dt>History</dt>
+      <dd class="hint" data-annotate-id="history">First request from this caller.</dd>
+    </dl>
+
+    <footer class="panel-foot" data-annotate-id="decision-surface">
+      <button class="manager-link" data-annotate-id="manager-affordance">Open Manager…</button>
+      <span class="queue" data-annotate-id="queue">2 more waiting</span>
+      <span class="spring"></span>
+      <span class="resting-hints" data-annotate-id="key-hints">
+        <span><span class="keycap">A</span> Approve</span>
+        <span><span class="keycap">D</span> Deny</span>
+      </span>
+      <span class="hover-actions">
+        <button class="btn">Deny</button>
+        <button class="btn default">Approve</button>
+      </span>
+    </footer>
+  </main>
+
+  <p class="spec"><b>prompt · native-sentinel (dark) · keyboard-first</b> — resting state shows only keycap hints; the button pair materializes on hover or focus. Try hovering the panel.</p>
+</div>
+<script src="https://unpkg.com/@design-drafts/toolbar@0/dist/toolbar.js" defer></script>
+<script src="https://unpkg.com/@design-drafts/annotate@0/dist/annotate.js" defer></script>
+</body>
+</html>

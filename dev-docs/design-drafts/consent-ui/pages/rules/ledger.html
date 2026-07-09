@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>secreq drafts — rules / terminal-ledger</title>
+<link rel="stylesheet" href="../../shared/styles/ledger.css">
+</head>
+<body>
+<div class="stage">
+  <main class="window manager" data-annotate-id="manager-window" aria-label="secreq manager, rules view">
+    <header class="tui-header" data-annotate-id="header">
+      <span class="app">secreq</span><span class="ctx">manager</span>
+      <span class="fill" aria-hidden="true"></span>
+      <span class="status">3 rules · 2 suggestions</span>
+    </header>
+
+    <nav class="viewbar" data-annotate-id="view-switcher">
+      <span class="view active"><b>1</b> rules</span>
+      <span class="view"><b>2</b> audit</span>
+      <span class="filter" data-annotate-id="filter"><b>/</b> filter</span>
+    </nav>
+
+    <section class="section" data-annotate-id="explainer">
+      <div class="row"><span class="hint">rules fire before the consent prompt. deny rules win; most-specific approve wins ties.</span></div>
+    </section>
+
+    <section class="section" data-annotate-id="rule-list">
+      <h2>RULES</h2>
+    </section>
+    <div class="rule-row sel">
+      <span class="pos">✓</span>
+      <span class="pos">approve</span>
+      <span class="name">cursor reads via gh</span>
+      <span class="meta">14 fired · today</span>
+      <span class="crit"><code>gh api --get /repos/*/pulls*</code> · ancestor Cursor.app · trained GITHUB_TOKEN</span>
+    </div>
+    <div class="rule-row">
+      <span class="neg">✓</span>
+      <span class="neg">deny</span>
+      <span class="name">block gh destructive ops</span>
+      <span class="meta">3 fired · 4d ago</span>
+      <span class="crit"><code>gh repo delete *</code> · ancestor Cursor.app</span>
+    </div>
+    <div class="rule-row">
+      <span class="off">·</span>
+      <span class="off">approve</span>
+      <span class="name off">old cursor rule <span class="meta">(off)</span></span>
+      <span class="meta">never fired</span>
+      <span class="crit"><code>gh api</code> · ancestor Cursor.app</span>
+    </div>
+
+    <section class="section" data-annotate-id="suggestions">
+      <h2>SUGGESTIONS</h2>
+    </section>
+    <div class="rule-row">
+      <span class="off">?</span>
+      <span class="pos">approve</span>
+      <span class="name">gh api reads from Superset.app</span>
+      <span class="meta">seen 6× this week</span>
+      <span class="crit"><code>gh api --get *</code> · ancestor Superset.app · GITHUB_TOKEN</span>
+    </div>
+    <div class="rule-row">
+      <span class="off">?</span>
+      <span class="neg">deny</span>
+      <span class="name">aws from unknown ancestors</span>
+      <span class="meta">denied 3× recently</span>
+      <span class="crit"><code>aws *</code> · ancestor not in trusted set</span>
+    </div>
+
+    <footer class="keybar" data-annotate-id="keybar">
+      <span><b>n</b> new</span>
+      <span><b>e</b> edit</span>
+      <span><b>x</b> delete</span>
+      <span><b>space</b> toggle</span>
+      <span><b>⏎</b> accept suggestion</span>
+      <span class="quiet"><b>esc</b> close</span>
+    </footer>
+  </main>
+
+  <p class="spec"><b>rules · terminal-ledger</b> — rules as ledger rows under man-page headers; verdicts are colored words, suggestions carry a ? marker and accept via ⏎.</p>
+</div>
+<script src="https://unpkg.com/@design-drafts/toolbar@0/dist/toolbar.js" defer></script>
+<script src="https://unpkg.com/@design-drafts/annotate@0/dist/annotate.js" defer></script>
+</body>
+</html>

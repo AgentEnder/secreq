@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>secreq drafts — prompt / terminal-ledger / asymmetric-friction</title>
+<link rel="stylesheet" href="../../shared/styles/ledger.css">
+</head>
+<body>
+<div class="stage">
+  <main class="window" data-annotate-id="prompt-window" aria-label="secreq consent prompt">
+    <header class="tui-header" data-annotate-id="header">
+      <span class="app">secreq</span><span class="ctx">consent</span>
+      <span class="fill" aria-hidden="true"></span>
+      <span class="status" data-annotate-id="queue">ask <b>1</b>/3 · 2 waiting</span>
+    </header>
+
+    <div class="cmdline" data-annotate-id="ask-summary">
+      <code>gh api /repos/acme/web/issues</code>
+      <span class="age">4s</span>
+    </div>
+
+    <section class="section" data-annotate-id="secrets">
+      <h2>SECRET</h2>
+      <div class="row">
+        <span class="secret-name">GITHUB_TOKEN</span>
+        <span class="provider-uri">op://Personal/GitHub/credential</span>
+      </div>
+    </section>
+
+    <section class="section" data-annotate-id="caller">
+      <h2>CALLER</h2>
+      <div class="row">
+        <span class="chain">Superset.app <span class="sep">›</span> zsh <span class="sep">›</span> gh</span>
+        <span class="meta">pid 48112</span>
+      </div>
+      <div class="row">
+        <span class="meta">cwd ~/repos/acme-web</span>
+      </div>
+    </section>
+
+    <section class="section" data-annotate-id="history">
+      <h2>HISTORY</h2>
+      <div class="row"><span class="hint">first request from this caller</span></div>
+    </section>
+
+    <div class="armed" role="status" data-annotate-id="armed-strip">
+      <span>approve GITHUB_TOKEN — press ⏎ to confirm</span>
+      <span class="note">esc cancels</span>
+    </div>
+
+    <footer class="keybar" data-annotate-id="decision-surface">
+      <span class="quiet"><b>a</b> approve (twice)</span>
+      <span><b>d</b> deny</span>
+      <span><b>⇥</b> next</span>
+      <span data-annotate-id="manager-affordance"><b>m</b> manager</span>
+    </footer>
+  </main>
+
+  <p class="spec"><b>prompt · terminal-ledger · asymmetric-friction</b> — deny is one keystroke; approve is two. Shown in the armed state: <b>a</b> was pressed, the amber strip waits for ⏎.</p>
+</div>
+<script src="https://unpkg.com/@design-drafts/toolbar@0/dist/toolbar.js" defer></script>
+<script src="https://unpkg.com/@design-drafts/annotate@0/dist/annotate.js" defer></script>
+</body>
+</html>
