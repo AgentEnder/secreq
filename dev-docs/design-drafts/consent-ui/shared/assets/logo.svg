@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Gate Monogram: two brackets (the gate), one dot (the secret).
+       The dot passes through only with consent. Brackets take
+       currentColor; the dot takes the theme accent via CSS variable,
+       falling back to the macOS dark accent. -->
+  <g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="square">
+    <path d="M23 10 H13 V54 H23"/>
+    <path d="M41 10 H51 V54 H41"/>
+  </g>
+  <circle cx="32" cy="32" r="7" fill="var(--logo-accent, #0a84ff)"/>
+</svg>

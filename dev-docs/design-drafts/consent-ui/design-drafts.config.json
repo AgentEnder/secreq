@@ -9,10 +9,31 @@
       "label": "Page",
       "description": "The three committed surfaces: the transient consent prompt, and the manager window's audit and rules views",
       "choices": [
-        { "name": "prompt", "label": "Prompt", "description": "Focus Stack: one ask at a time, with an argv-bearing process tree" },
-        { "name": "prompt-many", "label": "Prompt (42 secrets)", "description": "The secreq-run case: one process requesting 40+ vars" },
-        { "name": "audit", "label": "Audit", "description": "Scannable table in the manager window" },
-        { "name": "rules", "label": "Rules", "description": "Grouped list in the manager window" }
+        {
+          "name": "prompt",
+          "label": "Prompt",
+          "description": "Focus Stack: one ask at a time, with an argv-bearing process tree"
+        },
+        {
+          "name": "prompt-many",
+          "label": "Prompt (42 secrets)",
+          "description": "The secreq-run case: one process requesting 40+ vars"
+        },
+        {
+          "name": "audit",
+          "label": "Audit",
+          "description": "Scannable table in the manager window"
+        },
+        {
+          "name": "rules",
+          "label": "Rules",
+          "description": "Grouped list in the manager window"
+        },
+        {
+          "name": "logo",
+          "label": "Logo",
+          "description": "The gate-monogram mark on all six token sets, size ladder, wordmark"
+        }
       ]
     },
     {
@@ -20,9 +41,21 @@
       "label": "OS",
       "description": "Each OS gets its native dialog and window idiom, not a reskin",
       "choices": [
-        { "name": "macos", "label": "macOS", "description": "Alert panel, segmented control, traffic lights" },
-        { "name": "windows", "label": "Windows 11", "description": "ContentDialog footer buttons, SelectorBar tabs, caption buttons" },
-        { "name": "linux", "label": "Linux (GNOME)", "description": "AdwMessageDialog response row, headerbar, boxed lists" }
+        {
+          "name": "macos",
+          "label": "macOS",
+          "description": "Alert panel, segmented control, traffic lights"
+        },
+        {
+          "name": "windows",
+          "label": "Windows 11",
+          "description": "ContentDialog footer buttons, SelectorBar tabs, caption buttons"
+        },
+        {
+          "name": "linux",
+          "label": "Linux (GNOME)",
+          "description": "AdwMessageDialog response row, headerbar, boxed lists"
+        }
       ]
     },
     {
@@ -30,25 +63,135 @@
       "label": "Appearance",
       "description": "Sentinel follows the OS appearance; both are first-class",
       "choices": [
-        { "name": "dark", "label": "Dark" },
-        { "name": "light", "label": "Light" }
+        {
+          "name": "dark",
+          "label": "Dark"
+        },
+        {
+          "name": "light",
+          "label": "Light"
+        }
       ]
     }
   ],
   "pages": [
-    { "coordinates": { "page": "prompt", "os": "macos", "appearance": "dark" }, "path": "pages/prompt/macos-dark.html", "description": "Default: refined macOS alert panel with evidence well and process tree" },
-    { "coordinates": { "page": "prompt", "os": "macos", "appearance": "light" }, "path": "pages/prompt/macos-light.html" },
-    { "coordinates": { "page": "prompt-many", "os": "macos", "appearance": "dark" }, "path": "pages/prompt/macos-dark-many.html", "description": "42 secrets grouped by provider in a scrollable grid" },
-    { "coordinates": { "page": "prompt", "os": "windows", "appearance": "dark" }, "path": "pages/prompt/windows-dark.html", "description": "Windows 11 ContentDialog idiom" },
-    { "coordinates": { "page": "prompt", "os": "windows", "appearance": "light" }, "path": "pages/prompt/windows-light.html" },
-    { "coordinates": { "page": "prompt", "os": "linux", "appearance": "dark" }, "path": "pages/prompt/linux-dark.html", "description": "GNOME AdwMessageDialog idiom" },
-    { "coordinates": { "page": "prompt", "os": "linux", "appearance": "light" }, "path": "pages/prompt/linux-light.html" },
-    { "coordinates": { "page": "audit", "os": "macos", "appearance": "dark" }, "path": "pages/audit/macos-dark.html" },
-    { "coordinates": { "page": "audit", "os": "windows", "appearance": "dark" }, "path": "pages/audit/windows-dark.html" },
-    { "coordinates": { "page": "audit", "os": "linux", "appearance": "dark" }, "path": "pages/audit/linux-dark.html" },
-    { "coordinates": { "page": "rules", "os": "macos", "appearance": "dark" }, "path": "pages/rules/macos-dark.html" },
-    { "coordinates": { "page": "rules", "os": "windows", "appearance": "dark" }, "path": "pages/rules/windows-dark.html" },
-    { "coordinates": { "page": "rules", "os": "linux", "appearance": "dark" }, "path": "pages/rules/linux-dark.html" }
+    {
+      "coordinates": {
+        "page": "prompt",
+        "os": "macos",
+        "appearance": "dark"
+      },
+      "path": "pages/prompt/macos-dark.html",
+      "description": "Default: refined macOS alert panel with evidence well and process tree"
+    },
+    {
+      "coordinates": {
+        "page": "prompt",
+        "os": "macos",
+        "appearance": "light"
+      },
+      "path": "pages/prompt/macos-light.html"
+    },
+    {
+      "coordinates": {
+        "page": "prompt-many",
+        "os": "macos",
+        "appearance": "dark"
+      },
+      "path": "pages/prompt/macos-dark-many.html",
+      "description": "42 secrets grouped by provider in a scrollable grid"
+    },
+    {
+      "coordinates": {
+        "page": "prompt",
+        "os": "windows",
+        "appearance": "dark"
+      },
+      "path": "pages/prompt/windows-dark.html",
+      "description": "Windows 11 ContentDialog idiom"
+    },
+    {
+      "coordinates": {
+        "page": "prompt",
+        "os": "windows",
+        "appearance": "light"
+      },
+      "path": "pages/prompt/windows-light.html"
+    },
+    {
+      "coordinates": {
+        "page": "prompt",
+        "os": "linux",
+        "appearance": "dark"
+      },
+      "path": "pages/prompt/linux-dark.html",
+      "description": "GNOME AdwMessageDialog idiom"
+    },
+    {
+      "coordinates": {
+        "page": "prompt",
+        "os": "linux",
+        "appearance": "light"
+      },
+      "path": "pages/prompt/linux-light.html"
+    },
+    {
+      "coordinates": {
+        "page": "audit",
+        "os": "macos",
+        "appearance": "dark"
+      },
+      "path": "pages/audit/macos-dark.html"
+    },
+    {
+      "coordinates": {
+        "page": "audit",
+        "os": "windows",
+        "appearance": "dark"
+      },
+      "path": "pages/audit/windows-dark.html"
+    },
+    {
+      "coordinates": {
+        "page": "audit",
+        "os": "linux",
+        "appearance": "dark"
+      },
+      "path": "pages/audit/linux-dark.html"
+    },
+    {
+      "coordinates": {
+        "page": "rules",
+        "os": "macos",
+        "appearance": "dark"
+      },
+      "path": "pages/rules/macos-dark.html"
+    },
+    {
+      "coordinates": {
+        "page": "rules",
+        "os": "windows",
+        "appearance": "dark"
+      },
+      "path": "pages/rules/windows-dark.html"
+    },
+    {
+      "coordinates": {
+        "page": "rules",
+        "os": "linux",
+        "appearance": "dark"
+      },
+      "path": "pages/rules/linux-dark.html"
+    },
+    {
+      "coordinates": {
+        "page": "logo",
+        "os": "macos",
+        "appearance": "dark"
+      },
+      "path": "pages/logo/gate-monogram.html",
+      "description": "Gate Monogram: two brackets, one accent dot"
+    }
   ],
   "createdAt": "2026-07-09T19:15:57.000Z"
 }

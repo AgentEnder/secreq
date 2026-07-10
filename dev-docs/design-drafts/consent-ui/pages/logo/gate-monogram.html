@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>secreq drafts — logo / gate monogram</title>
+<link rel="stylesheet" href="../../shared/styles/base.css">
+<link rel="stylesheet" href="../../shared/styles/macos.css">
+<style>
+  .sheet { display: flex; flex-direction: column; gap: 20px; width: min(880px, 96vw); }
+  .swatches { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .swatch {
+    border-radius: 10px;
+    border: 1px solid var(--rule);
+    padding: 26px 0 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+  .swatch .cap { font-size: 11px; opacity: 0.55; }
+  .sizes, .wordmarks {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 22px 26px;
+    display: flex;
+    align-items: center;
+    gap: 40px;
+  }
+  .sizes .cell { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .sizes .cap, .wordmarks .cap { font-size: 11px; color: var(--dim); }
+  .wm { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: var(--fg); }
+  .wm .dot { color: var(--accent); }
+  .wm.big { font-size: 28px; font-weight: 700; }
+  .wm.small { font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="sheet">
+    <div class="swatches" data-annotate-id="token-swatches">
+      <div class="swatch" style="background:#2b2b2d; color:#e9e9eb">
+        <svg width="72" height="72" viewBox="0 0 64 64" style="--logo-accent:#0a84ff"><g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="square"><path d="M23 10 H13 V54 H23"/><path d="M41 10 H51 V54 H41"/></g><circle cx="32" cy="32" r="7" fill="var(--logo-accent)"/></svg>
+        <span class="cap" style="color:#98989d">macOS dark</span>
+      </div>
+      <div class="swatch" style="background:#2b2b2b; color:#ffffff">
+        <svg width="72" height="72" viewBox="0 0 64 64" style="--logo-accent:#60cdff"><g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="square"><path d="M23 10 H13 V54 H23"/><path d="M41 10 H51 V54 H41"/></g><circle cx="32" cy="32" r="7" fill="var(--logo-accent)"/></svg>
+        <span class="cap" style="color:#9d9d9d">Windows dark</span>
+      </div>
+      <div class="swatch" style="background:#383838; color:#ffffff">
+        <svg width="72" height="72" viewBox="0 0 64 64" style="--logo-accent:#78aeed"><g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="square"><path d="M23 10 H13 V54 H23"/><path d="M41 10 H51 V54 H41"/></g><circle cx="32" cy="32" r="7" fill="var(--logo-accent)"/></svg>
+        <span class="cap" style="color:#9a9996">GNOME dark</span>
+      </div>
+      <div class="swatch" style="background:#f5f5f7; color:#1d1d1f">
+        <svg width="72" height="72" viewBox="0 0 64 64" style="--logo-accent:#007aff"><g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="square"><path d="M23 10 H13 V54 H23"/><path d="M41 10 H51 V54 H41"/></g><circle cx="32" cy="32" r="7" fill="var(--logo-accent)"/></svg>
+        <span class="cap" style="color:#6e6e73">macOS light</span>
+      </div>
+      <div class="swatch" style="background:#fbfbfb; color:#1b1b1b">
+        <svg width="72" height="72" viewBox="0 0 64 64" style="--logo-accent:#005fb8"><g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="square"><path d="M23 10 H13 V54 H23"/><path d="M41 10 H51 V54 H41"/></g><circle cx="32" cy="32" r="7" fill="var(--logo-accent)"/></svg>
+        <span class="cap" style="color:#5f5f5f">Windows light</span>
+      </div>
+      <div class="swatch" style="background:#fafafa; color:#26262b">
+        <svg width="72" height="72" viewBox="0 0 64 64" style="--logo-accent:#1c71d8"><g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="square"><path d="M23 10 H13 V54 H23"/><path d="M41 10 H51 V54 H41"/></g><circle cx="32" cy="32" r="7" fill="var(--logo-accent)"/></svg>
+        <span class="cap" style="color:#77767b">GNOME light</span>
+      </div>
+    </div>
+
+    <div class="sizes" data-annotate-id="size-ladder">
+      <span class="cap">Size ladder</span>
+      <div class="cell">
+        <svg width="128" height="128" viewBox="0 0 64 64" style="color:var(--fg); --logo-accent:#0a84ff"><g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="square"><path d="M23 10 H13 V54 H23"/><path d="M41 10 H51 V54 H41"/></g><circle cx="32" cy="32" r="7" fill="var(--logo-accent)"/></svg>
+        <span class="cap">128 — app icon</span>
+      </div>
+      <div class="cell">
+        <svg width="30" height="30" viewBox="0 0 64 64" style="color:var(--fg); --logo-accent:#0a84ff"><g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="square"><path d="M23 10 H13 V54 H23"/><path d="M41 10 H51 V54 H41"/></g><circle cx="32" cy="32" r="7" fill="var(--logo-accent)"/></svg>
+        <span class="cap">30 — prompt header</span>
+      </div>
+      <div class="cell">
+        <svg width="16" height="16" viewBox="0 0 64 64" style="color:var(--fg); --logo-accent:#0a84ff"><g fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="square"><path d="M23 10 H13 V54 H23"/><path d="M41 10 H51 V54 H41"/></g><circle cx="32" cy="32" r="9" fill="var(--logo-accent)"/></svg>
+        <span class="cap">16 — favicon/menu</span>
+      </div>
+    </div>
+
+    <div class="wordmarks" data-annotate-id="wordmark">
+      <span class="cap">Wordmark</span>
+      <span class="wm big">[<span class="dot">·</span>] secreq</span>
+      <span class="wm small">[<span class="dot">·</span>] secreq — consent-gated secrets</span>
+    </div>
+  </div>
+
+  <p class="spec"><b>logo · gate monogram</b> — two brackets (the gate), one accent dot (the secret): it passes through only with consent. Brackets ride the theme foreground; the dot rides the theme accent. At 16px the stroke and dot fatten one step.</p>
+</div>
+<script src="https://unpkg.com/@design-drafts/toolbar@0/dist/toolbar.js" defer></script>
+<script src="https://unpkg.com/@design-drafts/annotate@0/dist/annotate.js" defer></script>
+</body>
+</html>
