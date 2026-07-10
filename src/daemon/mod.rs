@@ -57,12 +57,16 @@ const IDLE_EXIT_SECS: u64 = 2 * 60 * 60;
 /// finer granularity just burns CPU on a sleeping daemon.
 const MAIN_LOOP_TICK: Duration = Duration::from_secs(1);
 
-/// How long the "All clear" empty-queue state stays on screen before
-/// the daemon tells the consent window to exit. Short enough to feel
-/// snappy after a single approval, long enough that the user sees a
-/// confirmation rather than the window vanishing as soon as they
-/// click. Suppressed entirely when `viewer_mode` is set (the user is
-/// browsing the audit log; the window should stay open).
+/// How long the "All clear" empty-queue state lingers before the daemon
+/// tells the consent window to exit — but *only* for a window the user
+/// browsed away from (Rules/Audit) this session. A decision-only window
+/// (nothing but Approve/Deny) skips this grace entirely and closes the
+/// instant the queue drains, via `State::maybe_immediate_auto_hide` on
+/// the resolve path; there's no confirmation worth lingering over, and
+/// hanging around just reads as sluggish. This grace is the softer close
+/// for the browsed case: long enough not to yank a window mid-glance,
+/// short enough to still feel tidy. Suppressed entirely when
+/// `viewer_mode` is set (the user pinned the audit log open).
 const AUTO_HIDE_GRACE: Duration = Duration::from_secs(2);
 
 /// Cadence at which the daemon samples its own CPU/memory and writes a
@@ -416,54 +420,118 @@ pub fn ensure_badge_window(state: &state::SharedState) -> Result<()> {
     Ok(())
 }
 
-/// RAII guard for an exclusive lock on the pidfile.
+/// RAII guard for the daemon-singleton lock. Holds the locked pidfile
+/// open; the exclusive `flock` is released when the inner `File` drops at
+/// process exit.
+///
+/// It deliberately does **not** unlink the pidfile. `flock` binds to the
+/// file's *inode*, not its name — so removing the pidfile on exit lets the
+/// next `open(O_CREAT)` mint a fresh inode, and a `flock` on that new inode
+/// does not exclude a still-alive daemon holding the old (now-nameless)
+/// inode's lock. That inode churn is exactly how a restart burst left
+/// multiple daemons running at once. Leaving the file in place means every
+/// daemon locks the *same* inode, so the flock actually enforces the
+/// singleton. A leftover pidfile with no live flock is harmless — the next
+/// daemon reuses it.
 struct PidGuard {
     _file: std::fs::File,
-    path: PathBuf,
-}
-
-impl Drop for PidGuard {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
 }
 
 /// Try to take the daemon-singleton lock. Returns `Ok(Some(_))` if we got
 /// it (this process should run the daemon), `Ok(None)` if another daemon
 /// already holds it (this process should exit).
 fn acquire_pidfile_lock(path: &PathBuf) -> Result<Option<PidGuard>> {
+    use std::os::unix::fs::MetadataExt;
+
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(path)
-        .with_context(|| format!("open pidfile {}", path.display()))?;
-    // Non-blocking exclusive lock. If held, another daemon owns it.
-    let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    if ret != 0 {
-        let err = std::io::Error::last_os_error();
-        if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
-            return Ok(None);
+    // Retry a few times to cover the narrow window between our `open` and
+    // our `flock` in which another process could unlink+recreate the
+    // pidfile (e.g. a concurrent `secreq daemon stop` cleanup). Each miss
+    // reopens against the current file.
+    for _ in 0..5 {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(path)
+            .with_context(|| format!("open pidfile {}", path.display()))?;
+        // Non-blocking exclusive lock. If held, another daemon owns it.
+        let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if ret != 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
+                return Ok(None);
+            }
+            return Err(err).context("flock pidfile");
         }
-        return Err(err).context("flock pidfile");
+        // Verify the inode we locked is still the file living at `path`. If
+        // it was unlinked+recreated between our `open` and our `flock`, our
+        // lock is on a stale, nameless inode that no longer guards the
+        // pidfile — drop it and retry against the current file.
+        let locked = file.metadata().ok().map(|m| (m.dev(), m.ino()));
+        let current = std::fs::metadata(path).ok().map(|m| (m.dev(), m.ino()));
+        if locked.is_none() || locked != current {
+            // `file` drops here, releasing the stale lock; the loop reopens.
+            continue;
+        }
+        // We hold the lock on the current pidfile. Record our pid for human
+        // inspection (not load-bearing for liveness) — truncate first so the
+        // file shows only the live owner, not a prior generation's pid.
+        use std::io::Write;
+        let _ = file.set_len(0);
+        let mut writer = &file;
+        let _ = writeln!(writer, "{}", std::process::id());
+        return Ok(Some(PidGuard { _file: file }));
     }
-    // Write our pid for human inspection — not load-bearing for liveness.
-    use std::io::Write;
-    let mut writer = &file;
-    let _ = writeln!(writer, "{}", std::process::id());
-    Ok(Some(PidGuard {
-        _file: file,
-        path: path.clone(),
-    }))
+    // We kept losing the inode race — another daemon is actively managing
+    // the pidfile. Safer to exit than to risk running a second daemon.
+    log::log(format_args!(
+        "pidfile inode kept changing under us; assuming another daemon owns it — exiting"
+    ));
+    Ok(None)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::should_idle_exit;
+    use super::{acquire_pidfile_lock, should_idle_exit};
+
+    #[test]
+    fn pidfile_lock_is_exclusive_and_persists_across_release() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("daemon.pid");
+
+        let g1 = acquire_pidfile_lock(&path).expect("acquire");
+        assert!(g1.is_some(), "first acquire wins the lock");
+
+        // A second acquire while the first is held must be refused — this is
+        // the singleton invariant.
+        assert!(
+            acquire_pidfile_lock(&path)
+                .expect("second acquire")
+                .is_none(),
+            "a second acquire is refused while the lock is held"
+        );
+
+        // The actual fix: releasing the guard must NOT unlink the pidfile.
+        // Unlinking is what let the next open(O_CREAT) mint a fresh inode and
+        // defeat flock (the 8-daemon leak); leaving the file in place means
+        // every daemon locks the *same* inode, so the flock stays
+        // authoritative across restarts.
+        drop(g1);
+        assert!(
+            path.exists(),
+            "the pidfile persists after the guard drops (no inode churn)"
+        );
+
+        // (We don't assert re-acquire-after-drop here: that would hinge on
+        // the OS making a same-process flock *release* visible to an
+        // immediate re-flock, which races under parallel test load. The
+        // production path is cross-process — the prior holder is a fully
+        // dead process before a new one locks — so it isn't affected.)
+    }
 
     #[test]
     fn idle_exit_disabled_when_ssh_agent_enabled() {

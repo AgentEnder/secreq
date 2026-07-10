@@ -1135,6 +1135,16 @@ pub fn pidfile_path() -> Result<PathBuf> {
     Ok(socket_dir()?.join("daemon.pid"))
 }
 
+/// Path to the daemon-spawn lock, alongside the pidfile. Clients `flock`
+/// this before auto-spawning the daemon so a burst of wraps forks one
+/// daemon instead of a thundering herd (see `client::connect_or_spawn`).
+/// Distinct from the pidfile lock, which the daemon itself holds for its
+/// lifetime — this one is held only briefly, by whichever client is
+/// bringing the daemon up.
+pub fn spawn_lock_path() -> Result<PathBuf> {
+    Ok(socket_dir()?.join("daemon.spawn.lock"))
+}
+
 #[allow(dead_code)]
 pub fn pidfile_exists(path: &Path) -> bool {
     path.exists()

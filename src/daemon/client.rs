@@ -517,32 +517,98 @@ fn connect_or_spawn(socket: &Path) -> Result<UnixStream> {
             }
         }
     }
-    // No live daemon (or we just restarted a stale one). Spawn one and poll
-    // for the socket. Keep the child
-    // handle so we can detect early-exit (e.g. egui failing to init in a
-    // headless environment) and bail without waiting the full timeout.
-    let mut child = spawn_daemon().context("auto-spawn secreq daemon")?;
+    // No live daemon (or we just restarted a stale one). Serialize the
+    // spawn: a burst of wraps that all find no daemon must not each fork
+    // one — that thundering herd spawned dozens of short-lived daemons
+    // (and, with the old pidfile bug, occasionally left several running).
+    // Whichever client wins `daemon.spawn.lock` spawns the daemon; the
+    // rest just wait for its socket to come up.
     let deadline = Instant::now() + SPAWN_TIMEOUT;
-    let mut backoff = Duration::from_millis(20);
-    while Instant::now() < deadline {
-        sleep(backoff);
-        if let Ok(stream) = UnixStream::connect(socket) {
-            // Daemon is alive; let it run independently from here on.
-            return Ok(stream);
-        }
-        if let Ok(Some(status)) = child.try_wait() {
+    match acquire_spawn_lock()? {
+        Some(_spawn_guard) => {
+            // We own the spawn. Re-check first — another client may have
+            // brought the daemon up in the window before we took the lock.
+            if let Ok(stream) = UnixStream::connect(socket) {
+                return Ok(stream);
+            }
+            // Keep the child handle so we can detect early-exit (e.g. egui
+            // failing to init headless) and bail without the full timeout.
+            let mut child = spawn_daemon().context("auto-spawn secreq daemon")?;
+            let mut backoff = Duration::from_millis(20);
+            while Instant::now() < deadline {
+                sleep(backoff);
+                if let Ok(stream) = UnixStream::connect(socket) {
+                    // Daemon is alive; let it run independently from here on.
+                    return Ok(stream);
+                }
+                if let Ok(Some(status)) = child.try_wait() {
+                    bail!(
+                        "consent daemon exited before binding its socket (status {status}); \
+                         is a display available? try setting --yes to bypass"
+                    );
+                }
+                backoff = (backoff * 2).min(Duration::from_millis(250));
+            }
             bail!(
-                "consent daemon exited before binding its socket (status {status}); \
-                 is a display available? try setting --yes to bypass"
-            );
+                "consent daemon did not come up within {:?} ({} not connectable)",
+                SPAWN_TIMEOUT,
+                socket.display()
+            )
         }
-        backoff = (backoff * 2).min(Duration::from_millis(250));
+        None => {
+            // Another client holds the spawn lock and is bringing the daemon
+            // up. Don't fork a competing one — just wait for its socket.
+            let mut backoff = Duration::from_millis(20);
+            while Instant::now() < deadline {
+                sleep(backoff);
+                if let Ok(stream) = UnixStream::connect(socket) {
+                    return Ok(stream);
+                }
+                backoff = (backoff * 2).min(Duration::from_millis(250));
+            }
+            bail!(
+                "consent daemon did not come up within {:?} while another client was \
+                 spawning it ({} not connectable)",
+                SPAWN_TIMEOUT,
+                socket.display()
+            )
+        }
     }
-    bail!(
-        "consent daemon did not come up within {:?} ({} not connectable)",
-        SPAWN_TIMEOUT,
-        socket.display()
-    )
+}
+
+/// Take the daemon-spawn lock: a non-blocking `flock` on
+/// [`server::spawn_lock_path`]. `Some(file)` = we own the right to spawn
+/// the daemon (hold it until the socket is up, then let it drop); `None` =
+/// another client is already spawning, so we should wait rather than fork a
+/// competing daemon. The lock frees when the holder's fd closes; the file
+/// is never unlinked.
+fn acquire_spawn_lock() -> Result<Option<std::fs::File>> {
+    acquire_spawn_lock_at(&server::spawn_lock_path()?)
+}
+
+/// Core of [`acquire_spawn_lock`], split out so a test can drive it against
+/// a temp path instead of the real per-user runtime dir.
+fn acquire_spawn_lock_at(path: &Path) -> Result<Option<std::fs::File>> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .with_context(|| format!("open spawn lock {}", path.display()))?;
+    let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if ret == 0 {
+        return Ok(Some(file));
+    }
+    let err = std::io::Error::last_os_error();
+    if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
+        Ok(None)
+    } else {
+        Err(err).with_context(|| format!("flock spawn lock {}", path.display()))
+    }
 }
 
 /// Probe a running daemon's build id via the `Hello` handshake.
@@ -803,6 +869,31 @@ fn send_and_recv(stream: UnixStream, msg: ClientMsg) -> Result<DaemonMsg> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spawn_lock_is_exclusive_and_reusable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("daemon.spawn.lock");
+
+        // First client wins the right to spawn.
+        let g1 = acquire_spawn_lock_at(&path).expect("acquire");
+        assert!(g1.is_some(), "first client wins the spawn lock");
+
+        // A concurrent client must NOT also win — it should wait instead of
+        // forking a competing daemon (the thundering-herd fix).
+        assert!(
+            acquire_spawn_lock_at(&path).expect("contend").is_none(),
+            "a second client is refused while the spawn lock is held"
+        );
+
+        // Once the winner finishes (drops the guard), the lock is reusable
+        // for the next spawn cycle.
+        drop(g1);
+        assert!(
+            acquire_spawn_lock_at(&path).expect("re-acquire").is_some(),
+            "spawn lock is reusable after the holder drops it"
+        );
+    }
 
     #[test]
     fn utc_timestamp_formats_known_epochs() {
