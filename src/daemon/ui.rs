@@ -564,49 +564,65 @@ pub(crate) fn now_unix() -> u64 {
 
 // ── Rendering ─────────────────────────────────────────────────────────────
 
-/// Draw the small app-logo badge — accent-soft rounded square with a
-/// thin accent border and a stylised key shape inside. Built from
-/// primitives so it scales cleanly across DPRs.
+/// Draw the app mark — the Gate Monogram: two brackets (the gate), one
+/// accent dot (the secret); it passes through only with consent. No
+/// tile, no border: the brackets ride the theme foreground directly on
+/// the panel, so the mark reads as chrome, not as an app-store icon.
+/// Master SVG: `dev-docs/design-drafts/consent-ui/shared/assets/logo.svg`
+/// (viewBox 0 0 64 64; geometry below mirrors it).
 pub(crate) fn paint_app_icon(ui: &mut egui::Ui, size: f32) {
     let th = Theme::of(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     let painter = ui.painter();
-    let radius = egui::CornerRadius::same(7);
-    painter.rect_filled(rect, radius, th.raised);
-    painter.rect_stroke(
-        rect,
-        radius,
-        egui::Stroke::new(1.0, th.accent),
-        egui::StrokeKind::Inside,
-    );
+    let s = size / 64.0;
+    // Below ~20px, fatten the stroke and dot one step so the mark
+    // survives (mirrors the SVG's 16px favicon variant).
+    let (stroke_w, dot_r) = if size < 20.0 {
+        (8.0 * s, 9.0 * s)
+    } else {
+        (7.0 * s, 7.0 * s)
+    };
+    let stroke = egui::Stroke::new(stroke_w.max(1.0), th.fg);
 
-    let inner = rect.shrink(7.0);
-    let cx = inner.center().x;
-    let head_r = inner.width() * 0.34;
-    let head_center = egui::pos2(cx, inner.top() + head_r + 1.0);
-    // Key bow: hollow circle, with an inner darker dot for depth.
-    painter.circle_stroke(head_center, head_r, egui::Stroke::new(1.6, th.accent));
-    painter.circle_filled(head_center, head_r - 3.0, th.raised);
-    // Key shaft.
-    let shaft_top = head_center.y + head_r - 1.0;
-    let shaft_half_w = 1.2;
-    painter.rect_filled(
-        egui::Rect::from_min_max(
-            egui::pos2(cx - shaft_half_w, shaft_top),
-            egui::pos2(cx + shaft_half_w, inner.bottom() - 1.0),
-        ),
-        egui::CornerRadius::same(1),
-        th.accent,
+    let x = |v: f32| rect.left() + v * s;
+    let y = |v: f32| rect.top() + v * s;
+    // Left bracket: M23 10 H13 V54 H23. Verticals overshoot by half a
+    // stroke width so the corners join square, like the SVG's
+    // stroke-linecap="square".
+    let half = stroke_w / 2.0;
+    painter.line_segment(
+        [egui::pos2(x(23.0), y(10.0)), egui::pos2(x(13.0), y(10.0))],
+        stroke,
     );
-    // Key tooth.
-    painter.rect_filled(
-        egui::Rect::from_min_max(
-            egui::pos2(cx + shaft_half_w, inner.bottom() - 4.5),
-            egui::pos2(cx + shaft_half_w + 3.5, inner.bottom() - 2.0),
-        ),
-        egui::CornerRadius::same(1),
-        th.accent,
+    painter.line_segment(
+        [
+            egui::pos2(x(13.0), y(10.0) - half),
+            egui::pos2(x(13.0), y(54.0) + half),
+        ],
+        stroke,
     );
+    painter.line_segment(
+        [egui::pos2(x(13.0), y(54.0)), egui::pos2(x(23.0), y(54.0))],
+        stroke,
+    );
+    // Right bracket: M41 10 H51 V54 H41.
+    painter.line_segment(
+        [egui::pos2(x(41.0), y(10.0)), egui::pos2(x(51.0), y(10.0))],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(x(51.0), y(10.0) - half),
+            egui::pos2(x(51.0), y(54.0) + half),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [egui::pos2(x(51.0), y(54.0)), egui::pos2(x(41.0), y(54.0))],
+        stroke,
+    );
+    // The secret.
+    painter.circle_filled(rect.center(), dot_r, th.accent);
 }
 
 /// Paint a small magnifier glyph for the search field — a hollow ring

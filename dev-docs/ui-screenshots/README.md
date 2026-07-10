@@ -109,8 +109,13 @@ web app. All colors come from semantic tokens in `daemon/theme.rs` —
 one token set per `(OsFlavor, appearance)`, ported from the approved
 drafts in `dev-docs/design-drafts/consent-ui/`.
 
+- **The mark is the Gate Monogram.** Two brackets (the gate) in the
+  theme foreground, one accent dot (the secret) — drawn from painter
+  primitives in `paint_app_icon`, master SVG in
+  `dev-docs/design-drafts/consent-ui/shared/assets/logo.svg`. No tile,
+  no border: it reads as window chrome, not an app-store icon.
 - **Prompt = Focus Stack.** One ask rendered big; the queue is a "N
-  more waiting" line. Header (app icon + "`wrap` wants to use
+  more waiting" line. Header (the mark + "`wrap` wants to use
   `SECRET`" + command line), then the **evidence well** — an inset
   `well`-filled, hairline-separated block holding SECRET(S), ASKED BY
   (the ancestry as a tree with per-process argv + pid, full string on
