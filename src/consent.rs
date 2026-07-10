@@ -56,6 +56,14 @@ pub enum Decision {
     /// the rule's configured `deny_message` (if any) to stderr before
     /// exiting 1.
     DenyAuto,
+    /// The requesting process (the wrap, or an ancestor that took it
+    /// down with it) exited before the user decided — the ask was
+    /// abandoned, not answered. No secret is released and nothing is
+    /// remembered. There is no live wrap client to write the audit row
+    /// in this case, so the **daemon** records it directly (the second
+    /// documented exception to "the daemon never writes audit rows",
+    /// alongside SSH signs — see `CLAUDE.md`).
+    Abandoned,
 }
 
 impl Decision {
@@ -81,6 +89,7 @@ impl Decision {
             Decision::ApproveSshSessionAll => "approve+ssh-session-all",
             Decision::Deny => "deny",
             Decision::DenyAuto => "deny+auto",
+            Decision::Abandoned => "abandoned",
         }
     }
 }
@@ -200,6 +209,7 @@ mod tests {
         );
         assert_eq!(Decision::Deny.as_str(), "deny");
         assert_eq!(Decision::DenyAuto.as_str(), "deny+auto");
+        assert_eq!(Decision::Abandoned.as_str(), "abandoned");
     }
 
     #[test]
@@ -247,5 +257,8 @@ mod tests {
         assert!(Decision::ApproveSshSessionAll.approved());
         assert!(!Decision::Deny.approved());
         assert!(!Decision::DenyAuto.approved());
+        // Abandoned is a non-decision (the caller vanished before the user
+        // chose); it must never read as an approval.
+        assert!(!Decision::Abandoned.approved());
     }
 }

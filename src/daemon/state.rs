@@ -22,6 +22,7 @@ use std::time::{Duration, Instant, SystemTime};
 use anyhow::{Context, Result};
 use zeroize::Zeroizing;
 
+use crate::audit::{self, AuditCaller, AuditEntry};
 use crate::consent::{ApprovalEntry, Decision, SshGrant};
 use crate::manifest::{BatchRetrieve, Manifest, Provider};
 use crate::resolve::{self, ResolutionPlan, SecretRequest, Source};
@@ -48,13 +49,30 @@ pub struct QueueEntry {
     pub first_seen: Instant,
 }
 
+/// A stable per-waiter handle, minted by [`State::submit_ask`]. Lets the
+/// connection thread name *its own* waiter when the client hangs up (so
+/// [`State::withdraw_waiter`] removes exactly that one, not a sibling that
+/// coalesced onto the same entry). Monotonic per daemon; a `u64` counter
+/// never realistically overflows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WaiterId(u64);
+
 /// One parked client on a queue entry: where to send its reply, the
-/// secrets *it* asked for (so a per-waiter slice can be handed back), and
-/// the command it's running (for the card's per-secret provenance).
+/// secrets *it* asked for (so a per-waiter slice can be handed back), the
+/// command it's running (for the card's per-secret provenance), plus the
+/// `cwd` and caller chain needed to write an audit row if this client
+/// exits before the user decides (see [`State::withdraw_waiter`]).
 pub struct Waiter {
+    /// Stable id so a specific parked client can be withdrawn on hang-up.
+    pub id: WaiterId,
     pub sender: mpsc::Sender<WaiterReply>,
     pub requested: Vec<super::proto::SecretAsk>,
     pub command: Vec<String>,
+    /// The requesting process's working directory, carried so an
+    /// abandoned-ask audit row records *its* cwd, not the daemon's.
+    pub cwd: String,
+    /// The caller chain at ask time, kept for the abandoned-ask audit row.
+    pub callers: Vec<super::proto::Caller>,
 }
 
 impl QueueEntry {
@@ -222,6 +240,9 @@ pub struct State {
     /// respawns a fresh daemon. UI-write paths refresh this in-place
     /// so they never trigger the shutdown.
     rules_loaded_at: Option<SystemTime>,
+    /// Monotonic source of [`WaiterId`]s. Independent of the subscriber
+    /// counters so the id spaces stay grep-distinguishable.
+    waiter_next_id: u64,
 }
 
 impl Default for State {
@@ -250,6 +271,7 @@ impl Default for State {
             rules_path: None,
             rules: Vec::new(),
             rules_loaded_at: None,
+            waiter_next_id: 1,
         }
     }
 }
@@ -878,7 +900,15 @@ impl State {
 
     /// Add a waiter for `key`, either folding into an existing queue entry
     /// or creating a new one with `ask` as the representative.
-    pub fn submit_ask(&mut self, ask: Ask, waiter: mpsc::Sender<WaiterReply>) -> SubmitResult {
+    /// Enqueue (or coalesce) an ask and park a waiter on it. Returns the
+    /// [`SubmitResult`] (new entry vs. coalesced onto an existing one) and
+    /// the [`WaiterId`] the caller passes to [`State::withdraw_waiter`] if
+    /// its client hangs up before the user decides.
+    pub fn submit_ask(
+        &mut self,
+        ask: Ask,
+        waiter: mpsc::Sender<WaiterReply>,
+    ) -> (SubmitResult, WaiterId) {
         self.last_activity = Instant::now();
         // Queue is about to become non-empty (or stay non-empty);
         // either way the auto-hide grace clock should be reset.
@@ -913,18 +943,24 @@ impl State {
                 merge_secret(&mut entry.representative.secrets, s, &command_label);
             }
         }
+        let waiter_id = WaiterId(self.waiter_next_id);
+        self.waiter_next_id += 1;
         entry.waiters.push(Waiter {
+            id: waiter_id,
             sender: waiter,
             requested: ask.secrets.clone(),
             command: ask.command.clone(),
+            cwd: ask.cwd.clone(),
+            callers: ask.callers.clone(),
         });
         self.show_window();
         self.broadcast_consent_update();
-        if is_new {
+        let result = if is_new {
             SubmitResult::NewEntry
         } else {
             SubmitResult::Coalesced
-        }
+        };
+        (result, waiter_id)
     }
 
     /// Read a queue entry by key. Test-only: lets the state tests inspect
@@ -1082,6 +1118,77 @@ impl State {
                 let _ = w.sender.send(reply.clone());
             }
         }
+    }
+
+    /// Build the `abandoned` audit row for a withdrawn waiter. The wrap
+    /// name comes from the dedupe key; `args` is the waiter's command with
+    /// a leading element stripped iff it duplicates the wrap name — `x`
+    /// asks send `[wrap, args…]` (so we drop the wrap), while `run`/`read`
+    /// send the bare command (nothing to drop), reconstructing exactly the
+    /// `args` the live client would have logged.
+    fn abandoned_audit_entry(key: &DedupeKey, waiter: &Waiter) -> AuditEntry {
+        let args: &[String] = match waiter.command.split_first() {
+            Some((first, rest)) if first == &key.wrap => rest,
+            _ => &waiter.command,
+        };
+        let callers: Vec<AuditCaller> = waiter
+            .callers
+            .iter()
+            .map(|c| AuditCaller {
+                pid: c.pid,
+                name: c.name.clone(),
+                command: c.command.clone(),
+            })
+            .collect();
+        let secret_names: Vec<String> = waiter.requested.iter().map(|s| s.name.clone()).collect();
+        AuditEntry::abandoned(&key.wrap, args, &waiter.cwd, &callers, &secret_names)
+    }
+
+    /// Remove a single parked waiter whose client exited before the user
+    /// decided. Writes an `abandoned` audit row for that command (the
+    /// daemon does this itself — there's no live client left to write it,
+    /// the second documented exception to "the daemon never writes audit
+    /// rows", alongside SSH signs), drops the waiter (closing its reply
+    /// channel, which unblocks the parked connection thread), and — if it
+    /// was the last waiter on the entry — removes the entry so the card
+    /// leaves the requests view and the window can auto-hide.
+    ///
+    /// Idempotent: a no-op if the key or waiter id is gone (the user just
+    /// resolved it, or a duplicate hang-up already fired). Both this and
+    /// [`State::resolve`] run under the state mutex, so the "user approves
+    /// at the same instant the client dies" race collapses to whichever
+    /// wins — the loser finds the entry already gone and does nothing.
+    pub fn withdraw_waiter(&mut self, key: &DedupeKey, waiter_id: WaiterId) {
+        self.last_activity = Instant::now();
+        // Already resolved (moved to `pending`) or never here → nothing to do.
+        let Some(entry) = self.queue.get_mut(key) else {
+            return;
+        };
+        let Some(pos) = entry.waiters.iter().position(|w| w.id == waiter_id) else {
+            return;
+        };
+        // Removing the waiter drops its `Sender`; the reply-writer thread's
+        // `recv()` then returns `Err` and that thread exits cleanly.
+        let waiter = entry.waiters.remove(pos);
+
+        let audit_entry = State::abandoned_audit_entry(key, &waiter);
+        if let Err(err) = audit::append(&audit_entry) {
+            super::log::log_at(
+                "state",
+                format_args!("audit append failed for abandoned ask: {err:#}"),
+            );
+        }
+
+        // Drop the whole entry once its last waiter is gone. A still-
+        // populated entry stays (coalesced siblings are still waiting),
+        // just with a smaller waiter count.
+        if entry.waiters.is_empty() {
+            self.queue.remove(key);
+        }
+
+        self.broadcast_consent_update();
+        self.refresh_queue_empty_since();
+        self.maybe_immediate_auto_hide();
     }
 
     pub fn snapshot(&self) -> QueueSnapshot {
@@ -2342,6 +2449,154 @@ mod tests {
             .collect();
         assert_eq!(recorded, expected);
         assert_eq!(entry.waiters[0].command, ask.command);
+    }
+
+    #[test]
+    fn withdraw_waiter_removes_sole_waiter_writes_row_and_closes_channel() {
+        crate::audit::with_temp_log(|| {
+            let mut state = State::new();
+            let ask = ask_with_secret("gh", &["gh", "pr", "view"], "GITHUB_TOKEN");
+            let (tx, rx) = mpsc::channel();
+            let (_result, id) = state.submit_ask(ask.clone(), tx);
+            assert!(state.queue_entry_for_test(&ask.dedupe_key).is_some());
+
+            state.withdraw_waiter(&ask.dedupe_key, id);
+
+            // Entry gone → the card leaves the requests view.
+            assert!(
+                state.queue_entry_for_test(&ask.dedupe_key).is_none(),
+                "the entry is removed when its last waiter withdraws"
+            );
+            // The daemon wrote exactly one abandoned row for the dead command.
+            let rows = crate::audit::read_history(None).expect("read audit log");
+            assert_eq!(rows.len(), 1, "one abandoned row written");
+            assert_eq!(rows[0].decision, "abandoned");
+            assert_eq!(rows[0].wrap, "gh");
+            assert_eq!(rows[0].args, vec!["pr", "view"]);
+            // The parked connection thread's channel is closed (sender dropped),
+            // so its `recv()` unblocks with an error instead of hanging.
+            assert!(
+                rx.recv().is_err(),
+                "withdrawing drops the waiter's sender, unblocking its recv"
+            );
+        });
+    }
+
+    #[test]
+    fn withdraw_waiter_keeps_entry_while_a_sibling_waits() {
+        crate::audit::with_temp_log(|| {
+            let mut state = State::new();
+            let a = ask_with_secret("run", &["run", "./migrate"], "DB");
+            let b = with_dedupe_key(
+                ask_with_secret("run", &["run", "./worker"], "API"),
+                a.dedupe_key.clone(),
+            );
+            let (tx_a, rx_a) = mpsc::channel();
+            let (tx_b, rx_b) = mpsc::channel();
+            let (_r1, id_a) = state.submit_ask(a.clone(), tx_a);
+            let (_r2, _id_b) = state.submit_ask(b.clone(), tx_b);
+            assert_eq!(
+                state
+                    .queue_entry_for_test(&a.dedupe_key)
+                    .unwrap()
+                    .waiters
+                    .len(),
+                2,
+                "coalesced: one entry, two waiters"
+            );
+
+            state.withdraw_waiter(&a.dedupe_key, id_a);
+
+            let entry = state
+                .queue_entry_for_test(&a.dedupe_key)
+                .expect("entry survives while a sibling waiter remains");
+            assert_eq!(
+                entry.waiters.len(),
+                1,
+                "only the withdrawn waiter is removed"
+            );
+            assert!(rx_a.recv().is_err(), "withdrawn waiter's channel closed");
+            assert!(
+                matches!(rx_b.try_recv(), Err(mpsc::TryRecvError::Empty)),
+                "the sibling waiter is still parked with its channel open"
+            );
+        });
+    }
+
+    #[test]
+    fn withdraw_waiter_is_noop_on_unknown_key_or_id() {
+        crate::audit::with_temp_log(|| {
+            let mut state = State::new();
+            let ask = ask_with_secret("gh", &["gh", "auth"], "GITHUB_TOKEN");
+            let (tx, _rx) = mpsc::channel();
+            let (_result, id) = state.submit_ask(ask.clone(), tx);
+
+            // Unknown key: nothing removed, no panic.
+            let bogus_key = DedupeKey {
+                wrap: "nope".to_owned(),
+                ppid: 999,
+                parent_start_time: 1,
+            };
+            state.withdraw_waiter(&bogus_key, id);
+            assert_eq!(
+                state
+                    .queue_entry_for_test(&ask.dedupe_key)
+                    .unwrap()
+                    .waiters
+                    .len(),
+                1
+            );
+
+            // Known key, unknown waiter id: still nothing removed.
+            state.withdraw_waiter(&ask.dedupe_key, WaiterId(9_999));
+            assert_eq!(
+                state
+                    .queue_entry_for_test(&ask.dedupe_key)
+                    .unwrap()
+                    .waiters
+                    .len(),
+                1,
+                "an unknown waiter id withdraws nothing"
+            );
+        });
+    }
+
+    #[test]
+    fn abandoned_audit_entry_reconstructs_client_args() {
+        // `x` asks send `[wrap, args…]`; the leading wrap name is stripped so
+        // the row's args match what the live client would have logged.
+        let x_ask = ask_with_secret("gh", &["gh", "pr", "view"], "GITHUB_TOKEN");
+        let (tx, _rx) = mpsc::channel();
+        let waiter = Waiter {
+            id: WaiterId(1),
+            sender: tx,
+            requested: x_ask.secrets.clone(),
+            command: x_ask.command.clone(),
+            cwd: "/work".to_owned(),
+            callers: x_ask.callers.clone(),
+        };
+        let entry = State::abandoned_audit_entry(&x_ask.dedupe_key, &waiter);
+        assert_eq!(entry.wrap, "gh");
+        assert_eq!(entry.args, vec!["pr", "view"]);
+        assert_eq!(entry.decision, "abandoned");
+        assert_eq!(entry.secrets, vec!["GITHUB_TOKEN"]);
+        assert_eq!(entry.cwd, "/work");
+
+        // `run`/`read` asks send the bare command (command[0] != wrap), so
+        // nothing is stripped.
+        let run_ask = ask_with_secret("run", &["./deploy.sh", "--prod"], "TOKEN");
+        let (tx2, _rx2) = mpsc::channel();
+        let waiter2 = Waiter {
+            id: WaiterId(2),
+            sender: tx2,
+            requested: run_ask.secrets.clone(),
+            command: run_ask.command.clone(),
+            cwd: String::new(),
+            callers: vec![],
+        };
+        let entry2 = State::abandoned_audit_entry(&run_ask.dedupe_key, &waiter2);
+        assert_eq!(entry2.wrap, "run");
+        assert_eq!(entry2.args, vec!["./deploy.sh", "--prod"]);
     }
 
     #[test]

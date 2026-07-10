@@ -2907,6 +2907,15 @@ impl AuditVerdict {
                 fg: COLOR_DENY_BG,
                 bg: COLOR_DENY_SOFT,
             },
+            // The requesting process exited before the user decided — not
+            // an approve, not a deny. Rendered muted so it reads as a
+            // non-event at a glance, distinct from a real verdict.
+            "abandoned" => AuditVerdict {
+                label: "abandoned",
+                tag: None,
+                fg: COLOR_MUTED,
+                bg: COLOR_CHROME,
+            },
             // Unknown decisions map to a static "seen" so `label`
             // stays `&'static` (no borrow of `decision`).
             _ => AuditVerdict {

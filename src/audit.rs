@@ -133,6 +133,37 @@ impl AuditEntry {
         }
     }
 
+    /// Assemble an **abandoned** audit row. The requesting process exited
+    /// before the user decided, so there is no live wrap client to write
+    /// this row — the daemon writes it directly (the second documented
+    /// exception to "the daemon never writes audit rows", alongside
+    /// [`AuditEntry::ssh_sign`] — see `CLAUDE.md`).
+    ///
+    /// Unlike [`AuditEntry::new`], `cwd` is passed in rather than read from
+    /// the daemon's own process: the row must record the *requesting*
+    /// process's working directory (carried on the ask), not the daemon's.
+    /// The row carries no secret material — only the secret **names** the
+    /// ask would have released, same as every other wrap-run row.
+    pub fn abandoned(
+        wrap: &str,
+        args: &[String],
+        cwd: &str,
+        callers: &[AuditCaller],
+        secret_names: &[String],
+    ) -> AuditEntry {
+        AuditEntry {
+            ts_unix: now_unix(),
+            cwd: cwd.to_owned(),
+            wrap: wrap.to_owned(),
+            args: args.to_vec(),
+            callers: callers.to_vec(),
+            secrets: secret_names.to_vec(),
+            decision: Decision::Abandoned.as_str().to_owned(),
+            rule_id: None,
+            fingerprint: None,
+        }
+    }
+
     /// Chainable setter for the firing rule's id. Used on
     /// `ApproveAuto` / `DenyAuto` paths so the audit row links back
     /// to the rule that fired.
@@ -219,6 +250,32 @@ fn now_unix() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// Run `f` with `$XDG_STATE_HOME` pointed at a fresh tempdir, so any audit
+/// append during `f` lands there instead of the user's real state dir, and
+/// [`read_history`] inside `f` reads it back. Restores the previous value
+/// afterwards.
+///
+/// A single process-wide lock serializes every caller: `$XDG_STATE_HOME` is
+/// process-global, so two of these running at once (e.g. a `state` test and
+/// a `server` test in the same binary) would otherwise clobber each other's
+/// target dir. Shared here — not duplicated per module — so *all* audit-
+/// writing tests contend on the one lock.
+#[cfg(test)]
+pub(crate) fn with_temp_log<R>(f: impl FnOnce() -> R) -> R {
+    use std::sync::Mutex;
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().expect("tempdir");
+    let prev = std::env::var_os("XDG_STATE_HOME");
+    std::env::set_var("XDG_STATE_HOME", dir.path());
+    let out = f();
+    match prev {
+        Some(v) => std::env::set_var("XDG_STATE_HOME", v),
+        None => std::env::remove_var("XDG_STATE_HOME"),
+    }
+    out
 }
 
 #[cfg(test)]
@@ -329,6 +386,47 @@ mod tests {
         assert_eq!(parsed.wrap, "ssh:ssh.deploy");
         assert_eq!(parsed.callers.len(), 2);
         assert!(parsed.secrets.is_empty());
+    }
+
+    #[test]
+    fn abandoned_entry_records_context_with_abandoned_decision() {
+        // The daemon writes this when a wrap dies before the user decides.
+        // It must carry the requesting process's cwd (not the daemon's),
+        // the wrap + args + caller chain + secret NAMES, and the distinct
+        // "abandoned" decision — and never a fingerprint (that's SSH-only).
+        let callers = vec![
+            AuditCaller {
+                pid: 4242,
+                name: "gh".to_owned(),
+                command: "gh pr view 42".to_owned(),
+            },
+            AuditCaller {
+                pid: 4000,
+                name: "zsh".to_owned(),
+                command: "-zsh".to_owned(),
+            },
+        ];
+        let entry = AuditEntry::abandoned(
+            "gh",
+            &["pr".to_owned(), "view".to_owned(), "42".to_owned()],
+            "/home/dev/project",
+            &callers,
+            &["GITHUB_TOKEN".to_owned()],
+        );
+        assert_eq!(entry.decision, "abandoned");
+        assert_eq!(entry.wrap, "gh");
+        assert_eq!(entry.args, vec!["pr", "view", "42"]);
+        assert_eq!(entry.cwd, "/home/dev/project");
+        assert_eq!(entry.secrets, vec!["GITHUB_TOKEN"]);
+        assert_eq!(entry.callers.len(), 2);
+        assert_eq!(entry.callers[0].pid, 4242);
+        assert!(entry.fingerprint.is_none());
+
+        // Round-trips through the same Deserialize the history view uses.
+        let json = serde_json::to_string(&entry).expect("serialize abandoned entry");
+        let parsed: AuditEntry = serde_json::from_str(&json).expect("round-trip");
+        assert_eq!(parsed.decision, "abandoned");
+        assert_eq!(parsed.wrap, "gh");
     }
 
     #[test]

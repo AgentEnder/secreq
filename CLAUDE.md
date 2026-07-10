@@ -80,15 +80,23 @@ row is two lines of authorship cost; it's never wrong to write.
   `tests/schema_drift.rs` fails CI if either is stale.
 - The audit log is written by the **wrap client** (`commands.rs`)
   after the daemon's reply lands. The daemon never writes audit
-  rows itself — **with one exception: SSH-agent signs.** There is no
-  wrap client on the SSH path (the daemon *is* the agent), so the
-  daemon records each sign outcome itself via
-  `audit.rs::AuditEntry::ssh_sign` from `daemon/ssh_agent.rs::audit_sign`
-  (`ssh:<key_id>` wrap, the public-key SHA256 fingerprint, the
-  decision, and the caller chain — never the private key or the
-  signature bytes). This is the sole carve-out to "the daemon never
-  writes audit rows." Audit-write failures are non-fatal on both
-  paths (logged, never failing the user's command / the sign).
-  If you change the audit shape, update both
-  `audit.rs::AuditEntry::new` and the screenshot fixture helpers that
-  construct `AuditEntry` directly.
+  rows itself — **with two exceptions:**
+    1. **SSH-agent signs.** There is no wrap client on the SSH path
+       (the daemon *is* the agent), so the daemon records each sign
+       outcome itself via `audit.rs::AuditEntry::ssh_sign` from
+       `daemon/ssh_agent.rs::audit_sign` (`ssh:<key_id>` wrap, the
+       public-key SHA256 fingerprint, the decision, and the caller
+       chain — never the private key or the signature bytes).
+    2. **Abandoned asks.** When a wrap (or an ancestor that took it
+       down) exits before the user decides, its socket closes; the
+       daemon reaps the parked ask and — since the client is gone and
+       can't write its own row — records the `abandoned` outcome via
+       `audit.rs::AuditEntry::abandoned` from
+       `daemon/state.rs::withdraw_waiter` (one row per dead command,
+       with the requesting process's `cwd` + caller chain + secret
+       **names**, `decision = "abandoned"`). See `Decision::Abandoned`.
+  Audit-write failures are non-fatal on all paths (logged, never
+  failing the user's command / the sign / the reap).
+  If you change the audit shape, update `audit.rs::AuditEntry::new`,
+  the other `AuditEntry` constructors (`ssh_sign`, `abandoned`), and
+  the screenshot fixture helpers that construct `AuditEntry` directly.

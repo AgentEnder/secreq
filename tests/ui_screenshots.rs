@@ -1185,6 +1185,50 @@ fn audit_tab_search_filtering() {
 
 #[test]
 #[ignore = "screenshot harness"]
+fn audit_tab_abandoned_row() {
+    // The Audit tab showing an `abandoned` row — a wrap that exited before
+    // the user decided, so the daemon reaped the ask and logged it itself.
+    // Placed between an approve and a deny so the muted "abandoned" verdict
+    // pill reads as a non-event, distinct from either real verdict.
+    let audit = vec![
+        audit_line_traced(
+            60 * 3,
+            "gh",
+            &["pr", "view", "9421"],
+            &[(52310, "zsh", "-zsh")],
+            &["GITHUB_TOKEN"],
+            "approve+remember",
+        ),
+        audit_line_traced(
+            60 * 6,
+            "gh",
+            &["pr", "checkout", "9420"],
+            &[(52311, "zsh", "-zsh")],
+            &["GITHUB_TOKEN"],
+            "abandoned",
+        ),
+        audit_line_traced(
+            60 * 12,
+            "aws",
+            &["s3", "ls", "s3://prod-backups/"],
+            &[(52312, "make", "make ci-deploy")],
+            &["AWS_ACCESS_KEY_ID"],
+            "deny",
+        ),
+    ];
+    render_fixture_with_extras(
+        "27-audit-tab-abandoned",
+        audit,
+        FixtureExtras {
+            window_state: Some(Box::new(|ws| ws.focus_audit_tab())),
+            ..FixtureExtras::default()
+        },
+        |_state| Vec::new(),
+    );
+}
+
+#[test]
+#[ignore = "screenshot harness"]
 fn audit_tab_search_no_matches() {
     // The "your query found nothing" empty state. Same audit log as
     // the filtering fixture but with a query that misses every row,

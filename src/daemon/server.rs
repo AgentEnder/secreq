@@ -14,8 +14,8 @@ use std::thread;
 
 use anyhow::{Context, Result};
 
-use super::proto::{Ask, ClientMsg, DaemonMsg};
-use super::state::{SharedState, WaiterReply};
+use super::proto::{Ask, ClientMsg, DaemonMsg, DedupeKey};
+use super::state::{SharedState, WaiterId, WaiterReply};
 
 /// Bind the daemon socket and start accepting connections.
 ///
@@ -117,9 +117,19 @@ fn handle_connection(stream: UnixStream, state: SharedState) -> Result<()> {
         return Ok(());
     }
 
-    // `Ask` blocks `handle_message` until the user decides, so the
-    // spawn-the-consent-window step is done *inside* `handle_ask`
-    // before it parks on the reply channel — see the comment there.
+    // Branch: one-shot Ask. Handled here rather than through
+    // `handle_message` because this thread must keep the raw socket to
+    // watch for the client hanging up while the ask is parked — a wrap
+    // killed before the user decides then gets its ask reaped instead of
+    // orphaned in the queue. See `handle_ask_connection`.
+    if let ClientMsg::Ask(ask) = msg {
+        super::log::log_at("server", format_args!("← ClientMsg::Ask"));
+        // Mirror `handle_message`'s pre-dispatch rules refresh so a
+        // hand-edited rules file is honoured for this ask too.
+        state.lock().expect("state mutex").reload_rules_if_changed();
+        return handle_ask_connection(reader, stream, ask, state);
+    }
+
     // For the non-blocking show-the-window verbs, spawn after we've
     // replied so the client doesn't wait on `Command::spawn`.
     let needs_spawn = matches!(&msg, ClientMsg::ShowWindow | ClientMsg::ShowViewer);
@@ -582,7 +592,12 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
                 child_pid: guard.consent_child_pid(),
             }
         }
-        ClientMsg::Ask(ask) => handle_ask(ask, state),
+        // Ask is intercepted in `handle_connection` (it needs the raw
+        // socket to watch for a hang-up), so it never reaches this
+        // one-shot dispatch.
+        ClientMsg::Ask(_) => {
+            unreachable!("ClientMsg::Ask is handled by handle_ask_connection")
+        }
         ClientMsg::Shutdown => {
             state.lock().expect("state mutex").request_shutdown();
             DaemonMsg::Ok
@@ -665,6 +680,9 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
             crate::consent::Decision::ApproveSshSessionAll => "Decision::ApproveSshSessionAll",
             crate::consent::Decision::Deny => "Decision::Deny",
             crate::consent::Decision::DenyAuto => "Decision::DenyAuto",
+            // Never sent as a wrap reply — an abandoned ask has no live
+            // client to receive it — but Decision is shared, so name it.
+            crate::consent::Decision::Abandoned => "Decision::Abandoned",
         },
         DaemonMsg::Err { .. } => "Err",
         DaemonMsg::ConsentUpdate { .. } => "ConsentUpdate",
@@ -676,7 +694,20 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
     reply
 }
 
-fn handle_ask(ask: Ask, state: SharedState) -> DaemonMsg {
+/// Outcome of `handle_ask`. A fast path resolves synchronously (reply the
+/// client now); otherwise the ask is enqueued and the caller parks a
+/// reply-writer on `rx` while watching the socket for the client hanging
+/// up (see `handle_ask_connection`).
+enum AskDisposition {
+    Resolved(DaemonMsg),
+    Enqueued {
+        key: DedupeKey,
+        waiter_id: WaiterId,
+        rx: mpsc::Receiver<WaiterReply>,
+    },
+}
+
+fn handle_ask(ask: Ask, state: SharedState) -> AskDisposition {
     // Fast-path: parent-keyed approval cache hit. Take the lock briefly
     // to check authorization, then *release it* before resolving — the
     // provider call (and any biometric prompt) must not hold the state
@@ -695,12 +726,12 @@ fn handle_ask(ask: Ask, state: SharedState) -> DaemonMsg {
                 in_flight,
                 &state,
             );
-            return waiter_reply_to_daemon_msg(reply);
+            return AskDisposition::Resolved(waiter_reply_to_daemon_msg(reply));
         }
     }
     // Auto-rules path. The mtime-based reload already ran in
-    // `handle_message`, so `state.rules` reflects any hand-edits made
-    // since the daemon started. If a rule fires, the ask never enters
+    // `handle_ask_connection`, so `state.rules` reflects any hand-edits
+    // made since the daemon started. If a rule fires, the ask never enters
     // the queue. ApproveAuto resolves synchronously on this thread
     // (we'd otherwise be blocking on the user's click anyway, so
     // blocking on a provider invocation is equivalent from the
@@ -711,7 +742,7 @@ fn handle_ask(ask: Ask, state: SharedState) -> DaemonMsg {
             let cache = guard.secret_cache_arc();
             let in_flight = guard.in_flight_arc();
             drop(guard);
-            return handle_rule_hit(ask, hit, cache, in_flight, state);
+            return AskDisposition::Resolved(handle_rule_hit(ask, hit, cache, in_flight, state));
         }
     }
     // Nested-run fast path: a `run` invoked under an already-consented
@@ -734,21 +765,26 @@ fn handle_ask(ask: Ask, state: SharedState) -> DaemonMsg {
                 in_flight,
                 &state,
             );
-            return waiter_reply_to_daemon_msg(reply);
+            return AskDisposition::Resolved(waiter_reply_to_daemon_msg(reply));
         }
     }
-    // Slow path: enqueue and park on the reply channel.
+    // Slow path: enqueue and hand the caller the channel + waiter id so it
+    // can park a reply-writer while watching the socket for hang-up.
     let (tx, rx) = mpsc::channel();
-    let is_new = {
+    let key = ask.dedupe_key.clone();
+    let (is_new, waiter_id) = {
         let mut guard = state.lock().expect("state mutex");
-        let result = guard.submit_ask(ask, tx);
+        let (result, waiter_id) = guard.submit_ask(ask, tx);
         // Restart only on genuinely new entries. A coalesced ask is
         // joining an existing queue row that the current UI is already
         // displaying; killing the window mid-decision to "re-show"
         // the same card would be worse UX (and would drop the user's
         // in-progress choice). Only the first fresh entry per dedupe
         // key warrants a foreground raise.
-        matches!(result, super::state::SubmitResult::NewEntry)
+        (
+            matches!(result, super::state::SubmitResult::NewEntry),
+            waiter_id,
+        )
     };
     if is_new {
         let mut guard = state.lock().expect("state mutex");
@@ -786,16 +822,84 @@ fn handle_ask(ask: Ask, state: SharedState) -> DaemonMsg {
             format_args!("ensure_badge_window failed: {err:#}"),
         );
     }
-    match rx.recv() {
-        Ok(reply) => waiter_reply_to_daemon_msg(reply),
-        Err(_) => DaemonMsg::Decision {
-            decision: crate::consent::Decision::Deny,
-            secrets: std::collections::HashMap::new(),
-            rule_id: None,
-            rule_name: None,
-            deny_message: None,
-        },
+    AskDisposition::Enqueued { key, waiter_id, rx }
+}
+
+/// Drive a one-shot Ask connection. Fast-path resolutions reply straight
+/// back; a queued ask parks a reply-writer thread on the decision channel
+/// while THIS thread watches the socket for the client hanging up. A wrap
+/// killed before the user decides closes its socket — we notice the EOF and
+/// withdraw the ask (reaping the card + writing an `abandoned` audit row)
+/// instead of leaving it orphaned in the queue.
+fn handle_ask_connection(
+    reader: BufReader<UnixStream>,
+    stream: UnixStream,
+    ask: Ask,
+    state: SharedState,
+) -> Result<()> {
+    match handle_ask(ask, state.clone()) {
+        AskDisposition::Resolved(reply) => {
+            let mut writer = stream;
+            write_reply(&mut writer, &reply)
+        }
+        AskDisposition::Enqueued { key, waiter_id, rx } => {
+            park_ask_and_watch(reader, stream, state, key, waiter_id, rx)
+        }
     }
+}
+
+/// Park a queued ask: a reply-writer thread delivers the user's decision
+/// while this thread blocks reading the socket to detect a hang-up. On EOF
+/// (or a disconnect error) the client is gone, so we withdraw the waiter.
+fn park_ask_and_watch(
+    mut reader: BufReader<UnixStream>,
+    stream: UnixStream,
+    state: SharedState,
+    key: DedupeKey,
+    waiter_id: WaiterId,
+    rx: mpsc::Receiver<WaiterReply>,
+) -> Result<()> {
+    // Reply-writer: delivers the decision when the user acts. If the waiter
+    // is withdrawn first (client already gone), its sender is dropped and
+    // this `recv` returns `Err` — nothing to send, so the thread just exits.
+    let reply_thread = thread::Builder::new()
+        .name("secreqd-ask-reply".to_owned())
+        .spawn(move || {
+            let mut writer = stream;
+            if let Ok(reply) = rx.recv() {
+                let _ = write_reply(&mut writer, &waiter_reply_to_daemon_msg(reply));
+            }
+        })
+        .context("spawn ask reply-writer thread")?;
+
+    // Watch for the client hanging up. A wrap sends nothing after its Ask,
+    // so this single `read_line` blocks until the connection ends: `Ok(0)`
+    // is EOF and a disconnect error is the same signal — either way the
+    // client is gone. Unexpected extra bytes (a wrap shouldn't speak again)
+    // also end the watch; we don't loop because the protocol is one-shot.
+    let mut buf = String::new();
+    match reader.read_line(&mut buf) {
+        Ok(0) => {}
+        Ok(_) => super::log::log_at(
+            "server",
+            format_args!("unexpected bytes on parked ask socket; ending watch"),
+        ),
+        Err(ref err) if is_client_disconnect(err) => {}
+        Err(err) => return Err(err).context("watch parked ask socket"),
+    }
+
+    // Connection closed. Withdraw our waiter — a no-op if the user already
+    // resolved it (entry gone / moved to a resolving card). On a genuine
+    // abandon this reaps the card and writes the `abandoned` audit row.
+    state
+        .lock()
+        .expect("state mutex")
+        .withdraw_waiter(&key, waiter_id);
+
+    // The reply-writer has either already written the decision or unblocked
+    // on the dropped sender; join so the socket outlives any pending write.
+    let _ = reply_thread.join();
+    Ok(())
 }
 
 /// Apply a rule-mutation ClientMsg to State. Used by the streaming
@@ -1071,6 +1175,65 @@ mod tests {
             write_reply(&mut writer, &reply)
                 .expect("writing to a killed client must not be a daemon error");
         }
+    }
+
+    /// The core of the feature: a wrap killed while its ask is parked
+    /// closes its socket. `park_ask_and_watch` must notice the EOF, reap
+    /// the ask from the queue (so its card leaves the requests view), and
+    /// record an `abandoned` audit row — rather than leaving the ask
+    /// orphaned until the daemon exits.
+    #[test]
+    fn parked_ask_is_withdrawn_when_the_client_hangs_up() {
+        use std::sync::{Arc, Mutex};
+
+        crate::audit::with_temp_log(|| {
+            let state: SharedState = Arc::new(Mutex::new(super::super::state::State::new()));
+
+            // Register a parked waiter, as the slow path does.
+            let ask = Ask {
+                command: vec!["gh".to_owned(), "pr".to_owned(), "view".to_owned()],
+                cwd: "/work".to_owned(),
+                callers: vec![],
+                secrets: vec![],
+                providers: std::collections::HashMap::new(),
+                dedupe_key: DedupeKey {
+                    wrap: "gh".to_owned(),
+                    ppid: 4242,
+                    parent_start_time: 7,
+                },
+                ssh: None,
+                allow_remember: true,
+                nested_run: false,
+            };
+            let (tx, rx) = mpsc::channel();
+            let key = ask.dedupe_key.clone();
+            let waiter_id = state.lock().unwrap().submit_ask(ask, tx).1;
+            assert_eq!(
+                state.lock().unwrap().snapshot().entries.len(),
+                1,
+                "ask is queued before the hang-up"
+            );
+
+            // The wrap process is killed before the user decides: its socket
+            // end closes, so the watch read hits EOF immediately.
+            let (server_end, client_end) = UnixStream::pair().expect("socketpair");
+            drop(client_end);
+            let reader = BufReader::new(server_end.try_clone().expect("clone socket"));
+            park_ask_and_watch(reader, server_end, state.clone(), key, waiter_id, rx)
+                .expect("watch returns cleanly on a client hang-up");
+
+            // The card is reaped from the requests view...
+            assert!(
+                state.lock().unwrap().snapshot().entries.is_empty(),
+                "the abandoned ask is removed from the queue"
+            );
+            // ...and exactly one `abandoned` row was written for it.
+            let rows = crate::audit::read_history(None).expect("read audit log");
+            assert_eq!(rows.len(), 1, "one abandoned row");
+            assert_eq!(rows[0].decision, "abandoned");
+            assert_eq!(rows[0].wrap, "gh");
+            assert_eq!(rows[0].args, vec!["pr", "view"]);
+        });
     }
 
     #[test]
