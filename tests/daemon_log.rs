@@ -3,7 +3,8 @@
 //! The unit tests in `daemon::log` cover the pure rendering and the
 //! resource-summary math. This integration test exercises the part they
 //! can't: that `sample_resources` actually drives the global file sink,
-//! writing a parseable JSON line to `<state_dir>/daemon.log`.
+//! writing a parseable JSON line to the structured `<state_dir>/daemon.jsonl`
+//! (the human-format sibling is `daemon.log`).
 //!
 //! It runs in its own process (one test binary per file), so setting
 //! `XDG_STATE_HOME` to a tempdir fully isolates the log location — and
@@ -18,15 +19,17 @@ use secreq::daemon::log;
 fn sample_resources_writes_a_structured_resource_line() {
     let tmp = tempfile::tempdir().expect("tempdir");
     // Isolate the persistent-log location to our tempdir. `state_dir()`
-    // honours `$XDG_STATE_HOME` first, so `daemon.log` lands under it.
+    // honours `$XDG_STATE_HOME` first, so the logs land under it.
     std::env::set_var("XDG_STATE_HOME", tmp.path());
 
     let mut sys = log::prime_resource_sampler();
     log::sample_resources(&mut sys);
 
-    let log_path = tmp.path().join("secreq").join("daemon.log");
-    let file = std::fs::File::open(&log_path)
-        .unwrap_or_else(|e| panic!("daemon.log should exist at {}: {e}", log_path.display()));
+    // The structured JSON sink is `daemon.jsonl` (the human `daemon.log` is
+    // its sibling); the resource envelope is asserted against the JSON.
+    let jsonl_path = tmp.path().join("secreq").join("daemon.jsonl");
+    let file = std::fs::File::open(&jsonl_path)
+        .unwrap_or_else(|e| panic!("daemon.jsonl should exist at {}: {e}", jsonl_path.display()));
 
     // Find the resource record and validate its structured envelope.
     let resource_line = std::io::BufReader::new(file)

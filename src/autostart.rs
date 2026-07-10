@@ -72,15 +72,28 @@ pub fn service_file_path(home: &Path, platform: Platform) -> PathBuf {
 ///
 /// - `Label = com.secreq.daemon`
 /// - `ProgramArguments = [<exe>, "daemon", "--fg"]`
-/// - `RunAtLoad = true`, `KeepAlive = true` (start at login, restart on exit)
-/// - `StandardOutPath` / `StandardErrorPath = <log_path>` (the same log
-///   `secreq daemon log-path` prints, so users have one place to look)
+/// - `RunAtLoad = true`; `KeepAlive = { SuccessfulExit = false }` — restart
+///   only on a *crash* (non-zero exit), never on a clean exit. A plain
+///   `KeepAlive = true` respawns on *any* exit, which storms: if another
+///   daemon already holds the singleton lock, launchd's instance exits 0
+///   ("lock held") and gets relaunched every ~10s (launchd's throttle
+///   floor) forever. `SuccessfulExit = false` also lets `secreq daemon
+///   stop` and idle-exit (both exit 0) actually stick.
+/// - `StandardOutPath = /dev/null`, `StandardErrorPath = <dir>/daemon.stderr.log`.
+///   The daemon writes its own `daemon.log` + `daemon.jsonl` now (see
+///   `daemon::log`), so the launcher must **not** also redirect stdout/stderr
+///   into `daemon.log` — that's the two-fd interleaving the log split fixed.
+///   stderr keeps a small sidecar file so a hard panic (which bypasses the
+///   log module) is still captured.
 /// - `EnvironmentVariables.PATH` pinned (launchd's env is minimal)
 ///
 /// The exe and log paths are XML-escaped.
 pub fn render_launchd_plist(exe: &Path, log_path: &Path) -> String {
     let exe = xml_escape(&exe.display().to_string());
-    let log = xml_escape(&log_path.display().to_string());
+    // The daemon owns daemon.log / daemon.jsonl itself; the launcher only
+    // captures stderr (for panics) to a sidecar beside them.
+    let stderr_path = log_path.with_file_name("daemon.stderr.log");
+    let stderr = xml_escape(&stderr_path.display().to_string());
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -97,11 +110,14 @@ pub fn render_launchd_plist(exe: &Path, log_path: &Path) -> String {
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
     <key>StandardOutPath</key>
-    <string>{log}</string>
+    <string>/dev/null</string>
     <key>StandardErrorPath</key>
-    <string>{log}</string>
+    <string>{stderr}</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
@@ -131,8 +147,9 @@ pub fn render_systemd_unit(exe: &Path, log_path: &Path) -> String {
          Type=simple\n\
          ExecStart={exe} daemon --fg\n\
          Restart=on-failure\n\
-         # systemd journals stdout/stderr: journalctl --user -u {SYSTEMD_UNIT}\n\
-         # (the file daemon log still lives at {log})\n\
+         # The daemon writes its own logs — {log} (human) and daemon.jsonl\n\
+         # (structured) alongside it. systemd's journal\n\
+         # (journalctl --user -u {SYSTEMD_UNIT}) then only carries a hard panic.\n\
          # PATH is inherited from your user systemd environment — `op` and other\n\
          # provider binaries must be reachable there.\n\
          \n\
@@ -345,13 +362,28 @@ mod tests {
         assert!(plist.contains("<string>daemon</string>"));
         assert!(plist.contains("<string>--fg</string>"));
         assert!(plist.contains("<key>RunAtLoad</key>"));
+        // KeepAlive restarts only on a crash, not on a clean exit — a plain
+        // `KeepAlive=true` respawn-storms every 10s when another daemon holds
+        // the singleton lock (launchd's instance exits 0 "lock held").
         assert!(plist.contains("<key>KeepAlive</key>"));
+        assert!(plist.contains("<key>SuccessfulExit</key>"));
+        assert!(
+            !plist.contains("<key>KeepAlive</key>\n    <true/>"),
+            "KeepAlive must be the SuccessfulExit dict, not a bare true"
+        );
         assert!(plist.contains("<string>com.secreq.daemon</string>"));
         // The pinned PATH so launchd's minimal env can still find `op`.
         assert!(plist.contains(LAUNCHD_PATH));
-        // Log path wired to both stdout and stderr.
+        // stdout is discarded and stderr goes to a sidecar (panic capture) —
+        // the launcher must NOT redirect into daemon.log, which the daemon
+        // writes itself (the two-fd interleaving the log split fixed).
         assert!(plist.contains("<key>StandardOutPath</key>"));
-        assert!(plist.contains(&log.display().to_string()));
+        assert!(plist.contains("<string>/dev/null</string>"));
+        assert!(plist.contains("/Users/me/.local/state/secreq/daemon.stderr.log"));
+        assert!(
+            !plist.contains("<string>/Users/me/.local/state/secreq/daemon.log</string>"),
+            "launcher must not point stdout/stderr at daemon.log"
+        );
     }
 
     #[test]

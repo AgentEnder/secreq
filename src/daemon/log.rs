@@ -1,17 +1,27 @@
 //! Structured, persistent logging for the consent daemon.
 //!
-//! Every log event fans out to **two sinks**:
+//! Every log event fans out to **two persistent files plus interactive
+//! stderr**, all under `$XDG_STATE_HOME/secreq` (the dir that holds
+//! `audit.log`):
 //!
-//! - A **persistent JSON-lines file** at `<state_dir>/daemon.log` — the
-//!   same `$XDG_STATE_HOME/secreq` directory that holds `audit.log`. One
-//!   JSON object per line, append-only, survives daemon restarts. This
-//!   is the record you `jq`/grep when debugging a past session or
-//!   monitoring the daemon's footprint over time. Both the daemon and
-//!   the short-lived `consent-window` child append here; the `pid` field
-//!   disambiguates them.
-//! - **Human-readable stderr**, in the historical format, so a developer
-//!   running the daemon in the foreground still sees the consent-flow
-//!   state machine tick in real time.
+//! - **`daemon.jsonl`** — one JSON object per line, append-only. The record
+//!   you `jq`/grep when debugging a past session or monitoring the daemon's
+//!   footprint over time.
+//! - **`daemon.log`** — the same events in the historical human format
+//!   (`[secreq +12.345s tag] msg`). This is what `secreq daemon log-path`
+//!   prints and what bare `secreq daemon` tails.
+//! - **stderr**, but only when it's a TTY — so a developer running
+//!   `secreq daemon --fg` in a terminal sees the state machine tick live.
+//!   Under the login service (stderr redirected to a file) this is
+//!   suppressed, because the two files above already capture everything.
+//!
+//! The two files are written directly by this module — each line in a
+//! single `write_all`, so `O_APPEND` keeps whole lines atomic even when
+//! several daemons or a `consent-window` child append at once (the `pid`
+//! field disambiguates). They are **deliberately separate files**: they
+//! used to be one (`daemon.log`), with the JSON writer and a launcher's
+//! stderr redirect both appending through *different* fds — which tore
+//! each other's lines. Splitting them removes the shared target.
 //!
 //! Each record carries:
 //!
@@ -41,7 +51,7 @@
 
 use std::fmt::Arguments;
 use std::fs::{File, OpenOptions};
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -76,31 +86,51 @@ impl Level {
     }
 }
 
-/// Lazily-opened append handle to `<state_dir>/daemon.log`, guarded by a
-/// mutex so the daemon main loop, the socket accept thread, and the
-/// consent-window child's reader thread can all append without
-/// interleaving partial lines. `None` if the file couldn't be opened —
-/// in which case we log to stderr only.
-static FILE: OnceLock<Option<Mutex<File>>> = OnceLock::new();
+/// Lazily-opened append handles to the two persistent logs, each guarded by
+/// a mutex so this process's threads (main loop, socket accept, consent
+/// child reader) append whole lines without interleaving. Cross-process the
+/// files are `O_APPEND`, so a single `write_all` per line stays atomic even
+/// when several daemons append at once. `None` if a file couldn't be opened
+/// — that sink degrades silently (the other sinks still carry the line).
+static JSONL_FILE: OnceLock<Option<Mutex<File>>> = OnceLock::new();
+static LOG_FILE: OnceLock<Option<Mutex<File>>> = OnceLock::new();
 
-fn log_file() -> Option<&'static Mutex<File>> {
-    FILE.get_or_init(|| open_log_file().map(Mutex::new))
+fn jsonl_sink() -> Option<&'static Mutex<File>> {
+    JSONL_FILE
+        .get_or_init(|| jsonl_path().ok().and_then(open_append).map(Mutex::new))
         .as_ref()
 }
 
-/// Absolute path to the persistent daemon log, `<state_dir>/daemon.log`
-/// (honours `$XDG_STATE_HOME`, same dir as `audit.log`). The public
-/// accessor behind `secreq daemon log-path` and the `daemon` tail
-/// follower.
+fn log_sink() -> Option<&'static Mutex<File>> {
+    LOG_FILE
+        .get_or_init(|| log_path().ok().and_then(open_append).map(Mutex::new))
+        .as_ref()
+}
+
+/// Whether interactive stderr echo is on — true only when stderr is a TTY
+/// (a developer running `daemon --fg`). Cached once: under the login
+/// service stderr is a file, so we skip the echo and rely on the two files.
+fn stderr_is_tty() -> bool {
+    static TTY: OnceLock<bool> = OnceLock::new();
+    *TTY.get_or_init(|| std::io::stderr().is_terminal())
+}
+
+/// Absolute path to the human-readable daemon log, `<state_dir>/daemon.log`
+/// (honours `$XDG_STATE_HOME`, same dir as `audit.log`). The accessor
+/// behind `secreq daemon log-path` and the `daemon` tail follower.
 pub fn log_path() -> anyhow::Result<PathBuf> {
     Ok(crate::audit::state_dir()?.join("daemon.log"))
 }
 
-/// Open (creating if needed) the persistent JSON-lines log. Returns
-/// `None` on any failure — logging degrades to stderr rather than
-/// erroring.
-fn open_log_file() -> Option<File> {
-    let path = log_path().ok()?;
+/// Absolute path to the structured JSON-lines daemon log,
+/// `<state_dir>/daemon.jsonl` — one JSON object per line for `jq`/monitoring.
+pub fn jsonl_path() -> anyhow::Result<PathBuf> {
+    Ok(crate::audit::state_dir()?.join("daemon.jsonl"))
+}
+
+/// Open (creating if needed) a persistent log sink in append mode. Returns
+/// `None` on any failure — logging degrades rather than erroring.
+fn open_append(path: PathBuf) -> Option<File> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok()?;
     }
@@ -145,30 +175,49 @@ fn render_json(
     Value::Object(obj).to_string()
 }
 
-/// The one place every log line is born. Renders both sinks from the
-/// same captured timestamp so the file and stderr never disagree.
+/// The one place every log line is born. Renders all sinks from the same
+/// captured timestamp so they never disagree. Each file line is a single
+/// `write_all` (newline included) so a `tail`-style follower never observes
+/// a half-written, possibly mid-multibyte line.
 fn emit(level: Level, tag: &str, msg: &str, fields: &Map<String, Value>) {
     let t_mono_s = start().elapsed().as_secs_f64();
     let ts_unix = now_unix();
     let pid = std::process::id();
 
-    // Persistent structured sink (best-effort). The whole line —
-    // newline included — is written with a single `write_all` so the
-    // append is atomic: the daemon and the consent-window child both
-    // append here, and `tail`-style followers must never observe a
-    // half-written (and possibly mid-multibyte) line.
-    if let Some(file) = log_file() {
+    // Structured JSON sink → daemon.jsonl (best-effort).
+    if let Some(file) = jsonl_sink() {
         let mut line = render_json(ts_unix, t_mono_s, pid, level, tag, msg, fields);
         line.push('\n');
         if let Ok(mut guard) = file.lock() {
-            // Ignore write errors — a full/unwritable disk must not
-            // crash the daemon. stderr below still carries the line.
+            // Ignore write errors — a full/unwritable disk must not crash
+            // the daemon; the other sinks still carry the line.
             let _ = guard.write_all(line.as_bytes());
         }
     }
 
-    // Human-readable foreground sink.
-    eprintln!("[secreq +{t_mono_s:>7.3}s {tag}] {msg}");
+    // Human sink → daemon.log (best-effort), same atomic-per-line discipline.
+    let human = render_human(t_mono_s, tag, msg);
+    if let Some(file) = log_sink() {
+        let mut line = human.clone();
+        line.push('\n');
+        if let Ok(mut guard) = file.lock() {
+            let _ = guard.write_all(line.as_bytes());
+        }
+    }
+
+    // Interactive echo — only when stderr is a terminal. Under the login
+    // service stderr is redirected to a file, and echoing there would both
+    // duplicate daemon.log and re-introduce the two-fd tearing this split
+    // exists to fix.
+    if stderr_is_tty() {
+        eprintln!("{human}");
+    }
+}
+
+/// Render the human-readable form of a log line. Pure, so the unit test
+/// can assert the exact on-screen/on-disk shape.
+fn render_human(t_mono_s: f64, tag: &str, msg: &str) -> String {
+    format!("[secreq +{t_mono_s:>7.3}s {tag}] {msg}")
 }
 
 /// Write one debug line. Use [`log_at`] when you have a stable
@@ -272,6 +321,14 @@ mod tests {
         assert_eq!(v["msg"], "show_window: visible=true");
         // No metric fields present on a plain log line.
         assert!(v.get("cpu_pct").is_none());
+    }
+
+    #[test]
+    fn render_human_matches_historical_format() {
+        // The human line format is load-bearing: the `daemon` tail follower
+        // and users' eyes both expect `[secreq +<mono>s <tag>] <msg>`.
+        let line = render_human(12.3456, "state", "show_window: visible=true");
+        assert_eq!(line, "[secreq + 12.346s state] show_window: visible=true");
     }
 
     #[test]
