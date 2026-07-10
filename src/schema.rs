@@ -36,10 +36,19 @@ pub fn wraps_schema() -> Value {
                 "type": "string",
                 "description": "Directory where `secreq wrap` drops PATH shims. Set by `secreq init`. Supports a leading `~/`."
             },
+            "$wait_indicator": {
+                "type": "boolean",
+                "description": "Whether a wrap prints a 'waiting for approval' indicator to stderr while blocked on the consent prompt (spinner on a TTY, a timestamped line on a pipe). Defaults to true; set false to silence. The SECREQ_NO_WAIT_INDICATOR env var overrides this per-invocation."
+            },
             "providers": {
                 "type": "object",
                 "description": "Provider scheme definitions. Built-in providers (`op`, `keychain` on macOS, `lastpass` / `pass` on Unix) are available without an explicit entry; entries here override or add new schemes.",
                 "additionalProperties": { "$ref": "#/definitions/Provider" }
+            },
+            "ssh": {
+                "type": "object",
+                "description": "SSH identities served by the consent-gated SSH agent, keyed by identity name. Each identity stores its public key inline (not secret) so the agent can answer REQUEST_IDENTITIES without a resolve; the private key is a `secret://` reference resolved only at SIGN time.",
+                "additionalProperties": { "$ref": "#/definitions/SshIdentity" }
             }
         },
         "patternProperties": {
@@ -51,7 +60,8 @@ pub fn wraps_schema() -> Value {
             "Provider":        provider_schema(),
             "StoreCapability": store_capability_schema(),
             "FieldSpec":       field_spec_schema(),
-            "BatchRetrieve":   batch_retrieve_schema()
+            "BatchRetrieve":   batch_retrieve_schema(),
+            "SshIdentity":     ssh_identity_schema()
         }
     })
 }
@@ -171,8 +181,7 @@ fn rule_match_schema() -> Value {
 fn wrap_schema() -> Value {
     json!({
         "type": "object",
-        "description": "One per-binary wrap. `env` is required; everything else is metadata.",
-        "required": ["env"],
+        "description": "One per-binary wrap. `env` is optional: a wrap with no env entries is *gate-only* — consent is required before the binary runs, but nothing is injected (used to gate tools like `op` that have no secret to pass). Everything else is metadata.",
         "properties": {
             "$reason": {
                 "type": "string",
@@ -184,13 +193,36 @@ fn wrap_schema() -> Value {
             },
             "env": {
                 "type": "object",
-                "description": "Environment variables to inject. Each value is a `secret://provider/locator` reference; resolution happens at invocation time.",
+                "description": "Environment variables to inject. Each value is a `secret://provider/locator` reference; resolution happens at invocation time. Omit (or leave empty) for a gate-only wrap.",
                 "additionalProperties": {
                     "type": "string",
                     "pattern": "^secret://[^/]+/.+$",
                     "description": "A `secret://provider/locator` reference."
-                },
-                "minProperties": 1
+                }
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn ssh_identity_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "One SSH identity served by the agent. `public_key` is the inline OpenSSH public key (not secret); `private_key` is a `secret://provider/locator` reference resolved only at SIGN time.",
+        "required": ["public_key", "private_key"],
+        "properties": {
+            "$reason": {
+                "type": "string",
+                "description": "Rationale shown in the consent prompt when this identity is used to sign."
+            },
+            "public_key": {
+                "type": "string",
+                "description": "Inline OpenSSH public key (`ssh-ed25519 AAAA… comment`). Answered to REQUEST_IDENTITIES without a resolve."
+            },
+            "private_key": {
+                "type": "string",
+                "pattern": "^secret://[^/]+/.+$",
+                "description": "A `secret://provider/locator` reference to the private key, resolved only at SIGN time."
             }
         },
         "additionalProperties": false

@@ -47,6 +47,13 @@ pub struct AuditEntry {
     /// older `secreq` deserialize cleanly here.
     #[serde(default)]
     pub rule_id: Option<String>,
+    /// SHA256 fingerprint of the public key, set only for SSH-agent sign
+    /// rows (`Some("SHA256:…")`); `None` for every wrap-run row. This is a
+    /// public-key fingerprint — never the private key and never the
+    /// signature bytes. `#[serde(default)]` so older logs (and every
+    /// non-SSH row, which omits it) deserialize cleanly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
 }
 
 /// One process in the audit-time caller chain. Mirrors the runtime
@@ -94,6 +101,66 @@ impl AuditEntry {
             secrets: secret_names.to_vec(),
             decision: decision.as_str().to_owned(),
             rule_id: None,
+            fingerprint: None,
+        }
+    }
+
+    /// Assemble an SSH-agent **sign** audit row. There is no wrap client on
+    /// the SSH path, so the daemon writes this itself (the one documented
+    /// exception to "the daemon never writes audit rows" — see `CLAUDE.md`).
+    ///
+    /// The row carries the identity (`wrap = "ssh:<key_id>"`), the public
+    /// key's SHA256 `fingerprint`, the `decision`, and the caller `chain`.
+    /// It carries **no secret material**: `secrets` is empty (the private
+    /// key is resolved fresh, signed from, and zeroized — never named here),
+    /// and the signature bytes are never recorded.
+    pub fn ssh_sign(
+        key_id: &str,
+        fingerprint: &str,
+        callers: &[Caller],
+        decision: Decision,
+    ) -> AuditEntry {
+        AuditEntry {
+            ts_unix: now_unix(),
+            cwd: String::new(),
+            wrap: format!("ssh:{key_id}"),
+            args: Vec::new(),
+            callers: callers.iter().map(AuditCaller::from_runtime).collect(),
+            secrets: Vec::new(),
+            decision: decision.as_str().to_owned(),
+            rule_id: None,
+            fingerprint: Some(fingerprint.to_owned()),
+        }
+    }
+
+    /// Assemble an **abandoned** audit row. The requesting process exited
+    /// before the user decided, so there is no live wrap client to write
+    /// this row — the daemon writes it directly (the second documented
+    /// exception to "the daemon never writes audit rows", alongside
+    /// [`AuditEntry::ssh_sign`] — see `CLAUDE.md`).
+    ///
+    /// Unlike [`AuditEntry::new`], `cwd` is passed in rather than read from
+    /// the daemon's own process: the row must record the *requesting*
+    /// process's working directory (carried on the ask), not the daemon's.
+    /// The row carries no secret material — only the secret **names** the
+    /// ask would have released, same as every other wrap-run row.
+    pub fn abandoned(
+        wrap: &str,
+        args: &[String],
+        cwd: &str,
+        callers: &[AuditCaller],
+        secret_names: &[String],
+    ) -> AuditEntry {
+        AuditEntry {
+            ts_unix: now_unix(),
+            cwd: cwd.to_owned(),
+            wrap: wrap.to_owned(),
+            args: args.to_vec(),
+            callers: callers.to_vec(),
+            secrets: secret_names.to_vec(),
+            decision: Decision::Abandoned.as_str().to_owned(),
+            rule_id: None,
+            fingerprint: None,
         }
     }
 
@@ -185,6 +252,32 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+/// Run `f` with `$XDG_STATE_HOME` pointed at a fresh tempdir, so any audit
+/// append during `f` lands there instead of the user's real state dir, and
+/// [`read_history`] inside `f` reads it back. Restores the previous value
+/// afterwards.
+///
+/// A single process-wide lock serializes every caller: `$XDG_STATE_HOME` is
+/// process-global, so two of these running at once (e.g. a `state` test and
+/// a `server` test in the same binary) would otherwise clobber each other's
+/// target dir. Shared here — not duplicated per module — so *all* audit-
+/// writing tests contend on the one lock.
+#[cfg(test)]
+pub(crate) fn with_temp_log<R>(f: impl FnOnce() -> R) -> R {
+    use std::sync::Mutex;
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().expect("tempdir");
+    let prev = std::env::var_os("XDG_STATE_HOME");
+    std::env::set_var("XDG_STATE_HOME", dir.path());
+    let out = f();
+    match prev {
+        Some(v) => std::env::set_var("XDG_STATE_HOME", v),
+        None => std::env::remove_var("XDG_STATE_HOME"),
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,6 +311,122 @@ mod tests {
             }
         }
         entries
+    }
+
+    #[test]
+    fn ssh_sign_entry_carries_identity_not_key_or_signature() {
+        // An SSH-sign row must record the key id, the public-key
+        // fingerprint, the decision, and the full caller chain — and must
+        // leak NEITHER the private key NOR the signature bytes. We construct
+        // the entry the way the daemon does and assert on its serialized
+        // JSON (the exact on-disk shape).
+        let callers = vec![
+            Caller {
+                pid: 4242,
+                name: "git".to_owned(),
+                command: "git push origin main".to_owned(),
+                exe: None,
+                start_time: 1,
+            },
+            Caller {
+                pid: 4000,
+                name: "zsh".to_owned(),
+                command: "-zsh".to_owned(),
+                exe: None,
+                start_time: 1,
+            },
+        ];
+        // A made-up PEM + signature blob that must NOT appear in the row.
+        let secret_private_key = "-----BEGIN OPENSSH PRIVATE KEY-----DEADBEEF";
+        let secret_signature = "c2lnbmF0dXJlLWJ5dGVz";
+
+        let entry = AuditEntry::ssh_sign(
+            "ssh.deploy",
+            "SHA256:Nh0Me49Zh9fDwabc",
+            &callers,
+            Decision::ApproveCached,
+        );
+        let json = serde_json::to_string(&entry).expect("serialize ssh-sign entry");
+
+        // Identity + fingerprint + decision present.
+        assert!(json.contains("\"wrap\":\"ssh:ssh.deploy\""), "json: {json}");
+        assert!(
+            json.contains("\"fingerprint\":\"SHA256:Nh0Me49Zh9fDwabc\""),
+            "json: {json}"
+        );
+        assert!(
+            json.contains("\"decision\":\"approve+cached\""),
+            "json: {json}"
+        );
+        // Caller chain present (names + pids).
+        assert!(json.contains("\"pid\":4242"), "json: {json}");
+        assert!(json.contains("git push origin main"), "json: {json}");
+        // No secrets are named on an SSH-sign row.
+        assert!(json.contains("\"secrets\":[]"), "json: {json}");
+        // CRITICAL: never the private key, never the signature.
+        assert!(
+            !json.contains(secret_private_key),
+            "private key leaked into audit row: {json}"
+        );
+        assert!(
+            !json.contains(secret_signature),
+            "signature bytes leaked into audit row: {json}"
+        );
+        assert!(
+            !json.to_lowercase().contains("private key"),
+            "private-key text leaked into audit row: {json}"
+        );
+
+        // Round-trips back through Deserialize the way the history view reads it.
+        let parsed: AuditEntry = serde_json::from_str(&json).expect("round-trip");
+        assert_eq!(
+            parsed.fingerprint.as_deref(),
+            Some("SHA256:Nh0Me49Zh9fDwabc")
+        );
+        assert_eq!(parsed.wrap, "ssh:ssh.deploy");
+        assert_eq!(parsed.callers.len(), 2);
+        assert!(parsed.secrets.is_empty());
+    }
+
+    #[test]
+    fn abandoned_entry_records_context_with_abandoned_decision() {
+        // The daemon writes this when a wrap dies before the user decides.
+        // It must carry the requesting process's cwd (not the daemon's),
+        // the wrap + args + caller chain + secret NAMES, and the distinct
+        // "abandoned" decision — and never a fingerprint (that's SSH-only).
+        let callers = vec![
+            AuditCaller {
+                pid: 4242,
+                name: "gh".to_owned(),
+                command: "gh pr view 42".to_owned(),
+            },
+            AuditCaller {
+                pid: 4000,
+                name: "zsh".to_owned(),
+                command: "-zsh".to_owned(),
+            },
+        ];
+        let entry = AuditEntry::abandoned(
+            "gh",
+            &["pr".to_owned(), "view".to_owned(), "42".to_owned()],
+            "/home/dev/project",
+            &callers,
+            &["GITHUB_TOKEN".to_owned()],
+        );
+        assert_eq!(entry.decision, "abandoned");
+        assert_eq!(entry.wrap, "gh");
+        assert_eq!(entry.args, vec!["pr", "view", "42"]);
+        assert_eq!(entry.cwd, "/home/dev/project");
+        assert_eq!(entry.secrets, vec!["GITHUB_TOKEN"]);
+        assert_eq!(entry.callers.len(), 2);
+        assert_eq!(entry.callers[0].pid, 4242);
+        assert!(entry.fingerprint.is_none());
+
+        // Round-trips through the same Deserialize the history view uses.
+        let json = serde_json::to_string(&entry).expect("serialize abandoned entry");
+        let parsed: AuditEntry = serde_json::from_str(&json).expect("round-trip");
+        assert_eq!(parsed.decision, "abandoned");
+        assert_eq!(parsed.wrap, "gh");
     }
 
     #[test]

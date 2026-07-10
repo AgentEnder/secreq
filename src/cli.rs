@@ -1,14 +1,16 @@
 //! Command-line surface for the per-binary wrap model.
 //!
 //! Admin verbs (`init`, `wrap`, `unwrap`, `wraps`, `check`, `doctor`,
-//! `edit`) are parsed by clap. Anything else is treated as an *external
-//! subcommand* (the binary name to wrap-and-run, via [`commands::wrap_run`]).
+//! `edit`) are parsed by clap. Wrap-and-run is the explicit `x` subcommand:
+//! `secreq x <wrap> [args…]` (via [`commands::wrap_run`]) — that's what the
+//! PATH shims `exec`.
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::commands::{self, WrapArgs, WrapRunOpts};
+use crate::commands::{self, SshAddArgs, WrapArgs, WrapRunOpts};
+use crate::ssh_setup;
 
 /// `op run`, but for every secret store you own — per-binary CLI wrapping
 /// with provenance-aware consent.
@@ -18,8 +20,6 @@ use crate::commands::{self, WrapArgs, WrapRunOpts};
     version,
     about,
     long_about = None,
-    // Anything that isn't an admin verb is the binary to wrap.
-    allow_external_subcommands = true,
 )]
 struct Cli {
     /// Use a specific config file instead of `$XDG_CONFIG_HOME/secreq/wraps.json5`.
@@ -75,6 +75,13 @@ enum Command {
     /// List configured wraps.
     Wraps,
 
+    /// Manage secreq's SSH agent: configure identities, wire SSH clients to
+    /// the agent socket, and verify that signing works.
+    Ssh {
+        #[command(subcommand)]
+        action: SshAction,
+    },
+
     /// Validate the config.
     Check,
 
@@ -91,7 +98,8 @@ enum Command {
     /// in this process instead (the form auto-spawned by wraps).
     /// `secreq daemon stop` tells a running daemon to exit, which also
     /// clears every remembered approval (the cache is in-memory only by
-    /// design). `secreq daemon log-path` prints the log file path.
+    /// design). `secreq daemon status` reports whether one is running.
+    /// `secreq daemon log-path` prints the log file path.
     Daemon {
         /// Run the daemon in the foreground in this process instead of
         /// starting a background daemon and tailing its log.
@@ -121,16 +129,158 @@ enum Command {
         action: Option<RulesAction>,
     },
 
-    /// Internal: run the consent-window child process. The daemon
-    /// spawns one of these whenever the user needs to see the
-    /// consent UI. Not meant to be invoked by users directly — if
-    /// the daemon isn't running, this will fail to connect.
+    /// Internal: run the consent-prompt child process. The daemon
+    /// spawns one of these whenever a decision is demanded (a wrap run
+    /// or an SSH-agent sign). Not meant to be invoked by users directly
+    /// — if the daemon isn't running, this will fail to connect.
     #[command(hide = true)]
-    ConsentWindow,
+    ConsentWindow {
+        /// Open the window floating above other apps. The daemon always
+        /// sets this — the prompt exists to demand a decision.
+        #[arg(long)]
+        always_on_top: bool,
+    },
 
-    /// Anything else: the binary to wrap-and-run.
-    #[command(external_subcommand)]
-    External(Vec<String>),
+    /// Internal: run the manager-window child process (the persistent
+    /// Rules + Audit surface). The daemon spawns one on `secreq view`
+    /// or when the prompt's "Open Manager…" link is clicked. Not meant
+    /// to be invoked by users directly.
+    #[command(hide = true)]
+    ManagerWindow {
+        /// Which view to open on. Omitted → Rules, or Audit when the
+        /// daemon's snapshot carries viewer mode.
+        #[arg(long, value_parser = ["rules", "audit"])]
+        view: Option<String>,
+    },
+
+    /// Internal: run the always-on-top pending-requests badge child.
+    /// The daemon spawns one of these whenever requests are awaiting a
+    /// decision, so a backgrounded consent window can't be forgotten.
+    /// Not meant to be invoked by users directly.
+    #[command(hide = true)]
+    PendingBadge,
+
+    /// Run a wrapped binary through secreq: consent → inject secrets → exec
+    /// the real binary with output masking. This is what the PATH shims call
+    /// (`exec secreq x <wrap> "$@"`). Run it directly to wrap a one-off.
+    X {
+        /// The wrap (binary) name, e.g. `gh`.
+        wrap: String,
+        /// Arguments forwarded to the wrapped binary.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// `op run`, but for every secret store: resolve every
+    /// `secret://provider/locator` reference found in the environment —
+    /// the inherited environment plus any `--env-file` — through the
+    /// consent daemon, then run the command with the resolved values
+    /// injected and its output masked. Plain `NAME=value` entries pass
+    /// through unchanged. Unlike `x`, no wrap entry is required: the
+    /// references describe the secrets inline.
+    Run {
+        /// Load `NAME=value` lines from this file, layered *under* the
+        /// inherited environment (inherited wins on conflict). Values may
+        /// be `secret://provider/locator` references or plaintext.
+        /// Repeatable.
+        #[arg(long = "env-file", value_name = "PATH")]
+        env_file: Vec<PathBuf>,
+        /// The command to run, followed by its arguments.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+
+    /// `op read`, but for every secret store: resolve one or more secret
+    /// references and print their values as a JSON object. Each reference is
+    /// `secret://provider/locator` or the bare `provider/locator` shorthand.
+    /// Output is always a JSON object keyed by each ref exactly as typed —
+    /// even for a single ref — so it pipes cleanly into `jq`. Resolution
+    /// always goes through the consent daemon (every read is prompted and
+    /// audited); there is no `--yes` bypass, by design.
+    Read {
+        /// The references to resolve, e.g. `secret://op/Work/key` or
+        /// `op/Work/key`. At least one is required.
+        #[arg(value_name = "REF", required = true)]
+        refs: Vec<String>,
+    },
+}
+
+/// Subcommands under `secreq ssh …`: configure an identity, wire clients to
+/// the agent socket, and prove the agent can sign.
+#[derive(Subcommand)]
+enum SshAction {
+    /// Wire SSH clients at secreq's agent socket by writing a managed
+    /// block to `~/.ssh/config` (`IdentityAgent`) or your shell rc
+    /// (`SSH_AUTH_SOCK`). Pick the method with `--method`, or get an
+    /// interactive prompt when it's omitted. `--undo` strips the block
+    /// back out.
+    Setup {
+        /// Which file to wire: `ssh-config` (`~/.ssh/config`
+        /// `IdentityAgent`) or `shell-rc` (`SSH_AUTH_SOCK` export).
+        /// Omit to choose interactively.
+        #[arg(long, value_enum)]
+        method: Option<SshMethod>,
+        /// Remove the managed block instead of adding it.
+        #[arg(long)]
+        undo: bool,
+    },
+
+    /// Add (or overwrite) an SSH identity in `wraps.json5`. The agent serves
+    /// this identity once the daemon is running. The public key is stored
+    /// inline; the private key is a `secret://provider/locator` reference
+    /// resolved only at sign time. Omit `--public-key`/`--private-key` to
+    /// resolve them interactively (with 1Password `op` discovery when on
+    /// PATH). Pass both for a fully non-interactive run.
+    Add {
+        /// The identity name (the key under the `ssh` block), e.g. `github`.
+        name: String,
+        /// The OpenSSH public key: a path to a `.pub` file, or the literal
+        /// `ssh-… / ecdsa-… / sk-…` line. Prompted for if omitted.
+        #[arg(long, value_name = "PATH-OR-LITERAL")]
+        public_key: Option<String>,
+        /// The private key reference, `secret://provider/locator`. Prompted
+        /// for (with `op` discovery) if omitted.
+        #[arg(long, value_name = "secret://…")]
+        private_key: Option<String>,
+        /// Reason shown in the consent prompt when this identity signs.
+        #[arg(long)]
+        reason: Option<String>,
+        /// Overwrite an existing identity of the same name.
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Prove the agent can sign with a configured SSH identity. Connects to
+    /// the agent socket, lists identities, then asks the agent to sign a fixed
+    /// test message with the key and verifies the returned signature against
+    /// its public half — exercising the real consent → resolve → sign path.
+    /// With no `<name>`, validates every configured identity. Signing is a
+    /// real sign, so it may prompt for consent (and a biometric). Exits 0 only
+    /// if every validated identity verifies.
+    Validate {
+        /// The identity name to validate (the key under the `ssh` block). Omit
+        /// to validate every configured identity.
+        name: Option<String>,
+    },
+}
+
+/// Which config file `secreq ssh setup` should wire the agent into. Mirrors
+/// [`ssh_setup::Method`] as a clap `ValueEnum` so it parses `--method`.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum SshMethod {
+    /// `~/.ssh/config` with a `Host * / IdentityAgent` stanza.
+    SshConfig,
+    /// The shell rc file with an `SSH_AUTH_SOCK` export.
+    ShellRc,
+}
+
+impl From<SshMethod> for ssh_setup::Method {
+    fn from(m: SshMethod) -> Self {
+        match m {
+            SshMethod::SshConfig => ssh_setup::Method::SshConfig,
+            SshMethod::ShellRc => ssh_setup::Method::ShellRc,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -163,9 +313,23 @@ enum DaemonAction {
         #[arg(long, short = 'f')]
         force: bool,
     },
+    /// Report whether a daemon is running, without spawning one. Prints the
+    /// pid, the running build (flagging a stale daemon whose build differs
+    /// from this CLI's), and the socket + log paths. Exits 0 when a daemon is
+    /// running and 3 when none is, so scripts can branch on it.
+    Status,
     /// Print the path of the daemon's persistent log file and exit.
     /// Does not start a daemon.
     LogPath,
+    /// Install a per-user login service that runs the daemon at login and
+    /// keeps it alive (launchd LaunchAgent on macOS, systemd `--user` unit
+    /// on Linux). This is what keeps the SSH agent socket live for incoming
+    /// connections. `--undo` unloads and removes the service.
+    Install {
+        /// Unload and remove the login service instead of installing it.
+        #[arg(long)]
+        undo: bool,
+    },
 }
 
 /// Parse args, dispatch, return the process exit code.
@@ -187,6 +351,32 @@ pub fn run() -> i32 {
             },
             config,
         ),
+        Some(Command::Ssh {
+            action: SshAction::Setup { method, undo },
+        }) => commands::ssh_setup(method.map(ssh_setup::Method::from), undo, cli.yes, config),
+        Some(Command::Ssh {
+            action:
+                SshAction::Add {
+                    name,
+                    public_key,
+                    private_key,
+                    reason,
+                    force,
+                },
+        }) => commands::ssh_add(
+            SshAddArgs {
+                name,
+                public_key,
+                private_key,
+                reason,
+                force,
+            },
+            cli.yes,
+            config,
+        ),
+        Some(Command::Ssh {
+            action: SshAction::Validate { name },
+        }) => commands::ssh_test(name, config),
         Some(Command::Unwrap { binary }) => commands::unwrap_cmd(&binary, config),
         Some(Command::Wraps) => commands::wraps_list(config),
         Some(Command::Check) => commands::check(config),
@@ -204,9 +394,17 @@ pub fn run() -> i32 {
             ..
         }) => commands::daemon_stop(force),
         Some(Command::Daemon {
+            action: Some(DaemonAction::Status),
+            ..
+        }) => commands::daemon_status(),
+        Some(Command::Daemon {
             action: Some(DaemonAction::LogPath),
             ..
         }) => commands::daemon_log_path(),
+        Some(Command::Daemon {
+            action: Some(DaemonAction::Install { undo }),
+            ..
+        }) => commands::daemon_install(undo, cli.yes),
         Some(Command::Pending) => commands::pending(),
         Some(Command::View) => commands::view(),
         Some(Command::Rules { action }) => match action {
@@ -216,23 +414,47 @@ pub fn run() -> i32 {
             Some(RulesAction::Disable { target }) => commands::rules_set_enabled(&target, false),
             Some(RulesAction::Rm { target }) => commands::rules_rm(&target),
         },
-        Some(Command::ConsentWindow) => crate::daemon::child::run(),
-        Some(Command::External(parts)) => {
-            let (binary, args) = parts.split_first().expect("external subcommand has a name");
-            commands::wrap_run(
-                binary,
-                args,
-                WrapRunOpts {
-                    raw: cli.raw,
-                    no_remember: cli.no_remember,
-                    assume_yes: cli.yes,
-                },
-                config,
+        Some(Command::ConsentWindow { always_on_top }) => {
+            crate::daemon::child::run(crate::daemon::child::WindowKind::Prompt, always_on_top)
+        }
+        Some(Command::ManagerWindow { view }) => {
+            let initial_view = view.as_deref().map(|v| match v {
+                "audit" => crate::daemon::proto::ManagerFocus::Audit,
+                _ => crate::daemon::proto::ManagerFocus::Rules,
+            });
+            crate::daemon::child::run(
+                crate::daemon::child::WindowKind::Manager { initial_view },
+                false,
             )
         }
+        Some(Command::PendingBadge) => crate::daemon::badge::run(),
+        Some(Command::X { wrap, args }) => commands::wrap_run(
+            &wrap,
+            &args,
+            WrapRunOpts {
+                raw: cli.raw,
+                no_remember: cli.no_remember,
+                assume_yes: cli.yes,
+            },
+            config,
+        ),
+        Some(Command::Run { env_file, command }) => commands::run(
+            &command,
+            &env_file,
+            WrapRunOpts {
+                raw: cli.raw,
+                no_remember: cli.no_remember,
+                assume_yes: cli.yes,
+            },
+            config,
+        ),
+        // `read` is always daemon-gated: `cli.yes` is intentionally not
+        // threaded through, so there is no client-side bypass for a raw
+        // secret read.
+        Some(Command::Read { refs }) => commands::read(&refs, config),
         None => {
             // `secreq` with no args: short usage hint.
-            eprintln!("secreq: missing command. Try `secreq --help` or `secreq <binary>`.");
+            eprintln!("secreq: missing command. Try `secreq --help` or `secreq x <binary>`.");
             return 2;
         }
     };

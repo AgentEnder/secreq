@@ -37,11 +37,11 @@ src/
 └── schema.rs        — JSON Schema for wraps.json5 (source of truth)
 ```
 
-## Data flow for `secreq <BINARY> [args…]`
+## Data flow for `secreq x <WRAP> [args…]`
 
 ```
 ┌─ cli ────────────────────────────────────────────────────────────────────┐
-│ parse argv. Anything not an admin verb is an external subcommand;        │
+│ parse argv. The `x` verb takes <WRAP> + trailing args;                   │
 │ dispatch to commands::wrap_run                                            │
 └────────────────────────┬─────────────────────────────────────────────────┘
                          ▼
@@ -66,6 +66,7 @@ src/
 │ 6. if denied → exit 1                                                     │
 │ 7. resolve env: for each entry, retrieve via provider                     │
 │      auto-batches when ≥2 entries share a batch-capable provider          │
+│      (no-op for a gate-only wrap — empty env, nothing to resolve)         │
 │ 8. find real binary: scan PATH skipping shim_dir (avoid recursion)       │
 │ 9. exec::run with the real binary, args, env overrides, secrets list     │
 │       PTY (interactive) or piped; output masked unless --raw              │
@@ -77,11 +78,11 @@ src/
 
 A long-running per-user process owns the consent queue, the approvals
 cache, and the GUI. Started on-demand by the first client that finds no
-live socket, exits after 30 minutes of empty queue.
+live socket, exits after 2 hours of empty queue.
 
 ### Why a daemon
 
-Without it, N parallel `secreq gh` invocations (a monitoring app firing
+Without it, N parallel `secreq x gh` invocations (a monitoring app firing
 50 `gh api` calls at once) each independently check the cache, all miss,
 and all prompt — the user sees 50 modal dialogs.
 
@@ -138,10 +139,16 @@ timeout.
 
 ### Idle exit
 
-The egui update loop checks `state.last_activity.elapsed()` every ~500ms.
-When the queue has been empty for 30 minutes, it sends
-`ViewportCommand::Close` and the main thread returns from
-`run_native`. The socket file is cleaned up on drop.
+The headless daemon main loop wakes once per second (`MAIN_LOOP_TICK`).
+On each tick, if there's no attached consent window
+(`consent_subscriber_count() == 0`) AND there's been no activity for the
+idle timeout (`last_activity().elapsed() >= 2 hours`), it calls
+`guard.request_shutdown()`. That flips an atomic shutdown flag, which the
+main `while` loop observes and breaks out of, returning from `run`. The
+socket file is cleaned up on drop. An attached consent window suppresses
+the timeout entirely: while one is subscribed, every tick calls
+`touch()` to reset the idle clock, so leaving the window open never
+trips idle-exit.
 
 ### What crosses the daemon socket
 
@@ -216,9 +223,27 @@ trust boundary:
 
 ### `find_real_binary` skips the shim dir
 
-Without this, our shim recurses: `secreq gh` finds `<shim_dir>/gh`, execs
-it, which calls `secreq gh` again. The `skip` argument is mandatory; the
+Without this, our shim recurses: `secreq x gh` finds `<shim_dir>/gh`, execs
+it, which calls `secreq x gh` again. The `skip` argument is mandatory; the
 test `wrap_run_injects_env_and_masks_output…` exercises this.
+
+### Resolution doesn't re-gate a wrapped provider CLI
+
+If a binary is both **wrapped** *and* used as a `secret://` provider — the
+canonical case is `op`, gated as a [gate-only wrap](#wraps-config) yet
+named in `secret://op/...` references — then resolving another wrap's
+secret would PATH-resolve `op` to our shim and pop a *second* consent
+prompt (and, under `--yes`, hang on a prompt the caller never asked for).
+
+`provider::{retrieve, retrieve_batch, store}` set `SECREQ_RESOLVING=1`
+(`crate::RESOLVING_ENV`) on every subprocess they spawn. `wrap_run`
+checks for it up front and passes straight through to the real binary —
+no consent, no injection. The marker is scoped to secreq's own
+resolution subprocess, so a wrapped *script* that calls `op` itself still
+gates normally; only the internal `op read` secreq fires is skipped. It's
+not a security boundary (any same-user process could set it, same model
+as `SECREQ_NO_DAEMON`), just a recursion guard. Exercised by
+`resolving_env_bypasses_the_gate_for_a_wrapped_provider`.
 
 ### Fail-closed at every boundary
 
@@ -266,7 +291,7 @@ exits, every entry is gone.
 `secreq daemon stop` is the supported way to clear the cache — it
 sends a `Shutdown` message over the socket, the daemon exits, and the
 next wrap invocation auto-spawns a fresh one with an empty list. Idle
-exit (30 min of empty queue + no activity) achieves the same thing
+exit (2 hours of empty queue + no activity) achieves the same thing
 without user action.
 
 The cache is **daemon-owned** at runtime. Clients never see it directly;
@@ -314,6 +339,15 @@ reserved `providers` key + `$`-prefixed metadata. A fixed `Deserialize`
 target can't express "any key except these"; walking a `Value` and
 validating field-by-field can, with much better error messages.
 
+A `Wrap` with an empty `env` is a **gate-only wrap**: it routes the
+binary through the consent daemon but injects nothing. The whole pipeline
+above degrades to a no-op at the resolution steps (empty secrets list →
+no provider invocation, no masking), so gate-only support lives entirely
+at the input edges — the parser accepts empty `env`, the schema drops its
+`required`/`minProperties` constraints, and the consent card renders a
+"Gate only" marker instead of secret rows. `op` (1Password CLI) is the
+motivating case: no secret to pass, but you still want a consent gate.
+
 ### Built-in providers
 
 `manifest::builtin_providers()` returns a `BTreeMap` of providers shipped
@@ -342,7 +376,7 @@ post-parse representations (e.g. `ValueMode::Stdin` vs the JSON's
 | Looking for… | File |
 |---|---|
 | The CLI entry point | `src/main.rs` → `src/cli.rs` |
-| What `secreq <binary>` actually does | `src/commands.rs::wrap_run` |
+| What `secreq x <wrap>` actually does | `src/commands.rs::wrap_run` |
 | Wraps config + parser | `src/wraps.rs` |
 | Provider types + built-ins | `src/manifest.rs` |
 | Provider execution (retrieve / store / batch) | `src/provider.rs` |

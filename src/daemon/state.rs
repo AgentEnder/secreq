@@ -19,16 +19,18 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use zeroize::Zeroizing;
 
-use crate::consent::{ApprovalEntry, Decision};
+use crate::audit::{self, AuditCaller, AuditEntry};
+use crate::consent::{ApprovalEntry, Decision, SshGrant};
 use crate::manifest::{BatchRetrieve, Manifest, Provider};
 use crate::resolve::{self, ResolutionPlan, SecretRequest, Source};
 use crate::rules::{self, EvalCtx, Rule, RuleHit};
 
 use super::cache::{CacheKey, SecretCache};
 use super::in_flight::{Acquired, InFlightGuard, InFlightMap};
-use super::proto::{Ask, DedupeKey, WireProvider};
+use super::proto::{Ask, DedupeKey, RowStatus, WireProvider};
 
 /// One coalesced queue entry. Multiple clients with the same dedupe key
 /// share a single entry; resolving it sends the same outcome to every
@@ -40,10 +42,37 @@ pub struct QueueEntry {
     /// with the same key are assumed to be equivalent (same wrap, same
     /// providers); we keep their reply channels but not their Asks.
     pub representative: Ask,
-    /// Senders, one per still-waiting client.
-    pub waiters: Vec<mpsc::Sender<WaiterReply>>,
+    /// One per still-waiting client — each carries its own reply channel
+    /// plus the secrets and command that client asked for.
+    pub waiters: Vec<Waiter>,
     /// When this entry was first inserted — drives the UI's "Xs ago" label.
     pub first_seen: Instant,
+}
+
+/// A stable per-waiter handle, minted by [`State::submit_ask`]. Lets the
+/// connection thread name *its own* waiter when the client hangs up (so
+/// [`State::withdraw_waiter`] removes exactly that one, not a sibling that
+/// coalesced onto the same entry). Monotonic per daemon; a `u64` counter
+/// never realistically overflows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WaiterId(u64);
+
+/// One parked client on a queue entry: where to send its reply, the
+/// secrets *it* asked for (so a per-waiter slice can be handed back), the
+/// command it's running (for the card's per-secret provenance), plus the
+/// `cwd` and caller chain needed to write an audit row if this client
+/// exits before the user decides (see [`State::withdraw_waiter`]).
+pub struct Waiter {
+    /// Stable id so a specific parked client can be withdrawn on hang-up.
+    pub id: WaiterId,
+    pub sender: mpsc::Sender<WaiterReply>,
+    pub requested: Vec<super::proto::SecretAsk>,
+    pub command: Vec<String>,
+    /// The requesting process's working directory, carried so an
+    /// abandoned-ask audit row records *its* cwd, not the daemon's.
+    pub cwd: String,
+    /// The caller chain at ask time, kept for the abandoned-ask audit row.
+    pub callers: Vec<super::proto::Caller>,
 }
 
 impl QueueEntry {
@@ -81,14 +110,40 @@ pub struct QueueRow {
     pub representative: Ask,
     pub waiter_count: usize,
     pub first_seen: Instant,
+    /// Awaiting a decision, or already approved with resolution in
+    /// flight. Resolving rows render read-only (no Approve/Deny).
+    pub status: RowStatus,
+}
+
+/// An approved ask whose secrets are being resolved off the queue. We
+/// keep it visible as a "Resolving…" card so a biometric prompt the
+/// provider fires (on a cold cache) has its provenance on screen
+/// instead of popping over an empty window.
+struct PendingEntry {
+    representative: Ask,
+    /// When resolution began — drives the card's "Ns ago" label.
+    since: Instant,
 }
 
 /// Daemon state. Wrap in `Arc<Mutex<_>>` for sharing.
 pub struct State {
     queue: HashMap<DedupeKey, QueueEntry>,
+    /// Asks that have been authorized and are now resolving off the
+    /// queue (provider call / biometric in flight). Rendered as
+    /// read-only "Resolving…" cards. Keyed by dedupe key so sibling
+    /// auto-approved asks coalesce into one card.
+    pending: HashMap<DedupeKey, PendingEntry>,
     /// "Approve all from X" decisions for the daemon's lifetime. No disk
     /// backing — `secreq daemon stop` is the canonical reset.
     approvals: Vec<ApprovalEntry>,
+    /// Remembered SSH sign session grants. Parallel to `approvals` but each
+    /// grant carries a wall-clock `expires_at` and a key scope (one key or
+    /// all keys): an SSH anchor (shell / IDE / git session) can live for
+    /// hours, so a SIGN grant is time-bounded rather than tied to anchor
+    /// lifetime alone. See [`SshGrant`] for the rationale behind the
+    /// divergences. No disk backing — same `secreq daemon stop` reset as
+    /// `approvals`.
+    ssh_grants: Vec<SshGrant>,
     /// Encrypted in-memory cache of resolved secret values.
     secret_cache: Arc<Mutex<SecretCache>>,
     /// Singleflight coordinator. Ensures concurrent asks for the same
@@ -105,10 +160,10 @@ pub struct State {
     /// runs when the queue drains + viewer mode is off + grace
     /// period elapsed, or when the user closes the child window).
     window_visible: bool,
-    /// "Pinned" mode set by `ClientMsg::ShowViewer` (the `secreq
-    /// view` command). While true, the daemon doesn't ask the
-    /// consent window to exit even if the queue is empty — the user
-    /// is browsing the audit log.
+    /// Set by `ClientMsg::ShowViewer` (the `secreq view` command).
+    /// Carried on the snapshot stream so a freshly-attached manager
+    /// window opens on the Audit view. Cleared when the last manager
+    /// window detaches.
     viewer_mode: bool,
     /// Set by the socket thread on `ClientMsg::Shutdown`. The daemon
     /// main loop checks this flag and exits cleanly.
@@ -132,6 +187,42 @@ pub struct State {
     /// children. Cleared when the first child attaches OR after a
     /// timeout (so a failed spawn doesn't permanently block).
     consent_spawn_in_flight_since: Option<Instant>,
+
+    // ── Manager-window streaming subscribers ──────────────────────
+    //
+    // The persistent Rules + Audit window. A separate list from
+    // `consent_subscribers` because the manager has a deliberately
+    // different lifecycle: it opens on user intent (`secreq view`, the
+    // prompt's "Open Manager…"), closes when the user closes it, and is
+    // never touched by the prompt's auto-hide / restart-to-raise
+    // machinery. It receives the same `ConsentUpdate` snapshot stream
+    // (it needs live rules + the viewer-mode flag).
+    manager_subscribers: Vec<ManagerSubscriber>,
+    /// Monotonic ID source for manager subscribers, independent of the
+    /// other counters so the ID spaces stay grep-distinguishable.
+    manager_next_subscriber_id: u64,
+    /// Spawn-debounce for the manager child, mirroring
+    /// `consent_spawn_in_flight_since`.
+    manager_spawn_in_flight_since: Option<Instant>,
+
+    // ── Pending-badge streaming subscribers ───────────────────────
+    //
+    // The always-on-top "N pending" badge child(ren). A separate list
+    // from `consent_subscribers` because the badge has a deliberately
+    // different lifecycle: it persists while the queue is non-empty
+    // (even when the consent window is closed/backgrounded — that's the
+    // whole point), never restarts-to-raise, and never reports focus.
+    // Keeping it parallel means none of the consent-window focus /
+    // restart / auto-hide logic accidentally tears the badge down.
+    badge_subscribers: Vec<BadgeSubscriber>,
+    /// Monotonic ID source for badge subscribers. Independent of the
+    /// consent counter so the two ID spaces stay grep-distinguishable.
+    badge_next_subscriber_id: u64,
+    /// Spawn-debounce for the badge child, mirroring
+    /// `consent_spawn_in_flight_since`: set between `Command::spawn`
+    /// and the child's `BadgeWindowAttach` so a burst of asks doesn't
+    /// launch N badges. Cleared on attach or after `CONSENT_SPAWN_TIMEOUT`.
+    badge_spawn_in_flight_since: Option<Instant>,
     /// `true` between `initiate_consent_restart()` and the moment the
     /// dying child's detach is processed. Tells the detach handler
     /// "this isn't a user-initiated close — preserve viewer_mode and
@@ -166,13 +257,18 @@ pub struct State {
     /// respawns a fresh daemon. UI-write paths refresh this in-place
     /// so they never trigger the shutdown.
     rules_loaded_at: Option<SystemTime>,
+    /// Monotonic source of [`WaiterId`]s. Independent of the subscriber
+    /// counters so the id spaces stay grep-distinguishable.
+    waiter_next_id: u64,
 }
 
 impl Default for State {
     fn default() -> Self {
         State {
             queue: HashMap::new(),
+            pending: HashMap::new(),
             approvals: Vec::new(),
+            ssh_grants: Vec::new(),
             secret_cache: Arc::new(Mutex::new(SecretCache::new())),
             in_flight: InFlightMap::new(),
             last_activity: Instant::now(),
@@ -182,6 +278,12 @@ impl Default for State {
             consent_subscribers: Vec::new(),
             consent_next_subscriber_id: 1,
             consent_spawn_in_flight_since: None,
+            manager_subscribers: Vec::new(),
+            manager_next_subscriber_id: 1,
+            manager_spawn_in_flight_since: None,
+            badge_subscribers: Vec::new(),
+            badge_next_subscriber_id: 1,
+            badge_spawn_in_flight_since: None,
             consent_restart_pending: false,
             // Queue starts empty; record the moment so the auto-hide
             // logic has a stable "started counting" anchor.
@@ -189,6 +291,7 @@ impl Default for State {
             rules_path: None,
             rules: Vec::new(),
             rules_loaded_at: None,
+            waiter_next_id: 1,
         }
     }
 }
@@ -215,6 +318,25 @@ struct ConsentSubscriber {
     /// the child overwrites this whenever the OS reports a focus change
     /// via `ClientMsg::ConsentWindowFocus`.
     focused: bool,
+}
+
+/// One attached manager-window child (the persistent Rules + Audit
+/// surface). Leaner than [`ConsentSubscriber`]: the manager never
+/// reports focus and is never kill-and-respawn raised, so it carries
+/// only the streaming sender, a detach ID, and the pid the CLI can
+/// activate on `secreq view`.
+struct ManagerSubscriber {
+    id: u64,
+    pid: u32,
+    tx: mpsc::Sender<super::proto::DaemonMsg>,
+}
+
+/// One attached pending-badge child. Deliberately leaner than
+/// [`ConsentSubscriber`]: the badge never reports focus and never
+/// restarts, so it carries only the streaming sender and a detach ID.
+struct BadgeSubscriber {
+    id: u64,
+    tx: mpsc::Sender<super::proto::DaemonMsg>,
 }
 
 impl State {
@@ -269,6 +391,9 @@ impl State {
         // Tell every consent-window child to close so they don't
         // outlive the daemon.
         self.broadcast(super::proto::DaemonMsg::ConsentExitPlease);
+        // Same for the badge child(ren) — it reuses `ConsentExitPlease`
+        // as its "please exit" signal.
+        self.broadcast_badge(super::proto::DaemonMsg::ConsentExitPlease);
     }
 
     // ── Consent-window subscriber API ────────────────────────────
@@ -399,6 +524,91 @@ impl State {
         self.consent_subscribers.len()
     }
 
+    // ── Pending-badge subscriber API ─────────────────────────────
+
+    /// Register a pending-badge child. Returns its detach ID and the
+    /// initial snapshot to ship immediately so it can paint frame 1
+    /// without a round-trip. Mirrors [`attach_consent_window`] but with
+    /// no focus state and no foreground intent — the badge is never the
+    /// thing the user is "in".
+    pub fn attach_badge_window(
+        &mut self,
+        sender: mpsc::Sender<super::proto::DaemonMsg>,
+    ) -> (u64, super::proto::WireSnapshot) {
+        let id = self.badge_next_subscriber_id;
+        self.badge_next_subscriber_id = id.wrapping_add(1);
+        self.badge_spawn_in_flight_since = None;
+        self.badge_subscribers
+            .push(BadgeSubscriber { id, tx: sender });
+        super::log::log_at(
+            "state",
+            format_args!(
+                "badge window attached (id={id}, subscribers={})",
+                self.badge_subscribers.len()
+            ),
+        );
+        (id, self.snapshot_for_wire())
+    }
+
+    /// Remove a badge subscriber by ID. Called by the badge streaming
+    /// connection handler when its read loop exits — same detach-order
+    /// contract as [`detach_consent_window`].
+    pub fn detach_badge_window(&mut self, id: u64) {
+        let before = self.badge_subscribers.len();
+        self.badge_subscribers.retain(|s| s.id != id);
+        let after = self.badge_subscribers.len();
+        super::log::log_at(
+            "state",
+            format_args!("badge window detached (id={id}, subscribers {before}→{after})"),
+        );
+    }
+
+    /// Number of currently-attached badge children.
+    pub fn badge_subscriber_count(&self) -> usize {
+        self.badge_subscribers.len()
+    }
+
+    /// Should the daemon ensure a pending-badge child is running? True
+    /// iff there's at least one ask awaiting a decision and no badge is
+    /// already up. Resolving (already-approved) cards don't count — the
+    /// badge surfaces *undecided* requests, the ones a process is hung
+    /// on, not work that's merely finishing.
+    pub fn needs_badge_window(&self) -> bool {
+        !self.queue.is_empty() && self.badge_subscribers.is_empty()
+    }
+
+    /// True if a badge `Command::spawn` is in flight and we shouldn't
+    /// start another. Stale entries auto-clear after
+    /// [`CONSENT_SPAWN_TIMEOUT`] (shared constant — the spawn race is
+    /// identical to the consent window's).
+    pub fn badge_spawn_in_flight(&mut self) -> bool {
+        if let Some(at) = self.badge_spawn_in_flight_since {
+            if at.elapsed() < CONSENT_SPAWN_TIMEOUT {
+                return true;
+            }
+            self.badge_spawn_in_flight_since = None;
+        }
+        false
+    }
+
+    /// Record that a badge `Command::spawn` has just been kicked off.
+    pub fn mark_badge_spawn_in_flight(&mut self) {
+        self.badge_spawn_in_flight_since = Some(Instant::now());
+    }
+
+    /// Tell every attached badge child to exit. Sent when the queue
+    /// drains — the badge has nothing left to count, so it should
+    /// vanish. No-op if no badge is attached. Unlike
+    /// [`broadcast_consent_exit_please`] this doesn't touch
+    /// `queue_empty_since`: the badge has no auto-hide grace period, it
+    /// just goes the moment the last awaiting ask resolves.
+    pub fn broadcast_badge_exit_please(&mut self) {
+        if self.badge_subscribers.is_empty() {
+            return;
+        }
+        self.broadcast_badge(super::proto::DaemonMsg::ConsentExitPlease);
+    }
+
     /// Record a focus-state update for one attached child. Called by
     /// the streaming connection handler when a `ConsentWindowFocus`
     /// arrives. Unknown IDs are ignored — the subscriber may have
@@ -417,10 +627,96 @@ impl State {
     /// itself as focused (OS keyboard focus). Used to gate the
     /// kill-and-respawn raise — when the UI is already in front, a
     /// new ask just needs the streaming snapshot to land, not a
-    /// fresh process — and to suppress the auto-hide grace exit
-    /// while the user is interacting with the window.
+    /// fresh process.
     pub fn any_consent_focused(&self) -> bool {
         self.consent_subscribers.iter().any(|s| s.focused)
+    }
+
+    // ── Manager-window subscriber API ────────────────────────────
+
+    /// Register a manager-window child. Returns its detach ID and the
+    /// initial snapshot to ship immediately so it can paint frame 1
+    /// without a round-trip. Mirrors [`attach_consent_window`] but the
+    /// manager carries no focus state — it's never restart-raised.
+    pub fn attach_manager_window(
+        &mut self,
+        pid: u32,
+        sender: mpsc::Sender<super::proto::DaemonMsg>,
+    ) -> (u64, super::proto::WireSnapshot) {
+        let id = self.manager_next_subscriber_id;
+        self.manager_next_subscriber_id = id.wrapping_add(1);
+        self.manager_spawn_in_flight_since = None;
+        self.manager_subscribers.push(ManagerSubscriber {
+            id,
+            pid,
+            tx: sender,
+        });
+        super::log::log_at(
+            "state",
+            format_args!(
+                "manager window attached (id={id}, pid={pid}, subscribers={})",
+                self.manager_subscribers.len()
+            ),
+        );
+        (id, self.snapshot_for_wire())
+    }
+
+    /// Remove a manager subscriber by ID — same detach-order contract
+    /// as [`detach_consent_window`]. When the last manager detaches,
+    /// viewer mode clears: the pin belonged to the window the user just
+    /// closed, and the next `secreq view` re-sets it.
+    pub fn detach_manager_window(&mut self, id: u64) {
+        let before = self.manager_subscribers.len();
+        self.manager_subscribers.retain(|s| s.id != id);
+        let after = self.manager_subscribers.len();
+        super::log::log_at(
+            "state",
+            format_args!("manager window detached (id={id}, subscribers {before}→{after})"),
+        );
+        if self.manager_subscribers.is_empty() {
+            self.viewer_mode = false;
+        }
+    }
+
+    /// Number of currently-attached manager-window children.
+    pub fn manager_subscriber_count(&self) -> usize {
+        self.manager_subscribers.len()
+    }
+
+    /// First attached manager child's pid, if any — handed back on
+    /// `ShowViewer` so the CLI can activate the existing window.
+    pub fn manager_child_pid(&self) -> Option<u32> {
+        self.manager_subscribers.first().map(|s| s.pid)
+    }
+
+    /// Should `ensure_manager_window` spawn a child? True iff none is
+    /// attached (the manager spawns on demand, never from queue state).
+    pub fn needs_manager_window(&self) -> bool {
+        self.manager_subscribers.is_empty()
+    }
+
+    /// True if a manager `Command::spawn` is in flight and we shouldn't
+    /// start another. Stale entries auto-clear after
+    /// [`CONSENT_SPAWN_TIMEOUT`] (shared constant — same race shape).
+    pub fn manager_spawn_in_flight(&mut self) -> bool {
+        if let Some(at) = self.manager_spawn_in_flight_since {
+            if at.elapsed() < CONSENT_SPAWN_TIMEOUT {
+                return true;
+            }
+            self.manager_spawn_in_flight_since = None;
+        }
+        false
+    }
+
+    /// Record that a manager `Command::spawn` has just been kicked off.
+    pub fn mark_manager_spawn_in_flight(&mut self) {
+        self.manager_spawn_in_flight_since = Some(Instant::now());
+    }
+
+    /// Push `msg` to every attached manager child, pruning dead senders.
+    fn broadcast_manager(&mut self, msg: super::proto::DaemonMsg) {
+        self.manager_subscribers
+            .retain(|s| s.tx.send(msg.clone()).is_ok());
     }
 
     /// One-shot toast push for an auto-deny event. Best-effort —
@@ -461,13 +757,35 @@ impl State {
     /// crossed the empty/non-empty boundary. Idempotent: re-calling
     /// while the state hasn't changed leaves the timestamp alone.
     fn refresh_queue_empty_since(&mut self) {
-        if self.queue.is_empty() {
+        // "Empty" for auto-hide purposes means nothing for the user to
+        // look at — neither awaiting nor resolving cards. A resolving
+        // card must keep the window up (and the grace clock unstarted)
+        // until its biometric prompt clears.
+        if self.queue.is_empty() && self.pending.is_empty() {
             if self.queue_empty_since.is_none() {
                 self.queue_empty_since = Some(Instant::now());
             }
         } else {
             self.queue_empty_since = None;
         }
+    }
+
+    /// Close the prompt window *immediately* on drain. Called right
+    /// after the queue-empty timestamp is refreshed on the resolve path.
+    ///
+    /// The main loop's [`AUTO_HIDE_GRACE`](super::AUTO_HIDE_GRACE) exists
+    /// to leave a confirmation on screen for a beat — but the prompt is a
+    /// pure decision surface now (Rules/Audit live in the manager
+    /// window), so there's nothing to linger over once the last ask
+    /// resolves. The grace-timed main-loop path remains as a fallback
+    /// for a prompt that attaches after the drain. No subscribers
+    /// attached → nothing to close (the broadcast is a no-op and leaves
+    /// the grace clock armed).
+    fn maybe_immediate_auto_hide(&mut self) {
+        if self.queue_empty_since.is_none() {
+            return;
+        }
+        self.broadcast_consent_exit_please();
     }
 
     /// True if a `Command::spawn` is in flight and we shouldn't
@@ -493,11 +811,12 @@ impl State {
         self.consent_spawn_in_flight_since = Some(Instant::now());
     }
 
-    /// Should the daemon ensure a consent-window child is running?
-    /// True iff there's something for the user to see *and* nobody is
-    /// already there to see it.
+    /// Should the daemon ensure a consent-prompt child is running?
+    /// True iff there's a decision (or a resolving card) for the user
+    /// to see *and* nobody is already there to see it. Viewer mode is
+    /// the manager window's business, not the prompt's.
     pub fn needs_consent_window(&self) -> bool {
-        (!self.queue.is_empty() || self.viewer_mode) && self.consent_subscribers.is_empty()
+        (!self.queue.is_empty() || !self.pending.is_empty()) && self.consent_subscribers.is_empty()
     }
 
     /// Push the current snapshot to every attached consent window.
@@ -505,11 +824,24 @@ impl State {
     /// pruned out.
     pub fn broadcast_consent_update(&mut self) {
         let snapshot = self.snapshot_for_wire();
-        self.broadcast(super::proto::DaemonMsg::ConsentUpdate { snapshot });
+        let msg = super::proto::DaemonMsg::ConsentUpdate { snapshot };
+        // Same snapshot feeds all three surfaces: the prompt renders
+        // the queue, the manager needs the live rules + viewer-mode
+        // flag, and the badge just counts `Awaiting` rows.
+        self.broadcast(msg.clone());
+        self.broadcast_manager(msg.clone());
+        self.broadcast_badge(msg);
     }
 
     fn broadcast(&mut self, msg: super::proto::DaemonMsg) {
         self.consent_subscribers
+            .retain(|s| s.tx.send(msg.clone()).is_ok());
+    }
+
+    /// Push `msg` to every attached badge child, pruning senders whose
+    /// receiver has dropped (badge exited / crashed).
+    fn broadcast_badge(&mut self, msg: super::proto::DaemonMsg) {
+        self.badge_subscribers
             .retain(|s| s.tx.send(msg.clone()).is_ok());
     }
 
@@ -524,7 +856,15 @@ impl State {
                 representative: e.representative.clone(),
                 waiter_count: e.waiter_count(),
                 first_seen_secs_ago: now.saturating_duration_since(e.first_seen).as_secs(),
+                status: RowStatus::Awaiting,
             })
+            .chain(self.pending.values().map(|p| super::proto::WireQueueRow {
+                key: p.representative.dedupe_key.clone(),
+                representative: p.representative.clone(),
+                waiter_count: 0,
+                first_seen_secs_ago: now.saturating_duration_since(p.since).as_secs(),
+                status: RowStatus::Resolving,
+            }))
             .collect();
         super::proto::WireSnapshot {
             queue,
@@ -533,68 +873,162 @@ impl State {
         }
     }
 
-    /// Try to short-circuit an ask from the approvals cache. Returns
-    /// the resolved-secret reply if the user previously approved at any
-    /// level of the caller chain; the caller should *not* enqueue.
-    ///
-    /// The flow:
-    /// 1. Walk the caller chain looking for an approval (direct parent
-    ///    first, then each ancestor outwards).
-    /// 2. If found, use that scope to look up each secret in the
-    ///    encrypted in-memory cache.
-    /// 3. Any cache misses get resolved via the provider, and the
-    ///    fresh values are stored in the cache under this scope for
-    ///    future asks from descendants of the same scope.
-    pub fn try_cache_hit(&self, ask: &Ask) -> Option<WaiterReply> {
-        // Authorization gate: only short-circuit the prompt if some
-        // ancestor in the caller chain has a remembered approval for
-        // this wrap. The matched scope itself isn't used downstream —
-        // the secret cache keys on `(wrap, provider, locator)`, not on
-        // which parent process happened to be approved.
-        approval_scope_for(&self.approvals, ask)?;
-        // The approvals cache had a hit — the user is never prompted.
-        // Rewrite the reply's decision to `ApproveCached` so the audit
-        // log distinguishes "we used a remembered approval" from "the
-        // user just clicked Approve". The encrypted-secret cache may or
-        // may not also hit (it usually does, since `ApproveRemember`
-        // populates it during the original resolve); either way the
-        // *approval* was cached and that's what the audit pill reports.
-        Some(
-            resolve_for_ask(ask, self.secret_cache.clone(), self.in_flight.clone()).map_decision(
-                |d| {
-                    if d == Decision::Approve {
-                        Decision::ApproveCached
-                    } else {
-                        d
-                    }
-                },
-            ),
-        )
+    /// True if some ancestor in the caller chain has a remembered
+    /// approval for this wrap — i.e. the ask can be short-circuited
+    /// without prompting. The matched scope itself isn't used
+    /// downstream (the secret cache keys on `(wrap, provider, locator)`,
+    /// not on which parent was approved), so we return a bool. The
+    /// caller resolves via [`resolve_approved_with_pending`] so the
+    /// provider call runs *without* the state lock held — and shows a
+    /// "Resolving…" card if the secret cache is cold.
+    pub fn has_cached_approval(&self, ask: &Ask) -> bool {
+        approval_scope_for(&self.approvals, ask).is_some()
+    }
+
+    // ── SSH sign session grants ──────────────────────────────────────
+    //
+    // The SSH analogue of the wrap approvals cache above. Same in-memory,
+    // no-disk-backing model — but each grant carries a wall-clock TTL and a
+    // key scope (see [`SshGrant`]). The wrap cache reads no clock (the parent
+    // process's lifetime is its natural expiry); the SSH cache does, so its
+    // lookup is split into a public `has_ssh_grant` that reads
+    // `SystemTime::now()` and a private `has_ssh_grant_at(now)` that takes
+    // the clock explicitly — the latter is what the unit test drives.
+
+    /// True if a non-expired SSH grant covers `(key_id, anchor_pid,
+    /// anchor_start_time)` as of *now*. Prunes expired grants on access.
+    /// Reads the wall clock; see [`State::has_ssh_grant_at`] for the
+    /// clock-injectable form the tests use.
+    pub fn has_ssh_grant(&mut self, key_id: &str, anchor_pid: u32, anchor_start_time: u64) -> bool {
+        self.has_ssh_grant_at(key_id, anchor_pid, anchor_start_time, now_unix_secs())
+    }
+
+    /// Clock-injectable core of [`State::has_ssh_grant`]. Prunes every grant
+    /// that has expired as of `now`, then reports whether any surviving grant
+    /// covers the anchor + key.
+    fn has_ssh_grant_at(
+        &mut self,
+        key_id: &str,
+        anchor_pid: u32,
+        anchor_start_time: u64,
+        now: u64,
+    ) -> bool {
+        self.ssh_grants.retain(|g| now < g.expires_at);
+        self.ssh_grants
+            .iter()
+            .any(|g| g.matches(key_id, anchor_pid, anchor_start_time, now))
+    }
+
+    /// Remember an SSH sign session grant. Dedupes on the full grant so a
+    /// re-approval with the same scope/anchor/expiry is a no-op; a re-approval
+    /// with a later expiry is a distinct grant and both coexist harmlessly —
+    /// the latest still-valid one wins on lookup.
+    pub fn remember_ssh_grant(&mut self, grant: SshGrant) {
+        if !self.ssh_grants.contains(&grant) {
+            self.ssh_grants.push(grant);
+        }
+    }
+
+    /// Mark an authorized ask as resolving: show a read-only card in
+    /// the consent window while its provider call (and any biometric
+    /// prompt) runs. Idempotent per dedupe key so a burst of sibling
+    /// auto-approved asks coalesces into one card. Keeps the window up
+    /// and the auto-hide clock unstarted until [`end_pending`].
+    pub fn begin_pending(&mut self, ask: Ask) {
+        self.last_activity = Instant::now();
+        self.queue_empty_since = None;
+        self.pending
+            .entry(ask.dedupe_key.clone())
+            .or_insert_with(|| PendingEntry {
+                representative: ask,
+                since: Instant::now(),
+            });
+        self.show_window();
+        self.broadcast_consent_update();
+    }
+
+    /// Clear a resolving card once its secrets have landed (or failed).
+    /// No-op if the key was already cleared by a coalesced sibling.
+    pub fn end_pending(&mut self, key: &DedupeKey) {
+        if self.pending.remove(key).is_some() {
+            self.last_activity = Instant::now();
+            self.broadcast_consent_update();
+            self.refresh_queue_empty_since();
+            self.maybe_immediate_auto_hide();
+        }
     }
 
     /// Add a waiter for `key`, either folding into an existing queue entry
     /// or creating a new one with `ask` as the representative.
-    pub fn submit_ask(&mut self, ask: Ask, waiter: mpsc::Sender<WaiterReply>) -> SubmitResult {
+    /// Enqueue (or coalesce) an ask and park a waiter on it. Returns the
+    /// [`SubmitResult`] (new entry vs. coalesced onto an existing one) and
+    /// the [`WaiterId`] the caller passes to [`State::withdraw_waiter`] if
+    /// its client hangs up before the user decides.
+    pub fn submit_ask(
+        &mut self,
+        ask: Ask,
+        waiter: mpsc::Sender<WaiterReply>,
+    ) -> (SubmitResult, WaiterId) {
         self.last_activity = Instant::now();
         // Queue is about to become non-empty (or stay non-empty);
         // either way the auto-hide grace clock should be reset.
         self.queue_empty_since = None;
         let key = ask.dedupe_key.clone();
         let is_new = !self.queue.contains_key(&key);
+        // Command label stamped onto each merged secret's provenance. The
+        // plan uses the full joined command; the UI truncates it.
+        let command_label = ask.command.join(" ");
         let entry = self.queue.entry(key.clone()).or_insert_with(|| QueueEntry {
             key: key.clone(),
-            representative: ask.clone(),
+            // Build the representative's secrets by folding the creating
+            // ask's own secrets through `merge_secret`, so even the first
+            // ask's secrets carry `← command` provenance.
+            representative: Ask {
+                secrets: {
+                    let mut rep = Vec::new();
+                    for s in &ask.secrets {
+                        merge_secret(&mut rep, s, &command_label);
+                    }
+                    rep
+                },
+                ..ask.clone()
+            },
             waiters: Vec::new(),
             first_seen: Instant::now(),
         });
-        entry.waiters.push(waiter);
+        if !is_new {
+            // Coalesce: union this ask's secrets into the growing
+            // representative, stamping each with this ask's command.
+            for s in &ask.secrets {
+                merge_secret(&mut entry.representative.secrets, s, &command_label);
+            }
+        }
+        let waiter_id = WaiterId(self.waiter_next_id);
+        self.waiter_next_id += 1;
+        entry.waiters.push(Waiter {
+            id: waiter_id,
+            sender: waiter,
+            requested: ask.secrets.clone(),
+            command: ask.command.clone(),
+            cwd: ask.cwd.clone(),
+            callers: ask.callers.clone(),
+        });
         self.show_window();
         self.broadcast_consent_update();
-        if is_new {
+        let result = if is_new {
             SubmitResult::NewEntry
         } else {
             SubmitResult::Coalesced
-        }
+        };
+        (result, waiter_id)
+    }
+
+    /// Read a queue entry by key. Test-only: lets the state tests inspect
+    /// the parked waiters (their recorded `requested` / `command`) without
+    /// exposing the private `queue` map in production.
+    #[cfg(test)]
+    fn queue_entry_for_test(&self, key: &DedupeKey) -> Option<&QueueEntry> {
+        self.queue.get(key)
     }
 
     /// Resolve a queue entry. **Returns immediately** — the UI must not
@@ -615,15 +1049,37 @@ impl State {
     /// What happens on a spawned worker thread (no mutex held):
     /// - For approve, run `resolve_for_ask` (which may shell out to
     ///   `op read` and friends) and broadcast the result to waiters.
-    pub fn resolve(&mut self, key: &DedupeKey, decision: Decision, scope: ApprovalScope) {
+    ///
+    /// On an approved ask with a **cold** secret cache, the entry is
+    /// moved into `pending` (a "Resolving…" card) rather than dropped,
+    /// so the biometric prompt the provider fires has its provenance on
+    /// screen; the worker clears the card via `shared` once the value
+    /// lands. `shared` is the daemon's own `Arc<Mutex<State>>` — the
+    /// sole caller already holds it, so we take it explicitly rather
+    /// than keep a self-referential handle.
+    pub fn resolve(
+        &mut self,
+        key: &DedupeKey,
+        decision: Decision,
+        scope: ApprovalScope,
+        shared: &SharedState,
+    ) {
         self.last_activity = Instant::now();
         let Some(entry) = self.queue.remove(key) else {
             self.broadcast_consent_update();
             self.refresh_queue_empty_since();
+            self.maybe_immediate_auto_hide();
             return;
         };
 
-        if decision == Decision::ApproveRemember {
+        // SSH asks track their session grants separately via `SshGrant`
+        // (keyed on the anchor, inserted on the SSH path); the wrap approvals
+        // cache is never read for them, so skip the insert to avoid polluting
+        // it with dead entries.
+        if decision == Decision::ApproveRemember
+            && entry.representative.ssh.is_none()
+            && entry.representative.allow_remember
+        {
             let new = ApprovalEntry {
                 wrap: key.wrap.clone(),
                 ppid: scope.pid,
@@ -634,12 +1090,31 @@ impl State {
             }
         }
 
+        // Cold cache → a provider call (and maybe a biometric) is
+        // imminent. Keep the card on screen as "Resolving…" so the
+        // prompt isn't orphaned; the worker clears it when done.
+        let cold =
+            decision.approved() && !ask_fully_cached(&entry.representative, &self.secret_cache);
+        if cold {
+            self.pending.insert(
+                key.clone(),
+                PendingEntry {
+                    representative: entry.representative.clone(),
+                    since: Instant::now(),
+                },
+            );
+        }
+
         self.broadcast_consent_update();
         // Queue may have just emptied — set the timestamp so the
-        // auto-hide grace period starts counting. Main loop reads
-        // this each tick and broadcasts `ConsentExitPlease` once the
-        // grace elapses.
+        // auto-hide grace period starts counting (suppressed while a
+        // resolving card is up). Main loop reads this each tick and
+        // broadcasts `ConsentExitPlease` once the grace elapses.
         self.refresh_queue_empty_since();
+        // For a decision-only window, skip the grace entirely and close
+        // now. A cold approve keeps a resolving card up (queue not yet
+        // "empty"), so this fires from `end_pending` once the value lands.
+        self.maybe_immediate_auto_hide();
 
         if decision.approved() {
             // Resolution lives off-thread so the UI never blocks on a
@@ -648,17 +1123,49 @@ impl State {
             // socket connection threads parked on the channel.
             let cache = self.secret_cache.clone();
             let in_flight = self.in_flight.clone();
+            let shared = shared.clone();
+            let key = key.clone();
             std::thread::spawn(move || {
-                let reply =
-                    resolve_for_ask(&entry.representative, cache, in_flight).map_decision(|d| {
-                        if d == Decision::Approve {
-                            decision
-                        } else {
-                            d
-                        }
-                    });
+                // Resolve the union once (singleflight dedupes provider
+                // calls across the batch), keyed by (provider, locator).
+                let union = resolve_union(&entry.representative, cache, in_flight);
+                // Then hand each waiter back ONLY the secrets its own ask
+                // requested — looked up by (provider, locator) so a
+                // same-name-different-ref sibling never leaks in. A waiter
+                // whose full slice resolved gets Decision; one missing any
+                // of its keys gets Err (per-waiter, not all-or-nothing).
                 for w in &entry.waiters {
-                    let _ = w.send(reply.clone());
+                    let mut secrets = HashMap::new();
+                    let mut failure: Option<String> = None;
+                    for s in &w.requested {
+                        match union.get(&(s.provider.clone(), s.locator.clone())) {
+                            Some(Ok(value)) => {
+                                secrets.insert(s.name.clone(), value.clone());
+                            }
+                            Some(Err(msg)) => {
+                                failure.get_or_insert_with(|| msg.clone());
+                            }
+                            None => {
+                                failure.get_or_insert_with(|| {
+                                    format!("secret `{}` was not resolved for this session", s.name)
+                                });
+                            }
+                        }
+                    }
+                    let reply = match failure {
+                        Some(message) => WaiterReply::Err { message },
+                        None => WaiterReply::Decision { decision, secrets },
+                    };
+                    let _ = w.sender.send(reply);
+                }
+                // Clear the "Resolving…" card now that the value is
+                // cached (or the resolve failed). Skipped when warm
+                // (no card was shown). Best-effort: a daemon mid-
+                // shutdown may have poisoned/dropped the mutex.
+                if cold {
+                    if let Ok(mut guard) = shared.lock() {
+                        guard.end_pending(&key);
+                    }
                 }
             });
         } else {
@@ -668,9 +1175,80 @@ impl State {
                 secrets: HashMap::new(),
             };
             for w in &entry.waiters {
-                let _ = w.send(reply.clone());
+                let _ = w.sender.send(reply.clone());
             }
         }
+    }
+
+    /// Build the `abandoned` audit row for a withdrawn waiter. The wrap
+    /// name comes from the dedupe key; `args` is the waiter's command with
+    /// a leading element stripped iff it duplicates the wrap name — `x`
+    /// asks send `[wrap, args…]` (so we drop the wrap), while `run`/`read`
+    /// send the bare command (nothing to drop), reconstructing exactly the
+    /// `args` the live client would have logged.
+    fn abandoned_audit_entry(key: &DedupeKey, waiter: &Waiter) -> AuditEntry {
+        let args: &[String] = match waiter.command.split_first() {
+            Some((first, rest)) if first == &key.wrap => rest,
+            _ => &waiter.command,
+        };
+        let callers: Vec<AuditCaller> = waiter
+            .callers
+            .iter()
+            .map(|c| AuditCaller {
+                pid: c.pid,
+                name: c.name.clone(),
+                command: c.command.clone(),
+            })
+            .collect();
+        let secret_names: Vec<String> = waiter.requested.iter().map(|s| s.name.clone()).collect();
+        AuditEntry::abandoned(&key.wrap, args, &waiter.cwd, &callers, &secret_names)
+    }
+
+    /// Remove a single parked waiter whose client exited before the user
+    /// decided. Writes an `abandoned` audit row for that command (the
+    /// daemon does this itself — there's no live client left to write it,
+    /// the second documented exception to "the daemon never writes audit
+    /// rows", alongside SSH signs), drops the waiter (closing its reply
+    /// channel, which unblocks the parked connection thread), and — if it
+    /// was the last waiter on the entry — removes the entry so the card
+    /// leaves the requests view and the window can auto-hide.
+    ///
+    /// Idempotent: a no-op if the key or waiter id is gone (the user just
+    /// resolved it, or a duplicate hang-up already fired). Both this and
+    /// [`State::resolve`] run under the state mutex, so the "user approves
+    /// at the same instant the client dies" race collapses to whichever
+    /// wins — the loser finds the entry already gone and does nothing.
+    pub fn withdraw_waiter(&mut self, key: &DedupeKey, waiter_id: WaiterId) {
+        self.last_activity = Instant::now();
+        // Already resolved (moved to `pending`) or never here → nothing to do.
+        let Some(entry) = self.queue.get_mut(key) else {
+            return;
+        };
+        let Some(pos) = entry.waiters.iter().position(|w| w.id == waiter_id) else {
+            return;
+        };
+        // Removing the waiter drops its `Sender`; the reply-writer thread's
+        // `recv()` then returns `Err` and that thread exits cleanly.
+        let waiter = entry.waiters.remove(pos);
+
+        let audit_entry = State::abandoned_audit_entry(key, &waiter);
+        if let Err(err) = audit::append(&audit_entry) {
+            super::log::log_at(
+                "state",
+                format_args!("audit append failed for abandoned ask: {err:#}"),
+            );
+        }
+
+        // Drop the whole entry once its last waiter is gone. A still-
+        // populated entry stays (coalesced siblings are still waiting),
+        // just with a smaller waiter count.
+        if entry.waiters.is_empty() {
+            self.queue.remove(key);
+        }
+
+        self.broadcast_consent_update();
+        self.refresh_queue_empty_since();
+        self.maybe_immediate_auto_hide();
     }
 
     pub fn snapshot(&self) -> QueueSnapshot {
@@ -682,7 +1260,15 @@ impl State {
                 representative: e.representative.clone(),
                 waiter_count: e.waiter_count(),
                 first_seen: e.first_seen,
+                status: RowStatus::Awaiting,
             })
+            .chain(self.pending.values().map(|p| QueueRow {
+                key: p.representative.dedupe_key.clone(),
+                representative: p.representative.clone(),
+                waiter_count: 0,
+                first_seen: p.since,
+                status: RowStatus::Resolving,
+            }))
             .collect();
         entries.sort_by_key(|r| r.first_seen);
         QueueSnapshot { entries }
@@ -700,20 +1286,18 @@ impl State {
         self.broadcast_consent_update();
     }
 
-    /// `secreq view`: open the window AND pin it so the empty-queue
-    /// auto-hide is suppressed.
+    /// `secreq view`: flag viewer mode so a freshly-attached manager
+    /// child opens on the Audit view (the flag rides the snapshot
+    /// stream). Cleared when the last manager window detaches.
     pub fn enter_viewer_mode(&mut self) {
-        self.window_visible = true;
         self.viewer_mode = true;
         self.broadcast_consent_update();
     }
 
-    /// Called when the consent-window child detaches (close button,
-    /// process exit, crash). Clears viewer-mode so a subsequent ask
-    /// doesn't inherit the pin.
+    /// Called when the consent-prompt child detaches (close button,
+    /// process exit, crash).
     pub fn hide_window(&mut self) {
         self.window_visible = false;
-        self.viewer_mode = false;
         self.broadcast_consent_update();
     }
 
@@ -754,8 +1338,8 @@ impl State {
     /// **Why reload-in-place rather than restart-on-change?** The
     /// original design used a daemon shutdown to ensure the in-memory
     /// approvals cache was also cleared when policy changed. But the
-    /// approvals cache is checked *before* rules evaluate (in
-    /// `try_cache_hit`), so a rule edit doesn't actually invalidate
+    /// approvals cache is checked *before* rules evaluate (via
+    /// `has_cached_approval`), so a rule edit doesn't actually invalidate
     /// past approvals — past approvals are tied to a specific `(wrap,
     /// pid, start_time)` and remain semantically valid. The explicit
     /// revoke primitive (`secreq daemon stop`) stays as the way to
@@ -910,7 +1494,7 @@ impl State {
 }
 
 impl WaiterReply {
-    fn map_decision<F: FnOnce(Decision) -> Decision>(self, f: F) -> WaiterReply {
+    pub(super) fn map_decision<F: FnOnce(Decision) -> Decision>(self, f: F) -> WaiterReply {
         match self {
             WaiterReply::Decision { decision, secrets } => WaiterReply::Decision {
                 decision: f(decision),
@@ -978,6 +1562,38 @@ pub fn approval_scope_for(approvals: &[ApprovalEntry], ask: &Ask) -> Option<Appr
     None
 }
 
+/// Current Unix time in whole seconds. Used by the public SSH-approval
+/// lookup; the clock-injectable `*_at` form takes `now` directly so tests
+/// never touch the real clock.
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Merge `incoming` into the union `rep`, deduped by `(name, provider,
+/// locator)`. A duplicate appends `command` to the existing entry's
+/// `requested_by` (deduped); a new secret is pushed, stamped with
+/// `command`.
+fn merge_secret(
+    rep: &mut Vec<super::proto::SecretAsk>,
+    incoming: &super::proto::SecretAsk,
+    command: &str,
+) {
+    if let Some(existing) = rep.iter_mut().find(|s| {
+        s.name == incoming.name && s.provider == incoming.provider && s.locator == incoming.locator
+    }) {
+        if !existing.requested_by.iter().any(|c| c == command) {
+            existing.requested_by.push(command.to_owned());
+        }
+    } else {
+        let mut secret = incoming.clone();
+        secret.requested_by = vec![command.to_owned()];
+        rep.push(secret);
+    }
+}
+
 fn has_entry(approvals: &[ApprovalEntry], wrap: &str, scope: ApprovalScope) -> bool {
     approvals
         .iter()
@@ -1003,13 +1619,100 @@ fn has_entry(approvals: &[ApprovalEntry], wrap: &str, scope: ApprovalScope) -> b
 ///    guard; waiters wake, re-check the cache, and reply.
 ///
 /// Callers are responsible for authorization — this function never
-/// gates a lookup. Both the interactive path (`try_cache_hit` after
-/// `approval_scope_for` matches) and the auto-rule path (`handle_rule_hit`
-/// after the rule fires) call in only once they've confirmed the ask is
-/// allowed.
+/// gates a lookup. The approvals-cache path (`has_cached_approval`
+/// matched), the manual-approve path (`State::resolve`), and the
+/// auto-rule path (`handle_rule_hit` after the rule fires) all call in
+/// only once they've confirmed the ask is allowed.
 ///
 /// Running off-thread, so blocking on `op read` etc. is fine here.
 ///
+/// True if every secret the ask needs is already in the cache — i.e.
+/// resolving it will invoke no provider and so trigger no biometric
+/// prompt. Vacuously true for a gate-only ask (no secrets). Used to
+/// decide whether a "Resolving…" card is worth showing: if the value
+/// is already cached, resolution is instant and silent.
+pub(super) fn ask_fully_cached(ask: &Ask, cache: &Arc<Mutex<SecretCache>>) -> bool {
+    let guard = cache.lock().expect("secret cache mutex");
+    ask.secrets.iter().all(|s| {
+        guard
+            .get(&CacheKey {
+                wrap: ask.dedupe_key.wrap.clone(),
+                provider: s.provider.clone(),
+                locator: s.locator.clone(),
+            })
+            .is_some()
+    })
+}
+
+/// Should a nested `run` be served straight from the secret cache without
+/// showing the consent window? True **only** when the ask is marked
+/// `nested_run` (an inner `run` that detected an ancestor run's session
+/// marker) **and** every value is already cached, so resolution invokes
+/// no provider. An unnested run (`nested_run == false`) or any uncached
+/// secret returns false → the ask prompts. This is the sole window-skip
+/// for `run`: gating it on nesting guarantees a fresh top-level run
+/// always prompts, no matter how warm the cache is.
+pub(super) fn nested_run_fully_cached(ask: &Ask, cache: &Arc<Mutex<SecretCache>>) -> bool {
+    ask.nested_run && ask_fully_cached(ask, cache)
+}
+
+/// Run [`resolve::resolve_all`], logging its wall-clock cost to
+/// `daemon.log` under the `resolve` tag.
+///
+/// This is the daemon's window into a slow 1Password read: `resolve_all`
+/// spawns one `op run … printenv` per provider group, and that subprocess
+/// dominates the elapsed time (parsing its output is negligible). The line
+/// records the batch size, the providers involved, the total wall time, and
+/// the per-secret average — enough to see "N secrets cost T seconds, so each
+/// `op://` reference is ~T/N" without attaching a profiler. Both resolver
+/// call sites (`resolve_for_ask`, `resolve_union`) go through here so the
+/// timing line is identical regardless of path.
+fn resolve_all_logged(
+    manifest: &Manifest,
+    plan: &ResolutionPlan,
+) -> Result<Vec<resolve::ResolvedSecret>> {
+    let secret_count = plan.requests.len();
+    let mut providers: Vec<&str> = plan.requests.iter().map(|r| r.provider.as_str()).collect();
+    providers.sort_unstable();
+    providers.dedup();
+
+    let started = Instant::now();
+    let result = resolve::resolve_all(manifest, plan);
+    let elapsed = started.elapsed();
+
+    let per_secret_ms = if secret_count > 0 {
+        elapsed.as_secs_f64() * 1000.0 / secret_count as f64
+    } else {
+        0.0
+    };
+    match &result {
+        Ok((_resolved, stats)) => super::log::log_at(
+            "resolve",
+            format_args!(
+                "resolve_all: {secret_count} secret(s) across {} provider(s) [{}] in {:.3}s ({per_secret_ms:.0}ms/secret): \
+                 batch subprocess {:.3}s + parse {:.1}ms, {} batched / {} per-secret → ok",
+                providers.len(),
+                providers.join(","),
+                elapsed.as_secs_f64(),
+                stats.batch_subprocess.as_secs_f64(),
+                stats.batch_parse.as_secs_f64() * 1000.0,
+                stats.batched,
+                stats.per_secret,
+            ),
+        ),
+        Err(err) => super::log::log_at(
+            "resolve",
+            format_args!(
+                "resolve_all: {secret_count} secret(s) across {} provider(s) [{}] in {:.3}s → err: {err:#}",
+                providers.len(),
+                providers.join(","),
+                elapsed.as_secs_f64(),
+            ),
+        ),
+    }
+    result.map(|(resolved, _stats)| resolved)
+}
+
 /// `pub(super)` so the auto-rule path in `server.rs` can call this
 /// directly — auto-decisions bypass the queue, so they don't go
 /// through `State::resolve`.
@@ -1095,7 +1798,7 @@ pub(super) fn resolve_for_ask(
             })
             .collect(),
     };
-    match resolve::resolve_all(&manifest, &plan) {
+    match resolve_all_logged(&manifest, &plan) {
         Ok(resolved) => {
             let by_name: HashMap<String, _> =
                 resolved.into_iter().map(|r| (r.name, r.value)).collect();
@@ -1137,6 +1840,275 @@ pub(super) fn resolve_for_ask(
     }
 }
 
+/// Resolve the distinct `(provider, locator)` pairs of `rep`'s secrets,
+/// returning a map keyed by `(provider, locator)` so the caller can hand
+/// each waiter back exactly the values *it* asked for. The key isolation
+/// primitive for session aggregation: a name-keyed map would collapse two
+/// union entries that share a name but differ by ref (`FOO=…/a` vs
+/// `FOO=…/b`); `(provider, locator)` keeps them distinct.
+///
+/// Reuses the same cache + singleflight machinery as [`resolve_for_ask`]
+/// (the cache key is already `(wrap, provider, locator)`): a hit
+/// short-circuits, a miss acquires the singleflight slot, and this thread's
+/// resolver-owned keys batch into one `resolve::resolve_all` invocation.
+/// Never resolves a `(provider, locator)` more than once even if several
+/// union entries share it — distinct pairs are collected up front.
+///
+/// Each entry in the returned map is `Ok(value)` or `Err(message)` for that
+/// specific pair, so a caller can succeed a waiter whose slice resolved
+/// cleanly while erroring only the waiters that needed a failed pair.
+fn resolve_union(
+    rep: &Ask,
+    cache: Arc<Mutex<SecretCache>>,
+    in_flight: Arc<InFlightMap>,
+) -> HashMap<(String, String), Result<String, String>> {
+    let wrap = rep.dedupe_key.wrap.clone();
+
+    // Collect the distinct (provider, locator) pairs, remembering the first
+    // SecretAsk seen for each so provider-facing metadata (reason,
+    // description, default) is preserved. Insertion order is stable so the
+    // resolve batch mirrors arrival order.
+    let mut order: Vec<(String, String)> = Vec::new();
+    let mut first_ask: HashMap<(String, String), &super::proto::SecretAsk> = HashMap::new();
+    for s in &rep.secrets {
+        let pl = (s.provider.clone(), s.locator.clone());
+        first_ask.entry(pl.clone()).or_insert_with(|| {
+            order.push(pl);
+            s
+        });
+    }
+
+    let mut out: HashMap<(String, String), Result<String, String>> = HashMap::new();
+    // Keys this thread owns the singleflight slot for, paired with the
+    // synthetic request name we resolve them under (unique per pair, so a
+    // shared user-facing name never collapses two pairs in the resolver
+    // output map).
+    let mut needs_resolve: Vec<((String, String), String)> = Vec::new();
+    let mut guards: Vec<InFlightGuard> = Vec::new();
+
+    for pl in &order {
+        let (provider, locator) = pl;
+        let key = CacheKey {
+            wrap: wrap.clone(),
+            provider: provider.clone(),
+            locator: locator.clone(),
+        };
+        // Cache check — held only for the lookup.
+        {
+            let guard = cache.lock().expect("secret cache mutex");
+            if let Some(value) = guard.get(&key) {
+                out.insert(pl.clone(), Ok((*value).clone()));
+                continue;
+            }
+        }
+        // Miss → singleflight.
+        match in_flight.acquire(&key) {
+            Acquired::Resolver(g) => {
+                // Unique synthetic name so `resolve_all`'s name-keyed output
+                // can't collapse two same-user-name pairs. It must be a valid
+                // **environment variable name**: the batch path
+                // (`retrieve_batch`, e.g. `op run -- printenv`) sets one env
+                // var per request keyed on this name, and `Command::env`
+                // rejects NUL bytes — an index keeps it unique *and* legal
+                // (a `provider\0locator` join silently broke every batch,
+                // forcing slow per-secret fallback).
+                let req_name = format!("secreq_req_{}", needs_resolve.len());
+                needs_resolve.push((pl.clone(), req_name));
+                guards.push(g);
+            }
+            Acquired::Ready => {
+                let guard = cache.lock().expect("secret cache mutex");
+                match guard.get(&key) {
+                    Some(value) => {
+                        out.insert(pl.clone(), Ok((*value).clone()));
+                    }
+                    None => {
+                        // Ready-but-empty: treat as a per-pair failure. Do
+                        // NOT fail this thread's other guards — those pairs
+                        // may still resolve fine; the batch runs below.
+                        out.insert(
+                            pl.clone(),
+                            Err(format!(
+                                "in-flight slot for {provider}/{locator} signalled ready but cache was empty",
+                            )),
+                        );
+                    }
+                }
+            }
+            Acquired::Failed(msg) => {
+                out.insert(pl.clone(), Err(msg));
+            }
+        }
+    }
+
+    if needs_resolve.is_empty() {
+        return out;
+    }
+
+    let manifest = build_manifest(&rep.providers);
+    let plan = ResolutionPlan {
+        requests: needs_resolve
+            .iter()
+            .map(|((provider, locator), req_name)| {
+                let ask = first_ask[&(provider.clone(), locator.clone())];
+                SecretRequest {
+                    name: req_name.clone(),
+                    provider: provider.clone(),
+                    locator: locator.clone(),
+                    group: None,
+                    reason: ask.reason.clone(),
+                    description: ask.description.clone(),
+                    default: ask.default.clone(),
+                    source: Source::Eager,
+                }
+            })
+            .collect(),
+    };
+    match resolve_all_logged(&manifest, &plan) {
+        Ok(resolved) => {
+            let by_req: HashMap<String, _> =
+                resolved.into_iter().map(|r| (r.name, r.value)).collect();
+            let mut guard = cache.lock().expect("secret cache mutex");
+            for ((provider, locator), req_name) in &needs_resolve {
+                let pl = (provider.clone(), locator.clone());
+                match by_req.get(req_name) {
+                    Some(value) => {
+                        let exposed = value.expose().to_owned();
+                        guard.put(
+                            CacheKey {
+                                wrap: wrap.clone(),
+                                provider: provider.clone(),
+                                locator: locator.clone(),
+                            },
+                            &exposed,
+                        );
+                        out.insert(pl, Ok(exposed));
+                    }
+                    None => {
+                        out.insert(
+                            pl,
+                            Err(format!(
+                                "provider {provider} returned no value for {locator}"
+                            )),
+                        );
+                    }
+                }
+            }
+            drop(guard);
+            // Cache populated → wake parked waiters (also drops the slots).
+            for g in guards {
+                g.mark_ready();
+            }
+        }
+        Err(err) => {
+            let msg = format!("{err:#}");
+            // The whole batch failed: every resolver-owned pair failed.
+            // Fail the slots so concurrent waiters on those keys see a real
+            // error rather than the "did not signal" default.
+            fail_guards(guards, &msg);
+            for ((provider, locator), _req_name) in &needs_resolve {
+                out.insert((provider.clone(), locator.clone()), Err(msg.clone()));
+            }
+        }
+    }
+
+    out
+}
+
+/// Resolve a **single** secret through the shared encrypted cache + the
+/// singleflight coordinator, returning the value in a [`Zeroizing`] buffer.
+///
+/// This is the single-key analogue of [`resolve_for_ask`], used by the SSH
+/// sign path so a resolved private key is cached under
+/// `CacheKey { wrap: "ssh:<key_id>", provider, locator }` exactly like any
+/// other secret — the provider (and its biometric prompt) is invoked at most
+/// once per key per daemon lifetime, instead of on every sign. The wrap path
+/// keeps using `resolve_for_ask` so it can batch multiple secrets into one
+/// provider call; the SSH path only ever has one key, so it doesn't need the
+/// batch machinery, but it does need the cache + singleflight, which this
+/// function provides without the plaintext-`String` reply map.
+///
+/// On a cache hit it returns immediately. On a miss it either becomes the
+/// resolver (invokes the provider, populates the cache, signals waiters) or
+/// parks until another thread's resolve completes and reads the freshly
+/// cached value. Every error path marks the in-flight slot failed so parked
+/// waiters get a real error instead of hanging.
+pub(super) fn resolve_single_cached(
+    cache: &Arc<Mutex<SecretCache>>,
+    in_flight: &Arc<InFlightMap>,
+    key: CacheKey,
+    name: &str,
+    reason: Option<&str>,
+    providers: &std::collections::BTreeMap<String, Provider>,
+) -> Result<Zeroizing<String>> {
+    // Cache check — lock held only for the lookup.
+    {
+        let guard = cache.lock().expect("secret cache mutex");
+        if let Some(value) = guard.get(&key) {
+            return Ok(value);
+        }
+    }
+    // Miss → singleflight, mirroring `resolve_for_ask`.
+    match in_flight.acquire(&key) {
+        Acquired::Resolver(g) => {
+            let manifest = Manifest {
+                groups: std::collections::BTreeMap::new(),
+                providers: providers.clone(),
+            };
+            let plan = ResolutionPlan {
+                requests: vec![SecretRequest {
+                    name: name.to_owned(),
+                    provider: key.provider.clone(),
+                    locator: key.locator.clone(),
+                    group: None,
+                    reason: reason.map(str::to_owned),
+                    description: None,
+                    default: None,
+                    source: Source::Eager,
+                }],
+            };
+            let resolved = resolve::resolve_all(&manifest, &plan).and_then(|(rows, _stats)| {
+                rows.into_iter()
+                    .next()
+                    .map(|r| r.value)
+                    .with_context(|| format!("provider returned no value for {name:?}"))
+            });
+            match resolved {
+                Ok(secret) => {
+                    let exposed = Zeroizing::new(secret.expose().to_owned());
+                    {
+                        let mut guard = cache.lock().expect("secret cache mutex");
+                        guard.put(key, exposed.as_str());
+                    }
+                    // Cache populated → wake any parked waiters (also drops
+                    // the in-flight slot).
+                    g.mark_ready();
+                    Ok(exposed)
+                }
+                Err(err) => {
+                    let msg = format!("{err:#}");
+                    g.mark_failed(msg);
+                    Err(err)
+                }
+            }
+        }
+        Acquired::Ready => {
+            // Another thread resolved while we waited; the value should be in
+            // the cache now. Treat a "ready but empty" cache as a failure
+            // rather than retrying, matching `resolve_for_ask`.
+            let guard = cache.lock().expect("secret cache mutex");
+            guard.get(&key).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "in-flight slot for {}/{} signalled ready but cache was empty",
+                    key.provider,
+                    key.locator,
+                )
+            })
+        }
+        Acquired::Failed(msg) => Err(anyhow::anyhow!(msg)),
+    }
+}
+
 /// Consume `guards` and propagate `msg` to all waiters parked on
 /// their slots. Used in the failure paths of `resolve_for_ask` so
 /// concurrent asks for the same keys get a real error string.
@@ -1171,7 +2143,7 @@ fn build_manifest(providers: &HashMap<String, WireProvider>) -> Manifest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::proto::{Caller, DedupeKey};
+    use crate::daemon::proto::{Caller, DedupeKey, SshAskInfo};
 
     fn mk_ask(wrap: &str, callers: Vec<(u32, u64)>) -> Ask {
         let dedupe_key = DedupeKey {
@@ -1194,7 +2166,206 @@ mod tests {
             secrets: vec![],
             providers: HashMap::new(),
             dedupe_key,
+            ssh: None,
+            allow_remember: true,
+            nested_run: false,
         }
+    }
+
+    #[test]
+    fn ssh_grant_insert_hit_then_expiry_miss() {
+        use crate::consent::{SshAnchor, SshGrantScope};
+        let mut state = State::new();
+        state.remember_ssh_grant(SshGrant {
+            scope: SshGrantScope::OneKey("github".into()),
+            anchor: SshAnchor {
+                pid: 99,
+                start_time: 1_700_000_000,
+            },
+            expires_at: 5000,
+        });
+
+        // Inside the window, matching anchor + key: hit. `now` is passed
+        // explicitly so the test never reads the real clock.
+        assert!(state.has_ssh_grant_at("github", 99, 1_700_000_000, /*now=*/ 4999));
+        // Wrong anchor pid: miss even before expiry.
+        assert!(!state.has_ssh_grant_at("github", 100, 1_700_000_000, 4999));
+        // Past expiry: miss. This also prunes the grant.
+        assert!(!state.has_ssh_grant_at("github", 99, 1_700_000_000, 5001));
+        // The expired grant was pruned on the last access, so even a
+        // pre-expiry `now` no longer hits.
+        assert!(!state.has_ssh_grant_at("github", 99, 1_700_000_000, 4999));
+    }
+
+    #[test]
+    fn ssh_all_keys_grant_covers_any_key_on_the_anchor() {
+        use crate::consent::{SshAnchor, SshGrantScope};
+        let mut state = State::new();
+        state.remember_ssh_grant(SshGrant {
+            scope: SshGrantScope::AllKeys,
+            anchor: SshAnchor {
+                pid: 99,
+                start_time: 1_700_000_000,
+            },
+            expires_at: 5000,
+        });
+        // Any key id on the granted anchor is covered.
+        assert!(state.has_ssh_grant_at("github", 99, 1_700_000_000, 4999));
+        assert!(state.has_ssh_grant_at("gitlab", 99, 1_700_000_000, 4999));
+        // A different anchor is not.
+        assert!(!state.has_ssh_grant_at("github", 100, 1_700_000_000, 4999));
+    }
+
+    #[test]
+    fn resolve_ssh_ask_remember_does_not_write_wrap_cache_but_normal_ask_does() {
+        // SSH approvals are remembered via `SshGrant` (keyed on
+        // the anchor), so resolving an SSH ask with ApproveRemember must
+        // NOT add anything to the wrap approvals cache — that entry would
+        // be dead data. A normal wrap ask, by contrast, still populates it.
+        use std::sync::mpsc;
+
+        let shared: SharedState = Arc::new(Mutex::new(State::new()));
+        let scope = ApprovalScope {
+            pid: 4242,
+            start_time: 1_700_000_000,
+        };
+
+        // SSH ask: carries an `SshAskInfo` marker, no secrets.
+        let mut ssh_ask = mk_ask("ssh:github", vec![(4242, 1_700_000_000)]);
+        ssh_ask.ssh = Some(SshAskInfo {
+            key_id: "github".into(),
+            fingerprint: "SHA256:deadbeef".into(),
+            reason: None,
+        });
+        let ssh_key = ssh_ask.dedupe_key.clone();
+        let (tx, _rx) = mpsc::channel();
+        {
+            let mut guard = shared.lock().expect("state mutex");
+            guard.submit_ask(ssh_ask, tx);
+            guard.resolve(&ssh_key, Decision::ApproveRemember, scope, &shared);
+            assert!(
+                guard.approvals.is_empty(),
+                "an SSH ask must not write the wrap approvals cache"
+            );
+        }
+
+        // Normal wrap ask: no `ssh` marker → the wrap cache IS populated.
+        let wrap_ask = mk_ask("gh", vec![(4242, 1_700_000_000)]);
+        let wrap_key = wrap_ask.dedupe_key.clone();
+        let (tx, _rx) = mpsc::channel();
+        {
+            let mut guard = shared.lock().expect("state mutex");
+            guard.submit_ask(wrap_ask, tx);
+            guard.resolve(&wrap_key, Decision::ApproveRemember, scope, &shared);
+            assert_eq!(
+                guard.approvals.len(),
+                1,
+                "a normal wrap ask must still populate the wrap approvals cache"
+            );
+            assert_eq!(guard.approvals[0].wrap, "gh");
+        }
+    }
+
+    #[test]
+    fn ask_with_allow_remember_false_does_not_persist_approval() {
+        // A `run` ask (allow_remember = false) given ApproveRemember must
+        // NOT write the approvals cache — every run re-prompts.
+        use std::sync::mpsc;
+
+        let shared: SharedState = Arc::new(Mutex::new(State::new()));
+        let scope = ApprovalScope {
+            pid: 4242,
+            start_time: 1_700_000_000,
+        };
+
+        let mut ask = mk_ask("run", vec![(4242, 1_700_000_000)]);
+        ask.allow_remember = false;
+        let key = ask.dedupe_key.clone();
+        let (tx, _rx) = mpsc::channel();
+        let mut guard = shared.lock().expect("state mutex");
+        guard.submit_ask(ask, tx);
+        guard.resolve(&key, Decision::ApproveRemember, scope, &shared);
+        assert!(
+            guard.approvals.is_empty(),
+            "a run ask must not persist an approval even on ApproveRemember"
+        );
+    }
+
+    #[test]
+    fn badge_window_lifecycle_tracks_the_awaiting_queue() {
+        use std::sync::mpsc;
+
+        let shared: SharedState = Arc::new(Mutex::new(State::new()));
+
+        // Empty queue: no badge needed, none attached.
+        {
+            let guard = shared.lock().expect("state mutex");
+            assert!(!guard.needs_badge_window());
+            assert_eq!(guard.badge_subscriber_count(), 0);
+        }
+
+        // An ask awaiting a decision → a badge is needed (but not yet up).
+        let ask = mk_ask("gh", vec![(100, 1_700_000_000)]);
+        let key = ask.dedupe_key.clone();
+        let (tx, _rx) = mpsc::channel();
+        shared.lock().expect("state mutex").submit_ask(ask, tx);
+        assert!(shared.lock().unwrap().needs_badge_window());
+
+        // Attach a badge → it's up now, so we don't need to spawn another.
+        let (btx, brx) = mpsc::channel();
+        let id = {
+            let mut guard = shared.lock().expect("state mutex");
+            let (id, _snap) = guard.attach_badge_window(btx);
+            assert_eq!(guard.badge_subscriber_count(), 1);
+            assert!(!guard.needs_badge_window());
+            id
+        };
+        // The attach pushed an initial snapshot; the queue change pushed
+        // another. Both are `ConsentUpdate`s — drain them.
+        while let Ok(msg) = brx.try_recv() {
+            assert!(matches!(
+                msg,
+                crate::daemon::proto::DaemonMsg::ConsentUpdate { .. }
+            ));
+        }
+
+        // Drain the queue (deny the only ask). The badge is no longer
+        // needed once nothing awaits a decision.
+        {
+            let mut guard = shared.lock().expect("state mutex");
+            guard.resolve(
+                &key,
+                Decision::Deny,
+                ApprovalScope {
+                    pid: 100,
+                    start_time: 1_700_000_000,
+                },
+                &shared,
+            );
+            assert!(guard.queue_is_empty());
+            // A badge is still attached, but `needs_badge_window` is false
+            // because the queue is empty — the daemon's main loop will send
+            // the exit signal on its next tick.
+            assert!(!guard.needs_badge_window());
+        }
+
+        // The exit broadcast reaches the attached badge.
+        {
+            let mut guard = shared.lock().expect("state mutex");
+            guard.broadcast_badge_exit_please();
+        }
+        // Skip any trailing snapshot pushes; the exit signal must arrive.
+        let mut saw_exit = false;
+        while let Ok(msg) = brx.try_recv() {
+            if matches!(msg, crate::daemon::proto::DaemonMsg::ConsentExitPlease) {
+                saw_exit = true;
+            }
+        }
+        assert!(saw_exit, "badge must receive ConsentExitPlease on drain");
+
+        // Detaching with an empty queue leaves no badge needed.
+        shared.lock().expect("state mutex").detach_badge_window(id);
+        assert!(!shared.lock().unwrap().needs_badge_window());
     }
 
     #[test]
@@ -1279,14 +2450,13 @@ mod tests {
     }
 
     #[test]
-    fn try_cache_hit_returns_approve_cached_so_audit_log_can_distinguish() {
-        // A remembered approval (in `state.approvals`) plus an ask
-        // whose direct parent matches the scope should short-circuit
-        // the prompt. The reply must carry `ApproveCached`, not
-        // `Approve`, so the audit-log writer downstream can render
-        // "the user wasn't asked again" rather than implying a fresh
-        // user click. (Previously both paths returned `Approve` and
-        // the audit log couldn't tell the difference.)
+    fn has_cached_approval_matches_a_remembered_scope() {
+        // A remembered approval (in `state.approvals`) whose scope
+        // matches the ask's direct parent should short-circuit the
+        // prompt. The server then resolves via
+        // `resolve_approved_with_pending`, which stamps `ApproveCached`
+        // (not `Approve`) so the audit-log writer can render "the user
+        // wasn't asked again" rather than implying a fresh click.
         let mut state = State::new();
         state.approvals.push(ApprovalEntry {
             wrap: "gh".into(),
@@ -1294,13 +2464,14 @@ mod tests {
             parent_start_time: 1_700_000_000,
         });
         let ask = mk_ask("gh", vec![(7926, 1_700_000_000)]);
-        let reply = state.try_cache_hit(&ask).expect("approval hit");
-        match reply {
-            WaiterReply::Decision { decision, .. } => {
-                assert_eq!(decision, Decision::ApproveCached);
-            }
-            WaiterReply::Err { message } => panic!("unexpected err reply: {message}"),
-        }
+        assert!(state.has_cached_approval(&ask), "matching scope hits");
+
+        // A different parent identity is not authorized.
+        let other = mk_ask("gh", vec![(9999, 1_700_000_000)]);
+        assert!(
+            !state.has_cached_approval(&other),
+            "non-matching scope misses"
+        );
     }
 
     // ── Auto-rules path ───────────────────────────────────────────────
@@ -1337,6 +2508,7 @@ mod tests {
                 default: None,
                 description: None,
                 reason: None,
+                requested_by: vec![],
             }],
             providers: HashMap::new(),
             dedupe_key: DedupeKey {
@@ -1344,7 +2516,292 @@ mod tests {
                 ppid: 0,
                 parent_start_time: 0,
             },
+            ssh: None,
+            allow_remember: true,
+            nested_run: false,
         }
+    }
+
+    /// Like [`ask_with_secret`] but with an explicit `(provider, locator)`
+    /// so two asks can carry *distinct* secrets that still coalesce (when
+    /// keyed the same). Used to exercise the union merge.
+    fn ask_with_secret_named(
+        wrap: &str,
+        argv: &[&str],
+        name: &str,
+        provider: &str,
+        locator: &str,
+    ) -> Ask {
+        let mut ask = ask_with_secret(wrap, argv, name);
+        ask.secrets[0].provider = provider.to_owned();
+        ask.secrets[0].locator = locator.to_owned();
+        ask
+    }
+
+    /// Override an ask's dedupe key (so a sibling coalesces into an
+    /// existing entry).
+    fn with_dedupe_key(mut ask: Ask, key: DedupeKey) -> Ask {
+        ask.dedupe_key = key;
+        ask
+    }
+
+    #[test]
+    fn submit_ask_records_waiter_requested_and_command() {
+        let mut state = State::new();
+        let ask = ask_with_secret("run", &["run", "./worker"], "TOKEN");
+        let (tx, _rx) = mpsc::channel();
+        state.submit_ask(ask.clone(), tx);
+        let entry = state
+            .queue_entry_for_test(&ask.dedupe_key)
+            .expect("entry exists after submit_ask");
+        assert_eq!(entry.waiters.len(), 1);
+        // `SecretAsk` has no `PartialEq`; compare by identity fields
+        // (name / provider / locator) — enough to prove the waiter
+        // recorded its own requested set rather than an empty one.
+        let recorded: Vec<(&str, &str, &str)> = entry.waiters[0]
+            .requested
+            .iter()
+            .map(|s| (s.name.as_str(), s.provider.as_str(), s.locator.as_str()))
+            .collect();
+        let expected: Vec<(&str, &str, &str)> = ask
+            .secrets
+            .iter()
+            .map(|s| (s.name.as_str(), s.provider.as_str(), s.locator.as_str()))
+            .collect();
+        assert_eq!(recorded, expected);
+        assert_eq!(entry.waiters[0].command, ask.command);
+    }
+
+    #[test]
+    fn withdraw_waiter_removes_sole_waiter_writes_row_and_closes_channel() {
+        crate::audit::with_temp_log(|| {
+            let mut state = State::new();
+            let ask = ask_with_secret("gh", &["gh", "pr", "view"], "GITHUB_TOKEN");
+            let (tx, rx) = mpsc::channel();
+            let (_result, id) = state.submit_ask(ask.clone(), tx);
+            assert!(state.queue_entry_for_test(&ask.dedupe_key).is_some());
+
+            state.withdraw_waiter(&ask.dedupe_key, id);
+
+            // Entry gone → the card leaves the requests view.
+            assert!(
+                state.queue_entry_for_test(&ask.dedupe_key).is_none(),
+                "the entry is removed when its last waiter withdraws"
+            );
+            // The daemon wrote exactly one abandoned row for the dead command.
+            let rows = crate::audit::read_history(None).expect("read audit log");
+            assert_eq!(rows.len(), 1, "one abandoned row written");
+            assert_eq!(rows[0].decision, "abandoned");
+            assert_eq!(rows[0].wrap, "gh");
+            assert_eq!(rows[0].args, vec!["pr", "view"]);
+            // The parked connection thread's channel is closed (sender dropped),
+            // so its `recv()` unblocks with an error instead of hanging.
+            assert!(
+                rx.recv().is_err(),
+                "withdrawing drops the waiter's sender, unblocking its recv"
+            );
+        });
+    }
+
+    #[test]
+    fn withdraw_waiter_keeps_entry_while_a_sibling_waits() {
+        crate::audit::with_temp_log(|| {
+            let mut state = State::new();
+            let a = ask_with_secret("run", &["run", "./migrate"], "DB");
+            let b = with_dedupe_key(
+                ask_with_secret("run", &["run", "./worker"], "API"),
+                a.dedupe_key.clone(),
+            );
+            let (tx_a, rx_a) = mpsc::channel();
+            let (tx_b, rx_b) = mpsc::channel();
+            let (_r1, id_a) = state.submit_ask(a.clone(), tx_a);
+            let (_r2, _id_b) = state.submit_ask(b.clone(), tx_b);
+            assert_eq!(
+                state
+                    .queue_entry_for_test(&a.dedupe_key)
+                    .unwrap()
+                    .waiters
+                    .len(),
+                2,
+                "coalesced: one entry, two waiters"
+            );
+
+            state.withdraw_waiter(&a.dedupe_key, id_a);
+
+            let entry = state
+                .queue_entry_for_test(&a.dedupe_key)
+                .expect("entry survives while a sibling waiter remains");
+            assert_eq!(
+                entry.waiters.len(),
+                1,
+                "only the withdrawn waiter is removed"
+            );
+            assert!(rx_a.recv().is_err(), "withdrawn waiter's channel closed");
+            assert!(
+                matches!(rx_b.try_recv(), Err(mpsc::TryRecvError::Empty)),
+                "the sibling waiter is still parked with its channel open"
+            );
+        });
+    }
+
+    #[test]
+    fn withdraw_waiter_is_noop_on_unknown_key_or_id() {
+        crate::audit::with_temp_log(|| {
+            let mut state = State::new();
+            let ask = ask_with_secret("gh", &["gh", "auth"], "GITHUB_TOKEN");
+            let (tx, _rx) = mpsc::channel();
+            let (_result, id) = state.submit_ask(ask.clone(), tx);
+
+            // Unknown key: nothing removed, no panic.
+            let bogus_key = DedupeKey {
+                wrap: "nope".to_owned(),
+                ppid: 999,
+                parent_start_time: 1,
+            };
+            state.withdraw_waiter(&bogus_key, id);
+            assert_eq!(
+                state
+                    .queue_entry_for_test(&ask.dedupe_key)
+                    .unwrap()
+                    .waiters
+                    .len(),
+                1
+            );
+
+            // Known key, unknown waiter id: still nothing removed.
+            state.withdraw_waiter(&ask.dedupe_key, WaiterId(9_999));
+            assert_eq!(
+                state
+                    .queue_entry_for_test(&ask.dedupe_key)
+                    .unwrap()
+                    .waiters
+                    .len(),
+                1,
+                "an unknown waiter id withdraws nothing"
+            );
+        });
+    }
+
+    #[test]
+    fn abandoned_audit_entry_reconstructs_client_args() {
+        // `x` asks send `[wrap, args…]`; the leading wrap name is stripped so
+        // the row's args match what the live client would have logged.
+        let x_ask = ask_with_secret("gh", &["gh", "pr", "view"], "GITHUB_TOKEN");
+        let (tx, _rx) = mpsc::channel();
+        let waiter = Waiter {
+            id: WaiterId(1),
+            sender: tx,
+            requested: x_ask.secrets.clone(),
+            command: x_ask.command.clone(),
+            cwd: "/work".to_owned(),
+            callers: x_ask.callers.clone(),
+        };
+        let entry = State::abandoned_audit_entry(&x_ask.dedupe_key, &waiter);
+        assert_eq!(entry.wrap, "gh");
+        assert_eq!(entry.args, vec!["pr", "view"]);
+        assert_eq!(entry.decision, "abandoned");
+        assert_eq!(entry.secrets, vec!["GITHUB_TOKEN"]);
+        assert_eq!(entry.cwd, "/work");
+
+        // `run`/`read` asks send the bare command (command[0] != wrap), so
+        // nothing is stripped.
+        let run_ask = ask_with_secret("run", &["./deploy.sh", "--prod"], "TOKEN");
+        let (tx2, _rx2) = mpsc::channel();
+        let waiter2 = Waiter {
+            id: WaiterId(2),
+            sender: tx2,
+            requested: run_ask.secrets.clone(),
+            command: run_ask.command.clone(),
+            cwd: String::new(),
+            callers: vec![],
+        };
+        let entry2 = State::abandoned_audit_entry(&run_ask.dedupe_key, &waiter2);
+        assert_eq!(entry2.wrap, "run");
+        assert_eq!(entry2.args, vec!["./deploy.sh", "--prod"]);
+    }
+
+    #[test]
+    fn coalescing_unions_heterogeneous_secrets_with_provenance() {
+        let mut state = State::new();
+        let a = ask_with_secret_named("run", &["run", "./migrate"], "DB", "op", "pg");
+        let b = ask_with_secret_named("run", &["run", "./worker"], "API", "op", "stripe");
+        // Same dedupe key (same session) so they coalesce:
+        let b = with_dedupe_key(b, a.dedupe_key.clone());
+        let (tx1, _r1) = mpsc::channel();
+        let (tx2, _r2) = mpsc::channel();
+        state.submit_ask(a.clone(), tx1);
+        state.submit_ask(b.clone(), tx2);
+        let entry = state.queue_entry_for_test(&a.dedupe_key).unwrap();
+        let names: Vec<&str> = entry
+            .representative
+            .secrets
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["DB", "API"],
+            "union preserves both, in arrival order"
+        );
+        // provenance stamped with each requesting command:
+        assert!(entry.representative.secrets[0]
+            .requested_by
+            .contains(&"run ./migrate".to_owned()));
+        assert!(entry.representative.secrets[1]
+            .requested_by
+            .contains(&"run ./worker".to_owned()));
+    }
+
+    #[test]
+    fn nested_run_skips_window_only_when_nested_and_fully_cached() {
+        // The value the ask needs, cached under (wrap="run", fake, x) —
+        // the key `ask_with_secret` produces.
+        let cache = Arc::new(Mutex::new(SecretCache::new()));
+        cache.lock().unwrap().put(
+            CacheKey {
+                wrap: "run".to_owned(),
+                provider: "fake".to_owned(),
+                locator: "x".to_owned(),
+            },
+            "cached-value",
+        );
+
+        // Unnested run, even fully cached → must NOT skip. This is the
+        // load-bearing invariant: a top-level run always prompts.
+        let mut unnested = ask_with_secret("run", &["run", "cmd"], "TOKEN");
+        unnested.nested_run = false;
+        assert!(
+            !nested_run_fully_cached(&unnested, &cache),
+            "an unnested run must always prompt, even when fully cached"
+        );
+
+        // Nested + fully cached → skip the window.
+        let mut nested = ask_with_secret("run", &["run", "cmd"], "TOKEN");
+        nested.nested_run = true;
+        assert!(
+            nested_run_fully_cached(&nested, &cache),
+            "a nested, fully-cached run should resolve without prompting"
+        );
+
+        // Nested but one secret uncached → must NOT skip (prompts for the
+        // uncached var).
+        let mut nested_uncached = ask_with_secret("run", &["run", "cmd"], "TOKEN");
+        nested_uncached.nested_run = true;
+        nested_uncached
+            .secrets
+            .push(super::super::proto::SecretAsk {
+                name: "OTHER".to_owned(),
+                provider: "fake".to_owned(),
+                locator: "uncached".to_owned(),
+                default: None,
+                description: None,
+                reason: None,
+                requested_by: vec![],
+            });
+        assert!(
+            !nested_run_fully_cached(&nested_uncached, &cache),
+            "a nested run with any uncached secret must still prompt"
+        );
     }
 
     #[test]
@@ -1468,6 +2925,7 @@ mod tests {
                 default: None,
                 description: None,
                 reason: None,
+                requested_by: vec![],
             }],
             providers: providers.clone(),
             dedupe_key: DedupeKey {
@@ -1475,6 +2933,9 @@ mod tests {
                 ppid: 0,
                 parent_start_time: 0,
             },
+            ssh: None,
+            allow_remember: true,
+            nested_run: false,
         };
 
         let state = State::new();
@@ -1519,6 +2980,317 @@ mod tests {
             invocations, 1,
             "provider should have been invoked exactly once across {n} concurrent asks; got {invocations}"
         );
+    }
+
+    #[test]
+    fn resolve_single_cached_resolves_once_then_serves_from_cache() {
+        // The SSH-key regression in one test: the first sign resolves the
+        // private key through the provider (one biometric); a second sign for
+        // the same key must hit the encrypted cache and NOT re-invoke the
+        // provider. The retrieve script appends one line per invocation, so
+        // the line count is the invocation count.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let counter = tmp.path().join("invocations");
+        std::fs::write(&counter, b"").expect("create counter");
+        let script = format!(
+            "echo invoked >> {counter}; echo secret-{{locator}}",
+            counter = counter.display(),
+        );
+        let mut providers = std::collections::BTreeMap::new();
+        providers.insert(
+            "fake".to_owned(),
+            Provider {
+                name: "fake".to_owned(),
+                retrieve: vec!["sh".to_owned(), "-c".to_owned(), script],
+                store: None,
+                retrieve_batch: None,
+            },
+        );
+
+        let state = State::new();
+        let cache = state.secret_cache_arc();
+        let in_flight = state.in_flight_arc();
+        let key = CacheKey {
+            wrap: "ssh:github".into(),
+            provider: "fake".into(),
+            locator: "x".into(),
+        };
+
+        let first = super::resolve_single_cached(
+            &cache,
+            &in_flight,
+            key.clone(),
+            "github",
+            None,
+            &providers,
+        )
+        .expect("first resolve");
+        assert_eq!(&*first, "secret-x");
+
+        let second =
+            super::resolve_single_cached(&cache, &in_flight, key, "github", None, &providers)
+                .expect("second resolve");
+        assert_eq!(&*second, "secret-x");
+
+        let invocations = std::fs::read_to_string(&counter)
+            .expect("read counter")
+            .lines()
+            .count();
+        assert_eq!(
+            invocations, 1,
+            "provider must be invoked once; the second sign must hit the cache, got {invocations}"
+        );
+    }
+
+    /// A `WireProvider` map with a single `fake` provider whose `retrieve`
+    /// echoes `resolved-<locator>`. Lets per-waiter resolution tests drive
+    /// the real `resolve` path (submit → approve → recv) without a cache
+    /// pre-seed, so each `(provider, locator)` is genuinely resolved.
+    fn fake_echo_providers() -> HashMap<String, WireProvider> {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "fake".to_owned(),
+            WireProvider {
+                name: "fake".to_owned(),
+                retrieve: vec![
+                    "sh".to_owned(),
+                    "-c".to_owned(),
+                    "echo resolved-{locator}".to_owned(),
+                ],
+                retrieve_batch: None,
+            },
+        );
+        providers
+    }
+
+    /// A batch-capable fake provider. Per-secret `retrieve` yields
+    /// `persecret-<locator>`; the batch path (`printenv` over synthetic env)
+    /// yields `batched-<locator>`. The two sentinels differ so a resolve
+    /// test can tell which path actually ran — the batch env-var name must
+    /// be valid for `retrieve_batch` to succeed.
+    fn batch_fake_providers() -> HashMap<String, WireProvider> {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "bat".to_owned(),
+            WireProvider {
+                name: "bat".to_owned(),
+                retrieve: vec![
+                    "sh".to_owned(),
+                    "-c".to_owned(),
+                    "echo persecret-{locator}".to_owned(),
+                ],
+                retrieve_batch: Some(super::super::proto::WireBatchRetrieve {
+                    // Echo the whole env; resolve_all keeps only our request
+                    // names. This only works if those names are valid env
+                    // var names (no NUL).
+                    command: vec!["sh".to_owned(), "-c".to_owned(), "printenv".to_owned()],
+                    env_value_template: "batched-{locator}".to_owned(),
+                }),
+            },
+        );
+        providers
+    }
+
+    #[test]
+    fn resolve_union_batches_when_the_provider_declares_a_batch_capability() {
+        // Regression: `resolve_union` used to name each request with a NUL
+        // separator (`provider\0locator`). `resolve_all`'s batch path feeds
+        // that name to `Command::env` as an *env var name*, and NUL bytes
+        // are rejected there — so `op run` never spawned and every op resolve
+        // silently fell back to N per-secret reads (30s+ for a big run).
+        // Two secrets through the batch-capable provider must resolve via the
+        // BATCH (`batched-*`), not the per-secret fallback (`persecret-*`).
+        let mut ask = ask_with_secret_named("run", &["run", "x"], "S1", "bat", "loc-a");
+        ask.secrets.push(super::super::proto::SecretAsk {
+            name: "S2".to_owned(),
+            provider: "bat".to_owned(),
+            locator: "loc-b".to_owned(),
+            default: None,
+            description: None,
+            reason: None,
+            requested_by: vec![],
+        });
+        ask.providers = batch_fake_providers();
+
+        let cache = Arc::new(Mutex::new(SecretCache::new()));
+        let in_flight = InFlightMap::new();
+        let out = resolve_union(&ask, cache, in_flight);
+
+        let a = out
+            .get(&("bat".to_owned(), "loc-a".to_owned()))
+            .expect("loc-a resolved")
+            .as_ref()
+            .expect("loc-a ok");
+        let b = out
+            .get(&("bat".to_owned(), "loc-b".to_owned()))
+            .expect("loc-b resolved")
+            .as_ref()
+            .expect("loc-b ok");
+        assert_eq!(
+            a, "batched-loc-a",
+            "must resolve via the batch, not fallback"
+        );
+        assert_eq!(
+            b, "batched-loc-b",
+            "must resolve via the batch, not fallback"
+        );
+    }
+
+    /// Build a `run` ask carrying one secret `{name = provider/locator}`
+    /// wired to [`fake_echo_providers`], with an explicit dedupe key so
+    /// siblings coalesce.
+    fn run_ask_with_secret(
+        argv: &[&str],
+        name: &str,
+        provider: &str,
+        locator: &str,
+        key: DedupeKey,
+    ) -> Ask {
+        let mut ask = ask_with_secret_named("run", argv, name, provider, locator);
+        ask.providers = fake_echo_providers();
+        ask.dedupe_key = key;
+        ask
+    }
+
+    /// Session dedupe key shared by coalescing siblings in the tests below.
+    fn session_key() -> DedupeKey {
+        DedupeKey {
+            wrap: "run".to_owned(),
+            ppid: 6042,
+            parent_start_time: 12345,
+        }
+    }
+
+    #[test]
+    fn each_waiter_receives_only_its_own_secret() {
+        // A wants DB (fake/pg), B wants API (fake/stripe); same session key
+        // → they coalesce. On approve, A's reply must carry DB and NOT API;
+        // B's must carry API and NOT DB.
+        let shared: SharedState = Arc::new(Mutex::new(State::new()));
+        let key = session_key();
+        let a = run_ask_with_secret(&["run", "./migrate"], "DB", "fake", "pg", key.clone());
+        let b = run_ask_with_secret(&["run", "./worker"], "API", "fake", "stripe", key.clone());
+
+        let (tx_a, rx_a) = mpsc::channel();
+        let (tx_b, rx_b) = mpsc::channel();
+        {
+            let mut guard = shared.lock().expect("state mutex");
+            guard.submit_ask(a, tx_a);
+            guard.submit_ask(b, tx_b);
+            guard.resolve(
+                &key,
+                Decision::Approve,
+                ApprovalScope {
+                    pid: 6042,
+                    start_time: 12345,
+                },
+                &shared,
+            );
+        }
+
+        let reply_a = rx_a.recv().expect("A reply");
+        let reply_b = rx_b.recv().expect("B reply");
+
+        let secrets_a = match reply_a {
+            WaiterReply::Decision { secrets, .. } => secrets,
+            WaiterReply::Err { message } => panic!("A got err: {message}"),
+        };
+        let secrets_b = match reply_b {
+            WaiterReply::Decision { secrets, .. } => secrets,
+            WaiterReply::Err { message } => panic!("B got err: {message}"),
+        };
+
+        // The load-bearing isolation assertions: each waiter sees only its
+        // own secret, never the sibling's.
+        assert_eq!(secrets_a.get("DB").map(String::as_str), Some("resolved-pg"));
+        assert!(
+            !secrets_a.contains_key("API"),
+            "A must NOT receive B's secret"
+        );
+        assert_eq!(
+            secrets_b.get("API").map(String::as_str),
+            Some("resolved-stripe")
+        );
+        assert!(
+            !secrets_b.contains_key("DB"),
+            "B must NOT receive A's secret"
+        );
+    }
+
+    #[test]
+    fn x_style_identical_asks_each_get_the_full_set() {
+        // Two asks with the SAME secret {TOKEN = fake/t} coalesce → both
+        // replies carry TOKEN. Proves no regression for wrap coalescing.
+        let shared: SharedState = Arc::new(Mutex::new(State::new()));
+        let key = session_key();
+        let a = run_ask_with_secret(&["run", "./a"], "TOKEN", "fake", "t", key.clone());
+        let b = run_ask_with_secret(&["run", "./b"], "TOKEN", "fake", "t", key.clone());
+
+        let (tx_a, rx_a) = mpsc::channel();
+        let (tx_b, rx_b) = mpsc::channel();
+        {
+            let mut guard = shared.lock().expect("state mutex");
+            guard.submit_ask(a, tx_a);
+            guard.submit_ask(b, tx_b);
+            guard.resolve(
+                &key,
+                Decision::Approve,
+                ApprovalScope {
+                    pid: 6042,
+                    start_time: 12345,
+                },
+                &shared,
+            );
+        }
+
+        for rx in [rx_a, rx_b] {
+            match rx.recv().expect("reply") {
+                WaiterReply::Decision { secrets, .. } => {
+                    assert_eq!(secrets.get("TOKEN").map(String::as_str), Some("resolved-t"));
+                }
+                WaiterReply::Err { message } => panic!("unexpected err: {message}"),
+            }
+        }
+    }
+
+    #[test]
+    fn same_name_different_ref_across_siblings_stays_isolated() {
+        // A wants FOO = fake/a, B wants FOO = fake/b (same name, different
+        // ref!). Each waiter's FOO must be its own value — keying by
+        // (provider, locator) keeps the same-name union entries distinct.
+        let shared: SharedState = Arc::new(Mutex::new(State::new()));
+        let key = session_key();
+        let a = run_ask_with_secret(&["run", "./a"], "FOO", "fake", "a", key.clone());
+        let b = run_ask_with_secret(&["run", "./b"], "FOO", "fake", "b", key.clone());
+
+        let (tx_a, rx_a) = mpsc::channel();
+        let (tx_b, rx_b) = mpsc::channel();
+        {
+            let mut guard = shared.lock().expect("state mutex");
+            guard.submit_ask(a, tx_a);
+            guard.submit_ask(b, tx_b);
+            guard.resolve(
+                &key,
+                Decision::Approve,
+                ApprovalScope {
+                    pid: 6042,
+                    start_time: 12345,
+                },
+                &shared,
+            );
+        }
+
+        let secrets_a = match rx_a.recv().expect("A reply") {
+            WaiterReply::Decision { secrets, .. } => secrets,
+            WaiterReply::Err { message } => panic!("A got err: {message}"),
+        };
+        let secrets_b = match rx_b.recv().expect("B reply") {
+            WaiterReply::Decision { secrets, .. } => secrets,
+            WaiterReply::Err { message } => panic!("B got err: {message}"),
+        };
+
+        assert_eq!(secrets_a.get("FOO").map(String::as_str), Some("resolved-a"));
+        assert_eq!(secrets_b.get("FOO").map(String::as_str), Some("resolved-b"));
     }
 
     #[test]
@@ -1711,5 +3483,100 @@ mod tests {
     fn any_consent_focused_is_false_when_no_subscriber_attached() {
         let state = State::new();
         assert!(!state.any_consent_focused());
+    }
+
+    /// Manager subscribers track attach/detach independently of the
+    /// prompt's, and the last manager detach clears viewer mode (the
+    /// pin belonged to the window the user just closed).
+    #[test]
+    fn manager_attach_detach_lifecycle_clears_viewer_mode() {
+        let mut state = State::new();
+        assert!(state.needs_manager_window());
+
+        let (tx, _rx) = mpsc::channel();
+        let (id, _snap) = state.attach_manager_window(777, tx);
+        assert_eq!(state.manager_subscriber_count(), 1);
+        assert_eq!(state.manager_child_pid(), Some(777));
+        assert!(!state.needs_manager_window());
+
+        state.enter_viewer_mode();
+        assert!(state.viewer_mode());
+
+        state.detach_manager_window(id);
+        assert_eq!(state.manager_subscriber_count(), 0);
+        assert!(state.needs_manager_window());
+        assert!(
+            !state.viewer_mode(),
+            "last manager detach must clear viewer mode"
+        );
+    }
+
+    /// The prompt is a pure decision surface: it is told to exit the
+    /// instant the queue drains — we don't wait out the main-loop grace
+    /// for a confirmation nobody needs.
+    #[test]
+    fn resolve_draining_queue_exits_window_immediately_when_only_decisions_made() {
+        let shared: SharedState = Arc::new(Mutex::new(State::new()));
+        let (tx, rx) = mpsc::channel();
+        let ask = mk_ask("gh", vec![(100, 1_700_000_000)]);
+        let key = ask.dedupe_key.clone();
+        {
+            let mut guard = shared.lock().expect("state mutex");
+            guard.attach_consent_window(321, tx);
+            let (wtx, _wrx) = mpsc::channel();
+            guard.submit_ask(ask, wtx);
+            guard.resolve(
+                &key,
+                Decision::Deny,
+                ApprovalScope {
+                    pid: 100,
+                    start_time: 1_700_000_000,
+                },
+                &shared,
+            );
+        }
+
+        let mut saw_exit = false;
+        while let Ok(msg) = rx.try_recv() {
+            if matches!(msg, crate::daemon::proto::DaemonMsg::ConsentExitPlease) {
+                saw_exit = true;
+            }
+        }
+        assert!(
+            saw_exit,
+            "a decision-only window must be asked to exit the instant the queue drains"
+        );
+    }
+
+    /// The manager window must never receive the prompt's exit signal
+    /// on drain — it's a browsing surface the user closes themselves.
+    #[test]
+    fn resolve_draining_queue_never_exits_the_manager_window() {
+        let shared: SharedState = Arc::new(Mutex::new(State::new()));
+        let (tx, rx) = mpsc::channel();
+        let ask = mk_ask("gh", vec![(100, 1_700_000_000)]);
+        let key = ask.dedupe_key.clone();
+        {
+            let mut guard = shared.lock().expect("state mutex");
+            let (_id, _snap) = guard.attach_manager_window(321, tx);
+            let (wtx, _wrx) = mpsc::channel();
+            guard.submit_ask(ask, wtx);
+            guard.resolve(
+                &key,
+                Decision::Deny,
+                ApprovalScope {
+                    pid: 100,
+                    start_time: 1_700_000_000,
+                },
+                &shared,
+            );
+        }
+
+        while let Ok(msg) = rx.try_recv() {
+            assert!(
+                !matches!(msg, crate::daemon::proto::DaemonMsg::ConsentExitPlease),
+                "the manager window must never be asked to exit on queue drain"
+            );
+        }
     }
 }

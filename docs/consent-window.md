@@ -157,7 +157,7 @@ The supported ways to actually stop the daemon are:
 
 - `secreq daemon stop` — graceful, clears the cache.
 - `secreq daemon stop --force` — SIGKILLs the daemon when it's wedged.
-- Walk away — the daemon idle-exits after 30 minutes of empty queue.
+- Walk away — the daemon idle-exits after 2 hours of empty queue.
 
 On macOS the daemon's activation policy is set to `Accessory`, so it
 doesn't show in the Dock or Cmd+Tab while the window is hidden.

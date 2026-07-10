@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
-use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
+use std::io::{IsTerminal as _, Read as _, Seek as _, SeekFrom, Write as _};
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 
 use crate::audit::{self, AuditEntry};
+use crate::autostart;
 use crate::consent::Decision;
 use crate::daemon::client as daemon_client;
 use crate::daemon::proto;
@@ -26,6 +27,7 @@ use crate::reference::Reference;
 use crate::resolve::{self, SecretRequest, Source};
 use crate::secret::SecretValue;
 use crate::shim;
+use crate::ssh_setup;
 use crate::wraps::{self, Wrap, WrapsConfig};
 
 // ── Public entry points ───────────────────────────────────────────────────
@@ -53,6 +55,18 @@ pub fn wrap_run(
     config_path: Option<&Path>,
 ) -> Result<i32> {
     let config = load_config_or_default(config_path)?;
+
+    // Recursion guard: if we're already inside secreq's own secret
+    // resolution (the daemon — or a `--yes` run — is invoking a provider's
+    // retrieve command, and that provider's CLI happens to be wrapped),
+    // don't gate. Without this, resolving a `secret://op/...` reference for
+    // one wrap would PATH-resolve `op` to our shim and pop a *second*
+    // consent prompt for `op`. We pass straight through to the real binary.
+    // See `crate::RESOLVING_ENV`.
+    if std::env::var_os(crate::RESOLVING_ENV).is_some() {
+        return passthrough_unwrapped(binary, args, config.shim_dir.as_deref());
+    }
+
     let Some(wrap) = config.wraps.get(binary).cloned() else {
         return passthrough_unwrapped(binary, args, config.shim_dir.as_deref());
     };
@@ -135,6 +149,338 @@ pub fn wrap_run(
     let cwd = std::env::current_dir().context("could not determine current directory")?;
 
     crate::exec::run(&command, &env_overrides, &secrets_for_masking, &cwd)
+}
+
+/// Merge env-file pairs UNDER the inherited environment (inherited wins).
+fn effective_env(
+    inherited: &[(String, String)],
+    envfile: &[(String, String)],
+) -> BTreeMap<String, String> {
+    let mut eff: BTreeMap<String, String> = BTreeMap::new();
+    for (k, v) in envfile {
+        eff.insert(k.clone(), v.clone());
+    }
+    for (k, v) in inherited {
+        eff.insert(k.clone(), v.clone()); // inherited wins
+    }
+    eff
+}
+
+/// Compute the overrides for [`crate::exec::run`]. The child already
+/// inherits the process env, so we only emit: (a) keys present in the
+/// effective env but not inherited (file-only plain vars), and (b) every
+/// resolved ref (replacing its `secret://…` placeholder with the real
+/// value).
+fn build_overrides(
+    eff: &BTreeMap<String, String>,
+    inherited: &[(String, String)],
+    resolved: &[(String, String)],
+) -> Vec<(String, String)> {
+    use std::collections::HashSet;
+    let inherited_keys: HashSet<&str> = inherited.iter().map(|(k, _)| k.as_str()).collect();
+    let resolved_keys: HashSet<&str> = resolved.iter().map(|(k, _)| k.as_str()).collect();
+    let mut out: Vec<(String, String)> = resolved.to_vec();
+    for (k, v) in eff {
+        if resolved_keys.contains(k.as_str()) {
+            continue; // already carried by `resolved`
+        }
+        if !inherited_keys.contains(k.as_str()) {
+            out.push((k.clone(), v.clone())); // file-only plain var
+        }
+    }
+    out
+}
+
+/// Keep only the resolved entries whose name this run actually requested.
+/// Defense-in-depth against a daemon bug: this filters by *name*, so it
+/// catches a sibling's differently-named secret leaking in. It cannot
+/// catch a same-name value swap (A's `FOO` populated with B's value) —
+/// the daemon's `(provider, locator)` keying is the guarantor there.
+fn filter_to_refs(
+    resolved: HashMap<String, String>,
+    refs: &[(String, Reference)],
+) -> Vec<(String, SecretValue)> {
+    use std::collections::HashSet;
+    let requested: HashSet<&str> = refs.iter().map(|(name, _)| name.as_str()).collect();
+    resolved
+        .into_iter()
+        .filter(|(name, _)| requested.contains(name.as_str()))
+        .map(|(name, value)| (name, SecretValue::new(value)))
+        .collect()
+}
+
+/// `secreq run [--env-file PATH]… -- <cmd>` — the ambient mirror of `x`.
+/// Resolve `secret://provider/locator` references found in the inherited
+/// environment (and any `--env-file`) through the consent daemon, then exec
+/// `<cmd>` with the resolved values injected and output masked.
+///
+/// Only wired into the CLI by Task 5; `pub fn` items in this lib aren't
+/// dead-code-flagged (cf. `wrap_run`), so no `allow(dead_code)` is needed.
+pub fn run(
+    command: &[String],
+    env_files: &[PathBuf],
+    opts: WrapRunOpts,
+    config_path: Option<&Path>,
+) -> Result<i32> {
+    if command.is_empty() {
+        bail!(
+            "secreq run: no command given (usage: secreq run [--env-file PATH]… -- <cmd> [args…])"
+        );
+    }
+    let config = load_config_or_default(config_path)?;
+
+    // Recursion guard: if we're already inside secreq's own resolution,
+    // just exec the command without re-resolving (mirrors `wrap_run`). A
+    // provider CLI invoked during resolution can't trigger a second consent.
+    // This is a bare passthrough — `--env-file` entries (even plain ones)
+    // are intentionally not applied in this pathological re-entry case.
+    if std::env::var_os(crate::RESOLVING_ENV).is_some() {
+        let cwd = std::env::current_dir().context("could not determine current directory")?;
+        return crate::exec::run(command, &[], &[], &cwd);
+    }
+
+    // Nesting: this run is nested if an ancestor run already set the
+    // session marker — detect that BEFORE we set it for our own children.
+    // A nested run that turns out fully cached resolves without prompting
+    // (the daemon gates on `nested_run`); a top-level run never sees the
+    // marker, so it always prompts. We propagate the existing token (or
+    // mint one from our pid) so a whole run tree shares a single session.
+    let nested = std::env::var_os(crate::RUN_SESSION_ENV).is_some();
+    let session = std::env::var(crate::RUN_SESSION_ENV).unwrap_or_else(|_| mint_session_token());
+
+    // 1. Effective env = inherited, with --env-file layered underneath.
+    // `dotenvy` does the real `.env` parsing (quoting, escapes, `export`,
+    // `${VAR}` substitution against the process env), yielding processed
+    // pairs *without* mutating our own environment — we layer them
+    // explicitly so the inherited-wins precedence stays ours, not
+    // dotenvy's. A malformed line is a hard error before any exec.
+    let inherited: Vec<(String, String)> = std::env::vars().collect();
+    let mut envfile_pairs = Vec::new();
+    for path in env_files {
+        let iter = dotenvy::from_path_iter(path)
+            .with_context(|| format!("could not read env file {}", path.display()))?;
+        for item in iter {
+            let (key, value) =
+                item.with_context(|| format!("malformed entry in env file {}", path.display()))?;
+            envfile_pairs.push((key, value));
+        }
+    }
+    let eff = effective_env(&inherited, &envfile_pairs);
+
+    // 2. Scan for secret:// references. A value that looks like a ref but
+    // doesn't parse is a hard error here, before any exec.
+    let eff_pairs: Vec<(String, String)> =
+        eff.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let scanned = scan_env_refs(&eff_pairs)?;
+    let refs: Vec<(String, Reference)> =
+        scanned.into_iter().map(|r| (r.name, r.reference)).collect();
+
+    let cwd = std::env::current_dir().context("could not determine current directory")?;
+
+    // 3. Nothing to resolve → exec directly with the file-only plain vars.
+    // No daemon contact, no consent (honest "nothing to resolve" fast path).
+    if refs.is_empty() {
+        let mut overrides = build_overrides(&eff, &inherited, &[]);
+        overrides.push((crate::RUN_SESSION_ENV.to_owned(), session));
+        return crate::exec::run(command, &overrides, &[], &cwd);
+    }
+
+    // 4 + 5. Consent + resolve (daemon, or client-side under --yes).
+    let callers = provenance::caller_chain();
+    let names: Vec<String> = refs.iter().map(|(n, _)| n.clone()).collect();
+    let resolved: Vec<(String, SecretValue)> = if opts.assume_yes {
+        let _ = audit::append(&AuditEntry::new(
+            "run",
+            command,
+            &callers,
+            &names,
+            Decision::Approve,
+        ));
+        resolve_refs_client_side(&config, &refs, None)?
+    } else {
+        let mut ask = build_ask(
+            AskSpec {
+                dedupe_wrap: "run".to_owned(),
+                command: command.to_vec(),
+                refs: &refs,
+                reason: None,
+                allow_remember: false,
+            },
+            &callers,
+            &cwd,
+            &config,
+        );
+        // A nested run may skip the prompt when fully cached; a top-level
+        // run leaves this false, so the daemon always shows the window.
+        ask.nested_run = nested;
+        if nested {
+            if let Some(key) = session_dedupe_key(&session) {
+                ask.dedupe_key = key;
+            }
+        }
+        let outcome = daemon_client::request_consent(ask, config.wait_indicator_enabled())
+            .context("daemon consent request failed")?;
+        let _ = audit::append(
+            &AuditEntry::new("run", command, &callers, &names, outcome.decision)
+                .with_rule_id(outcome.rule_id.clone()),
+        );
+        if !outcome.decision.approved() {
+            // Mirror `wrap_run`'s deny messaging.
+            if outcome.decision == Decision::DenyAuto {
+                let rule_name = outcome.rule_name.as_deref().unwrap_or("(unknown)");
+                match outcome.deny_message.as_deref() {
+                    Some(msg) => eprintln!("secreq: denied by rule '{rule_name}': {msg}"),
+                    None => eprintln!("secreq: denied by rule '{rule_name}'"),
+                }
+            } else {
+                eprintln!("secreq: denied — command not run");
+            }
+            return Ok(1);
+        }
+        // Defense-in-depth: inject only secrets this run actually requested,
+        // so a daemon bug can't leak a sibling's differently-named secret
+        // here (the daemon's per-(provider,locator) slice guards same-name).
+        filter_to_refs(outcome.secrets, &refs)
+    };
+
+    // 6. Substitute resolved values into the env; build the overrides.
+    let resolved_plain: Vec<(String, String)> = resolved
+        .iter()
+        .map(|(name, value)| (name.clone(), value.expose().to_owned()))
+        .collect();
+    let mut env_overrides = build_overrides(&eff, &inherited, &resolved_plain);
+    // Establish/propagate the run-session marker so a nested run can be
+    // detected (and, when fully cached, skip its prompt).
+    env_overrides.push((crate::RUN_SESSION_ENV.to_owned(), session));
+
+    // 7. Exec with masking (unless --raw).
+    let secrets_for_masking: Vec<SecretValue> = if opts.raw {
+        Vec::new()
+    } else {
+        resolved.into_iter().map(|(_, v)| v).collect()
+    };
+    crate::exec::run(command, &env_overrides, &secrets_for_masking, &cwd)
+}
+
+/// `secreq read <ref>…` — resolve one or more secret references and print
+/// their values as a JSON object, mirroring `op read` but for every store.
+///
+/// Each `<ref>` is either a full `secret://provider/locator` reference or the
+/// bare `provider/locator` shorthand. Resolution **always** goes through the
+/// consent daemon — there is deliberately no `--yes` bypass: a `read` is a
+/// raw secret exfiltration primitive, so every call must be gated and audited.
+/// The output is always a JSON object keyed by each ref exactly as typed
+/// (even for a single ref), so callers can pipe it straight into `jq`.
+pub fn read(refs: &[String], config_path: Option<&Path>) -> Result<i32> {
+    if refs.is_empty() {
+        bail!("secreq read: no references given (usage: secreq read <ref>… )");
+    }
+
+    // Re-entrancy guard: we're inside secreq's own resolution (a provider CLI
+    // the daemon spawned has `SECREQ_RESOLVING` set). Calling back into the
+    // daemon now would deadlock, and unlike `run` there is no client-side
+    // path to fall through to — so refuse, fail-closed.
+    if std::env::var_os(crate::RESOLVING_ENV).is_some() {
+        bail!("secreq read: refusing to run during secret resolution (re-entrant call)");
+    }
+
+    let config = load_config_or_default(config_path)?;
+
+    // Parse every arg up front so a malformed ref fails before any daemon
+    // contact. Dedupe by the typed string (preserving order) so a repeated
+    // ref can't produce duplicate JSON keys.
+    let mut parsed: Vec<(String, Reference)> = Vec::with_capacity(refs.len());
+    let mut seen: Vec<String> = Vec::new();
+    for raw in refs {
+        let reference = Reference::parse_arg(raw).with_context(|| {
+            format!("`{raw}` is not a valid reference (expected `secret://provider/locator` or `provider/locator`)")
+        })?;
+        if seen.contains(raw) {
+            continue;
+        }
+        seen.push(raw.clone());
+        parsed.push((raw.clone(), reference));
+    }
+
+    let cwd = std::env::current_dir().context("could not determine current directory")?;
+    let callers = provenance::caller_chain();
+
+    // The argv shown in the consent prompt: `read` plus the refs (locators,
+    // never values — safe to display).
+    let mut command = vec!["read".to_owned()];
+    command.extend(seen.iter().cloned());
+
+    let ask = build_ask(
+        AskSpec {
+            dedupe_wrap: "read".to_owned(),
+            command: command.clone(),
+            refs: &parsed,
+            reason: None,
+            allow_remember: false,
+        },
+        &callers,
+        &cwd,
+        &config,
+    );
+    let outcome = daemon_client::request_consent(ask, config.wait_indicator_enabled())
+        .context("daemon consent request failed")?;
+    let _ = audit::append(
+        &AuditEntry::new("read", &command, &callers, &seen, outcome.decision)
+            .with_rule_id(outcome.rule_id.clone()),
+    );
+
+    if !outcome.decision.approved() {
+        if outcome.decision == Decision::DenyAuto {
+            let rule_name = outcome.rule_name.as_deref().unwrap_or("(unknown)");
+            match outcome.deny_message.as_deref() {
+                Some(msg) => eprintln!("secreq: denied by rule '{rule_name}': {msg}"),
+                None => eprintln!("secreq: denied by rule '{rule_name}'"),
+            }
+        } else {
+            eprintln!("secreq: denied");
+        }
+        return Ok(1);
+    }
+
+    // Assemble `(ref-as-typed, value)` pairs in input order. The daemon errors
+    // out (surfaced as `Err` above) on any resolution failure, so on approval
+    // every requested name must be present; a gap is an internal invariant
+    // break, not a user-facing "not found".
+    let mut pairs: Vec<(String, String)> = Vec::with_capacity(parsed.len());
+    for (typed, _) in &parsed {
+        let value = outcome.secrets.get(typed).with_context(|| {
+            format!("internal: daemon approved but returned no value for `{typed}`")
+        })?;
+        pairs.push((typed.clone(), value.clone()));
+    }
+
+    print!("{}", render_read_json(&pairs));
+    Ok(0)
+}
+
+/// Render resolved `(ref-as-typed, value)` pairs as a pretty JSON object,
+/// preserving input order (a plain `serde_json::Map` would sort keys, since
+/// the crate isn't built with `preserve_order`). Keys and values are escaped
+/// by `serde_json::to_string`, which never fails for a `String`.
+fn render_read_json(pairs: &[(String, String)]) -> String {
+    if pairs.is_empty() {
+        return "{}\n".to_owned();
+    }
+    let mut out = String::from("{\n");
+    for (i, (key, value)) in pairs.iter().enumerate() {
+        let key_json = serde_json::to_string(key).expect("String always serializes");
+        let value_json = serde_json::to_string(value).expect("String always serializes");
+        out.push_str("  ");
+        out.push_str(&key_json);
+        out.push_str(": ");
+        out.push_str(&value_json);
+        if i + 1 < pairs.len() {
+            out.push(',');
+        }
+        out.push('\n');
+    }
+    out.push_str("}\n");
+    out
 }
 
 /// `secreq init` — interactive first-time setup. Picks the shim dir,
@@ -263,11 +609,707 @@ pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Re
     config.shim_dir = Some(shim_dir.clone());
     write_config(&config_path, &config)?;
 
+    // 4b. Repair/migrate managed shims. `install` rewrites the body of any
+    // shim that carries our sentinel, so reinstalling every configured wrap's
+    // shim migrates stale bodies (e.g. the old `exec secreq <wrap>` form) to
+    // the current `exec secreq x <wrap>` form. Only touch shims we already
+    // own — a foreign file at the same name must never abort init.
+    let managed: Vec<String> = config
+        .wraps
+        .keys()
+        .filter(|name| shim::is_managed(&shim_dir, name))
+        .cloned()
+        .collect();
+    if !managed.is_empty() {
+        let refreshed = shim::reinstall_all(&shim_dir, managed)?;
+        cliclack::log::success(format!("Refreshed {} managed shims.", refreshed.len()))?;
+    }
+
+    // 5. Offer SSH-agent setup. secreq doubles as a provenance-aware SSH
+    // agent when the config has an `ssh` block; wiring SSH clients at its
+    // socket is the same plan/confirm/apply flow as `secreq ssh setup`, so
+    // we share `ssh_setup_core`. Entirely optional and non-fatal: declining
+    // (or any failure, including a non-terminal `interact`) must not fail
+    // `init`.
+    if prompt::confirm_default_yes("Also set up secreq as your SSH agent?").unwrap_or(false) {
+        if let Err(err) = ssh_setup_core(None, false, false, Some(&config_path)) {
+            cliclack::log::warning(format!(
+                "skipped SSH-agent setup: {err:#}. Run `secreq ssh setup` later to wire it."
+            ))?;
+        }
+    }
+
     cliclack::outro(format!(
         "Wrote {}.  Next: `secreq wrap <binary>`, e.g. `secreq wrap gh`.",
         config_path.display()
     ))?;
     Ok(0)
+}
+
+/// `secreq ssh setup` — wire SSH clients at secreq's agent socket (or, with
+/// `--undo`, strip the managed block back out). Thin wrapper over
+/// [`ssh_setup_core`], which `init` shares.
+pub fn ssh_setup(
+    method: Option<ssh_setup::Method>,
+    undo: bool,
+    assume_yes: bool,
+    config_path: Option<&Path>,
+) -> Result<i32> {
+    ssh_setup_core(method, undo, assume_yes, config_path)?;
+    Ok(0)
+}
+
+/// `secreq ssh setup` — a guided three-step onboarding flow:
+///
+/// 1. **Identity** — ensure the config declares at least one `ssh` identity
+///    (offer `ssh add`'s interactive flow when there are none).
+/// 2. **Auto-start** — offer to install the login service so the agent socket
+///    is always live (the SSH agent is useless if the daemon isn't running).
+/// 3. **Client wiring** — point SSH clients at the agent socket (the original
+///    method-select + plan/confirm/apply block).
+///
+/// Used by both `secreq ssh setup` and the optional step inside `secreq init`.
+///
+/// ## Scripted vs. guided
+///
+/// When `assume_yes` is set AND an explicit `--method` was passed
+/// (`method.is_some()`), the caller wants a non-interactive, scripted
+/// client-wiring run: we do ONLY step 3 and never prompt for identity or
+/// auto-start. This preserves `ssh setup --yes --method ssh-config` for
+/// scripts and tests. Otherwise (no `--method`, or interactive), we run the
+/// full guided flow.
+///
+/// `--undo` also strips only the client-wiring block — it never removes
+/// identities or the login service. Run `secreq ssh add --force`/`secreq
+/// daemon install --undo` to reverse those steps individually.
+///
+/// Steps 1 and 2 are best-effort: a failure or a decline there is surfaced as
+/// a warning and does NOT abort step 3. A normal completion returns `Ok(())`.
+fn ssh_setup_core(
+    method: Option<ssh_setup::Method>,
+    undo: bool,
+    assume_yes: bool,
+    config_path: Option<&Path>,
+) -> Result<()> {
+    // Scripted path: `--yes` + explicit `--method` means "just wire the
+    // client, don't prompt for identity/autostart". This is the deterministic
+    // path scripts and tests rely on.
+    let scripted = assume_yes && method.is_some();
+
+    if !scripted && !undo {
+        // Step 1: identity. Non-fatal — warn and continue on any error.
+        if let Err(err) = ssh_setup_identity_step(config_path) {
+            cliclack::log::warning(format!(
+                "skipped the identity step: {err:#}. Add one later with `secreq ssh add`."
+            ))?;
+        }
+        // Step 2: auto-start. Non-fatal — warn and continue on any error.
+        if let Err(err) = ssh_setup_autostart_step(assume_yes) {
+            cliclack::log::warning(format!(
+                "skipped the auto-start step: {err:#}. Install it later with `secreq daemon install`."
+            ))?;
+        }
+    }
+
+    // Step 3: client wiring (the original flow). Always runs.
+    ssh_setup_wiring_step(method, undo, assume_yes, config_path)?;
+
+    // Optional post-step (guided, non-scripted, non-undo): offer to prove the
+    // agent can actually sign. Non-fatal — a decline or failure never changes
+    // the exit status.
+    if !scripted && !undo {
+        if let Err(err) = ssh_setup_self_test_step(config_path) {
+            cliclack::log::warning(format!(
+                "skipped the self-test: {err:#}. Run `secreq ssh validate` later to verify signing."
+            ))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Optional final step of the guided `ssh setup`: offer to self-test one
+/// configured identity (prove the agent can sign). With one identity it tests
+/// that one; with several it asks which. Skipped when no identities are
+/// configured. Always non-fatal — `offer_self_test` swallows its own errors.
+fn ssh_setup_self_test_step(config_path: Option<&Path>) -> Result<()> {
+    let config = load_config_or_default(config_path)?;
+    let names: Vec<String> = config.ssh.keys().cloned().collect();
+    if names.is_empty() {
+        return Ok(());
+    }
+    if !prompt::confirm_default_yes("Test that the agent can sign now?")? {
+        return Ok(());
+    }
+
+    let chosen = if names.len() == 1 {
+        names[0].clone()
+    } else {
+        let mut select = cliclack::select::<String>("Which identity should I test?");
+        for name in &names {
+            select = select.item(name.clone(), name.as_str(), "");
+        }
+        select
+            .interact()
+            .context("interactive selection failed (need a real terminal)")?
+    };
+
+    offer_self_test(&chosen, config_path);
+    Ok(())
+}
+
+/// Step 1 of `ssh setup`: make sure an `ssh` identity is declared. With none
+/// configured, offer the interactive `ssh add` flow; with some, list them and
+/// offer to add another. Continues either way.
+fn ssh_setup_identity_step(config_path: Option<&Path>) -> Result<()> {
+    let config = load_config_or_default(config_path)?;
+    if config.ssh.is_empty() {
+        cliclack::log::warning(
+            "No SSH identities configured yet — the agent has nothing to serve until you add one.",
+        )?;
+        if prompt::confirm_default_yes("Add an SSH identity now?")? {
+            ssh_add_core(SshAddArgs::default(), config_path)?;
+        }
+    } else {
+        let names = config.ssh.keys().cloned().collect::<Vec<_>>().join(", ");
+        cliclack::log::info(format!("Configured SSH identities: {names}."))?;
+        if cliclack::confirm("Add another identity?")
+            .initial_value(false)
+            .interact()
+            .context("interactive confirm failed (need a real terminal)")?
+        {
+            ssh_add_core(SshAddArgs::default(), config_path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Step 2 of `ssh setup`: ensure the login service is installed so the agent
+/// socket is always live. Already installed → just report it; otherwise offer
+/// to install it (respecting `assume_yes` for the install confirm).
+fn ssh_setup_autostart_step(assume_yes: bool) -> Result<()> {
+    let platform = autostart::current_platform();
+    let home = dirs::home_dir().context("could not determine $HOME")?;
+    let service_file = autostart::service_file_path(&home, platform);
+    if service_file.exists() {
+        cliclack::log::success("Login service already installed.")?;
+        return Ok(());
+    }
+    if prompt::confirm_default_yes("Install the login service so the agent is always running?")? {
+        daemon_install_core(false, assume_yes)?;
+    }
+    Ok(())
+}
+
+/// Step 3 of `ssh setup`: the client-wiring block — resolve the agent socket,
+/// pick the method, then plan/confirm/apply (or `--undo` strips it).
+///
+/// `assume_yes` skips the confirmation prompt so the command can run without
+/// a terminal (and so tests can drive it deterministically).
+fn ssh_setup_wiring_step(
+    method: Option<ssh_setup::Method>,
+    undo: bool,
+    assume_yes: bool,
+    config_path: Option<&Path>,
+) -> Result<()> {
+    let agent_sock = crate::daemon::ssh_agent::default_agent_socket_path()
+        .context("could not determine the secreq SSH agent socket path")?;
+
+    // Load the config best-effort: a missing/broken config shouldn't block
+    // wiring the agent — but if it loads and has no `ssh` identities, warn
+    // that there's nothing to serve yet.
+    match load_config_or_default(config_path) {
+        Ok(config) if config.ssh.is_empty() => {
+            cliclack::log::warning(
+                "No SSH identities configured yet — setup will still wire the agent, but add an `ssh` block to wraps.json5 for it to serve keys.",
+            )?;
+        }
+        Ok(_) => {}
+        Err(err) => {
+            cliclack::log::warning(format!(
+                "couldn't read your config ({err:#}); wiring the agent anyway."
+            ))?;
+        }
+    }
+
+    // Pick the method: explicit `--method`, else an interactive select.
+    let method = match method {
+        Some(m) => m,
+        None => {
+            let choice: String = cliclack::select("How should SSH find the secreq agent?")
+                .item(
+                    "ssh-config".to_owned(),
+                    "Modify ~/.ssh/config (IdentityAgent)",
+                    "a Host * stanza pointing at the agent socket",
+                )
+                .item(
+                    "shell-rc".to_owned(),
+                    "Modify your shell rc (SSH_AUTH_SOCK)",
+                    "export SSH_AUTH_SOCK for new shells",
+                )
+                .interact()
+                .context("interactive selection failed (need a real terminal)")?;
+            if choice == "shell-rc" {
+                ssh_setup::Method::ShellRc
+            } else {
+                ssh_setup::Method::SshConfig
+            }
+        }
+    };
+
+    let home = dirs::home_dir().context("could not determine $HOME")?;
+    let shell = path_setup::detect_shell();
+
+    if undo {
+        if ssh_setup::remove(&home, method, shell)? {
+            cliclack::log::success("Removed the secreq SSH-agent block.")?;
+        } else {
+            cliclack::log::info("No secreq SSH-agent block found — nothing to remove.")?;
+        }
+        return Ok(());
+    }
+
+    let plan = ssh_setup::plan(&home, method, shell, &agent_sock)?;
+    if plan.already_configured {
+        cliclack::log::success(format!(
+            "{} already wires the secreq SSH agent; nothing to do.",
+            plan.config_file.display()
+        ))?;
+        return Ok(());
+    }
+
+    cliclack::note(
+        format!("I'll write this to {}:", plan.config_file.display()),
+        &plan.block,
+    )?;
+    if let Some(caveat) = &plan.caveat {
+        cliclack::log::warning(caveat)?;
+    }
+
+    let proceed = assume_yes || prompt::confirm_default_yes("Write it?")?;
+    if !proceed {
+        cliclack::log::info("Skipped — no files changed.")?;
+        return Ok(());
+    }
+
+    ssh_setup::apply(&plan)?;
+    cliclack::log::success(format!("wrote {}.", plan.config_file.display()))?;
+    cliclack::log::info(
+        "secreq's daemon must be running to serve keys — step 2 (or `secreq daemon install`) sets it to start at login. New shells / SSH sessions pick up the socket; restart your shell or run `exec $SHELL`.",
+    )?;
+    cliclack::log::info(
+        "Each identity's `private_key` reference must resolve to an OpenSSH private key, e.g. `op read \"op://Vault/My Key/private key\"`.",
+    )?;
+    Ok(())
+}
+
+/// Args for `secreq ssh add`.
+#[derive(Debug, Clone, Default)]
+pub struct SshAddArgs {
+    /// The identity name (the key under the `ssh` block).
+    pub name: String,
+    /// The public key: a path to a `.pub` file or a literal OpenSSH line.
+    pub public_key: Option<String>,
+    /// The private key reference, `secret://provider/locator`.
+    pub private_key: Option<String>,
+    /// Reason shown in the consent prompt at sign time.
+    pub reason: Option<String>,
+    /// Overwrite an existing identity of the same name.
+    pub force: bool,
+}
+
+/// `secreq ssh add <name>` — declare an SSH identity in `wraps.json5` so the
+/// agent serves it. Mirrors [`wrap`]: load → build → insert → `write_config`.
+///
+/// The public key is stored inline (it isn't secret); the private key is a
+/// `secret://provider/locator` reference resolved only at sign time. When
+/// `--public-key` and `--private-key` are both supplied the command runs with
+/// no prompts (so scripts/tests work); otherwise the missing pieces are
+/// resolved interactively, with 1Password `op` discovery when it's on PATH.
+pub fn ssh_add(args: SshAddArgs, assume_yes: bool, config_path: Option<&Path>) -> Result<i32> {
+    let _ = assume_yes;
+    ssh_add_core(args, config_path)?;
+    Ok(0)
+}
+
+/// The reusable body of `secreq ssh add`, shared with the `ssh setup`
+/// orchestrator's identity step. Returns `Ok(())` after writing the identity;
+/// the standalone command wraps it to produce an exit code.
+///
+/// When `args.name` is empty the name is prompted for interactively — that's
+/// the path the orchestrator takes (it has no name to preset).
+fn ssh_add_core(args: SshAddArgs, config_path: Option<&Path>) -> Result<()> {
+    let config_path = resolve_config_path(config_path)?;
+    let mut config = if config_path.is_file() {
+        WrapsConfig::load(&config_path)?
+    } else {
+        WrapsConfig::default()
+    };
+
+    // The CLI supplies the name as a positional; the orchestrator leaves it
+    // empty so we prompt for it here.
+    let name = if args.name.is_empty() {
+        prompt::ssh_identity_name()?
+    } else {
+        args.name.clone()
+    };
+
+    if config.ssh.contains_key(&name) && !args.force {
+        bail!("identity `{name}` already exists; use --force to overwrite");
+    }
+
+    // Non-interactive iff both key pieces are on the command line. Tracked so
+    // the op-discovery / manual prompts never fire on the scripted path.
+    let non_interactive = args.public_key.is_some() && args.private_key.is_some();
+
+    // Resolve the public key up front when supplied; otherwise leave it to be
+    // filled by op discovery or a manual prompt below.
+    let mut public_key: Option<String> = match &args.public_key {
+        Some(raw) => Some(resolve_public_key(raw)?),
+        None => None,
+    };
+
+    // Resolve the private-key reference.
+    let private_key: Reference = match &args.private_key {
+        Some(raw) => Reference::parse(raw).with_context(|| {
+            format!("`{raw}` is not a valid `secret://provider/locator` reference")
+        })?,
+        None => {
+            // Try op-assisted discovery (best-effort); on any failure fall
+            // through to the manual prompt. When op supplies a public key and
+            // none was given on the command line, capture it too.
+            match op_assisted_identity(public_key.is_none())? {
+                Some(found) => {
+                    if public_key.is_none() {
+                        public_key = found.public_key;
+                    }
+                    found.private_key
+                }
+                None => prompt::ssh_private_key_reference()?,
+            }
+        }
+    };
+
+    // Fill any still-missing public key via an interactive prompt.
+    let public_key = match public_key {
+        Some(pk) => pk,
+        None => {
+            if non_interactive {
+                bail!("no public key supplied");
+            }
+            prompt::ssh_public_key()?
+        }
+    };
+
+    let identity = wraps::SshIdentity {
+        reason: args.reason,
+        public_key,
+        private_key,
+    };
+    config.ssh.insert(name.clone(), identity);
+
+    write_config(&config_path, &config)?;
+
+    println!("Added SSH identity `{name}`.");
+    println!("  config: {}", config_path.display());
+    println!(
+        "  Ensure the private_key reference resolves to an OpenSSH private key, e.g. `op read \"op://Vault/My Key/private key\"`."
+    );
+    println!(
+        "  secreq's daemon must be running to serve this key — run `secreq daemon install` to start it at login (or wire it via `secreq ssh setup`)."
+    );
+
+    // Optional post-step (interactive path only): offer to prove the agent can
+    // actually sign with the key we just added. The fully non-interactive path
+    // (`--public-key` + `--private-key`) never prompts or signs, so scripts
+    // stay deterministic. A declined or failing self-test is non-fatal.
+    if !non_interactive
+        && prompt::confirm_default_yes(&format!(
+            "Test that the agent can sign with `{name}` now? (this performs a real signature and may prompt for approval)"
+        ))
+        .unwrap_or(false)
+    {
+        offer_self_test(&name, Some(&config_path));
+    }
+
+    Ok(())
+}
+
+/// `secreq ssh validate [<name>]` — prove the agent can sign with a configured
+/// identity. Connects to the agent socket, lists identities, asks the agent to
+/// sign a fixed test message with the key, and verifies the returned signature
+/// against the key's public half. With no `<name>`, tests every configured
+/// identity.
+///
+/// Signing is a *real* sign: if the daemon has no cached approval for this
+/// caller it will prompt for consent (and may ask for a biometric), so running
+/// the test can pop the consent window. Returns `Ok(0)` only if every tested
+/// identity verified; any failure (or no identities) returns a non-zero code.
+pub fn ssh_test(name: Option<String>, config_path: Option<&Path>) -> Result<i32> {
+    let config = load_config_or_default(config_path)?;
+
+    if config.ssh.is_empty() {
+        bail!("no SSH identities configured; add one with `secreq ssh add <name>` first");
+    }
+
+    // Resolve the identities to test: the named one, or all of them.
+    let to_test: Vec<(String, wraps::SshIdentity)> = match name {
+        Some(name) => {
+            let identity = config.ssh.get(&name).cloned().with_context(|| {
+                format!("no SSH identity named `{name}` in the config; `secreq wraps` lists them")
+            })?;
+            vec![(name, identity)]
+        }
+        None => config
+            .ssh
+            .iter()
+            .map(|(name, identity)| (name.clone(), identity.clone()))
+            .collect(),
+    };
+
+    let agent_sock = crate::daemon::ssh_agent::default_agent_socket_path()
+        .context("determining the agent socket path")?;
+
+    println!("Signing may prompt for consent — answer the prompt if one appears.\n");
+
+    let mut all_ok = true;
+    for (name, identity) in to_test {
+        let result = crate::ssh_selftest::run(&agent_sock, &identity, &name);
+        all_ok &= print_self_test_result(&name, &result);
+    }
+
+    Ok(if all_ok { 0 } else { 1 })
+}
+
+/// Print a single identity's self-test outcome as a `✓`/`✗` line and report
+/// whether it passed. Shared by `secreq ssh validate` and the optional
+/// post-step after `ssh add`/`ssh setup` so both render the same per-identity
+/// result.
+fn print_self_test_result(name: &str, result: &Result<crate::ssh_selftest::SelfTest>) -> bool {
+    match result {
+        Ok(test) if test.listed && test.verified => {
+            println!("✓ {name}: agent signed; signature verifies");
+            true
+        }
+        Ok(test) if !test.listed => {
+            println!(
+                "✗ {name}: the agent didn't list this key — is the config the daemon loaded current? (restart with `secreq daemon stop`)"
+            );
+            false
+        }
+        Ok(_) => {
+            println!("✗ {name}: the agent signed but the signature did not verify");
+            false
+        }
+        Err(err) => {
+            println!("✗ {name}: {err:#}");
+            false
+        }
+    }
+}
+
+/// Offer the self-test as a NON-FATAL post-step after `ssh add`/`ssh setup`.
+///
+/// Resolves the agent socket, loads the identity by `key_id`, runs the
+/// self-test, and prints the same `✓`/`✗` line as `secreq ssh validate`. Failure
+/// is never fatal: an unreachable socket is reported as a friendly hint (the
+/// daemon is probably not running yet), and a refused/unverified sign is a
+/// warning. The caller's exit status is unaffected either way.
+fn offer_self_test(key_id: &str, config_path: Option<&Path>) {
+    let identity = match load_config_or_default(config_path) {
+        Ok(config) => match config.ssh.get(key_id).cloned() {
+            Some(identity) => identity,
+            None => {
+                // The identity we just wrote is somehow gone — warn, don't fail.
+                let _ = cliclack::log::warning(format!(
+                    "couldn't find `{key_id}` in the config to self-test; skipping."
+                ));
+                return;
+            }
+        },
+        Err(err) => {
+            let _ =
+                cliclack::log::warning(format!("couldn't read the config to self-test: {err:#}"));
+            return;
+        }
+    };
+
+    let agent_sock = match crate::daemon::ssh_agent::default_agent_socket_path() {
+        Ok(path) => path,
+        Err(err) => {
+            let _ = cliclack::log::warning(format!(
+                "couldn't determine the agent socket to self-test: {err:#}"
+            ));
+            return;
+        }
+    };
+
+    println!("Signing may prompt for consent — answer the prompt if one appears.");
+    let result = crate::ssh_selftest::run(&agent_sock, &identity, key_id);
+    if result.is_err() && !agent_sock.exists() {
+        // The socket isn't there at all: the daemon almost certainly isn't
+        // running yet (the most common case right after onboarding). Give a
+        // friendly hint rather than an alarming ✗.
+        let _ = cliclack::log::info(format!(
+            "couldn't reach the agent yet — make sure the daemon is running (`secreq daemon install`), then `secreq ssh validate {key_id}`."
+        ));
+        return;
+    }
+    print_self_test_result(key_id, &result);
+}
+
+/// Resolve a `--public-key` argument to a validated OpenSSH public-key line.
+/// A path to an existing file is read (a `.pub` file is one line); otherwise
+/// a value starting with a known OpenSSH key-type prefix is treated as a
+/// literal. Anything else, or a value that doesn't parse, is an error.
+fn resolve_public_key(raw: &str) -> Result<String> {
+    let candidate = Path::new(raw);
+    let text = if candidate.is_file() {
+        std::fs::read_to_string(candidate)
+            .with_context(|| format!("could not read public key file {raw}"))?
+    } else if is_openssh_public_key_literal(raw) {
+        raw.to_owned()
+    } else {
+        bail!(
+            "`{raw}` is neither an existing file nor an OpenSSH public key (expected an `ssh-…`/`ecdsa-…`/`sk-…` line)"
+        );
+    };
+    validate_openssh_public_key(text.trim())
+}
+
+/// True if `s` looks like an inline OpenSSH public key (by key-type prefix).
+fn is_openssh_public_key_literal(s: &str) -> bool {
+    const PREFIXES: [&str; 4] = ["ssh-", "ecdsa-", "sk-ssh-", "sk-ecdsa-"];
+    PREFIXES.iter().any(|p| s.starts_with(p))
+}
+
+/// Parse `line` as an OpenSSH public key to validate it, returning the
+/// trimmed line on success.
+fn validate_openssh_public_key(line: &str) -> Result<String> {
+    ssh_key::PublicKey::from_openssh(line)
+        .with_context(|| "not a valid OpenSSH public key (expected `ssh-… AAAA… [comment]`)")?;
+    Ok(line.to_owned())
+}
+
+/// What op discovery yields: the private-key reference and, optionally, the
+/// public key fetched alongside it.
+struct OpIdentity {
+    private_key: Reference,
+    public_key: Option<String>,
+}
+
+/// Best-effort 1Password (`op`) discovery of an SSH-Key item. Returns `None`
+/// (never an error) when op is missing, errors, returns no items, or the user
+/// can't be prompted — the caller falls back to a manual prompt. When
+/// `want_public_key` is set, also fetches the item's public key.
+fn op_assisted_identity(want_public_key: bool) -> Result<Option<OpIdentity>> {
+    if !which_on_path("op") {
+        return Ok(None);
+    }
+
+    let items = match op_list_ssh_keys() {
+        Some(items) if !items.is_empty() => items,
+        _ => {
+            cliclack::log::info(
+                "1Password `op` found no SSH-Key items (or couldn't list them); entering the reference manually.",
+            )
+            .ok();
+            return Ok(None);
+        }
+    };
+
+    let mut select = cliclack::select::<usize>("Pick the 1Password SSH key to serve");
+    for (idx, item) in items.iter().enumerate() {
+        select = select.item(idx, item.title.as_str(), item.vault.as_str());
+    }
+    let chosen = match select.interact() {
+        Ok(idx) => &items[idx],
+        Err(_) => {
+            cliclack::log::info("No selection made; entering the reference manually.").ok();
+            return Ok(None);
+        }
+    };
+
+    let private_key = match Reference::parse(&format!(
+        "secret://op/{}/{}/private key",
+        chosen.vault, chosen.title
+    )) {
+        Some(reference) => reference,
+        None => return Ok(None),
+    };
+
+    let public_key = if want_public_key {
+        match op_read(&format!(
+            "op://{}/{}/public key",
+            chosen.vault, chosen.title
+        )) {
+            Some(raw) => match validate_openssh_public_key(raw.trim()) {
+                Ok(pk) => Some(pk),
+                Err(err) => {
+                    cliclack::log::warning(format!(
+                        "op returned a public key that didn't parse ({err:#}); you'll be prompted for it."
+                    ))
+                    .ok();
+                    None
+                }
+            },
+            None => None,
+        }
+    } else {
+        None
+    };
+
+    Ok(Some(OpIdentity {
+        private_key,
+        public_key,
+    }))
+}
+
+/// One 1Password SSH-Key item, as surfaced by `op item list`.
+struct OpItem {
+    title: String,
+    vault: String,
+}
+
+/// Run `op item list --categories "SSH Key" --format json` and parse out the
+/// title + vault of each item. Returns `None` on any failure.
+fn op_list_ssh_keys() -> Option<Vec<OpItem>> {
+    let output = Command::new("op")
+        .args([
+            "item",
+            "list",
+            "--categories",
+            "SSH Key",
+            "--format",
+            "json",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    let array = value.as_array()?;
+    let mut items = Vec::with_capacity(array.len());
+    for entry in array {
+        let title = entry.get("title")?.as_str()?.to_owned();
+        let vault = entry
+            .get("vault")
+            .and_then(|v| v.get("name"))
+            .and_then(|n| n.as_str())?
+            .to_owned();
+        items.push(OpItem { title, vault });
+    }
+    Some(items)
+}
+
+/// Run `op read <uri>` and return its trimmed stdout, or `None` on failure.
+fn op_read(uri: &str) -> Option<String> {
+    let output = Command::new("op").args(["read", uri]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8(output.stdout).ok()?.trim().to_owned())
 }
 
 /// Args for `secreq wrap`.
@@ -304,25 +1346,32 @@ pub fn wrap(args: WrapArgs, config_path: Option<&Path>) -> Result<i32> {
         .clone()
         .context("no $shim_dir configured; run `secreq init` first")?;
 
-    // Interactive flow gets a banner; non-interactive (all flags supplied)
-    // stays quiet so it composes cleanly with scripts.
-    let interactive = args.envs.is_empty();
+    // Interactive flow gets a banner; non-interactive (flags supplied, or
+    // no terminal to prompt on) stays quiet so it composes cleanly with
+    // scripts.
+    let interactive = args.envs.is_empty() && std::io::stdin().is_terminal();
     if interactive {
         cliclack::intro(format!("Wrap `{}`", args.binary))?;
     }
 
-    // Build the env map.
-    let env: BTreeMap<String, String> = if interactive {
-        prompt::interactive_wrap_envs(&config.providers)?
-    } else {
+    // Build the env map. Three paths:
+    //  - `--env` flags supplied → parse them (non-interactive).
+    //  - interactive terminal   → ask gate-only vs inject-secrets.
+    //  - no flags, no terminal  → gate-only. There's nothing to inject and
+    //    nothing to prompt on, so absence of `--env` means "just gate it".
+    // An empty env map is a *gate-only* wrap: consent is still required,
+    // but nothing is resolved or injected. Used to gate tools like `op`.
+    let env: BTreeMap<String, String> = if !args.envs.is_empty() {
         parse_env_assignments(&args.envs)?
+    } else if interactive {
+        if prompt::wrap_is_gate_only()? {
+            BTreeMap::new()
+        } else {
+            prompt::interactive_wrap_envs(&config.providers)?
+        }
+    } else {
+        BTreeMap::new()
     };
-    if env.is_empty() {
-        bail!(
-            "wrap `{}` would have no env vars; nothing to do",
-            args.binary
-        );
-    }
 
     let reason = args.reason.or_else(|| {
         if interactive {
@@ -346,15 +1395,22 @@ pub fn wrap(args: WrapArgs, config_path: Option<&Path>) -> Result<i32> {
     // Drop the shim.
     let shim_path = shim::install(&shim_dir, &args.binary)?;
 
+    // `config.wraps[binary]` is the wrap we just inserted; an empty env
+    // means we created a gate-only wrap.
+    let kind = if config.wraps[&args.binary].env.is_empty() {
+        " (gate-only — consent required, nothing injected)"
+    } else {
+        ""
+    };
     let summary = format!(
         "config: {}\n  shim: {}",
         config_path.display(),
         shim_path.display()
     );
     if interactive {
-        cliclack::outro(format!("Wrapped `{}`.\n  {summary}", args.binary))?;
+        cliclack::outro(format!("Wrapped `{}`{kind}.\n  {summary}", args.binary))?;
     } else {
-        println!("Wrapped `{}`.\n  {summary}", args.binary);
+        println!("Wrapped `{}`{kind}.\n  {summary}", args.binary);
     }
 
     if !path_setup::path_includes(&shim_dir) {
@@ -589,6 +1645,48 @@ pub fn daemon_stop(force: bool) -> Result<i32> {
     }
 }
 
+/// `secreq daemon status` — report whether a daemon is running, without
+/// spawning one. Exit code follows the `systemctl status` convention so
+/// scripts can branch on it: `0` when a daemon is running, [`STATUS_EXIT_NOT_RUNNING`]
+/// when none is. The pid is decided by the pidfile flock, so it's always a
+/// live process; the build id comes from the `Hello` handshake and is absent
+/// when the daemon holds the lock but doesn't answer (wedged).
+pub fn daemon_status() -> Result<i32> {
+    let socket = crate::daemon::server::default_socket_path()?;
+    let log = crate::daemon::log::log_path()?;
+    match daemon_client::daemon_status().context("could not query the consent daemon")? {
+        daemon_client::DaemonStatus::NotRunning => {
+            println!("secreq daemon: not running");
+            println!("  socket: {} (created on next spawn)", socket.display());
+            println!("  log:    {}", log.display());
+            Ok(STATUS_EXIT_NOT_RUNNING)
+        }
+        daemon_client::DaemonStatus::Running { pid, build_id } => {
+            println!("secreq daemon: running");
+            println!("  pid:    {pid}");
+            match build_id {
+                Some(id) if id == crate::BUILD_ID => {
+                    println!("  build:  {id} (matches this CLI)");
+                }
+                Some(id) => {
+                    println!("  build:  {id} (stale; this CLI is {})", crate::BUILD_ID);
+                }
+                None => {
+                    println!("  build:  unknown (daemon holds the lock but isn't answering)");
+                }
+            }
+            println!("  socket: {}", socket.display());
+            println!("  log:    {}", log.display());
+            Ok(0)
+        }
+    }
+}
+
+/// Exit code for `secreq daemon status` when no daemon is running. Mirrors
+/// `systemctl status`'s "program is not running" code so shell scripts can
+/// branch on `secreq daemon status` the same way.
+const STATUS_EXIT_NOT_RUNNING: i32 = 3;
+
 /// How many trailing lines of the existing log to print before
 /// following, matching the familiar `tail -f` default feel (but a touch
 /// larger — daemon lines are terse and a session's worth of context is
@@ -626,6 +1724,124 @@ pub fn daemon_tail() -> Result<i32> {
 pub fn daemon_log_path() -> Result<i32> {
     println!("{}", crate::daemon::log::log_path()?.display());
     Ok(0)
+}
+
+/// `secreq daemon install` — install (or `--undo`) a per-user login service
+/// that runs `secreq daemon --fg` at login and keeps it alive.
+///
+/// WHY: the SSH agent socket only exists while the daemon runs. Wraps
+/// auto-spawn the daemon on demand, but an incoming SSH connection has nothing
+/// to spawn it — so `SSH_AUTH_SOCK` points at a dead socket unless the daemon
+/// already happens to be up. A login service keeps it live.
+///
+/// Writing the service file is pure ([`autostart::plan`]/[`autostart::apply`]);
+/// loading it shells out to `launchctl`/`systemctl`
+/// ([`autostart::load_service`]). If the load step fails (e.g. a headless
+/// Linux box without a user bus), we still report the file was written and how
+/// to load it by hand rather than hard-failing.
+pub fn daemon_install(undo: bool, assume_yes: bool) -> Result<i32> {
+    daemon_install_core(undo, assume_yes)?;
+    Ok(0)
+}
+
+/// The reusable body of `secreq daemon install`, shared with the `ssh setup`
+/// orchestrator's auto-start step. Returns `Ok(())` once the service file is
+/// written (or undone); the standalone command wraps it for an exit code.
+fn daemon_install_core(undo: bool, assume_yes: bool) -> Result<()> {
+    let platform = autostart::current_platform();
+    let home = dirs::home_dir().context("could not determine $HOME")?;
+    let service_file = autostart::service_file_path(&home, platform);
+
+    if undo {
+        cliclack::intro("secreq daemon install --undo")?;
+        // Best-effort unload first; an unloaded-already service isn't an error
+        // we should stop on.
+        if let Err(err) = autostart::unload_service(platform, &service_file) {
+            cliclack::log::warning(format!(
+                "couldn't unload the service (it may not have been loaded): {err:#}"
+            ))?;
+        }
+        if autostart::remove(&home, platform)? {
+            cliclack::log::success(format!("Removed {}.", service_file.display()))?;
+        } else {
+            cliclack::log::info("No secreq login service found — nothing to remove.")?;
+        }
+        cliclack::outro("Done.")?;
+        return Ok(());
+    }
+
+    let exe = std::env::current_exe().context("could not determine the secreq executable path")?;
+    // Canonicalize when we can so the service points at a stable path (resolves
+    // symlinks like a homebrew shim); fall back to the raw path otherwise.
+    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+    let log_path = crate::daemon::log::log_path()?;
+
+    let plan = autostart::plan(&home, platform, &exe, &log_path)?;
+
+    cliclack::intro("secreq daemon install")?;
+    cliclack::note(
+        format!(
+            "I'll write this login service to {}:",
+            plan.service_file.display()
+        ),
+        &plan.contents,
+    )?;
+    if plan.already_installed {
+        cliclack::log::info(
+            "A service file already exists; it'll be rewritten (the exe path may have changed).",
+        )?;
+    }
+
+    let proceed = assume_yes || prompt::confirm_default_yes("Write and load it?")?;
+    if !proceed {
+        cliclack::log::info("Skipped — no files changed.")?;
+        cliclack::outro("Done.")?;
+        return Ok(());
+    }
+
+    let changed = autostart::apply(&plan)?;
+    if changed {
+        cliclack::log::success(format!("wrote {}.", plan.service_file.display()))?;
+    } else {
+        cliclack::log::info(format!(
+            "{} was already up to date.",
+            plan.service_file.display()
+        ))?;
+    }
+
+    match autostart::load_service(platform, &plan.service_file) {
+        Ok(()) => {
+            cliclack::log::success(
+                "Loaded the login service — the daemon is running now and will start at login.",
+            )?;
+            let hint = match platform {
+                autostart::Platform::Macos => "launchctl list | grep secreq",
+                autostart::Platform::Linux => "systemctl --user status secreq",
+            };
+            cliclack::log::info(format!("Check status with: {hint}"))?;
+        }
+        Err(err) => {
+            // Don't hard-fail after writing — the file is in place; tell the
+            // user how to load it manually.
+            cliclack::log::warning(format!("couldn't load the service automatically: {err:#}"))?;
+            let manual = match platform {
+                autostart::Platform::Macos => format!(
+                    "launchctl bootstrap gui/$(id -u) {}",
+                    plan.service_file.display()
+                ),
+                autostart::Platform::Linux => {
+                    "systemctl --user daemon-reload && systemctl --user enable --now secreq.service"
+                        .to_owned()
+                }
+            };
+            cliclack::log::info(format!(
+                "The file is written; load it by hand with:\n  {manual}"
+            ))?;
+        }
+    }
+
+    cliclack::outro("Done.")?;
+    Ok(())
 }
 
 /// Print the tail of `path` then follow appended lines, `tail -f`-style.
@@ -683,8 +1899,7 @@ fn open_log_with_retry(path: &Path) -> Result<File> {
             Ok(file) => return Ok(file),
             Err(_) if Instant::now() < deadline => sleep(Duration::from_millis(50)),
             Err(err) => {
-                return Err(err)
-                    .with_context(|| format!("open daemon log {}", path.display()));
+                return Err(err).with_context(|| format!("open daemon log {}", path.display()));
             }
         }
     }
@@ -883,58 +2098,109 @@ fn resolve_config_path(config_path: Option<&Path>) -> Result<PathBuf> {
         .context("could not determine config path (no XDG_CONFIG_HOME / no $HOME?)")
 }
 
-/// Build a consent ask, send it to the daemon, and return its decision +
-/// daemon-resolved secret values. The daemon does the resolution itself so
-/// a parallel burst of N asks triggers exactly one provider call per
-/// secret — fixing the "50 Touch ID prompts from 50 `gh api` calls"
-/// problem the file-lock approach couldn't.
-fn obtain_wrap_consent(
-    wrap: &Wrap,
-    callers: &[provenance::Caller],
-    args: &[String],
-) -> Result<daemon_client::ConsentOutcome> {
-    // No direct parent ⇒ the dedupe key would be meaningless. Synthetic
-    // invocations (e.g. some test harnesses) land here. Fail closed.
-    let Some(parent) = callers.first() else {
-        bail!("could not determine direct parent process; refusing to request consent");
-    };
+/// A parsed env reference: the variable name and its `secret://` target.
+#[derive(Debug)]
+pub(crate) struct EnvRef {
+    pub name: String,
+    pub reference: Reference,
+}
 
-    let cwd = std::env::current_dir().context("could not determine current directory")?;
-    let mut command = vec![wrap.name.clone()];
-    command.extend(args.iter().cloned());
-
-    // Build the secrets list. Bare-locator wraps (no `secret://...` prefix)
-    // never made it through `wraps::parse`, so we can assume `Reference::parse`
-    // succeeds — but if it doesn't, surface the malformed ref early instead
-    // of sending a junk ask the daemon would reject at resolution time.
-    let config = load_config_or_default(None)?;
-    let mut providers = HashMap::new();
-    let mut secrets: Vec<proto::SecretAsk> = Vec::new();
-    for (env_name, ref_str) in &wrap.env {
-        let reference = Reference::parse(ref_str).with_context(|| {
+/// Scan `(name, value)` env pairs for `secret://provider/locator` values.
+/// A value that *looks* like a reference (starts with the scheme) but does
+/// not parse is a hard error, naming the variable — we never silently pass
+/// a literal `secret://…` to the child. Values that don't look like a
+/// reference at all pass through untouched (not returned here).
+pub(crate) fn scan_env_refs(env: &[(String, String)]) -> Result<Vec<EnvRef>> {
+    let mut refs = Vec::new();
+    for (name, value) in env {
+        if !Reference::looks_like_ref(value) {
+            continue;
+        }
+        let reference = Reference::parse(value).with_context(|| {
             format!(
-                "wrap `{}`.env.{env_name}: `{ref_str}` is not a valid `secret://provider/locator` reference",
-                wrap.name
+                "env var `{name}`: `{value}` is not a valid `secret://provider/locator` reference"
             )
         })?;
-        let provider_name = reference.provider.clone();
+        refs.push(EnvRef {
+            name: name.clone(),
+            reference,
+        });
+    }
+    Ok(refs)
+}
+
+/// Mint a run-session token for a root run: `"<pid>:<nonce>"`. The pid
+/// aids debugging; the random nonce guarantees two trees never collide
+/// (and one tree always coalesces, since descendants inherit it verbatim).
+fn mint_session_token() -> String {
+    use rand::RngCore;
+    let nonce = rand::thread_rng().next_u64();
+    format!("{}:{}", std::process::id(), nonce)
+}
+
+/// Parse a session token into the dedupe key every descendant run of the
+/// tree shares. `parent_start_time` holds the nonce — opaque to the
+/// daemon, used only to group same-session asks into one queue entry.
+fn session_dedupe_key(token: &str) -> Option<proto::DedupeKey> {
+    let (pid, nonce) = token.split_once(':')?;
+    Some(proto::DedupeKey {
+        wrap: "run".to_owned(),
+        ppid: pid.parse().ok()?,
+        parent_start_time: nonce.parse().ok()?,
+    })
+}
+
+/// Explicit inputs to [`build_ask`]. Lets the `x` consent path and the
+/// `run` path share one Ask builder while supplying their own identity,
+/// command, and remember policy.
+pub(crate) struct AskSpec<'a> {
+    /// `dedupe_key.wrap` — the wrap name for `x`, the fixed `"run"` for run.
+    pub dedupe_wrap: String,
+    /// Argv shown in the consent prompt (never values).
+    pub command: Vec<String>,
+    /// The `(env name, reference)` pairs to inject.
+    pub refs: &'a [(String, Reference)],
+    /// `$reason` carried onto each `SecretAsk`.
+    pub reason: Option<String>,
+    /// Whether `ApproveRemember` may persist an approval (`true` for `x`).
+    pub allow_remember: bool,
+}
+
+/// Build the daemon [`proto::Ask`] from explicit pieces. Pure — no I/O
+/// beyond reading the providers snapshot already loaded into `config`.
+///
+/// Note the `ppid`/`parent_start_time` fall back to `0` when the caller
+/// chain is empty. The `x` path guards against that case *before* calling
+/// here (a meaningless dedupe key is a fail-closed condition for `x`); a
+/// future `run` caller is the only one that would ever rely on the fallback.
+pub(crate) fn build_ask(
+    spec: AskSpec<'_>,
+    callers: &[provenance::Caller],
+    cwd: &Path,
+    config: &WrapsConfig,
+) -> proto::Ask {
+    let mut providers = HashMap::new();
+    let mut secrets: Vec<proto::SecretAsk> = Vec::new();
+    for (name, reference) in spec.refs {
         // Include the provider definition the daemon will run. Built-ins
         // are overlaid by `load_config_or_default`, so they're in here too.
-        if let Some(p) = config.providers.get(&provider_name) {
-            providers.insert(provider_name.clone(), to_wire_provider(p));
+        if let Some(p) = config.providers.get(&reference.provider) {
+            providers.insert(reference.provider.clone(), to_wire_provider(p));
         }
         secrets.push(proto::SecretAsk {
-            name: env_name.clone(),
-            provider: provider_name,
-            locator: reference.locator,
+            name: name.clone(),
+            provider: reference.provider.clone(),
+            locator: reference.locator.clone(),
             default: None,
             description: None,
-            reason: wrap.reason.clone(),
+            reason: spec.reason.clone(),
+            requested_by: vec![],
         });
     }
 
-    let ask = proto::Ask {
-        command,
+    let parent = callers.first();
+    proto::Ask {
+        command: spec.command,
         cwd: cwd.display().to_string(),
         callers: callers
             .iter()
@@ -948,13 +2214,83 @@ fn obtain_wrap_consent(
         secrets,
         providers,
         dedupe_key: proto::DedupeKey {
-            wrap: wrap.name.clone(),
-            ppid: parent.pid,
-            parent_start_time: parent.start_time,
+            wrap: spec.dedupe_wrap,
+            ppid: parent.map(|p| p.pid).unwrap_or(0),
+            parent_start_time: parent.map(|p| p.start_time).unwrap_or(0),
         },
-    };
+        // Wrap / run asks are never SSH sign asks; only the in-process SSH
+        // agent path sets this.
+        ssh: None,
+        allow_remember: spec.allow_remember,
+        // Default to false (always-prompt). The `run` path sets it on the
+        // returned ask when it detects it's nested under another run.
+        nested_run: false,
+    }
+}
 
-    daemon_client::request_consent(ask).context("daemon consent request failed")
+/// Build a consent ask, send it to the daemon, and return its decision +
+/// daemon-resolved secret values. The daemon does the resolution itself so
+/// a parallel burst of N asks triggers exactly one provider call per
+/// secret — fixing the "50 Touch ID prompts from 50 `gh api` calls"
+/// problem the file-lock approach couldn't.
+fn obtain_wrap_consent(
+    wrap: &Wrap,
+    callers: &[provenance::Caller],
+    args: &[String],
+) -> Result<daemon_client::ConsentOutcome> {
+    // No direct parent ⇒ the dedupe key would be meaningless. Synthetic
+    // invocations (e.g. some test harnesses) land here. Fail closed before
+    // building an ask with a zeroed-out parent. (`build_ask` tolerates an
+    // empty chain for `run`; `x` must not.)
+    if callers.is_empty() {
+        bail!("could not determine direct parent process; refusing to request consent");
+    }
+
+    let cwd = std::env::current_dir().context("could not determine current directory")?;
+    let mut command = vec![wrap.name.clone()];
+    command.extend(args.iter().cloned());
+
+    // Parse the wrap's env into references. Bare-locator wraps (no
+    // `secret://...` prefix) never made it through `wraps::parse`, so we can
+    // assume `Reference::parse` succeeds — but if it doesn't, surface the
+    // malformed ref early instead of sending a junk ask the daemon would
+    // reject at resolution time.
+    let config = load_config_or_default(None)?;
+    let refs = parse_wrap_refs(wrap)?;
+
+    let ask = build_ask(
+        AskSpec {
+            dedupe_wrap: wrap.name.clone(),
+            command,
+            refs: &refs,
+            reason: wrap.reason.clone(),
+            // Wrap (`x`) asks may persist a remembered approval; only
+            // `secreq run` disables this.
+            allow_remember: true,
+        },
+        callers,
+        &cwd,
+        &config,
+    );
+
+    daemon_client::request_consent(ask, config.wait_indicator_enabled())
+        .context("daemon consent request failed")
+}
+
+/// Parse a wrap's `env` map into `(name, Reference)` pairs, surfacing a
+/// malformed `secret://` ref with the wrap-specific error message.
+fn parse_wrap_refs(wrap: &Wrap) -> Result<Vec<(String, Reference)>> {
+    let mut refs = Vec::with_capacity(wrap.env.len());
+    for (env_name, ref_str) in &wrap.env {
+        let reference = Reference::parse(ref_str).with_context(|| {
+            format!(
+                "wrap `{}`.env.{env_name}: `{ref_str}` is not a valid `secret://provider/locator` reference",
+                wrap.name
+            )
+        })?;
+        refs.push((env_name.clone(), reference));
+    }
+    Ok(refs)
 }
 
 fn to_wire_provider(p: &crate::manifest::Provider) -> proto::WireProvider {
@@ -972,6 +2308,19 @@ fn to_wire_provider(p: &crate::manifest::Provider) -> proto::WireProvider {
 /// resolve grouping/batching machinery by building a one-shot manifest with
 /// the wrap's env as eager secrets.
 fn resolve_wrap_env(config: &WrapsConfig, wrap: &Wrap) -> Result<Vec<(String, SecretValue)>> {
+    let refs = parse_wrap_refs(wrap)?;
+    resolve_refs_client_side(config, &refs, wrap.reason.as_deref())
+}
+
+/// Resolve a set of references client-side (the `--yes` path — no daemon, no
+/// coalescing). Reuses [`resolve::resolve_all`] for batching/grouping by
+/// adapting the providers into a one-shot manifest with each ref as an eager
+/// secret.
+pub(crate) fn resolve_refs_client_side(
+    config: &WrapsConfig,
+    refs: &[(String, Reference)],
+    reason: Option<&str>,
+) -> Result<Vec<(String, SecretValue)>> {
     // Adapt the WrapsConfig.providers into a Manifest so we can reuse
     // resolve::resolve_all (which already handles batching, defaults,
     // grouped invocations).
@@ -980,27 +2329,21 @@ fn resolve_wrap_env(config: &WrapsConfig, wrap: &Wrap) -> Result<Vec<(String, Se
         providers: config.providers.clone(),
     };
 
-    let mut requests = Vec::with_capacity(wrap.env.len());
-    for (env_name, ref_str) in &wrap.env {
-        let reference = Reference::parse(ref_str).with_context(|| {
-            format!(
-                "wrap `{}`.env.{}: `{}` is not a valid `secret://provider/locator` reference",
-                wrap.name, env_name, ref_str
-            )
-        })?;
-        requests.push(SecretRequest {
-            name: env_name.clone(),
-            provider: reference.provider,
-            locator: reference.locator,
+    let requests = refs
+        .iter()
+        .map(|(name, reference)| SecretRequest {
+            name: name.clone(),
+            provider: reference.provider.clone(),
+            locator: reference.locator.clone(),
             group: None,
-            reason: wrap.reason.clone(),
+            reason: reason.map(|s| s.to_owned()),
             description: None,
             default: None,
             source: Source::Eager,
-        });
-    }
+        })
+        .collect();
     let plan = resolve::ResolutionPlan { requests };
-    let resolved = resolve::resolve_all(&manifest, &plan)?;
+    let (resolved, _stats) = resolve::resolve_all(&manifest, &plan)?;
     Ok(resolved.into_iter().map(|r| (r.name, r.value)).collect())
 }
 
@@ -1012,7 +2355,7 @@ fn resolve_wrap_env(config: &WrapsConfig, wrap: &Wrap) -> Result<Vec<(String, Se
 /// The second exclusion is load-bearing: a user can end up with stray
 /// shims in `~/.local/bin`, `/usr/local/bin`, or wherever an earlier
 /// `secreq wrap` left one before they moved the shim dir. Those stray
-/// shims are still functional (`exec secreq <wrap> "$@"`) but secreq
+/// shims are still functional (`exec secreq x <wrap> "$@"`) but secreq
 /// doesn't know about them — and if the spawned-process PATH happens
 /// to put one *before* the real binary's location, find_real_binary
 /// would otherwise pick up the stray and spawn `secreq` recursively,
@@ -1156,6 +2499,31 @@ fn config_to_json_value(config: &WrapsConfig) -> Result<serde_json::Value> {
             serde_json::Value::Object(providers_obj),
         );
     }
+    if !config.ssh.is_empty() {
+        let mut ssh_obj = serde_json::Map::new();
+        for (name, identity) in &config.ssh {
+            let mut obj = serde_json::Map::new();
+            if let Some(reason) = &identity.reason {
+                obj.insert(
+                    "$reason".to_owned(),
+                    serde_json::Value::String(reason.clone()),
+                );
+            }
+            obj.insert(
+                "public_key".to_owned(),
+                serde_json::Value::String(identity.public_key.clone()),
+            );
+            obj.insert(
+                "private_key".to_owned(),
+                serde_json::Value::String(identity.private_key.to_string()),
+            );
+            ssh_obj.insert(name.clone(), serde_json::Value::Object(obj));
+        }
+        root.insert(
+            wraps::SSH_KEY.to_owned(),
+            serde_json::Value::Object(ssh_obj),
+        );
+    }
     Ok(serde_json::Value::Object(root))
 }
 
@@ -1238,11 +2606,74 @@ mod prompt {
         }
     }
 
+    /// Prompt for the identity name (the key under the `ssh` block). Used by
+    /// the `ssh setup` orchestrator's identity step, which has no preset name.
+    pub(super) fn ssh_identity_name() -> Result<String> {
+        cliclack::input("Identity name (the key under the `ssh` block)")
+            .placeholder("e.g. github")
+            .validate(|s: &String| {
+                if s.trim().is_empty() {
+                    Err("name can't be empty")
+                } else {
+                    Ok(())
+                }
+            })
+            .interact()
+            .context("interactive input failed (need a real terminal)")
+            .map(|s: String| s.trim().to_owned())
+    }
+
+    /// Prompt for a `secret://provider/locator` reference (the manual
+    /// fallback when op discovery is unavailable or declined). Validates the
+    /// input parses before returning.
+    pub(super) fn ssh_private_key_reference() -> Result<Reference> {
+        let raw: String = cliclack::input("Private key reference (secret://provider/locator)")
+            .placeholder("secret://op/Private/GitHub/private key")
+            .validate(|s: &String| match Reference::parse(s) {
+                Some(_) => Ok(()),
+                None => Err("must be a `secret://provider/locator` reference"),
+            })
+            .interact()
+            .context("interactive input failed (need a real terminal)")?;
+        Reference::parse(&raw).context("internal: validated reference failed to re-parse")
+    }
+
+    /// Prompt for an inline OpenSSH public key (path or pasted line), then
+    /// validate it parses.
+    pub(super) fn ssh_public_key() -> Result<String> {
+        let raw: String = cliclack::input("Public key (path to a .pub file, or the ssh-… line)")
+            .placeholder("ssh-ed25519 AAAA… me@host")
+            .interact()
+            .context("interactive input failed (need a real terminal)")?;
+        super::resolve_public_key(raw.trim())
+    }
+
     pub(super) fn confirm_default_yes(prompt: &str) -> Result<bool> {
         cliclack::confirm(prompt)
             .initial_value(true)
             .interact()
             .context("interactive confirm failed (need a real terminal)")
+    }
+
+    /// Ask whether this wrap should inject secrets or just gate the
+    /// command. A gate-only wrap (no env) still routes the binary through
+    /// the consent daemon but injects nothing — the model for tools like
+    /// `op` that have no secret to pass.
+    pub(super) fn wrap_is_gate_only() -> Result<bool> {
+        let choice: String = cliclack::select("What should this wrap do?")
+            .item(
+                "secrets".to_owned(),
+                "Inject secrets",
+                "resolve secret:// references into env vars",
+            )
+            .item(
+                "gate".to_owned(),
+                "Gate only (no secrets)",
+                "just require consent before the command runs",
+            )
+            .interact()
+            .context("interactive selection failed")?;
+        Ok(choice == "gate")
     }
 
     /// Drive the interactive `secreq wrap` env-collection loop: pick a
@@ -1316,7 +2747,192 @@ mod prompt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn render_read_json_emits_object_even_for_a_single_ref() {
+        let out = render_read_json(&[("op/Work/key".to_owned(), "s3cr3t".to_owned())]);
+        assert_eq!(out, "{\n  \"op/Work/key\": \"s3cr3t\"\n}\n");
+        // Round-trips through a real JSON parser.
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["op/Work/key"], "s3cr3t");
+    }
+
+    #[test]
+    fn render_read_json_preserves_input_order_not_sorted() {
+        // Keys deliberately out of sorted order; output must keep input order.
+        let out = render_read_json(&[
+            ("zeta/b".to_owned(), "1".to_owned()),
+            ("alpha/a".to_owned(), "2".to_owned()),
+        ]);
+        let zeta = out.find("zeta/b").unwrap();
+        let alpha = out.find("alpha/a").unwrap();
+        assert!(zeta < alpha, "input order must be preserved, got: {out}");
+    }
+
+    #[test]
+    fn render_read_json_escapes_keys_and_values() {
+        // A value with a quote, backslash, and newline must be valid JSON.
+        let out =
+            render_read_json(&[("secret://op/a\"b".to_owned(), "line1\nline2\"\\".to_owned())]);
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["secret://op/a\"b"], "line1\nline2\"\\");
+    }
+
+    #[test]
+    fn filter_to_refs_drops_unrequested_keys() {
+        use crate::reference::Reference;
+        let refs = vec![
+            (
+                "DATABASE_URL".to_owned(),
+                Reference::parse("secret://op/Work/PG/url").unwrap(),
+            ),
+            (
+                "API_KEY".to_owned(),
+                Reference::parse("secret://op/Work/Stripe/key").unwrap(),
+            ),
+        ];
+        let mut outcome: HashMap<String, String> = HashMap::new();
+        outcome.insert("DATABASE_URL".to_owned(), "db-secret".to_owned());
+        outcome.insert("API_KEY".to_owned(), "api-secret".to_owned());
+        // A sibling's secret the daemon should never have sent, but might
+        // due to a bug — the client filter must drop it.
+        outcome.insert("SIBLING_TOKEN".to_owned(), "leaked".to_owned());
+
+        let kept = filter_to_refs(outcome, &refs);
+        let names: HashSet<&str> = kept.iter().map(|(n, _)| n.as_str()).collect();
+        // Both requested names are kept…
+        assert!(names.contains("DATABASE_URL"));
+        assert!(names.contains("API_KEY"));
+        // …and the unrequested sibling secret is dropped.
+        assert!(!names.contains("SIBLING_TOKEN"));
+        assert_eq!(kept.len(), 2);
+        // Values survive intact for the kept entries.
+        let db = kept
+            .iter()
+            .find(|(n, _)| n == "DATABASE_URL")
+            .map(|(_, v)| v.expose());
+        assert_eq!(db, Some("db-secret"));
+    }
+
+    #[test]
+    fn session_token_round_trips_to_a_dedupe_key() {
+        // "pid:nonce" → DedupeKey { wrap:"run", ppid:pid, parent_start_time:nonce }
+        let key = session_dedupe_key("6042:12345678901234567890");
+        assert_eq!(
+            key,
+            Some(proto::DedupeKey {
+                wrap: "run".to_owned(),
+                ppid: 6042,
+                parent_start_time: 12345678901234567890,
+            })
+        );
+        assert_eq!(session_dedupe_key("garbage"), None);
+        assert_eq!(session_dedupe_key("6042"), None); // needs both halves
+    }
+
+    #[test]
+    fn minted_session_token_parses_back() {
+        let token = mint_session_token();
+        let key = session_dedupe_key(&token).expect("minted token must parse");
+        assert_eq!(key.wrap, "run");
+        assert_eq!(key.ppid, std::process::id());
+    }
+
+    #[test]
+    fn build_ask_sets_identity_command_and_remember() {
+        use crate::reference::Reference;
+        let refs = vec![(
+            "DATABASE_URL".to_owned(),
+            Reference::parse("secret://op/Work/PG/url").unwrap(),
+        )];
+        let callers = vec![provenance::Caller {
+            pid: 42,
+            name: "zsh".to_owned(),
+            command: "zsh".to_owned(),
+            exe: None,
+            start_time: 7,
+        }];
+        let config = WrapsConfig::default(); // providers map may be empty here
+        let ask = build_ask(
+            AskSpec {
+                dedupe_wrap: "run".to_owned(),
+                command: vec!["./deploy.sh".to_owned(), "--prod".to_owned()],
+                refs: &refs,
+                reason: None,
+                allow_remember: false,
+            },
+            &callers,
+            std::path::Path::new("/tmp/proj"),
+            &config,
+        );
+        assert_eq!(ask.dedupe_key.wrap, "run");
+        assert_eq!(ask.command, vec!["./deploy.sh", "--prod"]);
+        assert!(!ask.allow_remember);
+        assert_eq!(ask.secrets.len(), 1);
+        assert_eq!(ask.secrets[0].name, "DATABASE_URL");
+        assert_eq!(ask.secrets[0].provider, "op");
+        assert_eq!(ask.secrets[0].locator, "Work/PG/url");
+        assert_eq!(ask.dedupe_key.ppid, 42);
+    }
+
+    #[test]
+    fn scan_env_refs_returns_only_well_formed_refs() {
+        let env = vec![
+            ("PLAIN".to_owned(), "hello".to_owned()),
+            ("DB".to_owned(), "secret://op/Work/PG/url".to_owned()),
+            ("PG".to_owned(), "postgres://host/db".to_owned()),
+        ];
+        let refs = scan_env_refs(&env).unwrap();
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "DB");
+        assert_eq!(refs[0].reference.provider, "op");
+        assert_eq!(refs[0].reference.locator, "Work/PG/url");
+    }
+
+    #[test]
+    fn scan_env_refs_errors_on_a_malformed_ref_naming_the_var() {
+        let env = vec![("BAD".to_owned(), "secret://noslash".to_owned())];
+        let err = scan_env_refs(&env).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("BAD"), "error should name the var: {msg}");
+    }
+
+    #[test]
+    fn effective_env_layers_envfile_under_inherited() {
+        let inherited = vec![("A".to_owned(), "from_env".to_owned())];
+        let envfile = vec![
+            ("A".to_owned(), "from_file".to_owned()), // inherited wins
+            ("B".to_owned(), "secret://op/x".to_owned()), // file-only
+        ];
+        let eff = effective_env(&inherited, &envfile);
+        assert_eq!(eff.get("A").map(String::as_str), Some("from_env"));
+        assert_eq!(eff.get("B").map(String::as_str), Some("secret://op/x"));
+    }
+
+    #[test]
+    fn overrides_carry_filed_plain_vars_and_resolved_refs_only() {
+        // Given the effective env + resolved values, the overrides passed to
+        // exec::run must be: file-only plain vars + every resolved ref.
+        // Inherited plain vars are NOT re-emitted (the child inherits them).
+        let inherited = vec![("PATH".to_owned(), "/usr/bin".to_owned())];
+        let envfile = vec![
+            ("PLAIN".to_owned(), "hello".to_owned()),
+            ("TOKEN".to_owned(), "secret://op/x".to_owned()),
+        ];
+        let eff = effective_env(&inherited, &envfile);
+        let resolved = vec![("TOKEN".to_owned(), "real-token".to_owned())];
+        let mut overrides = build_overrides(&eff, &inherited, &resolved);
+        overrides.sort();
+        assert_eq!(
+            overrides,
+            vec![
+                ("PLAIN".to_owned(), "hello".to_owned()),
+                ("TOKEN".to_owned(), "real-token".to_owned()),
+            ]
+        );
+    }
 
     fn make_executable(path: &Path) {
         let mut perms = std::fs::metadata(path).unwrap().permissions();
@@ -1332,7 +2948,7 @@ mod tests {
         let path = dir.path().join("gh");
         std::fs::write(
             &path,
-            "#!/bin/sh\n# secreq-managed-shim: wrap=gh\nexec secreq gh \"$@\"\n",
+            "#!/bin/sh\n# secreq-managed-shim: wrap=gh\nexec secreq x gh \"$@\"\n",
         )
         .unwrap();
         make_executable(&path);
@@ -1364,5 +2980,45 @@ mod tests {
     fn is_secreq_shim_returns_false_for_missing_files() {
         let path = std::path::PathBuf::from("/this/does/not/exist/gh");
         assert!(!is_secreq_shim(&path));
+    }
+
+    #[test]
+    fn write_config_preserves_ssh_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wraps.json5");
+
+        let mut config = WrapsConfig::default();
+        config.wraps.insert(
+            "gh".to_owned(),
+            Wrap {
+                name: "gh".to_owned(),
+                reason: Some("GitHub API access".to_owned()),
+                env: std::iter::once((
+                    "GITHUB_TOKEN".to_owned(),
+                    "secret://op/Private/gh/token".to_owned(),
+                ))
+                .collect(),
+            },
+        );
+        config.ssh.insert(
+            "github".to_owned(),
+            wraps::SshIdentity {
+                reason: Some("git pushes".to_owned()),
+                public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1 me@mac".to_owned(),
+                private_key: Reference::parse("secret://op/Private/GitHub/private key").unwrap(),
+            },
+        );
+
+        write_config(&path, &config).unwrap();
+
+        let reloaded = WrapsConfig::load(&path).unwrap();
+        let id = reloaded
+            .ssh
+            .get("github")
+            .expect("ssh identity must survive a write/reload round-trip");
+        assert_eq!(id.reason.as_deref(), Some("git pushes"));
+        assert_eq!(id.public_key, "ssh-ed25519 AAAAC3NzaC1lZDI1 me@mac");
+        assert_eq!(id.private_key.provider, "op");
+        assert_eq!(id.private_key.locator, "Private/GitHub/private key");
     }
 }

@@ -42,6 +42,20 @@ chacha20poly1305 = { version = "0.10", default-features = false, features = ["al
 blake3 = "1"
 rand = "0.8"
 glob = "0.3"
+# `p256` (not just `ecdsa`) is required for ecdsa-nistp256 signing/keygen:
+# the `ecdsa` feature only pulls the `sec1` encoding, while the actual
+# curve Signer impl is gated behind `p256`.
+ssh-key = { version = "0.6", features = ["ed25519", "rsa", "ecdsa", "p256"] }
+ssh-encoding = "0.2"
+# Needed only to honor the SSH_AGENT_RSA_SHA2_256/512 SIGN_REQUEST flags:
+# ssh-key 0.6's public Signer impl for RSA hardcodes SHA-512, so we drop to
+# the same rsa::pkcs1v15 path it uses internally to select the hash. Pinned
+# to the version ssh-key resolves; re-exports `sha2` and `signature`.
+rsa = { version = "0.9", features = ["sha2"] }
+# `.env` parsing for `secreq run --env-file` (quoting, escapes, `export`,
+# `${VAR}` substitution). We use its non-mutating `from_path_iter`, never
+# the env-loading entry points.
+dotenvy = "0.15"
 
 # macOS-only.
 #

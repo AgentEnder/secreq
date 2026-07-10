@@ -32,6 +32,22 @@ gh repo list      # invokes secreq via PATH shim → consent → real gh
 aws s3 ls         # same; one biometric for both keys (retrieve_batch)
 ```
 
+For an *arbitrary* command (no wrap entry), `secreq run` is `op run` for
+every store — it resolves `secret://` refs found in the environment (and
+in any `--env-file`), then execs your command with the values injected
+and masked:
+
+```sh
+# .env holds refs, not secrets — safe to commit:
+#   DATABASE_URL=secret://op/Work/Postgres/url
+#   STRIPE_KEY=secret://keychain/stripe-live
+secreq run --env-file .env -- ./deploy.sh
+```
+
+Concurrent `secreq run` invocations in one process tree share a single
+consent prompt: the daemon unions their secret requests into one card,
+you approve once, and each command receives only its own secrets.
+
 | Command | Purpose |
 |---|---|
 | `secreq init` | First-time setup: pick a shim dir and (optionally) wire it into PATH. |
@@ -40,7 +56,8 @@ aws s3 ls         # same; one biometric for both keys (retrieve_batch)
 | `secreq wraps` | List configured wraps (names only — no values). |
 | `secreq check` / `doctor` | Validate config / verify provider CLIs. |
 | `secreq edit` | Open the config in `$EDITOR`. |
-| `secreq <bin> [args…]` | Wrap-and-run path. The shim invokes this. |
+| `secreq x <bin> [args…]` | Wrap-and-run path. The shim invokes this. |
+| `secreq run [--env-file F]… -- <cmd>` | `op run`, but for every store: resolve ambient `secret://` refs, then exec `<cmd>`. |
 
 Built-in providers: `op` (with `retrieve_batch` — one biometric per
 multi-secret invocation), `keychain` (macOS), `lastpass`, `pass` (Unix).
@@ -61,6 +78,11 @@ multi-secret invocation), `keychain` (macOS), `lastpass`, `pass` (Unix).
 - **Multi-provider output masking.** Any value resolved through any
   provider gets redacted on the wrapped binary's stdout/stderr. `--raw`
   opts out for `pbcopy`-style flows.
+- **Provenance-aware SSH agent.** Point `SSH_AUTH_SOCK` at secreq and each
+  key signature is gated by the same consent prompt — you see who's asking
+  before `git push` signs. The private key is resolved from your provider,
+  used in-process, and zeroized (a key-custody downgrade vs. 1Password's
+  sealed agent — see [`docs/ssh-agent.md`](./docs/ssh-agent.md)).
 
 ## Documentation
 
@@ -73,6 +95,7 @@ End-user docs live in [`docs/`](./docs/):
 | [`docs/cli.md`](./docs/cli.md) | Every subcommand, every flag, the wrap-and-run flow |
 | [`docs/wraps.md`](./docs/wraps.md) | Authoring `wraps.json5` |
 | [`docs/providers.md`](./docs/providers.md) | Provider model + built-ins |
+| [`docs/ssh-agent.md`](./docs/ssh-agent.md) | The provenance-aware SSH agent: config, setup, the key-custody tradeoff |
 | [`docs/consent-window.md`](./docs/consent-window.md) | The daemon UI: pending tree, audit log, audit JSONL format |
 | [`docs/wraps.schema.json`](./docs/wraps.schema.json) | JSON Schema (point your editor at it) |
 

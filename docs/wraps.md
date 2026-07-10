@@ -44,6 +44,7 @@ JSON5: comments, unquoted keys, trailing commas, single-quoted strings.
 | Key | Meaning |
 |---|---|
 | `$shim_dir` | Where `secreq wrap` drops PATH shims. Tilde-expansion (`~/`) honored. Set by `secreq init`. |
+| `$wait_indicator` | Boolean (default `true`). Whether a wrap prints a "waiting for approval" indicator to stderr while blocked on the consent prompt — a spinner on a TTY, a timestamped line (reprinted every 30s) on a pipe. Set `false` to silence. The `SECREQ_NO_WAIT_INDICATOR` env var silences it per-invocation regardless of this setting. |
 | `$schema` | Editor pointer; ignored at runtime. |
 | `providers` | Provider scheme definitions. Optional — see [providers.md](./providers.md). |
 | Any other identifier | A **wrap** (binary name). |
@@ -67,9 +68,46 @@ gh: {
 | Setting | Type | Meaning |
 |---|---|---|
 | `$reason` | string | Rationale shown in the consent prompt for context. |
-| `env` | object (required) | Environment variables to inject. Each value is a `secret://provider/locator` reference (full ref only — bare locators aren't supported here, unlike the old manifest model). |
+| `env` | object (optional) | Environment variables to inject. Each value is a `secret://provider/locator` reference (full ref only — bare locators aren't supported here, unlike the old manifest model). Omit (or leave empty) to make a [gate-only wrap](#gate-only-wraps). |
 
-`env` must be non-empty: a wrap with zero env vars has nothing to wrap.
+### Gate-only wraps
+
+A wrap with no `env` is a **gate-only wrap**: invoking the binary still
+requires consent through the daemon, but nothing is resolved or
+injected. Use it to gate a tool that manages its own credentials and has
+no secret for `secreq` to pass — `op` (the 1Password CLI) is the
+canonical case:
+
+```json5
+op: {
+  $reason: "1Password vault access",
+}
+```
+
+Now every `op` invocation (`op read …`, `op item get …`, …) pauses for a
+consent prompt that shows the full command, the working directory, and
+the caller process tree — the "why am I getting this request?" context
+the tool's own prompt usually omits. The consent card displays a
+**"Gate only — no secrets injected"** marker in place of the secret
+rows. Create one non-interactively with:
+
+```sh
+secreq wrap op --reason "1Password vault access"
+```
+
+(`secreq wrap op` with no `--env` and no terminal creates a gate; in an
+interactive terminal it offers a "Gate only (no secrets)" choice.)
+
+Gate-only wraps participate in [auto-rules](./consent-window.md) like any
+other wrap — e.g. auto-approve `op read op://Work/*` while still
+prompting for everything else.
+
+**Wrapping a provider CLI is safe.** If you gate `op` *and* also use it as
+a `secret://op/...` provider for other wraps, secreq won't double-prompt:
+when it resolves a secret it runs the provider with an internal marker
+(`SECREQ_RESOLVING`) that makes the wrapped `op` pass straight through.
+Only the `op` calls *you* (or your tools) make are gated; the ones secreq
+makes to fetch values for another wrap are not.
 
 There is **no TTL setting**. Cache lifetime is bounded by the lifetime
 of your parent process *and* the daemon process (see "How approval is
@@ -169,8 +207,9 @@ and use `secreq edit` for surgical edits you want to keep verbatim.
 
 ## What `secreq` ignores
 
-- Top-level keys starting with `$` other than `$shim_dir` are reserved
-  metadata (e.g. `$schema`, future `$version`).
+- Top-level keys starting with `$` other than `$shim_dir` and
+  `$wait_indicator` are reserved metadata (e.g. `$schema`, future
+  `$version`).
 - Per-wrap `$description` is accepted and currently ignored at runtime
   (parity with future tooling).
 - Comments, trailing commas, and JSON5 syntax sugar are accepted on read

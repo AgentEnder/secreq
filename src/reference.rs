@@ -16,8 +16,26 @@ pub const SCHEME: &str = "secret://";
 
 impl Reference {
     /// Parse a full reference, or `None` if `input` is not a well-formed one.
+    /// Requires the `secret://` scheme — used when scanning env values, where
+    /// a bare `provider/locator` must *not* be mistaken for a reference.
     pub fn parse(input: &str) -> Option<Reference> {
         let rest = input.strip_prefix(SCHEME)?;
+        Self::parse_body(rest)
+    }
+
+    /// Parse a `secreq read` argument: either a full `secret://provider/locator`
+    /// reference or the bare `provider/locator` shorthand. The scheme is
+    /// optional here because the argument position is unambiguous — every
+    /// `read` arg is a reference, so there's nothing for a bare locator to be
+    /// confused with.
+    pub fn parse_arg(input: &str) -> Option<Reference> {
+        let rest = input.strip_prefix(SCHEME).unwrap_or(input);
+        Self::parse_body(rest)
+    }
+
+    /// Split `provider/locator` (the part after any scheme prefix), rejecting
+    /// an empty provider or locator.
+    fn parse_body(rest: &str) -> Option<Reference> {
         let (provider, locator) = rest.split_once('/')?;
         if provider.is_empty() || locator.is_empty() {
             return None;
@@ -31,6 +49,14 @@ impl Reference {
     /// Cheap check: does this string look like a reference (`secret://…`)?
     pub fn looks_like_ref(input: &str) -> bool {
         input.starts_with(SCHEME)
+    }
+}
+
+impl std::fmt::Display for Reference {
+    /// Reconstruct the `secret://provider/locator` string. Round-trips through
+    /// [`Reference::parse`].
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{SCHEME}{}/{}", self.provider, self.locator)
     }
 }
 
@@ -61,8 +87,38 @@ mod tests {
     }
 
     #[test]
+    fn display_round_trips_through_parse() {
+        for input in [
+            "secret://op/Work/Stripe/api_key",
+            "secret://keychain/myapp",
+            "secret://op/Private/GitHub/private key",
+        ] {
+            let r = Reference::parse(input).unwrap();
+            assert_eq!(r.to_string(), input);
+            assert_eq!(Reference::parse(&r.to_string()).unwrap(), r);
+        }
+    }
+
+    #[test]
     fn looks_like_ref_is_a_cheap_prefix_test() {
         assert!(Reference::looks_like_ref("secret://x/y"));
         assert!(!Reference::looks_like_ref("postgres://x/y"));
+    }
+
+    #[test]
+    fn parse_arg_accepts_both_scheme_and_bare_forms() {
+        let with_scheme = Reference::parse_arg("secret://op/Work/Stripe/api_key").unwrap();
+        let bare = Reference::parse_arg("op/Work/Stripe/api_key").unwrap();
+        assert_eq!(with_scheme, bare);
+        assert_eq!(bare.provider, "op");
+        assert_eq!(bare.locator, "Work/Stripe/api_key");
+    }
+
+    #[test]
+    fn parse_arg_rejects_malformed_bare_refs() {
+        assert!(Reference::parse_arg("noslash").is_none()); // no locator segment
+        assert!(Reference::parse_arg("/locator").is_none()); // empty provider
+        assert!(Reference::parse_arg("op/").is_none()); // empty locator
+        assert!(Reference::parse_arg("secret://op").is_none()); // scheme, no locator
     }
 }

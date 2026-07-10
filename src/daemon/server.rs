@@ -14,8 +14,8 @@ use std::thread;
 
 use anyhow::{Context, Result};
 
-use super::proto::{Ask, ClientMsg, DaemonMsg};
-use super::state::{SharedState, WaiterReply};
+use super::proto::{Ask, ClientMsg, DaemonMsg, DedupeKey};
+use super::state::{SharedState, WaiterId, WaiterReply};
 
 /// Bind the daemon socket and start accepting connections.
 ///
@@ -47,6 +47,25 @@ pub fn start(socket_path: PathBuf, state: SharedState) -> Result<UnixListener> {
         .context("spawn daemon accept thread")?;
 
     Ok(listener)
+}
+
+/// Bind and start the SSH agent listener when the loaded config declares
+/// any `ssh` identities. Mirrors [`start`] (its own thread, returns the
+/// bound listener for the caller to keep alive) but speaks the SSH agent
+/// protocol on `agent.sock` rather than the JSON control protocol. Returns
+/// `Ok(None)` when no identities are configured — no agent socket exists
+/// in that case.
+///
+/// `providers` and `state` are threaded through to the SIGN handler: the
+/// providers resolve the private key fresh at sign time; the shared state
+/// drives the consent prompt + SSH approval cache.
+pub fn start_ssh_agent(
+    socket_path: PathBuf,
+    ssh: &std::collections::BTreeMap<String, crate::wraps::SshIdentity>,
+    providers: std::collections::BTreeMap<String, crate::manifest::Provider>,
+    state: SharedState,
+) -> Result<Option<UnixListener>> {
+    super::ssh_agent::start(socket_path, ssh, providers, state)
 }
 
 fn accept_loop(listener: UnixListener, state: SharedState) {
@@ -86,20 +105,67 @@ fn handle_connection(stream: UnixStream, state: SharedState) -> Result<()> {
         return Ok(());
     }
 
-    // `Ask` blocks `handle_message` until the user decides, so the
-    // spawn-the-consent-window step is done *inside* `handle_ask`
-    // before it parks on the reply channel — see the comment there.
-    // For the non-blocking show-the-window verbs, spawn after we've
+    // Branch: streaming manager-window attach — the persistent Rules +
+    // Audit surface. Same push-stream shape; its read loop handles rule
+    // mutations and detach.
+    if let ClientMsg::ManagerWindowAttach { pid } = msg {
+        super::log::log_at(
+            "server",
+            format_args!("← ClientMsg::ManagerWindowAttach (pid={pid})"),
+        );
+        handle_manager_window_connection(reader, stream, state, pid)?;
+        return Ok(());
+    }
+
+    // Branch: streaming pending-badge attach. Same push-stream shape as
+    // the consent window but a leaner read loop (no decisions / rules —
+    // only a click-to-raise nudge and detach).
+    if let ClientMsg::BadgeWindowAttach { pid } = msg {
+        super::log::log_at(
+            "server",
+            format_args!("← ClientMsg::BadgeWindowAttach (pid={pid})"),
+        );
+        handle_badge_window_connection(reader, stream, state)?;
+        return Ok(());
+    }
+
+    // Branch: one-shot Ask. Handled here rather than through
+    // `handle_message` because this thread must keep the raw socket to
+    // watch for the client hanging up while the ask is parked — a wrap
+    // killed before the user decides then gets its ask reaped instead of
+    // orphaned in the queue. See `handle_ask_connection`.
+    if let ClientMsg::Ask(ask) = msg {
+        super::log::log_at("server", format_args!("← ClientMsg::Ask"));
+        // Mirror `handle_message`'s pre-dispatch rules refresh so a
+        // hand-edited rules file is honoured for this ask too.
+        state.lock().expect("state mutex").reload_rules_if_changed();
+        return handle_ask_connection(reader, stream, ask, state);
+    }
+
+    // For the non-blocking show-a-window verbs, spawn after we've
     // replied so the client doesn't wait on `Command::spawn`.
-    let needs_spawn = matches!(&msg, ClientMsg::ShowWindow | ClientMsg::ShowViewer);
+    // `ShowWindow` raises the prompt; `ShowViewer` opens the manager
+    // on the Audit view.
+    let spawn_prompt = matches!(&msg, ClientMsg::ShowWindow);
+    let spawn_manager = matches!(&msg, ClientMsg::ShowViewer);
     let reply = handle_message(msg, state.clone());
     let mut writer = stream;
     write_reply(&mut writer, &reply)?;
-    if needs_spawn {
+    if spawn_prompt {
         if let Err(err) = super::ensure_consent_window(&state) {
             super::log::log_at(
                 "server",
                 format_args!("ensure_consent_window failed: {err:#}"),
+            );
+        }
+    }
+    if spawn_manager {
+        if let Err(err) =
+            super::ensure_manager_window(&state, Some(super::proto::ManagerFocus::Audit))
+        {
+            super::log::log_at(
+                "server",
+                format_args!("ensure_manager_window failed: {err:#}"),
             );
         }
     }
@@ -236,10 +302,14 @@ fn handle_consent_window_connection(
                     pid: scope_pid,
                     start_time: scope_start_time,
                 };
-                state
+                // `resolve` hands a clone of `state` to its off-thread
+                // resolver so it can clear the "Resolving…" card when
+                // the value lands; lock a separate handle to call it.
+                let handle = state.clone();
+                handle
                     .lock()
                     .expect("state mutex")
-                    .resolve(&key, decision, scope);
+                    .resolve(&key, decision, scope, &state);
             }
             ClientMsg::ConsentWindowDetach => {
                 super::log::log_at("server", format_args!("← ConsentWindowDetach"));
@@ -254,6 +324,18 @@ fn handle_consent_window_connection(
                     .lock()
                     .expect("state mutex")
                     .set_consent_focused(subscriber_id, focused);
+            }
+            ClientMsg::OpenManager { focus } => {
+                super::log::log_at(
+                    "server",
+                    format_args!("← OpenManager focus={focus:?} (prompt link)"),
+                );
+                if let Err(err) = super::ensure_manager_window(&state, Some(focus)) {
+                    super::log::log_at(
+                        "server",
+                        format_args!("open-manager ensure_manager_window failed: {err:#}"),
+                    );
+                }
             }
             // Rule mutations from the Rules tab. They arrive over the
             // streaming socket because that's the connection the
@@ -327,9 +409,242 @@ fn handle_consent_window_connection(
     Ok(())
 }
 
+/// Streaming connection for a manager-window child. Mirrors
+/// [`handle_consent_window_connection`]'s writer-thread + read-loop
+/// shape (and its exact detach-ordering contract). The manager's read
+/// loop handles rule mutations (its Rules view is the primary editor)
+/// and detach-by-socket-drop; it never sends decisions, never reports
+/// focus, and never receives `ConsentExitPlease` — it closes when the
+/// user closes it or when the daemon process exits (socket drop).
+fn handle_manager_window_connection(
+    reader: BufReader<UnixStream>,
+    socket: UnixStream,
+    state: SharedState,
+    pid: u32,
+) -> Result<()> {
+    let (tx, rx) = mpsc::channel::<DaemonMsg>();
+
+    let (subscriber_id, initial_snapshot) = state
+        .lock()
+        .expect("state mutex")
+        .attach_manager_window(pid, tx.clone());
+
+    let writer_socket = socket
+        .try_clone()
+        .context("clone socket for manager writer")?;
+    let writer_handle = thread::Builder::new()
+        .name("manager-window-writer".to_owned())
+        .spawn(move || {
+            let mut writer = writer_socket;
+            while let Ok(msg) = rx.recv() {
+                let json = match serde_json::to_string(&msg) {
+                    Ok(j) => j,
+                    Err(err) => {
+                        eprintln!("secreqd: serialize manager update: {err}");
+                        return;
+                    }
+                };
+                if writeln!(writer, "{json}").is_err() {
+                    return; // Socket closed.
+                }
+            }
+        })
+        .context("spawn manager-window writer thread")?;
+
+    // Eager initial push so the manager can paint its first frame.
+    let _ = tx.send(DaemonMsg::ConsentUpdate {
+        snapshot: initial_snapshot,
+    });
+
+    let mut reader = reader;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = match reader.read_line(&mut line) {
+            Ok(n) => n,
+            Err(_) => break,
+        };
+        if n == 0 {
+            super::log::log_at(
+                "server",
+                format_args!("manager-window socket closed by child"),
+            );
+            break;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let msg: ClientMsg = match serde_json::from_str(trimmed) {
+            Ok(m) => m,
+            Err(err) => {
+                super::log::log_at(
+                    "server",
+                    format_args!("manager-window: malformed msg: {err}; line=[{trimmed}]"),
+                );
+                continue;
+            }
+        };
+        match msg {
+            ClientMsg::AddRule { .. }
+            | ClientMsg::UpdateRule { .. }
+            | ClientMsg::DeleteRule { .. }
+            | ClientMsg::SetRuleEnabled { .. } => {
+                apply_streaming_rule_msg(&state, msg);
+            }
+            other => {
+                super::log::log_at(
+                    "server",
+                    format_args!("manager-window sent unexpected message: {other:?}"),
+                );
+            }
+        }
+    }
+
+    // Same detach-order contract as the consent window: remove the
+    // subscriber before dropping our local tx so the writer thread's
+    // `rx.recv()` returns `Err` and we can join without deadlocking.
+    // `detach_manager_window` also clears viewer mode when this was
+    // the last manager.
+    state
+        .lock()
+        .expect("state mutex")
+        .detach_manager_window(subscriber_id);
+    drop(tx);
+    let _ = writer_handle.join();
+    Ok(())
+}
+
+/// Streaming connection for a pending-badge child. Mirrors
+/// [`handle_consent_window_connection`]'s writer-thread + read-loop
+/// shape (and its exact detach-ordering contract), but the badge's read
+/// loop only handles two messages: `RaiseConsentRequested` (the user
+/// clicked the pill → bring the consent window forward) and
+/// `BadgeWindowDetach`. The badge gets the same `ConsentUpdate` stream
+/// as the consent window — it just renders the `Awaiting` count.
+fn handle_badge_window_connection(
+    reader: BufReader<UnixStream>,
+    socket: UnixStream,
+    state: SharedState,
+) -> Result<()> {
+    let (tx, rx) = mpsc::channel::<DaemonMsg>();
+
+    let (subscriber_id, initial_snapshot) = state
+        .lock()
+        .expect("state mutex")
+        .attach_badge_window(tx.clone());
+
+    let writer_socket = socket
+        .try_clone()
+        .context("clone socket for badge writer")?;
+    let writer_handle = thread::Builder::new()
+        .name("pending-badge-writer".to_owned())
+        .spawn(move || {
+            let mut writer = writer_socket;
+            while let Ok(msg) = rx.recv() {
+                let json = match serde_json::to_string(&msg) {
+                    Ok(j) => j,
+                    Err(err) => {
+                        eprintln!("secreqd: serialize badge update: {err}");
+                        return;
+                    }
+                };
+                if writeln!(writer, "{json}").is_err() {
+                    return; // Socket closed.
+                }
+            }
+        })
+        .context("spawn pending-badge writer thread")?;
+
+    // Eager initial push so the badge can paint its first frame.
+    let _ = tx.send(DaemonMsg::ConsentUpdate {
+        snapshot: initial_snapshot,
+    });
+
+    let mut reader = reader;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = match reader.read_line(&mut line) {
+            Ok(n) => n,
+            Err(_) => break,
+        };
+        if n == 0 {
+            super::log::log_at(
+                "server",
+                format_args!("pending-badge socket closed by child"),
+            );
+            break;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let msg: ClientMsg = match serde_json::from_str(trimmed) {
+            Ok(m) => m,
+            Err(err) => {
+                super::log::log_at(
+                    "server",
+                    format_args!("pending-badge: malformed msg: {err}; line=[{trimmed}]"),
+                );
+                continue;
+            }
+        };
+        match msg {
+            ClientMsg::RaiseConsentRequested => {
+                super::log::log_at(
+                    "server",
+                    format_args!("← RaiseConsentRequested (badge click)"),
+                );
+                // Same raise path as `ShowWindow`: show the window and,
+                // unless a live consent child is already in front, kill
+                // and respawn it so the fresh process gets foreground
+                // intent (the macOS App-Nap workaround). Then ensure a
+                // child exists at all.
+                {
+                    let mut guard = state.lock().expect("state mutex");
+                    guard.show_window();
+                    if !guard.any_consent_focused() {
+                        guard.initiate_consent_restart();
+                    }
+                    guard.touch();
+                }
+                if let Err(err) = super::ensure_consent_window(&state) {
+                    super::log::log_at(
+                        "server",
+                        format_args!("badge-raise ensure_consent_window failed: {err:#}"),
+                    );
+                }
+            }
+            ClientMsg::BadgeWindowDetach => {
+                super::log::log_at("server", format_args!("← BadgeWindowDetach"));
+                break;
+            }
+            other => {
+                super::log::log_at(
+                    "server",
+                    format_args!("pending-badge sent unexpected message: {other:?}"),
+                );
+            }
+        }
+    }
+
+    // Same detach-order contract as the consent window: remove the
+    // subscriber before dropping our local tx so the writer thread's
+    // `rx.recv()` returns `Err` and we can join without deadlocking.
+    state
+        .lock()
+        .expect("state mutex")
+        .detach_badge_window(subscriber_id);
+    drop(tx);
+    let _ = writer_handle.join();
+    Ok(())
+}
+
 fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
     let tag = match &msg {
         ClientMsg::Ping => "Ping",
+        ClientMsg::Hello { .. } => "Hello",
         ClientMsg::ShowWindow => "ShowWindow",
         ClientMsg::ShowViewer => "ShowViewer",
         ClientMsg::Ask(_) => "Ask",
@@ -338,6 +653,11 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
         ClientMsg::ConsentDecision { .. } => "ConsentDecision",
         ClientMsg::ConsentWindowDetach => "ConsentWindowDetach",
         ClientMsg::ConsentWindowFocus { .. } => "ConsentWindowFocus",
+        ClientMsg::ManagerWindowAttach { .. } => "ManagerWindowAttach",
+        ClientMsg::OpenManager { .. } => "OpenManager",
+        ClientMsg::BadgeWindowAttach { .. } => "BadgeWindowAttach",
+        ClientMsg::BadgeWindowDetach => "BadgeWindowDetach",
+        ClientMsg::RaiseConsentRequested => "RaiseConsentRequested",
         ClientMsg::ListRules => "ListRules",
         ClientMsg::AddRule { .. } => "AddRule",
         ClientMsg::UpdateRule { .. } => "UpdateRule",
@@ -354,6 +674,24 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
         ClientMsg::Ping => {
             state.lock().expect("state mutex").touch();
             DaemonMsg::Ok
+        }
+        ClientMsg::Hello { build_id } => {
+            // Version handshake. If the CLI is a different build than us,
+            // log it (the CLI drives the actual restart) and don't touch
+            // the idle clock — a stale daemon being probed for replacement
+            // shouldn't extend its own life.
+            if build_id != crate::BUILD_ID {
+                super::log::log_at(
+                    "server",
+                    format_args!(
+                        "Hello from CLI build {build_id}; daemon is {} — CLI will restart us",
+                        crate::BUILD_ID
+                    ),
+                );
+            }
+            DaemonMsg::Hello {
+                build_id: crate::BUILD_ID.to_owned(),
+            }
         }
         ClientMsg::ShowWindow => {
             let mut guard = state.lock().expect("state mutex");
@@ -378,32 +716,46 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
             }
         }
         ClientMsg::ShowViewer => {
+            // `secreq view` opens the *manager* window on the Audit
+            // view. No kill-and-respawn: the manager is a persistent
+            // browsing surface, so an existing one is left alone and
+            // its pid handed back for CLI-side activation. The spawn
+            // (if needed) happens after the reply, in
+            // `handle_connection`.
             let mut guard = state.lock().expect("state mutex");
             guard.enter_viewer_mode();
-            if !guard.any_consent_focused() {
-                guard.initiate_consent_restart();
-            }
             guard.touch();
             DaemonMsg::WindowOpened {
-                child_pid: guard.consent_child_pid(),
+                child_pid: guard.manager_child_pid(),
             }
         }
-        ClientMsg::Ask(ask) => handle_ask(ask, state),
+        // Ask is intercepted in `handle_connection` (it needs the raw
+        // socket to watch for a hang-up), so it never reaches this
+        // one-shot dispatch.
+        ClientMsg::Ask(_) => {
+            unreachable!("ClientMsg::Ask is handled by handle_ask_connection")
+        }
         ClientMsg::Shutdown => {
             state.lock().expect("state mutex").request_shutdown();
             DaemonMsg::Ok
         }
-        // The streaming consent-window messages must arrive on the
-        // streaming connection path (`handle_consent_window_connection`,
-        // added below). Seeing them on the one-shot path means the
-        // child connected without `ConsentWindowAttach` first; reply
-        // with an error so the child doesn't deadlock.
+        // The streaming window messages must arrive on the streaming
+        // connection paths (`handle_consent_window_connection` /
+        // `handle_manager_window_connection` / the badge handler).
+        // Seeing them on the one-shot path means the child connected
+        // without its Attach message first; reply with an error so the
+        // child doesn't deadlock.
         ClientMsg::ConsentWindowAttach { .. }
         | ClientMsg::ConsentDecision { .. }
         | ClientMsg::ConsentWindowDetach
-        | ClientMsg::ConsentWindowFocus { .. } => DaemonMsg::Err {
-            message: "consent-window message arrived on one-shot path; \
-                      child must send ConsentWindowAttach first"
+        | ClientMsg::ConsentWindowFocus { .. }
+        | ClientMsg::ManagerWindowAttach { .. }
+        | ClientMsg::OpenManager { .. }
+        | ClientMsg::BadgeWindowAttach { .. }
+        | ClientMsg::BadgeWindowDetach
+        | ClientMsg::RaiseConsentRequested => DaemonMsg::Err {
+            message: "streaming consent/badge message arrived on one-shot path; \
+                      child must send its Attach message first"
                 .to_owned(),
         },
         ClientMsg::ListRules => {
@@ -451,6 +803,7 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
     };
     let reply_tag = match &reply {
         DaemonMsg::Ok => "Ok",
+        DaemonMsg::Hello { .. } => "Hello",
         DaemonMsg::WindowOpened { child_pid } => match child_pid {
             Some(_) => "WindowOpened(existing)",
             None => "WindowOpened(spawning)",
@@ -460,8 +813,15 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
             crate::consent::Decision::ApproveRemember => "Decision::ApproveRemember",
             crate::consent::Decision::ApproveCached => "Decision::ApproveCached",
             crate::consent::Decision::ApproveAuto => "Decision::ApproveAuto",
+            // SSH-only decisions; they ride the in-process sign waiter, not
+            // this wrap socket reply, but Decision is shared so list them.
+            crate::consent::Decision::ApproveSshSession => "Decision::ApproveSshSession",
+            crate::consent::Decision::ApproveSshSessionAll => "Decision::ApproveSshSessionAll",
             crate::consent::Decision::Deny => "Decision::Deny",
             crate::consent::Decision::DenyAuto => "Decision::DenyAuto",
+            // Never sent as a wrap reply — an abandoned ask has no live
+            // client to receive it — but Decision is shared, so name it.
+            crate::consent::Decision::Abandoned => "Decision::Abandoned",
         },
         DaemonMsg::Err { .. } => "Err",
         DaemonMsg::ConsentUpdate { .. } => "ConsentUpdate",
@@ -473,19 +833,44 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
     reply
 }
 
-fn handle_ask(ask: Ask, state: SharedState) -> DaemonMsg {
-    // Fast-path: parent-keyed approval cache hit. Take the lock briefly,
-    // resolve (one provider invocation, the win we want even on cache
-    // hits), release. We don't enqueue: the UI has nothing to show.
+/// Outcome of `handle_ask`. A fast path resolves synchronously (reply the
+/// client now); otherwise the ask is enqueued and the caller parks a
+/// reply-writer on `rx` while watching the socket for the client hanging
+/// up (see `handle_ask_connection`).
+enum AskDisposition {
+    Resolved(DaemonMsg),
+    Enqueued {
+        key: DedupeKey,
+        waiter_id: WaiterId,
+        rx: mpsc::Receiver<WaiterReply>,
+    },
+}
+
+fn handle_ask(ask: Ask, state: SharedState) -> AskDisposition {
+    // Fast-path: parent-keyed approval cache hit. Take the lock briefly
+    // to check authorization, then *release it* before resolving — the
+    // provider call (and any biometric prompt) must not hold the state
+    // mutex, or the consent-window child couldn't attach to show the
+    // "Resolving…" card. We don't enqueue: there's no decision to make.
     {
         let guard = state.lock().expect("state mutex");
-        if let Some(reply) = guard.try_cache_hit(&ask) {
-            return waiter_reply_to_daemon_msg(reply);
+        if guard.has_cached_approval(&ask) {
+            let cache = guard.secret_cache_arc();
+            let in_flight = guard.in_flight_arc();
+            drop(guard);
+            let reply = resolve_approved_with_pending(
+                &ask,
+                crate::consent::Decision::ApproveCached,
+                cache,
+                in_flight,
+                &state,
+            );
+            return AskDisposition::Resolved(waiter_reply_to_daemon_msg(reply));
         }
     }
     // Auto-rules path. The mtime-based reload already ran in
-    // `handle_message`, so `state.rules` reflects any hand-edits made
-    // since the daemon started. If a rule fires, the ask never enters
+    // `handle_ask_connection`, so `state.rules` reflects any hand-edits
+    // made since the daemon started. If a rule fires, the ask never enters
     // the queue. ApproveAuto resolves synchronously on this thread
     // (we'd otherwise be blocking on the user's click anyway, so
     // blocking on a provider invocation is equivalent from the
@@ -496,21 +881,49 @@ fn handle_ask(ask: Ask, state: SharedState) -> DaemonMsg {
             let cache = guard.secret_cache_arc();
             let in_flight = guard.in_flight_arc();
             drop(guard);
-            return handle_rule_hit(ask, hit, cache, in_flight, state);
+            return AskDisposition::Resolved(handle_rule_hit(ask, hit, cache, in_flight, state));
         }
     }
-    // Slow path: enqueue and park on the reply channel.
+    // Nested-run fast path: a `run` invoked under an already-consented
+    // run (it carries `nested_run`) whose every value is already cached
+    // resolves silently — "a secret crosses the consent boundary once per
+    // run session." Any uncached secret makes `nested_run_fully_cached`
+    // false, so the ask falls through to the prompt below; and an
+    // unnested run never sets the flag, so it always prompts. Checked
+    // after the rules pass so a deny rule still wins over the skip.
+    {
+        let guard = state.lock().expect("state mutex");
+        let cache = guard.secret_cache_arc();
+        let in_flight = guard.in_flight_arc();
+        drop(guard);
+        if super::state::nested_run_fully_cached(&ask, &cache) {
+            let reply = resolve_approved_with_pending(
+                &ask,
+                crate::consent::Decision::ApproveCached,
+                cache,
+                in_flight,
+                &state,
+            );
+            return AskDisposition::Resolved(waiter_reply_to_daemon_msg(reply));
+        }
+    }
+    // Slow path: enqueue and hand the caller the channel + waiter id so it
+    // can park a reply-writer while watching the socket for hang-up.
     let (tx, rx) = mpsc::channel();
-    let is_new = {
+    let key = ask.dedupe_key.clone();
+    let (is_new, waiter_id) = {
         let mut guard = state.lock().expect("state mutex");
-        let result = guard.submit_ask(ask, tx);
+        let (result, waiter_id) = guard.submit_ask(ask, tx);
         // Restart only on genuinely new entries. A coalesced ask is
         // joining an existing queue row that the current UI is already
         // displaying; killing the window mid-decision to "re-show"
         // the same card would be worse UX (and would drop the user's
         // in-progress choice). Only the first fresh entry per dedupe
         // key warrants a foreground raise.
-        matches!(result, super::state::SubmitResult::NewEntry)
+        (
+            matches!(result, super::state::SubmitResult::NewEntry),
+            waiter_id,
+        )
     };
     if is_new {
         let mut guard = state.lock().expect("state mutex");
@@ -538,16 +951,94 @@ fn handle_ask(ask: Ask, state: SharedState) -> DaemonMsg {
             format_args!("ensure_consent_window failed: {err:#}"),
         );
     }
-    match rx.recv() {
-        Ok(reply) => waiter_reply_to_daemon_msg(reply),
-        Err(_) => DaemonMsg::Decision {
-            decision: crate::consent::Decision::Deny,
-            secrets: std::collections::HashMap::new(),
-            rule_id: None,
-            rule_name: None,
-            deny_message: None,
-        },
+    // Raise the always-on-top "N pending" badge too, so a backgrounded
+    // or dismissed consent window can't leave this ask forgotten with
+    // the wrap process hung. Idempotent — a no-op if a badge is already
+    // up. The badge persists until the queue drains.
+    if let Err(err) = super::ensure_badge_window(&state) {
+        super::log::log_at(
+            "server",
+            format_args!("ensure_badge_window failed: {err:#}"),
+        );
     }
+    AskDisposition::Enqueued { key, waiter_id, rx }
+}
+
+/// Drive a one-shot Ask connection. Fast-path resolutions reply straight
+/// back; a queued ask parks a reply-writer thread on the decision channel
+/// while THIS thread watches the socket for the client hanging up. A wrap
+/// killed before the user decides closes its socket — we notice the EOF and
+/// withdraw the ask (reaping the card + writing an `abandoned` audit row)
+/// instead of leaving it orphaned in the queue.
+fn handle_ask_connection(
+    reader: BufReader<UnixStream>,
+    stream: UnixStream,
+    ask: Ask,
+    state: SharedState,
+) -> Result<()> {
+    match handle_ask(ask, state.clone()) {
+        AskDisposition::Resolved(reply) => {
+            let mut writer = stream;
+            write_reply(&mut writer, &reply)
+        }
+        AskDisposition::Enqueued { key, waiter_id, rx } => {
+            park_ask_and_watch(reader, stream, state, key, waiter_id, rx)
+        }
+    }
+}
+
+/// Park a queued ask: a reply-writer thread delivers the user's decision
+/// while this thread blocks reading the socket to detect a hang-up. On EOF
+/// (or a disconnect error) the client is gone, so we withdraw the waiter.
+fn park_ask_and_watch(
+    mut reader: BufReader<UnixStream>,
+    stream: UnixStream,
+    state: SharedState,
+    key: DedupeKey,
+    waiter_id: WaiterId,
+    rx: mpsc::Receiver<WaiterReply>,
+) -> Result<()> {
+    // Reply-writer: delivers the decision when the user acts. If the waiter
+    // is withdrawn first (client already gone), its sender is dropped and
+    // this `recv` returns `Err` — nothing to send, so the thread just exits.
+    let reply_thread = thread::Builder::new()
+        .name("secreqd-ask-reply".to_owned())
+        .spawn(move || {
+            let mut writer = stream;
+            if let Ok(reply) = rx.recv() {
+                let _ = write_reply(&mut writer, &waiter_reply_to_daemon_msg(reply));
+            }
+        })
+        .context("spawn ask reply-writer thread")?;
+
+    // Watch for the client hanging up. A wrap sends nothing after its Ask,
+    // so this single `read_line` blocks until the connection ends: `Ok(0)`
+    // is EOF and a disconnect error is the same signal — either way the
+    // client is gone. Unexpected extra bytes (a wrap shouldn't speak again)
+    // also end the watch; we don't loop because the protocol is one-shot.
+    let mut buf = String::new();
+    match reader.read_line(&mut buf) {
+        Ok(0) => {}
+        Ok(_) => super::log::log_at(
+            "server",
+            format_args!("unexpected bytes on parked ask socket; ending watch"),
+        ),
+        Err(ref err) if is_client_disconnect(err) => {}
+        Err(err) => return Err(err).context("watch parked ask socket"),
+    }
+
+    // Connection closed. Withdraw our waiter — a no-op if the user already
+    // resolved it (entry gone / moved to a resolving card). On a genuine
+    // abandon this reaps the card and writes the `abandoned` audit row.
+    state
+        .lock()
+        .expect("state mutex")
+        .withdraw_waiter(&key, waiter_id);
+
+    // The reply-writer has either already written the decision or unblocked
+    // on the dropped sender; join so the socket outlives any pending write.
+    let _ = reply_thread.join();
+    Ok(())
 }
 
 /// Apply a rule-mutation ClientMsg to State. Used by the streaming
@@ -639,8 +1130,16 @@ fn handle_rule_hit(
             // provider. The `in_flight` map further coalesces concurrent
             // first-time asks (parallel `gh pr view` bursts) so the
             // provider is invoked exactly once per key even when N
-            // siblings race the empty cache.
-            let reply = super::state::resolve_for_ask(&ask, cache, in_flight);
+            // siblings race the empty cache. On a cold cache this raises
+            // the consent window with a "Resolving…" card so the
+            // biometric prompt has its provenance on screen.
+            let reply = resolve_approved_with_pending(
+                &ask,
+                crate::consent::Decision::ApproveAuto,
+                cache,
+                in_flight,
+                &state,
+            );
             match reply {
                 WaiterReply::Decision { secrets, .. } => DaemonMsg::Decision {
                     decision: crate::consent::Decision::ApproveAuto,
@@ -653,6 +1152,56 @@ fn handle_rule_hit(
             }
         }
     }
+}
+
+/// Resolve an already-authorized ask on the calling connection thread,
+/// surfacing a "Resolving…" card while the work is in flight.
+///
+/// Used by the two no-prompt approval paths (approvals-cache hit and
+/// auto-rule approve). When the secret cache is **cold** — a provider
+/// call, and possibly a biometric prompt, is imminent — it raises the
+/// consent window and shows the ask as resolving so the prompt keeps
+/// its provenance on screen, then clears the card once the value lands.
+/// The state lock is **not** held across `resolve_for_ask`, so the
+/// consent-window child can attach and render while the prompt is up.
+///
+/// `decision` is the approval flavour to stamp on the reply
+/// (`ApproveCached` or `ApproveAuto`) so the audit log distinguishes
+/// the path.
+fn resolve_approved_with_pending(
+    ask: &Ask,
+    decision: crate::consent::Decision,
+    cache: std::sync::Arc<std::sync::Mutex<super::cache::SecretCache>>,
+    in_flight: std::sync::Arc<super::in_flight::InFlightMap>,
+    state: &SharedState,
+) -> WaiterReply {
+    let cold = !super::state::ask_fully_cached(ask, &cache);
+    if cold {
+        state
+            .lock()
+            .expect("state mutex")
+            .begin_pending(ask.clone());
+        if let Err(err) = super::ensure_consent_window(state) {
+            super::log::log_at(
+                "server",
+                format_args!("ensure_consent_window (resolving card) failed: {err:#}"),
+            );
+        }
+    }
+    let reply = super::state::resolve_for_ask(ask, cache, in_flight).map_decision(|d| {
+        if d == crate::consent::Decision::Approve {
+            decision
+        } else {
+            d
+        }
+    });
+    if cold {
+        state
+            .lock()
+            .expect("state mutex")
+            .end_pending(&ask.dedupe_key);
+    }
+    reply
 }
 
 fn waiter_reply_to_daemon_msg(reply: WaiterReply) -> DaemonMsg {
@@ -713,9 +1262,26 @@ pub fn default_socket_path() -> Result<PathBuf> {
     Ok(socket_dir()?.join("consent.sock"))
 }
 
+/// Stable per-user SSH agent socket path (`agent.sock`), alongside the
+/// control socket. Re-exported here so the daemon derives both socket
+/// paths through `server::`.
+pub fn default_agent_socket_path() -> Result<PathBuf> {
+    super::ssh_agent::default_agent_socket_path()
+}
+
 #[allow(dead_code)]
 pub fn pidfile_path() -> Result<PathBuf> {
     Ok(socket_dir()?.join("daemon.pid"))
+}
+
+/// Path to the daemon-spawn lock, alongside the pidfile. Clients `flock`
+/// this before auto-spawning the daemon so a burst of wraps forks one
+/// daemon instead of a thundering herd (see `client::connect_or_spawn`).
+/// Distinct from the pidfile lock, which the daemon itself holds for its
+/// lifetime — this one is held only briefly, by whichever client is
+/// bringing the daemon up.
+pub fn spawn_lock_path() -> Result<PathBuf> {
+    Ok(socket_dir()?.join("daemon.spawn.lock"))
 }
 
 #[allow(dead_code)]
@@ -757,6 +1323,84 @@ mod tests {
         for _ in 0..10_000 {
             write_reply(&mut writer, &reply)
                 .expect("writing to a killed client must not be a daemon error");
+        }
+    }
+
+    /// The core of the feature: a wrap killed while its ask is parked
+    /// closes its socket. `park_ask_and_watch` must notice the EOF, reap
+    /// the ask from the queue (so its card leaves the requests view), and
+    /// record an `abandoned` audit row — rather than leaving the ask
+    /// orphaned until the daemon exits.
+    #[test]
+    fn parked_ask_is_withdrawn_when_the_client_hangs_up() {
+        use std::sync::{Arc, Mutex};
+
+        crate::audit::with_temp_log(|| {
+            let state: SharedState = Arc::new(Mutex::new(super::super::state::State::new()));
+
+            // Register a parked waiter, as the slow path does.
+            let ask = Ask {
+                command: vec!["gh".to_owned(), "pr".to_owned(), "view".to_owned()],
+                cwd: "/work".to_owned(),
+                callers: vec![],
+                secrets: vec![],
+                providers: std::collections::HashMap::new(),
+                dedupe_key: DedupeKey {
+                    wrap: "gh".to_owned(),
+                    ppid: 4242,
+                    parent_start_time: 7,
+                },
+                ssh: None,
+                allow_remember: true,
+                nested_run: false,
+            };
+            let (tx, rx) = mpsc::channel();
+            let key = ask.dedupe_key.clone();
+            let waiter_id = state.lock().unwrap().submit_ask(ask, tx).1;
+            assert_eq!(
+                state.lock().unwrap().snapshot().entries.len(),
+                1,
+                "ask is queued before the hang-up"
+            );
+
+            // The wrap process is killed before the user decides: its socket
+            // end closes, so the watch read hits EOF immediately.
+            let (server_end, client_end) = UnixStream::pair().expect("socketpair");
+            drop(client_end);
+            let reader = BufReader::new(server_end.try_clone().expect("clone socket"));
+            park_ask_and_watch(reader, server_end, state.clone(), key, waiter_id, rx)
+                .expect("watch returns cleanly on a client hang-up");
+
+            // The card is reaped from the requests view...
+            assert!(
+                state.lock().unwrap().snapshot().entries.is_empty(),
+                "the abandoned ask is removed from the queue"
+            );
+            // ...and exactly one `abandoned` row was written for it.
+            let rows = crate::audit::read_history(None).expect("read audit log");
+            assert_eq!(rows.len(), 1, "one abandoned row");
+            assert_eq!(rows[0].decision, "abandoned");
+            assert_eq!(rows[0].wrap, "gh");
+            assert_eq!(rows[0].args, vec!["pr", "view"]);
+        });
+    }
+
+    #[test]
+    fn hello_handshake_reports_the_daemons_own_build_id() {
+        // The version handshake must echo *this* binary's BUILD_ID
+        // regardless of what the CLI sent, so the CLI can compare and
+        // decide whether to restart a stale daemon.
+        use std::sync::{Arc, Mutex};
+        let state: SharedState = Arc::new(Mutex::new(super::super::state::State::new()));
+        let reply = handle_message(
+            ClientMsg::Hello {
+                build_id: "some-other-build +123".to_owned(),
+            },
+            state,
+        );
+        match reply {
+            DaemonMsg::Hello { build_id } => assert_eq!(build_id, crate::BUILD_ID),
+            other => panic!("expected Hello reply, got {other:?}"),
         }
     }
 

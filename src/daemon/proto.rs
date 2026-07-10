@@ -27,6 +27,18 @@ use serde::{Deserialize, Serialize};
 use crate::consent::Decision;
 use crate::rules::Rule;
 
+/// Which manager view a window should open on. Carried on the wire when
+/// the prompt's "Open Manager…" affordance is clicked
+/// ([`ClientMsg::OpenManager`]) and by the `secreq manager-window
+/// --view` flag the daemon passes at spawn time. Lives in proto because
+/// it crosses the socket; the UI modules re-export it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagerFocus {
+    Rules,
+    Audit,
+}
+
 /// One message from client → daemon.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -40,12 +52,22 @@ pub enum ClientMsg {
     /// Returns [`DaemonMsg::Ok`] immediately. The window will auto-hide
     /// once the queue empties (after a short grace period).
     ShowWindow,
-    /// "Show the window in viewer mode" — same as `ShowWindow` but the
-    /// auto-hide is suppressed so the user can browse the audit log.
-    /// Used by `secreq view`. Viewer mode clears on manual close.
+    /// "Open the manager window on the audit log." Used by `secreq
+    /// view`. Sets `viewer_mode` (which tells a freshly-attached
+    /// manager child to start on the Audit view) and spawns/raises the
+    /// manager window. Viewer mode clears when the manager closes.
     ShowViewer,
     /// "Are you alive?" Used by the auto-spawn poll loop. Replies with `Ok`.
     Ping,
+    /// "What build are you?" Version handshake the CLI sends right after
+    /// connecting to an *already-running* daemon. The daemon replies with
+    /// [`DaemonMsg::Hello`] carrying its compile-time [`crate::BUILD_ID`].
+    /// The CLI compares it against its own; a mismatch means the installed
+    /// binary was updated under a stale daemon, so the CLI restarts it.
+    /// Carries the CLI's own build id purely so the daemon can log the
+    /// mismatch from its side (it doesn't act on it — the CLI drives the
+    /// restart).
+    Hello { build_id: String },
     /// "Exit cleanly." Used by `secreq daemon stop` to forget the
     /// in-memory approvals cache (and free the singleton pidfile lock).
     /// Replies with `Ok` immediately; the actual exit happens shortly
@@ -84,22 +106,63 @@ pub enum ClientMsg {
     },
     /// "I'm closing cleanly." Daemon removes me from its subscriber list.
     ConsentWindowDetach,
+
+    // ── Streaming protocol for the pending-badge child process ──
+    //
+    // The badge is a second, much smaller always-on-top child the
+    // daemon spawns while requests are pending — a "N pending" pill
+    // floating over other apps so a backgrounded consent window can't
+    // be forgotten with processes still hung on a decision. Unlike the
+    // consent window it never restarts-to-raise and never reports
+    // focus; it just subscribes to the same snapshot stream (reusing
+    // `DaemonMsg::ConsentUpdate`, counting `RowStatus::Awaiting` rows)
+    // and exits on `DaemonMsg::ConsentExitPlease` when the queue drains.
+    /// "I'm the pending-badge child process; subscribe me to snapshot
+    /// updates." Daemon registers the badge as a separate subscriber
+    /// kind and replies with an immediate `ConsentUpdate`.
+    BadgeWindowAttach { pid: u32 },
+    /// "I'm closing cleanly." Daemon removes me from its badge
+    /// subscriber list.
+    BadgeWindowDetach,
+    /// "The user clicked the badge — bring the consent window
+    /// forward." The daemon ensures a consent-window child exists and
+    /// raises it (the same kill-and-respawn foreground path a new ask
+    /// or `secreq pending` takes). The badge itself never opens the
+    /// consent UI — it only asks the daemon to.
+    RaiseConsentRequested,
     /// "My OS focus state just changed." Sent by the consent-window
     /// child whenever `egui::InputState.focused` transitions; lets the
     /// daemon distinguish "UI is alive AND in front" from "UI is alive
-    /// but the user has tabbed away." Used to:
-    ///
-    ///   - skip the kill-and-respawn raise on a new ask when the
-    ///     existing window is already focused (the streaming snapshot
-    ///     already paints the new entry — no need to disrupt the user),
-    ///   - suppress the auto-hide grace-period exit while the user is
-    ///     interacting with the UI (e.g. scrolling the Audit tab after
-    ///     clearing the queue).
+    /// but the user has tabbed away." Used to skip the kill-and-respawn
+    /// raise on a new ask when the existing window is already focused
+    /// (the streaming snapshot already paints the new entry — no need to
+    /// disrupt the user).
     ///
     /// Default at attach is `focused = true`: a freshly-spawned child
     /// gets foreground intent on macOS, so until we hear otherwise the
     /// safe assumption is that it's in front.
     ConsentWindowFocus { focused: bool },
+
+    // ── Streaming protocol for the manager-window child process ──
+    //
+    // The manager is the persistent Rules + Audit surface, a separate
+    // child process from the transient prompt. It subscribes to the
+    // same `ConsentUpdate` snapshot stream (it needs live rules and the
+    // viewer-mode flag) but is never subject to the prompt's auto-hide
+    // or kill-and-respawn raise machinery: it closes when the user
+    // closes it, or on daemon shutdown.
+    /// "I'm the manager-window child process; subscribe me to snapshot
+    /// updates and accept rule mutations from me." Daemon replies with
+    /// an immediate `ConsentUpdate` carrying the current snapshot.
+    /// `pid` serves the same CLI-activation purpose as
+    /// [`ConsentWindowAttach`]'s.
+    ManagerWindowAttach { pid: u32 },
+    /// "The user clicked 'Open Manager…' in the prompt." The daemon
+    /// spawns a manager-window child (opening on `focus`) if none is
+    /// attached; if one is already up, the request is logged and the
+    /// existing window is left alone (raising it is the CLI's job on
+    /// the `secreq view` path).
+    OpenManager { focus: ManagerFocus },
 
     // ── Auto-rules management ─────────────────────────────────────
     //
@@ -147,6 +210,61 @@ pub struct Ask {
     /// Coalescing key: parallel asks with the same key fold into one queue
     /// entry. Today: `(wrap_name, ppid, parent_start_time)`.
     pub dedupe_key: DedupeKey,
+    /// `Some` when this ask is an SSH-agent sign request rather than a wrap
+    /// run. The consent UI renders an SSH variant (key identity + SHA256
+    /// fingerprint, no "secrets to inject" list) when this is set; wrap asks
+    /// leave it `None`. `#[serde(default)]` keeps the streaming attach
+    /// protocol back-compatible — an older child decoding a newer daemon's
+    /// snapshot, or vice versa, simply sees `None` and renders the wrap
+    /// layout. This is the consent-window attach protocol (daemon ↔ child),
+    /// not the `wraps.json5` config schema.
+    #[serde(default)]
+    pub ssh: Option<SshAskInfo>,
+    /// Whether an `ApproveRemember` decision on this ask may persist a
+    /// remembered approval. `true` for wrap (`x`) asks; `false` for
+    /// `secreq run`, whose fixed `"run"` identity would otherwise let one
+    /// remembered approval cover any later command in the same shell.
+    /// `#[serde(default = "default_true")]` keeps the attach protocol
+    /// back-compatible: an older peer omits the field and decodes `true`.
+    #[serde(default = "default_true")]
+    pub allow_remember: bool,
+    /// `true` when this ask is a `secreq run` invoked under an already-
+    /// consented run (the inner run saw the [`crate::RUN_SESSION_ENV`]
+    /// marker its parent set). The daemon may then serve the ask straight
+    /// from the secret cache without showing the consent window — but
+    /// *only* when every value is already cached (`ask_fully_cached`), so
+    /// any uncached secret still prompts. A top-level run never sets this,
+    /// so it always prompts. `#[serde(default)]` decodes older peers as
+    /// `false` (the never-skip, always-prompt default).
+    #[serde(default)]
+    pub nested_run: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// SSH-specific metadata carried on an [`Ask`] so the consent window can
+/// render a sign request distinctly. Holds only display addresses — the
+/// identity name and the public key's SHA256 fingerprint — never the
+/// private key or any secret value. The SSH path resolves the private key
+/// in-process after consent (see `daemon::ssh_agent`), so nothing secret
+/// rides this struct or the wire.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SshAskInfo {
+    /// The configured identity name (`ssh.<key_id>`), shown as the request's
+    /// identity label.
+    pub key_id: String,
+    /// The public key's SHA256 fingerprint, e.g.
+    /// `SHA256:Nh0Me49Zh9fDw/VYUfq43IJmI1T+XrjiYONPND8GzaM` — what
+    /// `ssh-add -l` prints, so the user can match it against a key they know.
+    pub fingerprint: String,
+    /// The identity's configured `$reason`, shown in the prompt to explain
+    /// what the key is for (e.g. "git pushes"). `None` when the identity has
+    /// no reason set. Lives here rather than on a `SecretAsk` because SSH
+    /// signs carry no secrets to inject.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -178,6 +296,11 @@ pub struct SecretAsk {
     pub default: Option<String>,
     pub description: Option<String>,
     pub reason: Option<String>,
+    /// Commands that requested this secret, for the session card's
+    /// `← command` provenance. Empty from the client; the daemon stamps
+    /// it as asks merge. `#[serde(default)]`.
+    #[serde(default)]
+    pub requested_by: Vec<String>,
 }
 
 /// Wire-form provider definition. Mirrors [`crate::manifest::Provider`]
@@ -222,6 +345,10 @@ pub enum DaemonMsg {
     },
     /// Generic acknowledgement (Ping / ConsentWindowDetach / Shutdown).
     Ok,
+    /// Reply to [`ClientMsg::Hello`]: the daemon's compile-time
+    /// [`crate::BUILD_ID`]. The CLI compares it to its own to decide
+    /// whether the running daemon is stale and should be restarted.
+    Hello { build_id: String },
     /// Reply to `ShowWindow` / `ShowViewer`. Carries the consent-window
     /// child's pid if one is already attached, so the CLI can call
     /// `NSRunningApplication.activate(...)` on it. `None` means the
@@ -276,6 +403,19 @@ pub struct WireSnapshot {
     pub rules: Vec<Rule>,
 }
 
+/// Lifecycle state of a row the consent window renders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum RowStatus {
+    /// Queued and awaiting a user decision — Approve/Deny buttons shown.
+    #[default]
+    Awaiting,
+    /// Already authorized (manual approve, approvals-cache hit, or
+    /// auto-rule), with a provider call (and possibly a biometric
+    /// prompt) in flight on a cold cache. Rendered as a read-only
+    /// "Resolving…" card so the prompt keeps its provenance on screen.
+    Resolving,
+}
+
 /// Wire-form `QueueRow`. `first_seen_secs_ago` is daemon-local elapsed
 /// seconds since the entry was queued; the child uses it as a fixed
 /// offset for "N s ago" labels (re-elapsed against its own clock).
@@ -285,4 +425,9 @@ pub struct WireQueueRow {
     pub representative: Ask,
     pub waiter_count: usize,
     pub first_seen_secs_ago: u64,
+    /// Awaiting (queued) vs Resolving (approved, value in flight).
+    /// `#[serde(default)]` so an older child decoding a newer daemon's
+    /// snapshot treats unknown rows as the common Awaiting case.
+    #[serde(default)]
+    pub status: RowStatus,
 }

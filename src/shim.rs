@@ -54,6 +54,23 @@ pub fn install(shim_dir: &Path, wrap_name: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Re-[`install`] the shim for every name in `wrap_names`, refreshing each
+/// managed shim's body to the current format. Idempotent: `install` rewrites
+/// the body when our sentinel is present, so this migrates stale bodies (e.g.
+/// the old `exec secreq <wrap>` form → `exec secreq x <wrap>`). Returns the
+/// path of every shim it wrote. Callers that don't want to abort on an
+/// unowned file should filter to [`is_managed`] names first.
+pub fn reinstall_all(
+    shim_dir: &Path,
+    wrap_names: impl IntoIterator<Item = String>,
+) -> Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for name in wrap_names {
+        paths.push(install(shim_dir, &name)?);
+    }
+    Ok(paths)
+}
+
 /// Remove the shim for `wrap_name` if it exists AND carries our sentinel.
 /// Returns `Ok(true)` if a shim was removed, `Ok(false)` if there was
 /// nothing to remove, or `Err` if a file exists at the target without our
@@ -85,7 +102,7 @@ pub fn is_managed(shim_dir: &Path, wrap_name: &str) -> bool {
 
 fn body(wrap_name: &str) -> String {
     format!(
-        "#!/bin/sh\n# {SENTINEL}: wrap={wrap_name}\n# Created by `secreq wrap {wrap_name}`. Removed by `secreq unwrap {wrap_name}`.\n# Do not edit by hand.\nexec secreq {wrap_name} \"$@\"\n"
+        "#!/bin/sh\n# {SENTINEL}: wrap={wrap_name}\n# Created by `secreq wrap {wrap_name}`. Removed by `secreq unwrap {wrap_name}`.\n# Do not edit by hand.\nexec secreq x {wrap_name} \"$@\"\n"
     )
 }
 
@@ -108,7 +125,7 @@ mod tests {
         assert_eq!(path, dir.path().join("gh"));
         let body = fs::read_to_string(&path).unwrap();
         assert!(body.contains(SENTINEL));
-        assert!(body.contains("exec secreq gh"));
+        assert!(body.contains("exec secreq x gh"));
         // Executable bit set.
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o755);
@@ -162,6 +179,25 @@ mod tests {
         let err = remove(dir.path(), "gh").unwrap_err();
         assert!(err.to_string().contains("not a secreq-managed shim"));
         assert!(target.exists(), "must not have been deleted");
+    }
+
+    #[test]
+    fn reinstall_all_migrates_a_stale_managed_body() {
+        let dir = tempfile::tempdir().unwrap();
+        // Simulate an old-format managed shim (pre-`x`, but with the sentinel
+        // so we own it).
+        let target = dir.path().join("gh");
+        fs::write(
+            &target,
+            format!("#!/bin/sh\n# {SENTINEL}: wrap=gh\nexec secreq gh \"$@\"\n"),
+        )
+        .unwrap();
+
+        let written = reinstall_all(dir.path(), ["gh".to_owned()]).unwrap();
+        assert_eq!(written, vec![target.clone()]);
+        let body = fs::read_to_string(&target).unwrap();
+        assert!(body.contains("exec secreq x gh"), "got: {body}");
+        assert!(!body.contains("exec secreq gh \""), "stale body remained");
     }
 
     #[test]
