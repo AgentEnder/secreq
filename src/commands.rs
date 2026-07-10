@@ -2343,7 +2343,7 @@ pub(crate) fn resolve_refs_client_side(
         })
         .collect();
     let plan = resolve::ResolutionPlan { requests };
-    let resolved = resolve::resolve_all(&manifest, &plan)?;
+    let (resolved, _stats) = resolve::resolve_all(&manifest, &plan)?;
     Ok(resolved.into_iter().map(|r| (r.name, r.value)).collect())
 }
 

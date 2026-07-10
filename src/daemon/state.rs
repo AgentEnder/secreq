@@ -1598,6 +1598,63 @@ pub(super) fn nested_run_fully_cached(ask: &Ask, cache: &Arc<Mutex<SecretCache>>
     ask.nested_run && ask_fully_cached(ask, cache)
 }
 
+/// Run [`resolve::resolve_all`], logging its wall-clock cost to
+/// `daemon.log` under the `resolve` tag.
+///
+/// This is the daemon's window into a slow 1Password read: `resolve_all`
+/// spawns one `op run … printenv` per provider group, and that subprocess
+/// dominates the elapsed time (parsing its output is negligible). The line
+/// records the batch size, the providers involved, the total wall time, and
+/// the per-secret average — enough to see "N secrets cost T seconds, so each
+/// `op://` reference is ~T/N" without attaching a profiler. Both resolver
+/// call sites (`resolve_for_ask`, `resolve_union`) go through here so the
+/// timing line is identical regardless of path.
+fn resolve_all_logged(
+    manifest: &Manifest,
+    plan: &ResolutionPlan,
+) -> Result<Vec<resolve::ResolvedSecret>> {
+    let secret_count = plan.requests.len();
+    let mut providers: Vec<&str> = plan.requests.iter().map(|r| r.provider.as_str()).collect();
+    providers.sort_unstable();
+    providers.dedup();
+
+    let started = Instant::now();
+    let result = resolve::resolve_all(manifest, plan);
+    let elapsed = started.elapsed();
+
+    let per_secret_ms = if secret_count > 0 {
+        elapsed.as_secs_f64() * 1000.0 / secret_count as f64
+    } else {
+        0.0
+    };
+    match &result {
+        Ok((_resolved, stats)) => super::log::log_at(
+            "resolve",
+            format_args!(
+                "resolve_all: {secret_count} secret(s) across {} provider(s) [{}] in {:.3}s ({per_secret_ms:.0}ms/secret): \
+                 batch subprocess {:.3}s + parse {:.1}ms, {} batched / {} per-secret → ok",
+                providers.len(),
+                providers.join(","),
+                elapsed.as_secs_f64(),
+                stats.batch_subprocess.as_secs_f64(),
+                stats.batch_parse.as_secs_f64() * 1000.0,
+                stats.batched,
+                stats.per_secret,
+            ),
+        ),
+        Err(err) => super::log::log_at(
+            "resolve",
+            format_args!(
+                "resolve_all: {secret_count} secret(s) across {} provider(s) [{}] in {:.3}s → err: {err:#}",
+                providers.len(),
+                providers.join(","),
+                elapsed.as_secs_f64(),
+            ),
+        ),
+    }
+    result.map(|(resolved, _stats)| resolved)
+}
+
 /// `pub(super)` so the auto-rule path in `server.rs` can call this
 /// directly — auto-decisions bypass the queue, so they don't go
 /// through `State::resolve`.
@@ -1683,7 +1740,7 @@ pub(super) fn resolve_for_ask(
             })
             .collect(),
     };
-    match resolve::resolve_all(&manifest, &plan) {
+    match resolve_all_logged(&manifest, &plan) {
         Ok(resolved) => {
             let by_name: HashMap<String, _> =
                 resolved.into_iter().map(|r| (r.name, r.value)).collect();
@@ -1790,8 +1847,14 @@ fn resolve_union(
         match in_flight.acquire(&key) {
             Acquired::Resolver(g) => {
                 // Unique synthetic name so `resolve_all`'s name-keyed output
-                // can't collapse two same-user-name pairs.
-                let req_name = format!("{}\u{0}{}", provider, locator);
+                // can't collapse two same-user-name pairs. It must be a valid
+                // **environment variable name**: the batch path
+                // (`retrieve_batch`, e.g. `op run -- printenv`) sets one env
+                // var per request keyed on this name, and `Command::env`
+                // rejects NUL bytes — an index keeps it unique *and* legal
+                // (a `provider\0locator` join silently broke every batch,
+                // forcing slow per-secret fallback).
+                let req_name = format!("secreq_req_{}", needs_resolve.len());
                 needs_resolve.push((pl.clone(), req_name));
                 guards.push(g);
             }
@@ -1843,7 +1906,7 @@ fn resolve_union(
             })
             .collect(),
     };
-    match resolve::resolve_all(&manifest, &plan) {
+    match resolve_all_logged(&manifest, &plan) {
         Ok(resolved) => {
             let by_req: HashMap<String, _> =
                 resolved.into_iter().map(|r| (r.name, r.value)).collect();
@@ -1946,7 +2009,7 @@ pub(super) fn resolve_single_cached(
                     source: Source::Eager,
                 }],
             };
-            let resolved = resolve::resolve_all(&manifest, &plan).and_then(|rows| {
+            let resolved = resolve::resolve_all(&manifest, &plan).and_then(|(rows, _stats)| {
                 rows.into_iter()
                     .next()
                     .map(|r| r.value)
@@ -2940,6 +3003,79 @@ mod tests {
             },
         );
         providers
+    }
+
+    /// A batch-capable fake provider. Per-secret `retrieve` yields
+    /// `persecret-<locator>`; the batch path (`printenv` over synthetic env)
+    /// yields `batched-<locator>`. The two sentinels differ so a resolve
+    /// test can tell which path actually ran — the batch env-var name must
+    /// be valid for `retrieve_batch` to succeed.
+    fn batch_fake_providers() -> HashMap<String, WireProvider> {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "bat".to_owned(),
+            WireProvider {
+                name: "bat".to_owned(),
+                retrieve: vec![
+                    "sh".to_owned(),
+                    "-c".to_owned(),
+                    "echo persecret-{locator}".to_owned(),
+                ],
+                retrieve_batch: Some(super::super::proto::WireBatchRetrieve {
+                    // Echo the whole env; resolve_all keeps only our request
+                    // names. This only works if those names are valid env
+                    // var names (no NUL).
+                    command: vec!["sh".to_owned(), "-c".to_owned(), "printenv".to_owned()],
+                    env_value_template: "batched-{locator}".to_owned(),
+                }),
+            },
+        );
+        providers
+    }
+
+    #[test]
+    fn resolve_union_batches_when_the_provider_declares_a_batch_capability() {
+        // Regression: `resolve_union` used to name each request with a NUL
+        // separator (`provider\0locator`). `resolve_all`'s batch path feeds
+        // that name to `Command::env` as an *env var name*, and NUL bytes
+        // are rejected there — so `op run` never spawned and every op resolve
+        // silently fell back to N per-secret reads (30s+ for a big run).
+        // Two secrets through the batch-capable provider must resolve via the
+        // BATCH (`batched-*`), not the per-secret fallback (`persecret-*`).
+        let mut ask = ask_with_secret_named("run", &["run", "x"], "S1", "bat", "loc-a");
+        ask.secrets.push(super::super::proto::SecretAsk {
+            name: "S2".to_owned(),
+            provider: "bat".to_owned(),
+            locator: "loc-b".to_owned(),
+            default: None,
+            description: None,
+            reason: None,
+            requested_by: vec![],
+        });
+        ask.providers = batch_fake_providers();
+
+        let cache = Arc::new(Mutex::new(SecretCache::new()));
+        let in_flight = InFlightMap::new();
+        let out = resolve_union(&ask, cache, in_flight);
+
+        let a = out
+            .get(&("bat".to_owned(), "loc-a".to_owned()))
+            .expect("loc-a resolved")
+            .as_ref()
+            .expect("loc-a ok");
+        let b = out
+            .get(&("bat".to_owned(), "loc-b".to_owned()))
+            .expect("loc-b resolved")
+            .as_ref()
+            .expect("loc-b ok");
+        assert_eq!(
+            a, "batched-loc-a",
+            "must resolve via the batch, not fallback"
+        );
+        assert_eq!(
+            b, "batched-loc-b",
+            "must resolve via the batch, not fallback"
+        );
     }
 
     /// Build a `run` ask carrying one secret `{name = provider/locator}`

@@ -10,6 +10,8 @@
 //! Building the request list ([`build_plan`]) is pure and testable; executing
 //! it ([`resolve_all`]) runs the providers.
 
+use std::time::Duration;
+
 use anyhow::{bail, Context, Result};
 
 use crate::manifest::Manifest;
@@ -143,7 +145,29 @@ pub fn build_plan(
 /// after a single one. Per-secret retrieves are used when the provider has
 /// no batch capability, when it has fewer than two requests (no benefit),
 /// or as a fallback if batching fails.
-pub fn resolve_all(manifest: &Manifest, plan: &ResolutionPlan) -> Result<Vec<ResolvedSecret>> {
+/// Timing and counters for one [`resolve_all`] pass, returned alongside the
+/// resolved secrets so a caller (the daemon) can log where a slow read spent
+/// its time. Only the batch subprocesses are timed — per-secret retrieves are
+/// counted but not individually clocked, since batching is the interesting
+/// case for the 1Password read path.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ResolveStats {
+    /// Summed time across all provider batch subprocesses (e.g. `op run …`).
+    pub batch_subprocess: Duration,
+    /// Summed time spent parsing batch subprocess output.
+    pub batch_parse: Duration,
+    /// Number of secrets served by a batch invocation.
+    pub batched: usize,
+    /// Number of secrets served by a per-secret retrieve: providers with no
+    /// batch capability, groups smaller than two, a whole-batch fallback, or
+    /// the salvage retry of individual `NotFound` entries.
+    pub per_secret: usize,
+}
+
+pub fn resolve_all(
+    manifest: &Manifest,
+    plan: &ResolutionPlan,
+) -> Result<(Vec<ResolvedSecret>, ResolveStats)> {
     use std::collections::BTreeMap;
 
     // Group requests by provider name, preserving insertion order within
@@ -159,6 +183,7 @@ pub fn resolve_all(manifest: &Manifest, plan: &ResolutionPlan) -> Result<Vec<Res
 
     // Provider-group resolution → outcomes_by_name.
     let mut outcomes: BTreeMap<String, ReadOutcome> = BTreeMap::new();
+    let mut stats = ResolveStats::default();
     for (provider_name, reqs) in &by_provider {
         let provider = manifest.providers.get(*provider_name).with_context(|| {
             format!(
@@ -176,7 +201,7 @@ pub fn resolve_all(manifest: &Manifest, plan: &ResolutionPlan) -> Result<Vec<Res
                 .map(|r| (r.name.clone(), r.locator.clone()))
                 .collect();
             match provider::retrieve_batch(provider, &pairs) {
-                Ok(map) => Some(map),
+                Ok(batched) => Some(batched),
                 Err(err) => {
                     // Loud-but-recoverable: tell the user we're falling back
                     // so they can debug their batch template if needed, then
@@ -191,7 +216,9 @@ pub fn resolve_all(manifest: &Manifest, plan: &ResolutionPlan) -> Result<Vec<Res
             None
         };
 
-        if let Some(map) = batched {
+        if let Some((map, timing)) = batched {
+            stats.batch_subprocess += timing.subprocess;
+            stats.batch_parse += timing.parse;
             for (name, outcome) in map {
                 outcomes.insert(name, outcome);
             }
@@ -204,11 +231,14 @@ pub fn resolve_all(manifest: &Manifest, plan: &ResolutionPlan) -> Result<Vec<Res
                 .iter()
                 .filter(|r| matches!(outcomes.get(&r.name), Some(ReadOutcome::NotFound { .. })))
                 .collect();
+            stats.batched += reqs.len() - salvage.len();
+            stats.per_secret += salvage.len();
             for req in salvage {
                 let outcome = provider::retrieve(provider, &req.locator)?;
                 outcomes.insert(req.name.clone(), outcome);
             }
         } else {
+            stats.per_secret += reqs.len();
             for req in reqs {
                 let outcome = provider::retrieve(provider, &req.locator)?;
                 outcomes.insert(req.name.clone(), outcome);
@@ -250,7 +280,7 @@ pub fn resolve_all(manifest: &Manifest, plan: &ResolutionPlan) -> Result<Vec<Res
             },
         }
     }
-    Ok(resolved)
+    Ok((resolved, stats))
 }
 
 /// Resolve which groups are in scope, validating any `--only` names.
@@ -400,7 +430,7 @@ mod tests {
         )
         .unwrap();
         let plan = build_plan(&m, None, &[], false).unwrap();
-        let resolved = resolve_all(&m, &plan).unwrap();
+        let (resolved, _stats) = resolve_all(&m, &plan).unwrap();
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].value.expose(), "fallback");
     }
@@ -448,7 +478,7 @@ mod tests {
         );
         let m = Manifest::parse(&manifest_text, "t").unwrap();
         let plan = build_plan(&m, None, &[], false).unwrap();
-        let resolved = resolve_all(&m, &plan).unwrap();
+        let (resolved, _stats) = resolve_all(&m, &plan).unwrap();
         // Order preserved from plan.
         assert_eq!(resolved.len(), 3);
         assert_eq!(
@@ -490,7 +520,7 @@ mod tests {
         );
         let m = Manifest::parse(&manifest_text, "t").unwrap();
         let plan = build_plan(&m, None, &[], false).unwrap();
-        let resolved = resolve_all(&m, &plan).unwrap();
+        let (resolved, _stats) = resolve_all(&m, &plan).unwrap();
         assert_eq!(resolved[0].value.expose(), "loc-a");
         // The counter should hold a single 'r' (retrieve), no 'b' (batch).
         let log = std::fs::read_to_string(&counter).unwrap();
@@ -524,7 +554,7 @@ mod tests {
         );
         let m = Manifest::parse(&manifest_text, "t").unwrap();
         let plan = build_plan(&m, None, &[], false).unwrap();
-        let resolved = resolve_all(&m, &plan).unwrap();
+        let (resolved, _stats) = resolve_all(&m, &plan).unwrap();
         assert_eq!(resolved[0].value.expose(), "a");
         assert_eq!(resolved[1].value.expose(), "b");
         // Two per-secret retrieves were performed.
@@ -538,7 +568,7 @@ mod tests {
     fn resolve_all_reads_value_from_provider() {
         let m = manifest();
         let plan = build_plan(&m, Some(&["stripe".to_owned()]), &[], false).unwrap();
-        let resolved = resolve_all(&m, &plan).unwrap();
+        let (resolved, _stats) = resolve_all(&m, &plan).unwrap();
         // `printf %s {locator}` echoes the locator back as the value.
         assert_eq!(resolved[0].name, "STRIPE_KEY");
         assert_eq!(resolved[0].value.expose(), "Work/Stripe/api_key");

@@ -13,6 +13,7 @@
 use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 
@@ -42,6 +43,22 @@ pub enum RetrieveOutcome {
 
 // `read` kept temporarily as the historical alias used by `resolve`.
 pub use RetrieveOutcome as ReadOutcome;
+
+/// Wall-clock breakdown of one [`retrieve_batch`] call.
+///
+/// `subprocess` is the load-bearing figure for a slow 1Password read: it's
+/// the time spent in the provider's batch command (e.g. `op run … printenv`),
+/// which is where `op` resolves every `op://` reference. `parse` is the time
+/// spent splitting that command's stdout back into `KEY=VALUE` pairs — it
+/// should be negligible, and a surprising value there points at pathological
+/// output size rather than at 1Password itself.
+#[derive(Clone, Copy, Debug)]
+pub struct BatchTiming {
+    /// Time the batch subprocess (e.g. `op run … printenv`) took to run.
+    pub subprocess: Duration,
+    /// Time spent parsing the subprocess's stdout into resolved values.
+    pub parse: Duration,
+}
 
 /// Run `provider`'s retrieve template against `locator`.
 ///
@@ -125,14 +142,16 @@ pub fn validate(provider: &Provider) -> Result<()> {
 ///
 /// The returned map has one entry per request: `Found` when the value
 /// appeared in output, `NotFound` when it didn't (the caller decides whether
-/// to apply a default or fall back to per-secret retrieve).
+/// to apply a default or fall back to per-secret retrieve). Alongside it we
+/// return a [`BatchTiming`] so the caller (ultimately the daemon) can log how
+/// much of the read was the provider subprocess versus our own parsing.
 ///
 /// Errors propagate out of `Command::spawn` failures and non-zero exits — the
 /// caller is expected to fall back to per-secret retrieve in those cases.
 pub fn retrieve_batch(
     provider: &Provider,
     requests: &[(String, String)],
-) -> Result<BTreeMap<String, RetrieveOutcome>> {
+) -> Result<(BTreeMap<String, RetrieveOutcome>, BatchTiming)> {
     let cap: &BatchRetrieve = provider.retrieve_batch.as_ref().with_context(|| {
         format!(
             "provider `{}` has no retrieve_batch capability",
@@ -157,6 +176,7 @@ pub fn retrieve_batch(
         cmd.env(name, val);
     }
 
+    let subprocess_started = Instant::now();
     let output = cmd.output().map_err(|e| {
         anyhow::anyhow!(
             "provider `{}`: failed to run `{}`: {e} (is it installed and on PATH?)",
@@ -164,6 +184,7 @@ pub fn retrieve_batch(
             program
         )
     })?;
+    let subprocess = subprocess_started.elapsed();
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
@@ -179,6 +200,7 @@ pub fn retrieve_batch(
         );
     }
 
+    let parse_started = Instant::now();
     let text = String::from_utf8(output.stdout).with_context(|| {
         format!(
             "provider `{}` retrieve_batch returned non-UTF-8 output",
@@ -216,7 +238,8 @@ pub fn retrieve_batch(
                 stderr: String::new(),
             });
     }
-    Ok(found)
+    let parse = parse_started.elapsed();
+    Ok((found, BatchTiming { subprocess, parse }))
 }
 
 // ── store: persist a new value through a provider ─────────────────────────
@@ -563,7 +586,7 @@ mod tests {
             ("BAR".to_owned(), "bar-locator".to_owned()),
             ("BAZ".to_owned(), "baz-locator".to_owned()),
         ];
-        let out = retrieve_batch(&p, &reqs).unwrap();
+        let (out, _timing) = retrieve_batch(&p, &reqs).unwrap();
         for (name, locator) in &reqs {
             match out.get(name).unwrap() {
                 RetrieveOutcome::Found(v) => {
@@ -580,7 +603,7 @@ mod tests {
         // emits the whole lot. We must keep only the requested names.
         let p = batch_provider_echoing_env();
         let reqs = vec![("FOO".to_owned(), "x".to_owned())];
-        let out = retrieve_batch(&p, &reqs).unwrap();
+        let (out, _timing) = retrieve_batch(&p, &reqs).unwrap();
         assert_eq!(out.len(), 1, "only the requested name should appear");
         assert!(matches!(out.get("FOO"), Some(RetrieveOutcome::Found(_))));
     }
@@ -602,7 +625,7 @@ mod tests {
             ("FOO".to_owned(), "f".to_owned()),
             ("BAR".to_owned(), "b".to_owned()),
         ];
-        let out = retrieve_batch(&p, &reqs).unwrap();
+        let (out, _timing) = retrieve_batch(&p, &reqs).unwrap();
         assert!(matches!(out.get("FOO"), Some(RetrieveOutcome::Found(_))));
         assert!(matches!(
             out.get("BAR"),
