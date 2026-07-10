@@ -328,16 +328,20 @@ to avoid the client needing a round-trip. Cheap; one extra string.
 
 ## 11. UI changes
 
-### Window default size
+> **Superseded (2026-07-09, Native Sentinel redesign):** the single
+> tabbed window described below was split into two windows — see
+> `dev-docs/design-drafts/consent-ui/references/brief.md`. The
+> **prompt** (`secreq consent-window`, 500×470, always-on-top) renders
+> one ask at a time; Rules and Audit live in the **manager**
+> (`secreq manager-window`, 900×600, opened via the prompt's
+> "Open Manager", by `secreq view`, or on demand). Sections below that
+> say "tab" now mean the corresponding manager view; the rule-form and
+> suggestion specs apply unchanged inside the manager's Rules view.
 
-`src/daemon/child.rs:92`: bump `with_inner_size([520.0, 480.0])` to
-`[760.0, 560.0]`. Three tabs need more horizontal room; the rule form
-needs vertical room.
+### Window layout (superseded: was one 760×560 three-tab window)
 
-### Tab layout
-
-`Pending | Rules | Audit` (Rules in the middle so the destructive-ish
-"Audit" stays rightmost as today).
+Prompt window: no tabs. Manager window: `Rules | Audit` behind a
+per-OS view switcher (segmented control / SelectorBar / headerbar).
 
 ### Rules tab
 
@@ -394,8 +398,8 @@ Opens the rule form pre-populated with:
 
 ### Auto-deny toast
 
-When a `DenyAuto` is broadcast, the consent window (if running) renders
-a transient toast row at the top of the Pending tab for ~5s:
+When a `DenyAuto` is broadcast, the prompt window (if running) renders
+a transient toast row above the current ask for ~5s:
 
 ```
 [auto-denied] gh repo delete me/x — rule: 'Block gh destructive ops'
@@ -483,8 +487,9 @@ Land in slices; each slice is independently shippable + reviewable.
 - Create rule from audit row, verify next matching ask auto-approves.
 - Toggle rule disabled, verify the same ask now prompts.
 - Edit rule file by hand, verify daemon restart message and fresh load.
-- Verify auto-deny toast in the consent window when one is open.
-- Verify default window size shows all three tabs comfortably.
+- Verify auto-deny toast in the prompt window when one is open.
+- Verify the manager window shows both views comfortably at its
+  default size, and the prompt never clips its decision row.
 
 ## 15. Open items deferred to later iterations
 
@@ -557,9 +562,9 @@ filesystem root since `/` matches every absolute path.
 
 - [`src/recommendations.rs`] is pure: it takes `&[AuditEntry]` and
   `&[Rule]` and returns `Vec<Suggestion>`. No daemon, no IPC, no I/O.
-- The UI computes suggestions inline in `render_consent_panel`'s
-  Rules-tab branch, filters out dismissed keys, and passes a slice
-  down to a new `render_suggestions_section`.
+- The UI computes suggestions inline in `render_manager_panel`'s
+  Rules-view branch, filters out dismissed keys, and passes a slice
+  down to `render_suggestions_section`.
 - `RuleDraft::from_suggestion` mirrors the existing
   `RuleDraft::from_audit_entry` constructor so the rule form's save
   path is untouched.

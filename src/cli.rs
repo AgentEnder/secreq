@@ -129,17 +129,28 @@ enum Command {
         action: Option<RulesAction>,
     },
 
-    /// Internal: run the consent-window child process. The daemon
-    /// spawns one of these whenever the user needs to see the
-    /// consent UI. Not meant to be invoked by users directly — if
-    /// the daemon isn't running, this will fail to connect.
+    /// Internal: run the consent-prompt child process. The daemon
+    /// spawns one of these whenever a decision is demanded (a wrap run
+    /// or an SSH-agent sign). Not meant to be invoked by users directly
+    /// — if the daemon isn't running, this will fail to connect.
     #[command(hide = true)]
     ConsentWindow {
-        /// Open the window floating above other apps. The daemon sets
-        /// this when the window is spawned to demand a decision (a wrap
-        /// run or an SSH-agent sign), and omits it for `secreq view`.
+        /// Open the window floating above other apps. The daemon always
+        /// sets this — the prompt exists to demand a decision.
         #[arg(long)]
         always_on_top: bool,
+    },
+
+    /// Internal: run the manager-window child process (the persistent
+    /// Rules + Audit surface). The daemon spawns one on `secreq view`
+    /// or when the prompt's "Open Manager…" link is clicked. Not meant
+    /// to be invoked by users directly.
+    #[command(hide = true)]
+    ManagerWindow {
+        /// Which view to open on. Omitted → Rules, or Audit when the
+        /// daemon's snapshot carries viewer mode.
+        #[arg(long, value_parser = ["rules", "audit"])]
+        view: Option<String>,
     },
 
     /// Internal: run the always-on-top pending-requests badge child.
@@ -403,7 +414,19 @@ pub fn run() -> i32 {
             Some(RulesAction::Disable { target }) => commands::rules_set_enabled(&target, false),
             Some(RulesAction::Rm { target }) => commands::rules_rm(&target),
         },
-        Some(Command::ConsentWindow { always_on_top }) => crate::daemon::child::run(always_on_top),
+        Some(Command::ConsentWindow { always_on_top }) => {
+            crate::daemon::child::run(crate::daemon::child::WindowKind::Prompt, always_on_top)
+        }
+        Some(Command::ManagerWindow { view }) => {
+            let initial_view = view.as_deref().map(|v| match v {
+                "audit" => crate::daemon::proto::ManagerFocus::Audit,
+                _ => crate::daemon::proto::ManagerFocus::Rules,
+            });
+            crate::daemon::child::run(
+                crate::daemon::child::WindowKind::Manager { initial_view },
+                false,
+            )
+        }
         Some(Command::PendingBadge) => crate::daemon::badge::run(),
         Some(Command::X { wrap, args }) => commands::wrap_run(
             &wrap,

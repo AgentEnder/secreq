@@ -160,10 +160,10 @@ pub struct State {
     /// runs when the queue drains + viewer mode is off + grace
     /// period elapsed, or when the user closes the child window).
     window_visible: bool,
-    /// "Pinned" mode set by `ClientMsg::ShowViewer` (the `secreq
-    /// view` command). While true, the daemon doesn't ask the
-    /// consent window to exit even if the queue is empty — the user
-    /// is browsing the audit log.
+    /// Set by `ClientMsg::ShowViewer` (the `secreq view` command).
+    /// Carried on the snapshot stream so a freshly-attached manager
+    /// window opens on the Audit view. Cleared when the last manager
+    /// window detaches.
     viewer_mode: bool,
     /// Set by the socket thread on `ClientMsg::Shutdown`. The daemon
     /// main loop checks this flag and exits cleanly.
@@ -187,6 +187,23 @@ pub struct State {
     /// children. Cleared when the first child attaches OR after a
     /// timeout (so a failed spawn doesn't permanently block).
     consent_spawn_in_flight_since: Option<Instant>,
+
+    // ── Manager-window streaming subscribers ──────────────────────
+    //
+    // The persistent Rules + Audit window. A separate list from
+    // `consent_subscribers` because the manager has a deliberately
+    // different lifecycle: it opens on user intent (`secreq view`, the
+    // prompt's "Open Manager…"), closes when the user closes it, and is
+    // never touched by the prompt's auto-hide / restart-to-raise
+    // machinery. It receives the same `ConsentUpdate` snapshot stream
+    // (it needs live rules + the viewer-mode flag).
+    manager_subscribers: Vec<ManagerSubscriber>,
+    /// Monotonic ID source for manager subscribers, independent of the
+    /// other counters so the ID spaces stay grep-distinguishable.
+    manager_next_subscriber_id: u64,
+    /// Spawn-debounce for the manager child, mirroring
+    /// `consent_spawn_in_flight_since`.
+    manager_spawn_in_flight_since: Option<Instant>,
 
     // ── Pending-badge streaming subscribers ───────────────────────
     //
@@ -261,6 +278,9 @@ impl Default for State {
             consent_subscribers: Vec::new(),
             consent_next_subscriber_id: 1,
             consent_spawn_in_flight_since: None,
+            manager_subscribers: Vec::new(),
+            manager_next_subscriber_id: 1,
+            manager_spawn_in_flight_since: None,
             badge_subscribers: Vec::new(),
             badge_next_subscriber_id: 1,
             badge_spawn_in_flight_since: None,
@@ -298,24 +318,17 @@ struct ConsentSubscriber {
     /// the child overwrites this whenever the OS reports a focus change
     /// via `ClientMsg::ConsentWindowFocus`.
     focused: bool,
-    /// Latest reported "interacting" state: focused AND on a tab other
-    /// than Pending (Rules / Audit). Distinct from `focused` because the
-    /// auto-hide gate wants "is the user busy on a non-Pending tab" — a
-    /// window focused on the empty Pending tab should still auto-hide,
-    /// whereas one focused on the Audit log must not be yanked away. The
-    /// child reports transitions via `ClientMsg::ConsentWindowInteractive`.
-    /// Defaults to `false`: a fresh decision window opens on Pending.
-    interacting: bool,
-    /// Sticky record of whether the user has *ever* interacted with a
-    /// non-Pending tab during this window's life. Latched `true` the
-    /// first time `interacting` is reported `true` and never reset for
-    /// the subscriber's lifetime. Unlike the momentary `interacting`,
-    /// this distinguishes "the user only ever approved/denied" (exit
-    /// the moment the queue drains) from "the user browsed Rules/Audit
-    /// at some point" (linger with the auto-hide grace so we don't yank
-    /// a window they were using). Reset naturally: a new batch of asks
-    /// spawns a fresh window and thus a fresh subscriber.
-    ever_interacted: bool,
+}
+
+/// One attached manager-window child (the persistent Rules + Audit
+/// surface). Leaner than [`ConsentSubscriber`]: the manager never
+/// reports focus and is never kill-and-respawn raised, so it carries
+/// only the streaming sender, a detach ID, and the pid the CLI can
+/// activate on `secreq view`.
+struct ManagerSubscriber {
+    id: u64,
+    pid: u32,
+    tx: mpsc::Sender<super::proto::DaemonMsg>,
 }
 
 /// One attached pending-badge child. Deliberately leaner than
@@ -406,8 +419,6 @@ impl State {
             pid,
             tx: sender,
             focused: true,
-            interacting: false,
-            ever_interacted: false,
         });
         super::log::log_at(
             "state",
@@ -621,39 +632,91 @@ impl State {
         self.consent_subscribers.iter().any(|s| s.focused)
     }
 
-    /// Record an "interacting" update for one attached child. Called by
-    /// the streaming connection handler when a
-    /// `ClientMsg::ConsentWindowInteractive` arrives. Unknown IDs are
-    /// ignored — same detach race as [`set_consent_focused`].
-    pub fn set_consent_interacting(&mut self, id: u64, interacting: bool) {
-        for s in &mut self.consent_subscribers {
-            if s.id == id {
-                s.interacting = interacting;
-                // Latch the sticky record: once the user has visited a
-                // non-Pending tab we linger on drain instead of vanishing.
-                s.ever_interacted |= interacting;
-                return;
-            }
+    // ── Manager-window subscriber API ────────────────────────────
+
+    /// Register a manager-window child. Returns its detach ID and the
+    /// initial snapshot to ship immediately so it can paint frame 1
+    /// without a round-trip. Mirrors [`attach_consent_window`] but the
+    /// manager carries no focus state — it's never restart-raised.
+    pub fn attach_manager_window(
+        &mut self,
+        pid: u32,
+        sender: mpsc::Sender<super::proto::DaemonMsg>,
+    ) -> (u64, super::proto::WireSnapshot) {
+        let id = self.manager_next_subscriber_id;
+        self.manager_next_subscriber_id = id.wrapping_add(1);
+        self.manager_spawn_in_flight_since = None;
+        self.manager_subscribers.push(ManagerSubscriber {
+            id,
+            pid,
+            tx: sender,
+        });
+        super::log::log_at(
+            "state",
+            format_args!(
+                "manager window attached (id={id}, pid={pid}, subscribers={})",
+                self.manager_subscribers.len()
+            ),
+        );
+        (id, self.snapshot_for_wire())
+    }
+
+    /// Remove a manager subscriber by ID — same detach-order contract
+    /// as [`detach_consent_window`]. When the last manager detaches,
+    /// viewer mode clears: the pin belonged to the window the user just
+    /// closed, and the next `secreq view` re-sets it.
+    pub fn detach_manager_window(&mut self, id: u64) {
+        let before = self.manager_subscribers.len();
+        self.manager_subscribers.retain(|s| s.id != id);
+        let after = self.manager_subscribers.len();
+        super::log::log_at(
+            "state",
+            format_args!("manager window detached (id={id}, subscribers {before}→{after})"),
+        );
+        if self.manager_subscribers.is_empty() {
+            self.viewer_mode = false;
         }
     }
 
-    /// `true` if any attached consent-window child reports the user as
-    /// interacting with a non-Pending tab (Rules / Audit) while focused.
-    /// This — not raw focus — gates the auto-hide grace exit: a window
-    /// idling on the empty Pending tab should still hide, but one the
-    /// user is actively browsing (e.g. scrolling the Audit log) must not
-    /// be yanked out from under them.
-    pub fn any_consent_interacting(&self) -> bool {
-        self.consent_subscribers.iter().any(|s| s.interacting)
+    /// Number of currently-attached manager-window children.
+    pub fn manager_subscriber_count(&self) -> usize {
+        self.manager_subscribers.len()
     }
 
-    /// `true` if any attached consent window has *ever* interacted with
-    /// a non-Pending tab this session (see [`ConsentSubscriber::ever_interacted`]).
-    /// Gates the immediate auto-hide: a window that only ever approved or
-    /// denied has nothing worth lingering over, so it exits the moment the
-    /// queue drains; one the user browsed away from keeps the grace period.
-    pub fn any_consent_ever_interacted(&self) -> bool {
-        self.consent_subscribers.iter().any(|s| s.ever_interacted)
+    /// First attached manager child's pid, if any — handed back on
+    /// `ShowViewer` so the CLI can activate the existing window.
+    pub fn manager_child_pid(&self) -> Option<u32> {
+        self.manager_subscribers.first().map(|s| s.pid)
+    }
+
+    /// Should `ensure_manager_window` spawn a child? True iff none is
+    /// attached (the manager spawns on demand, never from queue state).
+    pub fn needs_manager_window(&self) -> bool {
+        self.manager_subscribers.is_empty()
+    }
+
+    /// True if a manager `Command::spawn` is in flight and we shouldn't
+    /// start another. Stale entries auto-clear after
+    /// [`CONSENT_SPAWN_TIMEOUT`] (shared constant — same race shape).
+    pub fn manager_spawn_in_flight(&mut self) -> bool {
+        if let Some(at) = self.manager_spawn_in_flight_since {
+            if at.elapsed() < CONSENT_SPAWN_TIMEOUT {
+                return true;
+            }
+            self.manager_spawn_in_flight_since = None;
+        }
+        false
+    }
+
+    /// Record that a manager `Command::spawn` has just been kicked off.
+    pub fn mark_manager_spawn_in_flight(&mut self) {
+        self.manager_spawn_in_flight_since = Some(Instant::now());
+    }
+
+    /// Push `msg` to every attached manager child, pruning dead senders.
+    fn broadcast_manager(&mut self, msg: super::proto::DaemonMsg) {
+        self.manager_subscribers
+            .retain(|s| s.tx.send(msg.clone()).is_ok());
     }
 
     /// One-shot toast push for an auto-deny event. Best-effort —
@@ -707,23 +770,18 @@ impl State {
         }
     }
 
-    /// Close the consent window *immediately* on drain when the user did
-    /// nothing but approve/deny this session. Called right after the
-    /// queue-empty timestamp is refreshed on the resolve path.
+    /// Close the prompt window *immediately* on drain. Called right
+    /// after the queue-empty timestamp is refreshed on the resolve path.
     ///
     /// The main loop's [`AUTO_HIDE_GRACE`](super::AUTO_HIDE_GRACE) exists
-    /// to leave a confirmation on screen for a beat — but there's nothing
-    /// to confirm for a window the user only ever clicked Approve/Deny in,
-    /// so lingering just reads as sluggish. We skip the grace and send the
-    /// exit here. A window the user browsed away from (Rules/Audit) is
-    /// left for the grace-timed path so we never yank one they were using;
-    /// likewise a pinned `viewer_mode` window and any not-yet-drained
-    /// queue. No subscribers attached → nothing to close (the broadcast is
-    /// a no-op and leaves the grace clock armed as a fallback).
+    /// to leave a confirmation on screen for a beat — but the prompt is a
+    /// pure decision surface now (Rules/Audit live in the manager
+    /// window), so there's nothing to linger over once the last ask
+    /// resolves. The grace-timed main-loop path remains as a fallback
+    /// for a prompt that attaches after the drain. No subscribers
+    /// attached → nothing to close (the broadcast is a no-op and leaves
+    /// the grace clock armed).
     fn maybe_immediate_auto_hide(&mut self) {
-        if self.viewer_mode || self.any_consent_ever_interacted() {
-            return;
-        }
         if self.queue_empty_since.is_none() {
             return;
         }
@@ -753,12 +811,12 @@ impl State {
         self.consent_spawn_in_flight_since = Some(Instant::now());
     }
 
-    /// Should the daemon ensure a consent-window child is running?
-    /// True iff there's something for the user to see *and* nobody is
-    /// already there to see it.
+    /// Should the daemon ensure a consent-prompt child is running?
+    /// True iff there's a decision (or a resolving card) for the user
+    /// to see *and* nobody is already there to see it. Viewer mode is
+    /// the manager window's business, not the prompt's.
     pub fn needs_consent_window(&self) -> bool {
-        (!self.queue.is_empty() || !self.pending.is_empty() || self.viewer_mode)
-            && self.consent_subscribers.is_empty()
+        (!self.queue.is_empty() || !self.pending.is_empty()) && self.consent_subscribers.is_empty()
     }
 
     /// Push the current snapshot to every attached consent window.
@@ -767,9 +825,11 @@ impl State {
     pub fn broadcast_consent_update(&mut self) {
         let snapshot = self.snapshot_for_wire();
         let msg = super::proto::DaemonMsg::ConsentUpdate { snapshot };
-        // Same snapshot feeds both surfaces: the consent window renders
-        // the full queue; the badge just counts `Awaiting` rows.
+        // Same snapshot feeds all three surfaces: the prompt renders
+        // the queue, the manager needs the live rules + viewer-mode
+        // flag, and the badge just counts `Awaiting` rows.
         self.broadcast(msg.clone());
+        self.broadcast_manager(msg.clone());
         self.broadcast_badge(msg);
     }
 
@@ -1226,20 +1286,18 @@ impl State {
         self.broadcast_consent_update();
     }
 
-    /// `secreq view`: open the window AND pin it so the empty-queue
-    /// auto-hide is suppressed.
+    /// `secreq view`: flag viewer mode so a freshly-attached manager
+    /// child opens on the Audit view (the flag rides the snapshot
+    /// stream). Cleared when the last manager window detaches.
     pub fn enter_viewer_mode(&mut self) {
-        self.window_visible = true;
         self.viewer_mode = true;
         self.broadcast_consent_update();
     }
 
-    /// Called when the consent-window child detaches (close button,
-    /// process exit, crash). Clears viewer-mode so a subsequent ask
-    /// doesn't inherit the pin.
+    /// Called when the consent-prompt child detaches (close button,
+    /// process exit, crash).
     pub fn hide_window(&mut self) {
         self.window_visible = false;
-        self.viewer_mode = false;
         self.broadcast_consent_update();
     }
 
@@ -3427,68 +3485,33 @@ mod tests {
         assert!(!state.any_consent_focused());
     }
 
-    /// `interacting` defaults to false at attach: a freshly-spawned
-    /// decision window opens on the Pending tab, so the user isn't yet
-    /// "interacting with another tab" and the auto-hide gate shouldn't
-    /// be suppressed before we've heard anything from the child.
+    /// Manager subscribers track attach/detach independently of the
+    /// prompt's, and the last manager detach clears viewer mode (the
+    /// pin belonged to the window the user just closed).
     #[test]
-    fn attach_consent_window_defaults_to_not_interacting() {
+    fn manager_attach_detach_lifecycle_clears_viewer_mode() {
         let mut state = State::new();
+        assert!(state.needs_manager_window());
+
         let (tx, _rx) = mpsc::channel();
-        let (_id, _snap) = state.attach_consent_window(4242, tx);
-        assert!(!state.any_consent_interacting());
+        let (id, _snap) = state.attach_manager_window(777, tx);
+        assert_eq!(state.manager_subscriber_count(), 1);
+        assert_eq!(state.manager_child_pid(), Some(777));
+        assert!(!state.needs_manager_window());
+
+        state.enter_viewer_mode();
+        assert!(state.viewer_mode());
+
+        state.detach_manager_window(id);
+        assert_eq!(state.manager_subscriber_count(), 0);
+        assert!(state.needs_manager_window());
+        assert!(
+            !state.viewer_mode(),
+            "last manager detach must clear viewer mode"
+        );
     }
 
-    /// The auto-hide gate keys off `interacting`, not raw focus: a
-    /// window focused on the Pending tab (interacting = false) must
-    /// NOT suppress auto-hide, but one focused on another tab
-    /// (interacting = true, e.g. browsing the Audit log) must.
-    #[test]
-    fn set_consent_interacting_flips_per_subscriber_state() {
-        let mut state = State::new();
-        let (tx, _rx) = mpsc::channel();
-        let (id, _snap) = state.attach_consent_window(4242, tx);
-
-        state.set_consent_interacting(id, true);
-        assert!(state.any_consent_interacting());
-
-        state.set_consent_interacting(id, false);
-        assert!(!state.any_consent_interacting());
-    }
-
-    /// Unknown ids are a no-op, same race rationale as the focus path.
-    #[test]
-    fn set_consent_interacting_for_unknown_id_is_a_noop() {
-        let mut state = State::new();
-        let (tx, _rx) = mpsc::channel();
-        let (id, _snap) = state.attach_consent_window(4242, tx);
-        state.set_consent_interacting(id, true);
-        state.set_consent_interacting(9999, false);
-        // The real subscriber's `interacting = true` survives.
-        assert!(state.any_consent_interacting());
-    }
-
-    /// `ever_interacted` is sticky: once the user visits a non-Pending
-    /// tab it stays latched even after they return to Pending. This is
-    /// what lets the drain path tell "only ever approved/denied" apart
-    /// from "browsed Rules/Audit at some point".
-    #[test]
-    fn set_consent_interacting_latches_ever_interacted() {
-        let mut state = State::new();
-        let (tx, _rx) = mpsc::channel();
-        let (id, _snap) = state.attach_consent_window(4242, tx);
-        assert!(!state.any_consent_ever_interacted());
-
-        state.set_consent_interacting(id, true);
-        assert!(state.any_consent_ever_interacted());
-
-        // Back to Pending: momentary flag clears, sticky one does not.
-        state.set_consent_interacting(id, false);
-        assert!(!state.any_consent_interacting());
-        assert!(state.any_consent_ever_interacted());
-    }
-
-    /// A window that only ever approved/denied is told to exit the
+    /// The prompt is a pure decision surface: it is told to exit the
     /// instant the queue drains — we don't wait out the main-loop grace
     /// for a confirmation nobody needs.
     #[test]
@@ -3525,21 +3548,17 @@ mod tests {
         );
     }
 
-    /// A window the user browsed away from (Rules/Audit) must NOT be
-    /// yanked on drain — it defers to the main loop's grace period. The
-    /// grace clock stays armed so the main loop can honour it.
+    /// The manager window must never receive the prompt's exit signal
+    /// on drain — it's a browsing surface the user closes themselves.
     #[test]
-    fn resolve_draining_queue_defers_to_grace_when_user_browsed_other_tabs() {
+    fn resolve_draining_queue_never_exits_the_manager_window() {
         let shared: SharedState = Arc::new(Mutex::new(State::new()));
         let (tx, rx) = mpsc::channel();
         let ask = mk_ask("gh", vec![(100, 1_700_000_000)]);
         let key = ask.dedupe_key.clone();
         {
             let mut guard = shared.lock().expect("state mutex");
-            let (id, _snap) = guard.attach_consent_window(321, tx);
-            // Visited the Audit tab, then returned to Pending.
-            guard.set_consent_interacting(id, true);
-            guard.set_consent_interacting(id, false);
+            let (_id, _snap) = guard.attach_manager_window(321, tx);
             let (wtx, _wrx) = mpsc::channel();
             guard.submit_ask(ask, wtx);
             guard.resolve(
@@ -3556,10 +3575,8 @@ mod tests {
         while let Ok(msg) = rx.try_recv() {
             assert!(
                 !matches!(msg, crate::daemon::proto::DaemonMsg::ConsentExitPlease),
-                "a browsed window must linger through the grace period, not exit on drain"
+                "the manager window must never be asked to exit on queue drain"
             );
         }
-        // The grace clock is armed for the main loop to time out.
-        assert!(shared.lock().unwrap().queue_empty_since().is_some());
     }
 }

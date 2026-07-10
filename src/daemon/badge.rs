@@ -125,6 +125,8 @@ pub fn run() -> Result<i32> {
         "secreq pending-badge",
         native_opts,
         Box::new(move |cc| {
+            // Follow the OS appearance, same as the consent window.
+            cc.egui_ctx.set_theme(egui::ThemePreference::System);
             super::ui::install_style(&cc.egui_ctx);
             *ctx_slot.lock().expect("egui_ctx mutex") = Some(cc.egui_ctx.clone());
             Ok(Box::new(app))
@@ -248,6 +250,9 @@ impl eframe::App for BadgeApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // Re-derive the style each frame so an OS light/dark flip
+        // mid-session restyles the badge immediately.
+        super::ui::install_style(&ctx);
 
         if self.exit_requested.load(Ordering::SeqCst) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
