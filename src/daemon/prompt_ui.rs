@@ -240,8 +240,7 @@ fn render_header(ui: &mut egui::Ui, th: &Theme, row: &QueueRow) {
                         .color(th.dim),
                 )
                 .truncate(),
-            )
-            .on_hover_text(sub);
+            );
         });
     });
 }
@@ -314,8 +313,7 @@ fn render_evidence_well(
                             .color(th.fg),
                     )
                     .truncate(),
-                )
-                .on_hover_text(&ssh.fingerprint);
+                );
             });
             well_separator(ui, th);
         } else {
@@ -339,8 +337,7 @@ fn render_evidence_well(
                         .color(th.fg),
                 )
                 .truncate(),
-            )
-            .on_hover_text(&ask.cwd);
+            );
         });
         well_separator(ui, th);
 
@@ -412,8 +409,7 @@ fn render_secrets(
                             .color(th.dim),
                     )
                     .truncate(),
-                )
-                .on_hover_text(&s.locator);
+                );
             });
         }
         return;
@@ -569,8 +565,7 @@ fn caller_row(
                             .color(th.dim),
                     )
                     .truncate(),
-                )
-                .on_hover_text(argv);
+                );
             },
         );
         if !pid_text.is_empty() {
