@@ -177,6 +177,13 @@ pub(crate) fn rewrite_in_place(config_file: &Path, new_block: &str) -> Result<bo
     Ok(true)
 }
 
+/// The managed block in `config_file`, sentinels included. `None` if the file
+/// is absent, unreadable, or carries no block. Used by migration 0002 to ask
+/// "does this block name the old socket?" before touching it.
+pub(crate) fn block_in_file(config_file: &Path) -> Option<String> {
+    existing_block(&fs::read_to_string(config_file).ok()?)
+}
+
 fn apply_ssh_config(plan: &SshSetupPlan) -> Result<bool> {
     // Ensure ~/.ssh exists with 0700 — ssh refuses a group/world-accessible
     // config dir.

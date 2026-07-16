@@ -134,7 +134,9 @@ pub fn socket_dir() -> Result<PathBuf> {
     ))
 }
 
-fn socket_dir_from(xdg_runtime: Option<OsString>, root: &Path) -> PathBuf {
+/// The `root`-relative half of [`socket_dir`], split out so callers that must
+/// not read the ambient root (migrations, tests) can pass their own.
+pub(crate) fn socket_dir_from(xdg_runtime: Option<OsString>, root: &Path) -> PathBuf {
     if let Some(raw) = xdg_runtime {
         if !raw.is_empty() {
             return PathBuf::from(raw).join("secreq");

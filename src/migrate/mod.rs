@@ -24,6 +24,7 @@
 //!    migrations. Pinned by `migration_ids_are_dense_and_one_based`.
 
 mod m0001_secreq_root;
+mod m0002_ssh_agent_socket;
 
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::AsRawFd;
@@ -40,11 +41,26 @@ use crate::paths;
 pub struct Ctx {
     /// Target root — tracks current behavior (`$SECREQ_HOME`, else `~/.secreq`).
     pub root: PathBuf,
+    /// The user's home. `None` if it can't be resolved, which means any
+    /// migration keyed on it has nothing to do.
+    ///
+    /// Injected rather than resolved in-migration for the reason the whole
+    /// `Ctx` exists, but with more teeth than the fields below: migration
+    /// 0002 rewrites files *outside* the secreq tree (`~/.ssh/config`, shell
+    /// rc files). A migration that called `dirs::home_dir()` itself would
+    /// edit the developer's real dotfiles on every `cargo test`, because
+    /// `run_pending_in`'s tests drive the whole `MIGRATIONS` list.
+    pub home: Option<PathBuf>,
     /// Frozen: where config lived before migration 0001. `None` if it can't
     /// be resolved (no `$HOME`), which simply means nothing to migrate.
     pub legacy_config_dir: Option<PathBuf>,
     /// Frozen: where logs lived before migration 0001.
     pub legacy_state_dir: Option<PathBuf>,
+    /// Frozen: where the sockets lived before migration 0002. The value comes
+    /// from [`m0002_ssh_agent_socket::legacy_runtime_dir`] — the frozen logic
+    /// lives with the migration that needs it; only the resolved value is
+    /// injected here so tests can substitute a tempdir.
+    pub legacy_runtime_dir: Option<PathBuf>,
 }
 
 struct Migration {
@@ -58,12 +74,20 @@ struct Migration {
 }
 
 /// Append-only. Never reorder, never reuse an id, never delete an entry.
-const MIGRATIONS: &[Migration] = &[Migration {
-    id: 1,
-    name: "secreq-root",
-    snapshot: m0001_secreq_root::snapshot_files,
-    run: m0001_secreq_root::run,
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        id: 1,
+        name: "secreq-root",
+        snapshot: m0001_secreq_root::snapshot_files,
+        run: m0001_secreq_root::run,
+    },
+    Migration {
+        id: 2,
+        name: "ssh-agent-socket",
+        snapshot: m0002_ssh_agent_socket::snapshot_files,
+        run: m0002_ssh_agent_socket::run,
+    },
+];
 
 const STATE_FILE: &str = ".migration-state";
 const LOCK_FILE: &str = ".migration.lock";
@@ -114,8 +138,10 @@ fn build_stamp() -> String {
 pub fn run_pending() -> Result<()> {
     let ctx = Ctx {
         root: paths::secreq_root()?,
+        home: dirs::home_dir(),
         legacy_config_dir: legacy_config_dir(),
         legacy_state_dir: legacy_state_dir(),
+        legacy_runtime_dir: m0002_ssh_agent_socket::legacy_runtime_dir(),
     };
     run_pending_in(&ctx)
 }
@@ -502,11 +528,17 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// Every path under `tmp`. These tests drive `run_pending_in`, which runs
+    /// the *whole* `MIGRATIONS` list — including 0002, which edits dotfiles
+    /// under `home`. A real `dirs::home_dir()` here would rewrite the
+    /// developer's `~/.ssh/config` and `~/.zshrc` on `cargo test`.
     fn ctx_in(tmp: &TempDir) -> Ctx {
         Ctx {
             root: tmp.path().join("secreq"),
+            home: Some(tmp.path().join("home")),
             legacy_config_dir: Some(tmp.path().join("config/secreq")),
             legacy_state_dir: Some(tmp.path().join("state/secreq")),
+            legacy_runtime_dir: Some(tmp.path().join("runtime/secreq")),
         }
     }
 
