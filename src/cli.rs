@@ -221,6 +221,35 @@ enum Command {
         #[arg(value_name = "REF", required = true)]
         refs: Vec<String>,
     },
+
+    /// Ask the host's secreq for one secret, from inside a sandbox.
+    ///
+    /// This is the guest end of a scoped agent socket (`secreq agent open`
+    /// opens the host end). It dials the socket named by `$SECREQ_SOCK` —
+    /// the same convention as `SSH_AUTH_SOCK` — so nothing is stored in the
+    /// sandbox: each use is asked for, gated by consent on the host, and
+    /// audited there. `$SECREQ_SOCK` is set for you inside a brain `--vm`
+    /// sandbox.
+    ///
+    /// The value goes to stdout and everything else to stderr, so it
+    /// composes:
+    ///
+    ///   export GH_TOKEN="$(secreq resolve secret://op/Dev/gh/token)"
+    ///
+    /// Exits 0 on a release, 3 when the host denies (reason on stderr,
+    /// nothing on stdout), 1 on any error.
+    Resolve {
+        /// The reference to resolve, e.g. `secret://op/Dev/gh/token` or the
+        /// bare `op/Dev/gh/token`. It must be one the host declared with
+        /// `--allow` when it opened this socket; anything else is denied
+        /// without troubling the user for a decision.
+        #[arg(value_name = "REF")]
+        reference: Option<String>,
+        /// Print the ref names this socket may resolve, one per line, and
+        /// exit. Free — listing never prompts and never releases a value.
+        #[arg(long, conflicts_with = "reference")]
+        list: bool,
+    },
 }
 
 /// Subcommands under `secreq agent …`.
@@ -548,6 +577,11 @@ pub fn run() -> i32 {
         // threaded through, so there is no client-side bypass for a raw
         // secret read.
         Some(Command::Read { refs }) => commands::read(&refs, config),
+        // `resolve` reads no config and dials no local daemon: the host at
+        // the other end of `$SECREQ_SOCK` owns every decision, so none of
+        // the global flags (`--yes`, `--no-remember`, `--config`) has
+        // anything to act on here.
+        Some(Command::Resolve { reference, list }) => commands::resolve(reference.as_deref(), list),
         None => {
             // Bare `secreq` in a real terminal opens an action picker; a
             // non-TTY invocation (a shim, a pipe, CI) keeps the deterministic

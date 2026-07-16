@@ -16,6 +16,7 @@ consent ceremony** — the wedge nobody else covers.
 | **Authoring `wraps.json5`** | [wraps.md](./wraps.md) + [wraps.schema.json](./wraps.schema.json) (point your editor at the schema for validation). |
 | **Picking or defining a provider** | [providers.md](./providers.md). |
 | **Using `secreq` as your SSH agent** | [ssh-agent.md](./ssh-agent.md) — onboarding (`ssh add`, `daemon install`, `ssh setup`), config, the key-custody tradeoff. |
+| **Getting secrets into a VM sandbox without copying them** | [secret-agent.md](./secret-agent.md) — `agent open` on the host, `secreq resolve` + `SECREQ_SOCK` in the guest. |
 | **Understanding what the daemon window shows** | [consent-window.md](./consent-window.md) — pending tree, audit log, viewer mode. |
 
 ## Documentation map
@@ -34,6 +35,11 @@ consent ceremony** — the wedge nobody else covers.
   install` for the login service, `ssh setup` to wire clients), the `ssh`
   config block, the per-anchor TTL, and the key-custody downgrade vs.
   1Password's sealed agent.
+- **[secret-agent.md](./secret-agent.md)** — serving `secret://` refs to a
+  VM sandbox over a forwarded socket instead of copying tokens into it:
+  `agent open` and its host-declared allowlist, `secreq resolve` +
+  `SECREQ_SOCK` in the guest, and the granularity downgrade (the sandbox is
+  the principal — there is no caller chain to verify).
 - **[consent-window.md](./consent-window.md)** — the daemon UI: the
   pending tree, approve-all-at-an-ancestor semantics, the audit log
   tab, audit log JSONL format.

@@ -421,6 +421,48 @@ Same as `x`: `0` on a clean child exit, `1` on denied consent or
 resolution failure (including a malformed `secret://` value), `2` when no
 command was given, otherwise the child's exit code.
 
+### `resolve`
+
+```
+secreq resolve <REF>
+secreq resolve --list
+```
+
+The **guest** side of the secret agent: ask the *host's* `secreq`, over the
+socket named by `$SECREQ_SOCK`, for one secret this sandbox was declared
+allowed to have. Nothing is stored in the guest — every use is asked for,
+gated by consent on the host, and audited there. Full story:
+[secret-agent.md](./secret-agent.md).
+
+`$SECREQ_SOCK` is set for you inside a brain `--vm` sandbox. On a host, the
+other end is `secreq agent open --scope <name> --allow <ref>… --sock <path>`,
+forwarded in with `ssh -R`.
+
+`<REF>` is a full `secret://provider/locator` or the bare
+`provider/locator` shorthand.
+
+**The value, and only the value, goes to stdout** — diagnostics, errors, and
+denials all go to stderr, so the command substitutes cleanly:
+
+```sh
+export GH_TOKEN="$(secreq resolve secret://op/Dev/gh/token)"
+```
+
+The value is printed with a trailing newline (`op read`'s convention), which
+`$(…)` strips. `--list` prints the scope's allowed ref **names**, one per
+line, and never prompts — listing is free.
+
+The global flags don't apply: the host owns every decision, so there is
+nothing for `--yes`, `--no-remember`, or `--config` to act on.
+
+#### Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | Released. The value is on stdout. |
+| 3 | Denied by the host (you said no, a rule denied it, or the ref is outside this socket's declared scope). Reason on stderr, stdout empty. **A denial is final — don't retry it.** |
+| 1 | Error: `$SECREQ_SOCK` unset, the agent unreachable, a malformed ref, or resolution failed on the host after approval. |
+
 ## Environment variables `secreq` reads or sets
 
 | Variable | When |
@@ -431,4 +473,5 @@ command was given, otherwise the child's exit code.
 | `XDG_RUNTIME_DIR` | Consent daemon socket + pidfile. Falls back to `$TMPDIR/secreq-<uid>`. |
 | `EDITOR` / `VISUAL` | Used by `secreq edit`. |
 | `DISPLAY` / `WAYLAND_DISPLAY` | Linux/BSD: when neither is set, `secreq` fails closed instead of spawning a daemon that can't render. |
+| `SECREQ_SOCK` | Read by `secreq resolve`: the scoped secret agent socket to ask, mirroring `SSH_AUTH_SOCK`. Set inside a brain `--vm` sandbox, where the host forwards its `secreq agent open` socket in. See [secret-agent.md](./secret-agent.md). |
 | `SECREQ_NO_DAEMON` | Set to `1` to disable the daemon entirely — consent fails closed unless `--yes` is used. Intended for tests and headless automation. |

@@ -6,6 +6,10 @@
 //! protocol in [`proto`] to resolve refs from the *host's* secreq instead of
 //! having tokens copied into it.
 //!
+//! The guest's half of that conversation is [`client`] — `secreq resolve
+//! <ref>`, dialling `$SECREQ_SOCK`. This module is the host's half; nothing
+//! the client can say changes anything it decides.
+//!
 //! Design: `dev-docs/plans/2026-07-16-remote-secret-agent.md`.
 //!
 //! ## Why this is not `daemon/ssh_agent.rs`
@@ -77,6 +81,7 @@
 //! **silent** release — no prompt, no chance to notice. The prompt is the
 //! only place a claim is safe, because a human is reading it.
 
+pub mod client;
 pub mod proto;
 
 use std::collections::{BTreeMap, HashMap};

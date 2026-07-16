@@ -14,6 +14,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
+use zeroize::Zeroize as _;
 
 use crate::audit::{self, AuditEntry};
 use crate::autostart;
@@ -25,6 +26,8 @@ use crate::provenance;
 use crate::provider;
 use crate::reference::Reference;
 use crate::resolve::{self, SecretRequest, Source};
+use crate::scoped_agent::client as agent_client;
+use crate::scoped_agent::proto::{Request as AgentRequest, Response as AgentResponse};
 use crate::secret::SecretValue;
 use crate::shim;
 use crate::ssh_setup;
@@ -407,6 +410,141 @@ pub fn agent_open(
     );
     crate::scoped_agent::open(sock, scope, gate)?;
     Ok(0)
+}
+
+/// Exit code for a **denied** `secreq resolve`, distinct from the `1` an
+/// error exits with.
+///
+/// The protocol splits `Denied` from `Error` on purpose — a denial is a
+/// normal policy answer and a guest that retried it would be manufacturing
+/// the click-training the design forbids — and that split is worth nothing if
+/// the shell can't see it. A script can branch: `3` means "the host said no,
+/// stop asking"; `1` means "something is broken, maybe fix it and retry".
+const RESOLVE_DENIED_EXIT: i32 = 3;
+
+/// `secreq resolve <secret://ref>` / `secreq resolve --list` — the **guest**
+/// side of the remote secret agent: ask the host, over `$SECREQ_SOCK`, for a
+/// ref the host declared this sandbox may have.
+///
+/// Design: `dev-docs/plans/2026-07-16-remote-secret-agent.md` (build step C).
+/// The host side is [`agent_open`]; the protocol is
+/// [`crate::scoped_agent::proto`].
+///
+/// ## Output discipline
+///
+/// **The value, and only the value, goes to stdout** — every diagnostic, every
+/// error, every denial goes to stderr. That's not tidiness, it's the whole
+/// interface: this command exists to be substituted into a shell, and a single
+/// stray "resolving…" line on stdout would land inside the token.
+///
+/// ```sh
+/// export GH_TOKEN="$(secreq resolve secret://op/Dev/gh/token)"
+/// ```
+///
+/// The value is written with a trailing newline (`op read`'s convention, and
+/// what a terminal needs); `$(…)` strips it, so the substitution above gets
+/// the value exactly. `--list` prints the allowed ref names one per line —
+/// stdout again, since that's the answer.
+///
+/// ## Why this doesn't share `read`'s path
+///
+/// [`read`] resolves through the *local* daemon: it needs a config, a
+/// provider, and a consent window. A guest has none of the three — it has a
+/// socket. Everything policy-shaped (the allowlist, the prompt, the
+/// decision's TTL, the audit row) happens on the host, and nothing this
+/// function does can influence any of it.
+pub fn resolve(reference: Option<&str>, list: bool) -> Result<i32> {
+    if list == reference.is_some() {
+        bail!("secreq resolve: give exactly one of <ref> or --list (usage: secreq resolve <secret://provider/locator>)");
+    }
+
+    // Parse before dialling: a typo should read as a typo, with the shape it
+    // should have had, rather than as a socket error (when there's no agent)
+    // or a remote refusal (when there is) — neither of which is about the
+    // typo. Sending the canonical form also means the host parses exactly
+    // what we validated. `parse_arg` accepts the bare `provider/locator`
+    // shorthand, matching `read` and `agent open --allow`.
+    let reference = reference
+        .map(|raw| {
+            Reference::parse_arg(raw).with_context(|| {
+                format!("`{raw}` is not a valid reference (expected `secret://provider/locator` or `provider/locator`)")
+            })
+        })
+        .transpose()?;
+
+    let socket = agent_client::socket_from_env()?;
+    let mut agent = agent_client::AgentClient::connect(&socket)?;
+
+    match reference {
+        Some(reference) => resolve_one(&mut agent, &reference),
+        None => resolve_list(&mut agent),
+    }
+}
+
+/// `secreq resolve <ref>`: one gated resolve, value to stdout.
+fn resolve_one(agent: &mut agent_client::AgentClient, reference: &Reference) -> Result<i32> {
+    let request = AgentRequest::resolve_claiming(
+        reference.to_string(),
+        // A claim, and the host treats it as one — see
+        // [`agent_client::self_reported_chain`].
+        agent_client::self_reported_chain(),
+    );
+
+    match agent.request(&request)? {
+        AgentResponse::Value { mut value } => {
+            let mut stdout = std::io::stdout().lock();
+            // Write, then scrub our copy — the same care the host takes with
+            // the value it sent. `write!` rather than `print!` because a
+            // closed pipe (`secreq resolve … | head -c 4`) must be an error
+            // we report, not a panic in a formatting macro.
+            let written = writeln!(stdout, "{value}").and_then(|()| stdout.flush());
+            value.zeroize();
+            written.context("write the resolved secret to stdout")?;
+            Ok(0)
+        }
+        // A refusal: the reason goes to stderr and stdout stays empty, so a
+        // caller that ignored the exit code substitutes an empty string
+        // rather than an error message.
+        AgentResponse::Denied { message } => {
+            eprintln!("secreq: {reference}: denied by the host: {message}");
+            Ok(RESOLVE_DENIED_EXIT)
+        }
+        AgentResponse::Error { message } => {
+            bail!("the scoped secret agent could not answer for {reference}: {message}")
+        }
+        AgentResponse::Refs { .. } => {
+            bail!("the scoped secret agent answered a resolve with a ref listing")
+        }
+    }
+}
+
+/// `secreq resolve --list`: the scope's allowed ref names, one per line.
+///
+/// Free on the host — no prompt, no consent, no audit row — because it
+/// releases nothing the host didn't already declare to this very socket.
+fn resolve_list(agent: &mut agent_client::AgentClient) -> Result<i32> {
+    match agent.request(&AgentRequest::List)? {
+        AgentResponse::Refs { refs } => {
+            let mut stdout = std::io::stdout().lock();
+            for reference in &refs {
+                writeln!(stdout, "{reference}").context("write the ref listing to stdout")?;
+            }
+            stdout.flush().context("write the ref listing to stdout")?;
+            Ok(0)
+        }
+        AgentResponse::Denied { message } => {
+            eprintln!("secreq: listing denied by the host: {message}");
+            Ok(RESOLVE_DENIED_EXIT)
+        }
+        AgentResponse::Error { message } => {
+            bail!("the scoped secret agent could not list this scope's refs: {message}")
+        }
+        // Listing must never carry material. If one arrives, the far end is
+        // not a scoped agent — so print nothing and say so.
+        AgentResponse::Value { .. } => {
+            bail!("the scoped secret agent answered a listing with a secret value; refusing to print it")
+        }
+    }
 }
 
 /// `secreq read <ref>…` — resolve one or more secret references and print

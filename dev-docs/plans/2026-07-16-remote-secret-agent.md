@@ -1,7 +1,7 @@
 # Remote secret agent — serving secrets to guest VMs
 
 Date: 2026-07-16
-Status: design (validated); **A + B implemented** (see "Build order" below)
+Status: design (validated); **A + B + C implemented** (see "Build order" below)
 
 *A guest VM resolves `secret://` refs from the HOST's secreq over a
 forwarded unix socket — gated by host-side consent, bounded by a
@@ -192,7 +192,9 @@ inspect.
   `consent::{AgentAnchor, AgentGrant}`, `scoped_agent::{ScopeApprovals,
   GuestChain, Clock}`, the prompt's GUEST SAYS row.
 - **C — guest client**: `secreq resolve <ref>` dialing `$SECREQ_SOCK`,
-  and the env convention. Needs A.
+  and the env convention. Needs A. **Implemented** —
+  `src/scoped_agent/client.rs`, `commands::resolve`,
+  `tests/resolve_client.rs`, `docs/secret-agent.md`.
 - **D — brain wiring** (brain project): `secreq agent open` + `ssh -R`
   at sandbox start, `SECREQ_SOCK` in the guest profile; VM tier stops
   copying env. Needs A + C.
@@ -294,3 +296,37 @@ inspect.
   prompt's session-grant idiom, leaving the footer's Approve as "this
   request only". An "Approve" that silently meant "approve for five
   minutes" would be a consent UI lying by omission.
+
+## Notes from implementing C
+
+- **stdout is the interface, not the output.** `secreq resolve` exists to
+  be substituted — `export GH_TOKEN="$(secreq resolve …)"` — so the value
+  and nothing else goes to stdout and every diagnostic goes to stderr. The
+  failure mode is what makes it worth a rule rather than a habit: a stray
+  progress line lands *inside* someone's token, and a denial printed to
+  stdout would export the word "denied" as a credential. `tests/
+  resolve_client.rs` asserts the streams byte-for-byte, and asserts the
+  substitution itself through a real `sh -c`, because that shell contract
+  is the thing being promised.
+- **A denial gets its own exit code (3), distinct from an error (1).**
+  `proto` already splits `Denied` from `Error` so a guest doesn't retry a
+  refusal into click-training; that split is worth nothing if the shell
+  can't see it. `3` means "the host said no — final"; `1` means "something
+  is broken, maybe retry".
+- **The ref is parsed before the socket is dialled.** A typo should read as
+  a typo, not as "no agent" (on a host) or a remote refusal (in a guest) —
+  neither of which is about the typo. It also means the host parses exactly
+  the canonical form the client validated.
+- **The guest chain is wired, and it is the one place `provenance.rs` is
+  legitimately called on this feature.** `CLAUDE.md`'s rule is that the
+  *host* side must never consult `provenance`/`peercred`, because a guest
+  has no host pid and the socket's peer is the tunnel. `client::
+  self_reported_chain` runs in the **guest**, in the guest's own kernel,
+  about its own tree: locally true, remotely a claim — which is exactly
+  what `GuestChain` is for. Best-effort: a kernel `sysinfo` can't read
+  yields an empty chain and no prompt row, and nothing depends on it.
+- **`resolve` shares nothing with `read`.** `read` needs a config, a
+  provider and a consent window; a guest has none of the three — it has a
+  socket. Every policy-shaped thing (allowlist, prompt, TTL, audit row)
+  happens on the host, so the client is deliberately thin enough that
+  there is nothing in it to get wrong.
