@@ -876,15 +876,27 @@ fn ssh_setup_wiring_step(
         return Ok(());
     }
 
+    if plan.updates_existing {
+        cliclack::log::warning(format!(
+            "{} already has a secreq SSH-agent block, but it points at a different \
+             socket than the agent now uses. I'll update it in place.",
+            plan.config_file.display()
+        ))?;
+    }
+    let verb = if plan.updates_existing {
+        "update"
+    } else {
+        "write"
+    };
     cliclack::note(
-        format!("I'll write this to {}:", plan.config_file.display()),
+        format!("I'll {verb} this in {}:", plan.config_file.display()),
         &plan.block,
     )?;
     if let Some(caveat) = &plan.caveat {
         cliclack::log::warning(caveat)?;
     }
 
-    let proceed = assume_yes || prompt::confirm_default_yes("Write it?")?;
+    let proceed = assume_yes || prompt::confirm_default_yes(&format!("{verb} it?"))?;
     if !proceed {
         cliclack::log::info("Skipped — no files changed.")?;
         return Ok(());

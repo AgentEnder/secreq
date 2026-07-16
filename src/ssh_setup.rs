@@ -52,8 +52,19 @@ pub struct SshSetupPlan {
     pub config_file: PathBuf,
     /// Full block including sentinels. Show this to the user.
     pub block: String,
-    /// True if the block is already present — [`apply`] will be a no-op.
+    /// True if the file already carries **exactly** this block — [`apply`]
+    /// will be a no-op.
+    ///
+    /// Deliberately content equality, not sentinel presence. Presence-only
+    /// would make the block write-once: the socket path is baked into it, so
+    /// when that path moves (as it did in migration 0001) every existing
+    /// install reports "already configured" and re-running setup silently
+    /// changes nothing, leaving SSH pointed at a socket no daemon listens on.
     pub already_configured: bool,
+    /// True if a block is present but differs from [`block`](Self::block) —
+    /// [`apply`] will rewrite it in place rather than add a new one. Lets the
+    /// caller say "updating" instead of "writing".
+    pub updates_existing: bool,
     /// Optional one-liner caveat about this method/shell's behavior.
     pub caveat: Option<String>,
 }
@@ -71,12 +82,13 @@ pub fn plan(home: &Path, method: Method, shell: Shell, agent_sock: &Path) -> Res
         Method::SshConfig => {
             let config_file = home.join(".ssh/config");
             let block = ssh_config_block(agent_sock);
-            let already_configured = file_has_sentinel(&config_file);
+            let (already_configured, updates_existing) = block_state(&config_file, &block);
             Ok(SshSetupPlan {
                 method,
                 config_file,
                 block,
                 already_configured,
+                updates_existing,
                 // ssh applies the FIRST IdentityAgent it obtains for a host;
                 // we prepend so ours wins over anything already in the file.
                 caveat: Some(
@@ -94,33 +106,75 @@ pub fn plan(home: &Path, method: Method, shell: Shell, agent_sock: &Path) -> Res
                 )
             })?;
             let block = shell_rc_block(&shell, agent_sock);
-            let already_configured = file_has_sentinel(&config_file);
+            let (already_configured, updates_existing) = block_state(&config_file, &block);
             Ok(SshSetupPlan {
                 method,
                 config_file,
                 block,
                 already_configured,
+                updates_existing,
                 caveat: path_setup::caveat_for(&shell),
             })
         }
     }
 }
 
-/// Apply the plan. Idempotent — if the sentinel is already present, returns
-/// `Ok(false)` without touching the file. Returns `Ok(true)` if we wrote
-/// something.
+/// Classify `config_file` against the block we want: `(already_configured,
+/// updates_existing)`. A missing/unreadable file is neither.
+fn block_state(config_file: &Path, want: &str) -> (bool, bool) {
+    let Ok(content) = fs::read_to_string(config_file) else {
+        return (false, false);
+    };
+    match existing_block(&content) {
+        Some(found) if found == want => (true, false),
+        Some(_) => (false, true),
+        None => (false, false),
+    }
+}
+
+/// Apply the plan. Idempotent — if the file already carries exactly this
+/// block, returns `Ok(false)` without touching it. Returns `Ok(true)` if we
+/// wrote something.
 ///
-/// `SshConfig` **prepends** the block (ssh uses the first `IdentityAgent`),
-/// ensuring `~/.ssh` is `0700` and the config is `0600`. `ShellRc`
-/// **appends** like the PATH block.
+/// Three cases: no block → add one (`SshConfig` **prepends**, since ssh uses
+/// the first `IdentityAgent`; `ShellRc` **appends** like the PATH block); a
+/// block that differs → rewrite it **in place**, preserving its position; an
+/// identical block → no-op.
 pub fn apply(plan: &SshSetupPlan) -> Result<bool> {
     if plan.already_configured {
         return Ok(false);
+    }
+    if plan.updates_existing {
+        return rewrite_in_place(&plan.config_file, &plan.block);
     }
     match plan.method {
         Method::SshConfig => apply_ssh_config(plan),
         Method::ShellRc => apply_shell_rc(plan),
     }
+}
+
+/// Swap the managed block in `config_file` for `new_block`, leaving the rest
+/// of the file byte-identical. `Ok(false)` if there was no block to replace.
+///
+/// Shared by [`apply`] and migration 0002 — the migration repoints blocks on
+/// installs whose owner will never re-run `ssh setup`, and must reach the
+/// exact same result.
+pub(crate) fn rewrite_in_place(config_file: &Path, new_block: &str) -> Result<bool> {
+    let content = match fs::read_to_string(config_file) {
+        Ok(c) => c,
+        Err(_) => return Ok(false),
+    };
+    let Some(updated) = replace_block(&content, new_block) else {
+        return Ok(false);
+    };
+    if updated == content {
+        return Ok(false);
+    }
+    // Preserve the file's mode: ~/.ssh/config must stay 0600 or ssh refuses
+    // it, and `fs::write` on an existing file leaves the mode alone.
+    fs::write(config_file, updated)
+        .with_context(|| format!("could not write {}", config_file.display()))?;
+    Ok(true)
 }
 
 fn apply_ssh_config(plan: &SshSetupPlan) -> Result<bool> {
@@ -197,10 +251,11 @@ pub fn remove(home: &Path, method: Method, shell: Shell) -> Result<bool> {
     Ok(true)
 }
 
-/// Strip the sentinel-bracketed block from `content`. Returns `None` if no
-/// block is present, else the remainder with the begin..=end lines removed
-/// (plus one trailing blank line if it immediately follows the end line).
-fn strip_block(content: &str) -> Option<String> {
+/// Line indices of the begin/end sentinels in `content`, inclusive. `None` if
+/// either is absent. The single source of truth for locating our block —
+/// [`strip_block`], [`replace_block`], and [`existing_block`] all agree by
+/// construction because they share it.
+fn block_bounds(content: &str) -> Option<(usize, usize)> {
     let lines: Vec<&str> = content.lines().collect();
     let begin = lines.iter().position(|l| l.contains(BEGIN_SENTINEL))?;
     let end = lines
@@ -208,6 +263,24 @@ fn strip_block(content: &str) -> Option<String> {
         .skip(begin)
         .position(|l| l.contains(END_SENTINEL))
         .map(|offset| begin + offset)?;
+    Some((begin, end))
+}
+
+/// The managed block currently in `content`, sentinels included, or `None` if
+/// there isn't one. Used to compare what's on disk against what we'd write —
+/// see [`plan`]'s `already_configured`.
+fn existing_block(content: &str) -> Option<String> {
+    let (begin, end) = block_bounds(content)?;
+    let lines: Vec<&str> = content.lines().collect();
+    Some(lines[begin..=end].join("\n"))
+}
+
+/// Strip the sentinel-bracketed block from `content`. Returns `None` if no
+/// block is present, else the remainder with the begin..=end lines removed
+/// (plus one trailing blank line if it immediately follows the end line).
+fn strip_block(content: &str) -> Option<String> {
+    let (begin, end) = block_bounds(content)?;
+    let lines: Vec<&str> = content.lines().collect();
     // Drop begin..=end, plus a single blank line right after the end line.
     let mut after = end + 1;
     if lines.get(after).is_some_and(|l| l.trim().is_empty()) {
@@ -228,11 +301,28 @@ fn strip_block(content: &str) -> Option<String> {
     Some(result)
 }
 
-/// True if `path` exists and contains our begin sentinel.
-fn file_has_sentinel(path: &Path) -> bool {
-    fs::read_to_string(path)
-        .map(|s| s.contains(BEGIN_SENTINEL))
-        .unwrap_or(false)
+/// Swap the managed block in `content` for `new_block`, **in place**. Returns
+/// `None` if there's no block to replace.
+///
+/// In place, not strip-and-re-add: the block's position is the user's (or a
+/// previous `apply`'s) and carries meaning we must not silently change. For
+/// `~/.ssh/config` that position decides whether our `IdentityAgent` wins,
+/// since ssh takes the first one it obtains for a host.
+fn replace_block(content: &str, new_block: &str) -> Option<String> {
+    let (begin, end) = block_bounds(content)?;
+    let lines: Vec<&str> = content.lines().collect();
+    let new_lines: Vec<&str> = new_block.lines().collect();
+    let kept: Vec<&str> = lines[..begin]
+        .iter()
+        .chain(new_lines.iter())
+        .chain(lines[end + 1..].iter())
+        .copied()
+        .collect();
+    let mut result = kept.join("\n");
+    if !result.is_empty() && content.ends_with('\n') {
+        result.push('\n');
+    }
+    Some(result)
 }
 
 fn ssh_config_block(agent_sock: &Path) -> String {
@@ -360,6 +450,107 @@ mod tests {
         assert!(!apply(&p2).unwrap(), "second apply must be a no-op");
         let after_second = fs::read_to_string(&p2.config_file).unwrap();
         assert_eq!(after_first, after_second);
+    }
+
+    /// The migration-0001 regression: the socket moved, so the block on disk
+    /// names a path no daemon listens on. Sentinel-presence idempotency
+    /// reported "already configured" and re-running setup fixed nothing.
+    #[test]
+    fn apply_rewrites_a_block_whose_socket_path_changed() {
+        let home = tempfile::tempdir().unwrap();
+        let old_sock = home.path().join("legacy/agent.sock");
+        let new_sock = home.path().join("secreq/run/agent.sock");
+
+        let p1 = plan(home.path(), Method::SshConfig, Shell::Zsh, &old_sock).unwrap();
+        assert!(apply(&p1).unwrap());
+
+        let p2 = plan(home.path(), Method::SshConfig, Shell::Zsh, &new_sock).unwrap();
+        assert!(
+            !p2.already_configured,
+            "a block naming a stale socket is not 'already configured'"
+        );
+        assert!(
+            p2.updates_existing,
+            "should rewrite, not add a second block"
+        );
+        assert!(apply(&p2).unwrap(), "apply must rewrite the stale block");
+
+        let content = fs::read_to_string(&p2.config_file).unwrap();
+        assert!(content.contains(&format!("IdentityAgent \"{}\"", new_sock.display())));
+        assert!(
+            !content.contains(&old_sock.display().to_string()),
+            "stale path must be gone:\n{content}"
+        );
+        assert_eq!(
+            content.matches(BEGIN_SENTINEL).count(),
+            1,
+            "must not accumulate blocks:\n{content}"
+        );
+    }
+
+    #[test]
+    fn rewrite_preserves_position_and_surrounding_content() {
+        let home = tempfile::tempdir().unwrap();
+        let old_sock = home.path().join("legacy/agent.sock");
+        let new_sock = home.path().join("secreq/run/agent.sock");
+        let ssh_dir = home.path().join(".ssh");
+        fs::create_dir_all(&ssh_dir).unwrap();
+        let config = ssh_dir.join("config");
+
+        // Our block sandwiched between the user's own stanzas.
+        let block = ssh_config_block(&old_sock);
+        let before = "Host above\n  User me\n";
+        let after = "\nHost below\n  User you\n";
+        fs::write(&config, format!("{before}{block}\n{after}")).unwrap();
+
+        let p = plan(home.path(), Method::SshConfig, Shell::Zsh, &new_sock).unwrap();
+        assert!(p.updates_existing);
+        assert!(apply(&p).unwrap());
+
+        let content = fs::read_to_string(&config).unwrap();
+        // Neighbours intact, and ours stayed between them.
+        assert!(content.contains("Host above"));
+        assert!(content.contains("Host below"));
+        let above = content.find("Host above").unwrap();
+        let ours = content.find(BEGIN_SENTINEL).unwrap();
+        let below = content.find("Host below").unwrap();
+        assert!(above < ours && ours < below, "block moved:\n{content}");
+        assert!(content.contains(&format!("IdentityAgent \"{}\"", new_sock.display())));
+    }
+
+    #[test]
+    fn rewrite_keeps_ssh_config_0600() {
+        let home = tempfile::tempdir().unwrap();
+        let old_sock = home.path().join("legacy/agent.sock");
+        let new_sock = home.path().join("secreq/run/agent.sock");
+
+        let p1 = plan(home.path(), Method::SshConfig, Shell::Zsh, &old_sock).unwrap();
+        apply(&p1).unwrap();
+        let p2 = plan(home.path(), Method::SshConfig, Shell::Zsh, &new_sock).unwrap();
+        apply(&p2).unwrap();
+
+        assert_eq!(mode_of(&p2.config_file), 0o600, "ssh refuses a laxer mode");
+    }
+
+    #[test]
+    fn apply_rewrites_a_stale_shell_rc_block() {
+        let home = tempfile::tempdir().unwrap();
+        let old_sock = home.path().join("legacy/agent.sock");
+        let new_sock = home.path().join("secreq/run/agent.sock");
+        let zshrc = home.path().join(".zshrc");
+        fs::write(&zshrc, "# my rc\n").unwrap();
+
+        let p1 = plan(home.path(), Method::ShellRc, Shell::Zsh, &old_sock).unwrap();
+        apply(&p1).unwrap();
+        let p2 = plan(home.path(), Method::ShellRc, Shell::Zsh, &new_sock).unwrap();
+        assert!(p2.updates_existing);
+        assert!(apply(&p2).unwrap());
+
+        let content = fs::read_to_string(&zshrc).unwrap();
+        assert!(content.starts_with("# my rc\n"), "rc preamble survives");
+        assert!(content.contains(&format!(r#"export SSH_AUTH_SOCK="{}""#, new_sock.display())));
+        assert!(!content.contains(&old_sock.display().to_string()));
+        assert_eq!(content.matches(BEGIN_SENTINEL).count(), 1);
     }
 
     #[test]
