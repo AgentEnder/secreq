@@ -761,7 +761,19 @@ fn log(scope: &Scope, args: std::fmt::Arguments<'_>) {
 ///   socket;
 /// - SIGKILL / crash → nothing can run, so the *next* `open` reclaims the
 ///   stale file (see [`clear_stale_socket`]).
-pub fn open(socket_path: &Path, scope: Scope, gate: Arc<dyn Gate>) -> Result<()> {
+///
+/// `on_bound` is called once the socket is bound **and** narrowed to 0600,
+/// immediately before serving begins — the first moment the path is both
+/// dialable and safe to hand out. `commands::agent_open` prints the path from
+/// it, so a caller that reads that line can `ssh -R` the socket straight away
+/// rather than poll for its existence. Reporting from the caller instead
+/// would have to happen before this function blocks, i.e. before the bind.
+pub fn open(
+    socket_path: &Path,
+    scope: Scope,
+    gate: Arc<dyn Gate>,
+    on_bound: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
     clear_stale_socket(socket_path)?;
     if let Some(parent) = socket_path.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
@@ -786,6 +798,12 @@ pub fn open(socket_path: &Path, scope: Scope, gate: Arc<dyn Gate>) -> Result<()>
     );
 
     let guard = SocketGuard(socket_path.to_path_buf());
+    // Bound and 0600: the path is now real and private, so it's safe to tell
+    // the world where it is. Failing here aborts before serving, and `guard`
+    // unlinks on the way out — a socket nobody can be told about is worse
+    // than no socket.
+    on_bound(socket_path)?;
+
     // The approvals cache is created here and dropped with this process, so
     // the grants a sandbox earns can never outlive the sandbox's socket.
     serve_on(
@@ -1083,6 +1101,33 @@ mod tests {
         assert!(!scope.allows(&reference("secret://keychain/Dev/gh/token")));
     }
 
+    /// Closing our listener does not always make the socket dead *yet*.
+    ///
+    /// Other tests in this binary run real subprocesses (`provider::tests`
+    /// shells out to `sh`), and `Command::spawn` forks. A fork that lands
+    /// between our `bind` and our `drop` copies the listening fd into the
+    /// child, which holds it until `exec` closes it (Rust sets `CLOEXEC`).
+    /// For that window the socket is still listening on someone else's fd
+    /// and `connect()` keeps succeeding — so the "corpse" this test means to
+    /// build is briefly alive, and `clear_stale_socket` correctly refuses it.
+    ///
+    /// So wait for the precondition instead of assuming it: poll until the
+    /// socket really is refusing connections. The wait is for a condition,
+    /// not a duration, and it fails loudly rather than silently proceeding
+    /// against a live socket.
+    fn wait_until_socket_is_dead(path: &Path) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while UnixStream::connect(path).is_ok() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{} never stopped accepting: an inherited fd outlived its exec, \
+                 or something really is listening",
+                path.display()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     /// A path with nothing listening is a corpse (a SIGKILLed predecessor),
     /// and reclaiming it is what makes a restart work.
     #[test]
@@ -1093,6 +1138,7 @@ mod tests {
         // nothing is accepting on it — exactly the SIGKILL aftermath.
         drop(UnixListener::bind(&path).expect("bind"));
         assert!(path.exists(), "precondition: the stale file is present");
+        wait_until_socket_is_dead(&path);
 
         clear_stale_socket(&path).expect("a dead socket must be reclaimable");
         assert!(!path.exists(), "the stale socket should have been removed");

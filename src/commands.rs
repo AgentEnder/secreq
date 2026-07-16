@@ -365,7 +365,7 @@ pub fn run(
     crate::exec::run(command, &env_overrides, &secrets_for_masking, &cwd)
 }
 
-/// `secreq agent open --scope <name> --allow <ref>… --sock <path>` — bind a
+/// `secreq agent open --scope <name> --allow <ref>… [--sock <path>]` — bind a
 /// scoped, ephemeral socket serving `secret://` refs to a guest, and serve it
 /// until the process is interrupted.
 ///
@@ -375,10 +375,15 @@ pub fn run(
 /// guest can only ask, never widen. Blocks — the socket's lifetime *is* this
 /// process's lifetime — so the caller (brain, at sandbox start) backgrounds
 /// it and kills it when the sandbox goes away.
+///
+/// `sock` is an explicit override; `None` defaults it into
+/// [`crate::paths::scoped_agent_socket`], beside every other socket secreq
+/// binds. Either way the resolved path is printed to stdout before serving
+/// starts, so the caller reads the path back rather than reconstructing it.
 pub fn agent_open(
     scope: &str,
     allow: &[String],
-    sock: &Path,
+    sock: Option<&Path>,
     config_path: Option<&Path>,
 ) -> Result<i32> {
     // Parse every ref up front so a typo in the host's own declaration fails
@@ -395,6 +400,13 @@ pub fn agent_open(
     }
 
     let scope = crate::scoped_agent::Scope::new(scope, refs)?;
+    // An explicit --sock wins: brain picks a path so it can `ssh -R` it into
+    // the guest. Otherwise this socket lives where every other secreq socket
+    // does, rather than being the one path that ignores `paths`.
+    let sock = match sock {
+        Some(path) => path.to_path_buf(),
+        None => crate::paths::scoped_agent_socket(scope.name())?,
+    };
     let config = load_config_or_default(config_path)?;
     // The gate resolves through the user's configured providers; the daemon
     // supplies only the decision.
@@ -408,7 +420,21 @@ pub fn agent_open(
         scope.allowed_refs().len(),
         sock.display()
     );
-    crate::scoped_agent::open(sock, scope, gate)?;
+
+    // Reported from `on_bound` rather than here: this must be true when the
+    // caller reads it, and here is still before the bind. `open` hands it back
+    // once the socket is bound and 0600, so a caller can `ssh -R` the path the
+    // moment it reads the line instead of polling for the file to appear.
+    crate::scoped_agent::open(&sock, scope, gate, |bound| {
+        // The path, alone, on stdout — the human line above went to stderr —
+        // so a caller backgrounding this reads one clean, machine-readable
+        // line. Flushed because `open` then blocks forever: an unflushed path
+        // would strand the caller waiting on a line sitting in our buffer.
+        println!("{}", bound.display());
+        std::io::stdout()
+            .flush()
+            .context("failed to report the scoped agent socket path")
+    })?;
     Ok(0)
 }
 

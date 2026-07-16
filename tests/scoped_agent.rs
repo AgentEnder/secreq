@@ -196,25 +196,64 @@ impl Harness {
     }
 }
 
-/// Run `f` with `$XDG_STATE_HOME` pointed at a fresh tempdir so audit
-/// appends land there instead of the developer's real state dir, and
-/// `read_history` inside `f` reads them back.
+/// Every env var that can steer secreq at a real file, and what pinning each
+/// one protects. Pinning a subset is worse than useless: it looks isolated
+/// and isn't.
 ///
-/// A process-wide lock serializes callers: `$XDG_STATE_HOME` is
-/// process-global, so two of these running concurrently in this test binary
-/// would clobber each other's target dir. (The same reasoning as
-/// `audit::with_temp_log`, which is `cfg(test)`-internal to the crate and so
-/// isn't reachable from an integration test.)
+/// See `dev-docs/plans/2026-07-16-secreq-root-and-migrations.md` — an earlier
+/// draft assumed `$SECREQ_HOME` alone was enough, and acting on it moved a
+/// developer's real config into a tempdir that was deleted moments later.
+const ISOLATED_VARS: &[&str] = &[
+    // The root: config, and the audit log this file asserts on.
+    "SECREQ_HOME",
+    // The migration's frozen legacy probe, which `$SECREQ_HOME` does not
+    // redirect — this is the var whose omission ate a real config.
+    "XDG_CONFIG_HOME",
+    "XDG_STATE_HOME",
+    // Backstop: every lookup above falls back to `dirs::home_dir()`, so a
+    // forgotten pin lands here rather than in the real home.
+    "HOME",
+    // Socket dir, for anything that resolves `paths::socket_dir()` — the
+    // harness binds its own tempdir socket today, but a future test calling
+    // `agent_open` would otherwise bind beside the developer's live daemon.
+    "XDG_RUNTIME_DIR",
+];
+
+/// Run `f` with every path secreq can resolve pinned inside one fresh
+/// tempdir, so audit appends land there instead of the developer's real
+/// `~/.secreq`, and `read_history` inside `f` reads them back.
+///
+/// Integration tests link the lib **without** `cfg(test)`, so
+/// `paths::test_fallback_root` does not cover them — this helper is the only
+/// thing standing between these tests and the real files.
+///
+/// A process-wide lock serializes callers: the environment is process-global,
+/// so two of these running concurrently in this test binary would clobber
+/// each other's target dir. (The same reasoning as `audit::with_temp_log`,
+/// which is `cfg(test)`-internal to the crate and so isn't reachable here.)
 fn with_temp_audit_log<R>(f: impl FnOnce() -> R) -> R {
     static ENV_LOCK: Mutex<()> = Mutex::new(());
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().expect("tempdir");
-    let prev = std::env::var_os("XDG_STATE_HOME");
-    std::env::set_var("XDG_STATE_HOME", dir.path());
+
+    let saved: Vec<(&str, Option<std::ffi::OsString>)> = ISOLATED_VARS
+        .iter()
+        .map(|name| {
+            let prev = std::env::var_os(name);
+            // A subdir per var: distinct locations, so a path escaping one
+            // pin can't be silently caught by another.
+            std::env::set_var(name, dir.path().join(name.to_ascii_lowercase()));
+            (*name, prev)
+        })
+        .collect();
+
     let out = f();
-    match prev {
-        Some(v) => std::env::set_var("XDG_STATE_HOME", v),
-        None => std::env::remove_var("XDG_STATE_HOME"),
+
+    for (name, prev) in saved {
+        match prev {
+            Some(v) => std::env::set_var(name, v),
+            None => std::env::remove_var(name),
+        }
     }
     out
 }
@@ -414,7 +453,7 @@ fn the_secret_value_never_appears_in_the_audit_log() {
         harness.round_trip(&Request::resolve(OUT_OF_SCOPE_REF));
         harness.round_trip(&Request::List);
 
-        let path = audit::audit_log_path().expect("audit log path");
+        let path = secreq::paths::audit_log_path().expect("audit log path");
         let raw = std::fs::read_to_string(&path).expect("read raw audit log");
 
         assert!(

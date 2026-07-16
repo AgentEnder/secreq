@@ -44,27 +44,63 @@ fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_secreq")
 }
 
-/// Run `f` with `$XDG_STATE_HOME` pointed at a fresh tempdir.
+/// Every env var that can steer secreq at a real file. Pinning a subset is
+/// worse than useless: it looks isolated and isn't. See
+/// `dev-docs/plans/2026-07-16-secreq-root-and-migrations.md` — an earlier
+/// draft assumed `$SECREQ_HOME` alone sufficed, and acting on it moved a
+/// developer's real config into a tempdir that was deleted moments later.
+///
+/// Kept in step with `tests/scoped_agent.rs`'s copy, and with `run_resolve`
+/// below, which pins the same set on the child.
+const ISOLATED_VARS: &[&str] = &[
+    // The root: config, and the audit log the host half writes.
+    "SECREQ_HOME",
+    // The migration's frozen legacy probe, which `$SECREQ_HOME` does not
+    // redirect — this is the var whose omission ate a real config.
+    "XDG_CONFIG_HOME",
+    "XDG_STATE_HOME",
+    // Backstop: every lookup above falls back to `dirs::home_dir()`.
+    "HOME",
+    // Socket dir, for anything resolving `paths::socket_dir()`.
+    "XDG_RUNTIME_DIR",
+];
+
+/// Run `f` with every path secreq can resolve pinned inside one fresh
+/// tempdir.
 ///
 /// The **host** half of these tests runs in this process, so its audit rows
 /// land wherever this process's env says — i.e. in the developer's real
-/// `~/.local/state/secreq/audit.log` unless we move it. (The `secreq resolve`
-/// child writes no rows: auditing is the host's job. It gets its own pinned
-/// dir anyway, in `run_resolve`.)
+/// `~/.secreq/audit.log` unless we move it, since integration tests link the
+/// lib without `cfg(test)` and so get no `paths::test_fallback_root`. (The
+/// `secreq resolve` child writes no rows: auditing is the host's job. It gets
+/// its own pinned dir anyway, in `run_resolve`.)
 ///
-/// The lock serializes callers, since `$XDG_STATE_HOME` is process-global and
-/// two of these at once would clobber each other's target — the same reasoning
-/// as `tests/scoped_agent.rs`'s copy of this helper.
+/// The lock serializes callers, since the environment is process-global and
+/// two of these at once would clobber each other's target — the same
+/// reasoning as `tests/scoped_agent.rs`'s copy of this helper.
 fn with_temp_audit_log<R>(f: impl FnOnce() -> R) -> R {
     static ENV_LOCK: Mutex<()> = Mutex::new(());
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().expect("tempdir");
-    let prev = std::env::var_os("XDG_STATE_HOME");
-    std::env::set_var("XDG_STATE_HOME", dir.path());
+
+    let saved: Vec<(&str, Option<std::ffi::OsString>)> = ISOLATED_VARS
+        .iter()
+        .map(|name| {
+            let prev = std::env::var_os(name);
+            // A subdir per var: distinct locations, so a path escaping one
+            // pin can't be silently caught by another.
+            std::env::set_var(name, dir.path().join(name.to_ascii_lowercase()));
+            (*name, prev)
+        })
+        .collect();
+
     let out = f();
-    match prev {
-        Some(v) => std::env::set_var("XDG_STATE_HOME", v),
-        None => std::env::remove_var("XDG_STATE_HOME"),
+
+    for (name, prev) in saved {
+        match prev {
+            Some(v) => std::env::set_var(name, v),
+            None => std::env::remove_var(name),
+        }
     }
     out
 }
@@ -135,11 +171,15 @@ impl Host {
 fn run_resolve(socket: Option<&Path>, args: &[&str]) -> Output {
     let state = tempfile::tempdir().expect("tempdir");
     let mut command = Command::new(bin());
+    command.arg("resolve").args(args);
+    // Same layered pin as `with_temp_audit_log`, on the child. `$SECREQ_HOME`
+    // alone would leave the migration that runs at the top of `cli::run`
+    // probing the developer's real `~/.config/secreq` and moving it into
+    // `state`, which is deleted when this function returns.
+    for name in ISOLATED_VARS {
+        command.env(name, state.path().join(name.to_ascii_lowercase()));
+    }
     command
-        .arg("resolve")
-        .args(args)
-        .env("XDG_CONFIG_HOME", state.path().join("config"))
-        .env("XDG_STATE_HOME", state.path().join("state"))
         .env("SECREQ_NO_DAEMON", "1")
         .env_remove("SECREQ_CONSENT_SOCK");
     match socket {
@@ -204,12 +244,20 @@ fn the_value_substitutes_cleanly_into_a_shell_variable() {
     with_temp_audit_log(|| {
         let host = Host::serving(Decision::Approve);
 
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(format!(
-                r#"GH_TOKEN="$({} resolve {ALLOWED_REF})"; printf '[%s]' "$GH_TOKEN""#,
-                bin(),
-            ))
+        let state = tempfile::tempdir().expect("tempdir");
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(format!(
+            r#"GH_TOKEN="$({} resolve {ALLOWED_REF})"; printf '[%s]' "$GH_TOKEN""#,
+            bin(),
+        ));
+        // Pinned explicitly rather than left to inherit `with_temp_audit_log`'s
+        // pins: the `secreq` under this shell is a real binary running the real
+        // `cli::run`, migration and all, and "it happens to inherit an isolated
+        // env" is precisely the assumption that ate a developer's config once.
+        for name in ISOLATED_VARS {
+            command.env(name, state.path().join(name.to_ascii_lowercase()));
+        }
+        let output = command
             .env("SECREQ_SOCK", &host.socket)
             .env("SECREQ_NO_DAEMON", "1")
             .output()

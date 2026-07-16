@@ -373,26 +373,32 @@ fn audit_auto_fire(secs_ago: u64, rule_id: &str, decision: &str) -> AuditEntry {
     }
 }
 
-/// Point `$XDG_STATE_HOME` at a fresh tempdir and write `audit_entries`
-/// as its `audit.log`, so `AuditCache::refresh_if_stale` reads our
-/// synthetic history through the normal path. Returns the tempdir guard
-/// — keep it alive across the render.
+/// Point `$SECREQ_HOME` at a fresh tempdir and write `audit_entries` as its
+/// `audit.log`, so `AuditCache::refresh_if_stale` reads our synthetic history
+/// through the normal path. Returns the tempdir guard — keep it alive across
+/// the render.
+///
+/// The root is `<tmp>/secreq`, not `<tmp>`: `paths::audit_log_path()` is
+/// `<root>/audit.log` directly, with no `secreq` component of its own (that
+/// was the old `$XDG_STATE_HOME/secreq/…` layout). Rooting at `<tmp>` while
+/// writing to `<tmp>/secreq/audit.log` would leave the fixture reading an
+/// empty history and rendering a blank audit tab.
 ///
 /// SAFETY of the env mutation: the fixtures run sequentially
 /// (`--test-threads=1` per the regen instructions); each fixture sets
 /// the var, renders, and the next overwrites it.
 fn install_audit_log(audit_entries: &[AuditEntry]) -> tempfile::TempDir {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let secreq_state = tmp.path().join("secreq");
-    std::fs::create_dir_all(&secreq_state).expect("mkdir secreq state");
-    let audit_path = secreq_state.join("audit.log");
+    let secreq_root = tmp.path().join("secreq");
+    std::fs::create_dir_all(&secreq_root).expect("mkdir secreq root");
+    let audit_path = secreq_root.join("audit.log");
     let mut buf = String::new();
     for entry in audit_entries {
         buf.push_str(&serde_json::to_string(entry).expect("serialize entry"));
         buf.push('\n');
     }
     std::fs::write(&audit_path, buf).expect("write audit.log");
-    std::env::set_var("SECREQ_HOME", tmp.path());
+    std::env::set_var("SECREQ_HOME", &secreq_root);
     tmp
 }
 

@@ -145,6 +145,48 @@ pub(crate) fn socket_dir_from(xdg_runtime: Option<OsString>, root: &Path) -> Pat
     root.join("run")
 }
 
+/// Default socket for a scoped secret agent (`secreq agent open --scope
+/// <name>`), in [`socket_dir`] beside `consent.sock` and `agent.sock`.
+///
+/// Named per-scope rather than a single `scope.sock`: a host serves one
+/// sandbox per scope and may well serve several at once, so a shared path
+/// would mean the second `agent open` failing to bind against the first.
+///
+/// `scope-` rather than `agent-`: `agent.sock` is the *SSH* agent, and a
+/// sibling named `agent-my-vm.sock` would read as "the SSH agent for my-vm",
+/// which is the one thing this socket is not.
+///
+/// `agent open --sock <path>` overrides this — brain needs the socket at a
+/// path it chose so it can `ssh -R` it into the guest.
+pub fn scoped_agent_socket(scope: &str) -> Result<PathBuf> {
+    Ok(socket_dir()?.join(scoped_agent_socket_name(scope)?))
+}
+
+/// Filename half of [`scoped_agent_socket`], split out to be testable without
+/// touching the environment.
+///
+/// A scope name is otherwise only ever *displayed* (it is the principal in the
+/// consent prompt), so it has never had to be a valid filename. Deriving a
+/// path from it makes that a new constraint, and one worth enforcing loudly:
+/// `--scope ../../../tmp/x` would otherwise silently bind outside
+/// [`socket_dir`]. Rejected, not sanitized — mapping `a/b` and `a-b` onto one
+/// filename would let two distinct scopes collide on one socket.
+fn scoped_agent_socket_name(scope: &str) -> Result<String> {
+    let bad = scope.is_empty()
+        || scope == "."
+        || scope == ".."
+        || scope.contains('/')
+        || scope.contains('\0');
+    if bad {
+        anyhow::bail!(
+            "scope name {scope:?} can't be used as a socket filename \
+             (no `/`, and not `.` or `..`); either rename the scope or pass \
+             `--sock <path>` to choose the path yourself"
+        );
+    }
+    Ok(format!("scope-{scope}.sock"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,5 +248,43 @@ mod tests {
     fn empty_xdg_runtime_dir_is_treated_as_unset() {
         let dir = socket_dir_from(Some(OsString::from("")), Path::new("/home/ada/.secreq"));
         assert_eq!(dir, PathBuf::from("/home/ada/.secreq/run"));
+    }
+
+    #[test]
+    fn scoped_agent_socket_is_named_after_its_scope() {
+        assert_eq!(
+            scoped_agent_socket_name("my-vm").unwrap(),
+            "scope-my-vm.sock"
+        );
+    }
+
+    /// Two scopes must never land on one socket, or the second `agent open`
+    /// fails to bind against the first.
+    #[test]
+    fn distinct_scopes_get_distinct_sockets() {
+        let a = scoped_agent_socket_name("build").unwrap();
+        let b = scoped_agent_socket_name("test").unwrap();
+        assert_ne!(a, b);
+    }
+
+    /// The scope name is a display principal being reused as a filename;
+    /// a separator in it would bind outside `socket_dir()` entirely.
+    #[test]
+    fn a_scope_name_that_would_escape_the_socket_dir_is_refused() {
+        for escape in ["../../tmp/evil", "a/b", "..", ".", ""] {
+            let err = scoped_agent_socket_name(escape).unwrap_err().to_string();
+            assert!(
+                err.contains("--sock"),
+                "{escape:?} must be refused with a way out: {err}"
+            );
+        }
+    }
+
+    /// Refused, not sanitized: mapping `a/b` onto `a-b` would silently alias
+    /// two different scopes onto one socket.
+    #[test]
+    fn a_refused_scope_name_is_not_quietly_rewritten() {
+        assert!(scoped_agent_socket_name("a/b").is_err());
+        assert_eq!(scoped_agent_socket_name("a-b").unwrap(), "scope-a-b.sock");
     }
 }

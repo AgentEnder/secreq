@@ -1396,3 +1396,109 @@ fn migrate_restore_names_available_levels_when_the_snapshot_is_missing() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("no snapshot"), "unhelpful: {stderr}");
 }
+
+/// `agent open` with no `--sock` binds into `paths::socket_dir()` beside the
+/// other sockets, and prints the resolved path on stdout so a caller (brain,
+/// which must `ssh -R` it into a guest) reads it back rather than guessing.
+///
+/// `$XDG_RUNTIME_DIR` is pinned as well as the sandbox's usual layers —
+/// `socket_dir()` prefers it, so without it this test would bind beside the
+/// developer's live daemon sockets.
+#[test]
+fn agent_open_defaults_its_socket_into_the_socket_dir_and_prints_it() {
+    use std::io::BufRead;
+
+    let dir = tempfile::tempdir().unwrap();
+    let runtime_dir = dir.path().join("runtime");
+    fs::create_dir_all(&runtime_dir).unwrap();
+
+    let mut cmd = Command::new(bin());
+    cmd.args([
+        "agent",
+        "open",
+        "--scope",
+        "test-vm",
+        "--allow",
+        "secret://fake/thing",
+    ]);
+    sandbox_env(&mut cmd, dir.path())
+        .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .env("SECREQ_NO_DAEMON", "1")
+        .env_remove("SECREQ_CONSENT_SOCK")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+
+    // `agent open` serves until killed — the socket's lifetime *is* the
+    // process's — so read the one line it promises and then stop it, rather
+    // than waiting for an exit that never comes.
+    let mut child = cmd.spawn().expect("spawn agent open");
+    let mut line = String::new();
+    std::io::BufReader::new(child.stdout.take().expect("piped stdout"))
+        .read_line(&mut line)
+        .expect("read the resolved socket path");
+    let printed = PathBuf::from(line.trim());
+
+    let expected = runtime_dir.join("secreq/scope-test-vm.sock");
+    assert_eq!(
+        printed, expected,
+        "the printed path must be the scope's socket in the socket dir"
+    );
+    assert!(
+        printed.exists(),
+        "the printed path must be a socket that actually got bound: {}",
+        printed.display()
+    );
+
+    child.kill().expect("kill agent open");
+    child.wait().expect("reap agent open");
+}
+
+/// `--sock` still wins: brain picks the path so it can `ssh -R` it into a
+/// guest, and the printed path must report where it actually bound.
+#[test]
+fn agent_open_honours_an_explicit_sock_override() {
+    use std::io::BufRead;
+
+    let dir = tempfile::tempdir().unwrap();
+    let runtime_dir = dir.path().join("runtime");
+    fs::create_dir_all(&runtime_dir).unwrap();
+    let chosen = dir.path().join("chosen.sock");
+
+    let mut cmd = Command::new(bin());
+    cmd.args([
+        "agent",
+        "open",
+        "--scope",
+        "test-vm",
+        "--allow",
+        "secret://fake/thing",
+        "--sock",
+    ])
+    .arg(&chosen);
+    sandbox_env(&mut cmd, dir.path())
+        .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .env("SECREQ_NO_DAEMON", "1")
+        .env_remove("SECREQ_CONSENT_SOCK")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+
+    let mut child = cmd.spawn().expect("spawn agent open");
+    let mut line = String::new();
+    std::io::BufReader::new(child.stdout.take().expect("piped stdout"))
+        .read_line(&mut line)
+        .expect("read the resolved socket path");
+
+    assert_eq!(
+        PathBuf::from(line.trim()),
+        chosen,
+        "an explicit --sock must be honoured and reported"
+    );
+    assert!(chosen.exists(), "--sock must be where it actually bound");
+    assert!(
+        !runtime_dir.join("secreq/scope-test-vm.sock").exists(),
+        "an explicit --sock must not also bind the default path"
+    );
+
+    child.kill().expect("kill agent open");
+    child.wait().expect("reap agent open");
+}

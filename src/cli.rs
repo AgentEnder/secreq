@@ -266,6 +266,9 @@ enum AgentAction {
     /// showing the scope as the principal: a guest has no host process tree,
     /// so there is no caller chain to show.
     ///
+    /// The resolved socket path is printed to stdout on its own line, so the
+    /// caller can read it back rather than reconstruct it.
+    ///
     /// Forward the socket into a VM the way `ssh -A` forwards an agent:
     ///
     ///   secreq agent open --scope my-vm --allow secret://op/Dev/gh/token \
@@ -282,8 +285,13 @@ enum AgentAction {
         #[arg(long = "allow", value_name = "secret://…", required = true)]
         allow: Vec<String>,
         /// Where to bind the socket. Must not already exist.
+        ///
+        /// Defaults to `scope-<name>.sock` in secreq's socket dir
+        /// (`$XDG_RUNTIME_DIR/secreq`, else `<$SECREQ_HOME>/run`), beside the
+        /// consent and SSH-agent sockets. Pass this to bind elsewhere — e.g.
+        /// at a path you are about to `ssh -R` into a guest.
         #[arg(long, value_name = "PATH")]
-        sock: PathBuf,
+        sock: Option<PathBuf>,
     },
 }
 
@@ -498,7 +506,7 @@ pub fn run() -> i32 {
         }) => commands::ssh_test(name, config),
         Some(Command::Agent {
             action: AgentAction::Open { scope, allow, sock },
-        }) => commands::agent_open(&scope, &allow, &sock, config),
+        }) => commands::agent_open(&scope, &allow, sock.as_deref(), config),
         Some(Command::Unwrap { binary }) => commands::unwrap_cmd(&binary, config),
         Some(Command::Wraps) => commands::wraps_list(config),
         Some(Command::Check) => commands::check(config),
