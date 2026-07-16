@@ -1495,6 +1495,50 @@ pub fn view() -> Result<i32> {
     Ok(0)
 }
 
+/// The verbs offered by the bare-`secreq` action picker. Kept in dispatch
+/// order — the first item is the default the cursor lands on, so a bare
+/// `secreq` + Enter opens the viewer.
+#[derive(Clone, PartialEq, Eq)]
+enum MenuAction {
+    View,
+    Wraps,
+    Rules,
+    Pending,
+    SshSetup,
+    Init,
+    Quit,
+}
+
+/// Bare `secreq` in an interactive terminal: present an action picker and
+/// dispatch into the chosen verb. Non-TTY invocations never reach here —
+/// `cli::run` keeps the exit-2 usage hint for shims, pipes, and CI.
+pub fn interactive_menu(config_path: Option<&Path>, assume_yes: bool) -> Result<i32> {
+    cliclack::intro("secreq — what do you want to do?")?;
+    let action = cliclack::select("Select an action")
+        .item(MenuAction::View, "Open the viewer window", "view")
+        .item(MenuAction::Wraps, "List configured wraps", "wraps")
+        .item(MenuAction::Rules, "Manage auto-rules", "rules")
+        .item(MenuAction::Pending, "Open pending requests", "pending")
+        .item(MenuAction::SshSetup, "Set up the SSH agent", "ssh setup")
+        .item(MenuAction::Init, "Run first-time setup", "init")
+        .item(MenuAction::Quit, "Quit", "")
+        .interact()
+        .context("interactive selection failed (need a real terminal)")?;
+
+    match action {
+        MenuAction::View => view(),
+        MenuAction::Wraps => wraps_list(config_path),
+        MenuAction::Rules => rules_list(),
+        MenuAction::Pending => pending(),
+        MenuAction::SshSetup => ssh_setup(None, false, assume_yes, config_path),
+        MenuAction::Init => init(config_path, None),
+        MenuAction::Quit => {
+            cliclack::outro("Nothing to do — bye.")?;
+            Ok(0)
+        }
+    }
+}
+
 /// `secreq rules` (with no subcommand or with `list`): one-line table
 /// of every configured rule.
 pub fn rules_list() -> Result<i32> {

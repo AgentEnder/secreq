@@ -58,6 +58,8 @@ you approve once, and each command receives only its own secrets.
 | `secreq edit` | Open the config in `$EDITOR`. |
 | `secreq x <bin> [args…]` | Wrap-and-run path. The shim invokes this. |
 | `secreq run [--env-file F]… -- <cmd>` | `op run`, but for every store: resolve ambient `secret://` refs, then exec `<cmd>`. |
+| `secreq view` / `secreq ui` | Open the daemon's window in viewer mode (audit log, pinned). |
+| `secreq` (bare, in a terminal) | Interactive action picker over the common verbs. Non-TTY invocations print a usage hint instead. |
 
 Built-in providers: `op` (with `retrieve_batch` — one biometric per
 multi-secret invocation), `keychain` (macOS), `lastpass`, `pass` (Unix).

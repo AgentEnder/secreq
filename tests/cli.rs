@@ -278,6 +278,45 @@ fn bare_unknown_command_is_not_a_wrap() {
     assert!(!stdout.contains("argv="), "child ran; got: {stdout}");
 }
 
+#[test]
+fn bare_secreq_without_terminal_prints_usage_hint() {
+    // `run_secreq` drives the binary with piped stdio, so stdin/stdout are
+    // never a TTY. Bare `secreq` must then skip the interactive picker and
+    // keep the deterministic usage hint + exit 2 that shims and CI rely on.
+    let (dir, _config) = sandbox();
+    let out = run_secreq(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("missing command"),
+        "expected the missing-command hint; got: {stderr}"
+    );
+}
+
+#[test]
+fn ui_alias_routes_identically_to_view() {
+    // `secreq ui` is a clap alias of `secreq view`, so both must reach the
+    // same viewer handler. With the daemon disabled the handler bails the
+    // same way for both — identical exit code and stderr proves the routing.
+    let (dir, _config) = sandbox();
+    let ui = run_secreq(dir.path(), &["ui"]);
+    let view = run_secreq(dir.path(), &["view"]);
+    assert_eq!(
+        ui.status.code(),
+        view.status.code(),
+        "ui and view should share an exit code"
+    );
+    assert_eq!(
+        ui.stderr, view.stderr,
+        "ui and view should produce identical output"
+    );
+    let stderr = String::from_utf8_lossy(&ui.stderr);
+    assert!(
+        stderr.contains("SECREQ_NO_DAEMON"),
+        "expected the daemon-disabled error from the viewer handler; got: {stderr}"
+    );
+}
+
 // ── wrap / unwrap / wraps ─────────────────────────────────────────────────
 
 #[test]

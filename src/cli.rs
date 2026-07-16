@@ -5,6 +5,7 @@
 //! `secreq x <wrap> [args…]` (via [`commands::wrap_run`]) — that's what the
 //! PATH shims `exec`.
 
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -126,7 +127,8 @@ enum Command {
     /// auto-hide doesn't fire while you browse the audit log. Lands
     /// on the Audit tab; switch to Pending via the tab bar if you
     /// want to act on queued requests. Auto-spawns the daemon if it
-    /// isn't running.
+    /// isn't running. Also reachable as `secreq ui`.
+    #[command(visible_alias = "ui")]
     View,
 
     /// Manage auto-approve / auto-deny rules. Rules are created from
@@ -502,9 +504,15 @@ pub fn run() -> i32 {
         // secret read.
         Some(Command::Read { refs }) => commands::read(&refs, config),
         None => {
-            // `secreq` with no args: short usage hint.
-            eprintln!("secreq: missing command. Try `secreq --help` or `secreq x <binary>`.");
-            return 2;
+            // Bare `secreq` in a real terminal opens an action picker; a
+            // non-TTY invocation (a shim, a pipe, CI) keeps the deterministic
+            // usage hint so automation never blocks on stdin.
+            if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+                commands::interactive_menu(config, cli.yes)
+            } else {
+                eprintln!("secreq: missing command. Try `secreq --help` or `secreq x <binary>`.");
+                return 2;
+            }
         }
     };
 
