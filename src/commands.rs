@@ -2674,6 +2674,50 @@ mod prompt {
         Ok(choice == "gate")
     }
 
+    /// Check that `locator` actually resolves, so a typo or a mangled paste
+    /// fails here rather than at run time. Returns whether to accept it: `true`
+    /// when it resolved (or the user chose to keep it anyway), `false` to
+    /// re-prompt.
+    ///
+    /// **This reads the real secret outside the consent daemon.** That's a
+    /// deliberate carve-out, narrower than it looks: the value is dropped
+    /// immediately, never printed, never audited, and never handed to another
+    /// process — only its *existence* reaches the user. The gate exists to
+    /// decide which programs receive secrets; here the user is at their own
+    /// terminal configuring this very wrap, and the store still applies its own
+    /// authentication (1Password biometric-prompts regardless). `commands::read`
+    /// stays daemon-gated with no bypass because it *prints* the value, which
+    /// is the exfiltration primitive this carve-out is not.
+    fn locator_resolves(provider: &crate::manifest::Provider, locator: &str) -> Result<bool> {
+        let spinner = cliclack::spinner();
+        spinner.start("Checking that the locator resolves…");
+        let outcome = crate::provider::retrieve(provider, locator);
+
+        match outcome {
+            Ok(crate::provider::RetrieveOutcome::Found(_)) => {
+                // The value is dropped right here, unread.
+                spinner.stop("Locator resolves ✓");
+                Ok(true)
+            }
+            Ok(crate::provider::RetrieveOutcome::NotFound { status, stderr }) => {
+                spinner.stop("Locator did not resolve");
+                let detail = if stderr.is_empty() { status } else { stderr };
+                cliclack::log::warning(format!("provider `{}`: {detail}", provider.name))?;
+                cliclack::confirm("Use this locator anyway?")
+                    .initial_value(false)
+                    .interact()
+                    .context("interactive confirm failed")
+            }
+            // The provider CLI isn't installed or couldn't run at all. That's
+            // not evidence about the locator, so don't block on it.
+            Err(err) => {
+                spinner.stop("Skipped the resolvability check");
+                cliclack::log::info(format!("couldn't check this locator ({err:#})"))?;
+                Ok(true)
+            }
+        }
+    }
+
     /// Drive the interactive `secreq wrap` env-collection loop: pick a
     /// provider, name the env var, supply a locator; loop until the user
     /// signals they're done.
@@ -2719,16 +2763,36 @@ mod prompt {
                 .interact()
                 .context("interactive input failed")?;
 
-            let locator: String = cliclack::input("Locator")
-                .placeholder("provider-specific address (e.g. Personal/GitHub Token/credential)")
-                .interact()
-                .context("interactive input failed")?;
+            // The provider was chosen from `providers`, so the lookup holds.
+            let provider_def = &providers[&provider];
+            let ref_str = loop {
+                let raw: String = cliclack::input("Locator")
+                    .placeholder(
+                        "provider-specific address (e.g. Personal/GitHub Token/credential)",
+                    )
+                    .interact()
+                    .context("interactive input failed")?;
 
-            let ref_str = format!("secret://{provider}/{locator}");
-            if Reference::parse(&ref_str).is_none() {
-                cliclack::log::warning(format!("invalid ref `{ref_str}`; try again"))?;
-                continue;
-            }
+                // Accept whatever the store handed the user — a quoted
+                // `op://…` reference, our own `secret://…` form, or a bare
+                // locator — and reduce it to the bare locator the template
+                // wants. Without this, a pasted `"op://…"` gets re-prefixed
+                // into `op://"op://…"` and fails only at run time.
+                let locator = crate::provider::normalize_pasted_locator(provider_def, &raw);
+                if locator != raw.trim() {
+                    cliclack::log::info(format!("Reading that as locator `{locator}`"))?;
+                }
+
+                let ref_str = format!("secret://{provider}/{locator}");
+                if Reference::parse(&ref_str).is_none() {
+                    cliclack::log::warning(format!("invalid ref `{ref_str}`; try again"))?;
+                    continue;
+                }
+
+                if locator_resolves(provider_def, &locator)? {
+                    break ref_str;
+                }
+            };
             env.insert(env_name, ref_str);
 
             let again = cliclack::confirm("Add another env var?")

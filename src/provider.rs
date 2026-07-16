@@ -389,6 +389,62 @@ fn substitute_fields_and_value(
         .collect()
 }
 
+/// The provider's own URI scheme, read off its `retrieve` template: the
+/// literal text preceding `{locator}` in the first argument that mentions it
+/// (`"op://{locator}"` → `op://`).
+///
+/// Only scheme-shaped prefixes (ending in `://`) count. A template like
+/// `--secret={locator}` yields `None`, because stripping a flag off a pasted
+/// locator would be a false positive; a bare `{locator}` yields `None` too.
+pub fn native_locator_prefix(provider: &Provider) -> Option<&str> {
+    let arg = provider
+        .retrieve
+        .iter()
+        .find(|arg| arg.contains(LOCATOR_PLACEHOLDER))?;
+    let prefix = &arg[..arg.find(LOCATOR_PLACEHOLDER)?];
+    prefix.ends_with("://").then_some(prefix)
+}
+
+/// Clean up a locator a human pasted into a prompt.
+///
+/// Every affordance a store gives you hands over a *native reference*, not the
+/// bare locator our templates want: 1Password's "Copy Secret Reference" yields
+/// `op://Vault/Item/field`, and its docs show it quoted inside `op read "…"`.
+/// Substituted raw into `op://{locator}`, that produces the doubled nonsense
+/// `op://"op://Vault/Item/field"`, which `op` rejects. So we peel, in order:
+/// surrounding whitespace, one layer of matched quotes, then whichever prefix
+/// applies — our own `secret://<provider>/` or the provider's native scheme.
+///
+/// Only the *selected* provider's scheme is stripped. A locator carrying some
+/// other store's scheme passes through untouched, for the caller's
+/// resolvability check to flag.
+pub fn normalize_pasted_locator(provider: &Provider, raw: &str) -> String {
+    let mut s = raw.trim();
+
+    // One layer of matched quotes — `op`'s own docs quote the reference.
+    for quote in ['"', '\''] {
+        if let Some(inner) = s.strip_prefix(quote).and_then(|r| r.strip_suffix(quote)) {
+            s = inner.trim();
+            break;
+        }
+    }
+
+    // Our own ref form, e.g. `secret://op/Vault/Item/field`.
+    let ours = format!("{}{}/", crate::reference::SCHEME, provider.name);
+    if let Some(rest) = s.strip_prefix(&ours) {
+        return rest.to_owned();
+    }
+
+    // The provider's native scheme, e.g. `op://Vault/Item/field`.
+    if let Some(prefix) = native_locator_prefix(provider) {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            return rest.to_owned();
+        }
+    }
+
+    s.to_owned()
+}
+
 /// Strip exactly one trailing line ending (`\n` or `\r\n`). Stores append a
 /// newline to the value; we remove just that one, never trimming real content.
 fn strip_one_trailing_newline(mut bytes: Vec<u8>) -> Vec<u8> {
@@ -413,6 +469,108 @@ mod tests {
             store: None,
             retrieve_batch: None,
         }
+    }
+
+    fn op_provider() -> Provider {
+        retrieve_only_provider(&["op", "read", "op://{locator}"])
+    }
+
+    #[test]
+    fn native_prefix_is_read_off_the_retrieve_template() {
+        assert_eq!(native_locator_prefix(&op_provider()), Some("op://"));
+    }
+
+    #[test]
+    fn native_prefix_is_absent_when_the_template_takes_a_bare_locator() {
+        let keychain = retrieve_only_provider(&["security", "find-generic-password", "{locator}"]);
+        assert_eq!(native_locator_prefix(&keychain), None);
+    }
+
+    #[test]
+    fn native_prefix_ignores_non_scheme_literals() {
+        // `--secret=` is a flag, not a URI scheme; stripping it off a pasted
+        // locator would be a false positive.
+        let odd = retrieve_only_provider(&["vault", "--secret={locator}"]);
+        assert_eq!(native_locator_prefix(&odd), None);
+    }
+
+    #[test]
+    fn normalize_leaves_a_plain_locator_untouched() {
+        assert_eq!(
+            normalize_pasted_locator(&op_provider(), "Private/GitHub CLI PAT/token"),
+            "Private/GitHub CLI PAT/token"
+        );
+    }
+
+    #[test]
+    fn normalize_strips_the_providers_own_scheme() {
+        assert_eq!(
+            normalize_pasted_locator(&op_provider(), "op://Private/GitHub CLI PAT/token"),
+            "Private/GitHub CLI PAT/token"
+        );
+    }
+
+    #[test]
+    fn normalize_strips_quotes_around_a_pasted_native_ref() {
+        // The reported bug: 1Password hands over a quoted `op://…` reference,
+        // which used to be re-prefixed into `op://"op://…"`.
+        assert_eq!(
+            normalize_pasted_locator(&op_provider(), "\"op://Private/GitHub CLI PAT/token\""),
+            "Private/GitHub CLI PAT/token"
+        );
+        assert_eq!(
+            normalize_pasted_locator(&op_provider(), "'op://Private/GitHub CLI PAT/token'"),
+            "Private/GitHub CLI PAT/token"
+        );
+    }
+
+    #[test]
+    fn normalize_strips_our_own_secret_scheme_for_this_provider() {
+        assert_eq!(
+            normalize_pasted_locator(&op_provider(), "secret://test/Private/GitHub/token"),
+            "Private/GitHub/token"
+        );
+    }
+
+    #[test]
+    fn normalize_trims_surrounding_whitespace() {
+        assert_eq!(
+            normalize_pasted_locator(&op_provider(), "  op://Private/GitHub/token \n"),
+            "Private/GitHub/token"
+        );
+    }
+
+    #[test]
+    fn normalize_keeps_another_providers_scheme_as_a_literal_locator() {
+        // Only the selected provider's own prefix is stripped; anything else
+        // passes through so the caller's resolvability check can flag it.
+        let keychain = retrieve_only_provider(&["security", "{locator}"]);
+        assert_eq!(
+            normalize_pasted_locator(&keychain, "op://Private/GitHub/token"),
+            "op://Private/GitHub/token"
+        );
+    }
+
+    #[test]
+    fn normalize_does_not_strip_a_scheme_from_the_middle_of_a_locator() {
+        assert_eq!(
+            normalize_pasted_locator(&op_provider(), "Private/weird op:// name/token"),
+            "Private/weird op:// name/token"
+        );
+    }
+
+    #[test]
+    fn pasted_native_ref_no_longer_doubles_the_scheme_in_the_final_argv() {
+        // Regression: pasting 1Password's quoted reference straight into the
+        // `wrap` locator prompt used to build `op read op://"op://…"`, which
+        // op rejected with `invalid character in secret reference: '"'`.
+        let op = op_provider();
+        let pasted = "\"op://Private/GitHub CLI PAT/token\"";
+        let argv = substitute_locator(&op.retrieve, &normalize_pasted_locator(&op, pasted));
+        assert_eq!(
+            argv,
+            vec!["op", "read", "op://Private/GitHub CLI PAT/token"]
+        );
     }
 
     #[test]
