@@ -32,6 +32,25 @@ use secreq::wraps::SshIdentity;
 use ssh_encoding::{Decode, Encode};
 use ssh_key::{LineEnding, PrivateKey, PublicKey};
 
+/// Pin every secreq path into a per-process tempdir.
+///
+/// These tests drive `ssh_agent::serve_on` **in-process**, and it logs
+/// through `daemon::log`, which resolves its sink from `$SECREQ_HOME`. With
+/// nothing pinned that resolves to the developer's real `~/.secreq`, so a
+/// plain `cargo test` appends this suite's `SIGN_REQUEST` chatter to their
+/// actual daemon log. (The lib's own unit tests get an automatic fallback in
+/// `paths::secreq_root`, but integration tests link the lib without
+/// `cfg(test)` and must pin it themselves.)
+///
+/// Idempotent and race-free: every caller writes the same path, and the
+/// `OnceLock` keeps one tempdir alive for the whole test binary.
+fn isolate_paths() {
+    use std::sync::OnceLock;
+    static DIR: OnceLock<tempfile::TempDir> = OnceLock::new();
+    let dir = DIR.get_or_init(|| tempfile::tempdir().expect("isolation tempdir"));
+    std::env::set_var("SECREQ_HOME", dir.path());
+}
+
 /// A real OpenSSH ed25519 public key (generated once for this test). The
 /// private half is irrelevant: listing never resolves a private key.
 const TEST_PUBLIC_KEY: &str =
@@ -66,6 +85,7 @@ fn encode_sign_request(key_blob: &[u8], data: &[u8], flags: u32) -> Vec<u8> {
 
 #[test]
 fn lists_configured_identities_without_resolving() {
+    isolate_paths();
     // One identity whose private_key reference is deliberately bogus: if
     // listing tried to resolve it, the provider call would be observable.
     // It succeeds regardless, which proves listing never resolves.
@@ -211,6 +231,7 @@ fn signing_context_with_seeded_approval(
 
 #[test]
 fn signs_for_seeded_approval_and_signature_verifies() {
+    isolate_paths();
     let dir = tempfile::tempdir().expect("tempdir");
     let (ctx, public_key, blob, _identity) = signing_context_with_seeded_approval(dir.path());
 

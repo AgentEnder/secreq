@@ -7,7 +7,7 @@
 //! (the human-format sibling is `daemon.log`).
 //!
 //! It runs in its own process (one test binary per file), so setting
-//! `XDG_STATE_HOME` to a tempdir fully isolates the log location — and
+//! `SECREQ_HOME` to a tempdir fully isolates the log location — and
 //! it never spawns a real daemon, so it can't collide with the
 //! singleton pidfile lock or disturb a developer's running daemon.
 
@@ -18,16 +18,16 @@ use secreq::daemon::log;
 #[test]
 fn sample_resources_writes_a_structured_resource_line() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    // Isolate the persistent-log location to our tempdir. `state_dir()`
-    // honours `$XDG_STATE_HOME` first, so the logs land under it.
-    std::env::set_var("XDG_STATE_HOME", tmp.path());
+    // Isolate the persistent-log location to our tempdir. Every secreq path
+    // hangs off `$SECREQ_HOME`, so this one var is the whole sandbox.
+    std::env::set_var("SECREQ_HOME", tmp.path());
 
     let mut sys = log::prime_resource_sampler();
     log::sample_resources(&mut sys);
 
     // The structured JSON sink is `daemon.jsonl` (the human `daemon.log` is
     // its sibling); the resource envelope is asserted against the JSON.
-    let jsonl_path = tmp.path().join("secreq").join("daemon.jsonl");
+    let jsonl_path = tmp.path().join("daemon.jsonl");
     let file = std::fs::File::open(&jsonl_path)
         .unwrap_or_else(|e| panic!("daemon.jsonl should exist at {}: {e}", jsonl_path.display()));
 

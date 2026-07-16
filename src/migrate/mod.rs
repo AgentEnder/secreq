@@ -1,0 +1,716 @@
+//! Automatic, idempotent config migrations.
+//!
+//! Runs at the top of [`crate::cli::run`], before any subcommand dispatch —
+//! the one chokepoint every entry point passes through, *including* the
+//! daemon (it re-execs `current_exe()` and lands back in `cli::run`, see
+//! `daemon::client`). Design:
+//! `dev-docs/plans/2026-07-16-secreq-root-and-migrations.md`.
+//!
+//! # Rules for writing a migration
+//!
+//! 1. **Idempotent.** A migration may re-run after a crash, or run against a
+//!    fresh install where there is nothing to do. Both must be no-ops.
+//! 2. **Atomic.** Failure must leave the *old* state intact so the next run
+//!    retries cleanly. Copy → verify → swap, never mutate in place.
+//! 3. **Legacy paths are frozen history.** A migration must never resolve an
+//!    *old* location through [`crate::paths`]: that module tracks current
+//!    behavior, and if it changed, the migration would retroactively mean
+//!    something different for users who hadn't run it yet. Freeze the old
+//!    logic here (see [`legacy_config_dir`]) and never touch it again. The
+//!    *target* root is the exception — it should track current behavior, so
+//!    it arrives via [`Ctx::root`].
+//! 4. **Ids are dense, 1-based, append-only, never reused.** `run_pending`
+//!    slices `MIGRATIONS[level..]`, so a gap would silently run the wrong
+//!    migrations. Pinned by `migration_ids_are_dense_and_one_based`.
+
+mod m0001_secreq_root;
+
+use std::fs::{File, OpenOptions};
+use std::os::unix::io::AsRawFd;
+use std::path::{Path, PathBuf};
+
+use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
+
+use crate::paths;
+
+/// Everything a migration is allowed to know about the world. Injected
+/// rather than resolved inside migrations, so tests can drive them against
+/// tempdirs without touching the real home.
+pub struct Ctx {
+    /// Target root — tracks current behavior (`$SECREQ_HOME`, else `~/.secreq`).
+    pub root: PathBuf,
+    /// Frozen: where config lived before migration 0001. `None` if it can't
+    /// be resolved (no `$HOME`), which simply means nothing to migrate.
+    pub legacy_config_dir: Option<PathBuf>,
+    /// Frozen: where logs lived before migration 0001.
+    pub legacy_state_dir: Option<PathBuf>,
+}
+
+struct Migration {
+    id: u32,
+    name: &'static str,
+    /// Absolute paths to capture before running, at their **pre-migration**
+    /// locations. Snapshots are keyed by pre-migration level, so
+    /// `snapshots/K/` is the config as it stood at level K.
+    snapshot: fn(&Ctx) -> Vec<PathBuf>,
+    run: fn(&Ctx) -> Result<()>,
+}
+
+/// Append-only. Never reorder, never reuse an id, never delete an entry.
+const MIGRATIONS: &[Migration] = &[Migration {
+    id: 1,
+    name: "secreq-root",
+    snapshot: m0001_secreq_root::snapshot_files,
+    run: m0001_secreq_root::run,
+}];
+
+const STATE_FILE: &str = ".migration-state";
+const LOCK_FILE: &str = ".migration.lock";
+const SNAPSHOT_DIR: &str = "migration-snapshots";
+
+/// Machine-local. Deliberately **not** stored in `wraps.json5`: that file is
+/// dotfile-synced (chezmoi/stow/git), and a synced `migration_level` would
+/// tell a fresh machine it was already migrated when it wasn't, so it would
+/// skip the migration it actually needs.
+#[derive(Serialize, Deserialize, Default, Debug)]
+struct State {
+    migration_level: u32,
+    /// Display-only. `SECREQ_BUILD_ID` is `<sha>[-dirty] +<ts>` — built for
+    /// equality ("same binary?"), not ordering, so this can never be
+    /// *compared* to compute "install >= X". It only tells a human what
+    /// wrote their config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    migrated_by: Option<String>,
+}
+
+/// **FROZEN.** How secreq resolved its config dir before migration 0001
+/// (mirrors the old `wraps::default_config_path`). Describes history — must
+/// never change.
+fn legacy_config_dir() -> Option<PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
+        .map(|b| b.join("secreq"))
+}
+
+/// **FROZEN.** How secreq resolved its state dir before migration 0001
+/// (mirrors the old `audit::state_dir`).
+fn legacy_state_dir() -> Option<PathBuf> {
+    std::env::var_os("XDG_STATE_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|h| h.join(".local").join("state")))
+        .map(|b| b.join("secreq"))
+}
+
+fn build_stamp() -> String {
+    format!("{} ({})", env!("CARGO_PKG_VERSION"), crate::BUILD_ID)
+}
+
+/// Run every migration the user hasn't yet. Called once per process from
+/// `cli::run`.
+pub fn run_pending() -> Result<()> {
+    let ctx = Ctx {
+        root: paths::secreq_root()?,
+        legacy_config_dir: legacy_config_dir(),
+        legacy_state_dir: legacy_state_dir(),
+    };
+    run_pending_in(&ctx)
+}
+
+pub fn run_pending_in(ctx: &Ctx) -> Result<()> {
+    let state = read_state(&ctx.root)?;
+    let level = state.migration_level as usize;
+
+    // Must precede the fast path. `level >= MIGRATIONS.len()` as a fast path
+    // would swallow this case: an old binary would see `5 >= 3`, return Ok,
+    // and silently run against a config a newer secreq migrated.
+    if level > MIGRATIONS.len() {
+        bail!(downgrade_message(ctx, &state));
+    }
+    // Fast path: no flock. `secreq x <bin>` is in the hot path of every
+    // wrapped command and the consent-prompt child spawns per prompt, so the
+    // steady-state cost must stay at one small read.
+    if level == MIGRATIONS.len() {
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(&ctx.root).with_context(|| format!("create {}", ctx.root.display()))?;
+    let _lock = acquire_lock(&ctx.root)?;
+
+    // Re-read under the lock. On first upgrade a burst of wraps all observe
+    // `level < len` at once; one migrates, the rest land here and no-op.
+    let level = read_state(&ctx.root)?.migration_level as usize;
+    if level >= MIGRATIONS.len() {
+        return Ok(());
+    }
+
+    for m in &MIGRATIONS[level..] {
+        snapshot_if_absent(ctx, m)?;
+        (m.run)(ctx).with_context(|| format!("migration {:04} ({}) failed", m.id, m.name))?;
+        // Stamp after each, not at the end, so a failure at 3 keeps 1 and 2.
+        write_state(&ctx.root, m.id)?;
+    }
+    Ok(())
+}
+
+fn downgrade_message(ctx: &Ctx, state: &State) -> String {
+    let by = state
+        .migrated_by
+        .as_deref()
+        .unwrap_or("an unknown secreq build");
+    format!(
+        "{} records migration level {}, but this secreq ships {}.\n\
+         Your config was migrated by {}.\n\
+         \n\
+         This build is older than the one that migrated your config. Either\n\
+         install that build (or newer), or restore the level-{} snapshot to\n\
+         keep using this one:\n\
+         \n    secreq migrate restore {}\n",
+        state_path(&ctx.root).display(),
+        state.migration_level,
+        MIGRATIONS.len(),
+        by,
+        MIGRATIONS.len(),
+        MIGRATIONS.len(),
+    )
+}
+
+fn state_path(root: &Path) -> PathBuf {
+    root.join(STATE_FILE)
+}
+
+/// Absent file means level 0 — so a fresh install runs every migration as a
+/// no-op and stamps, with no special case.
+fn read_state(root: &Path) -> Result<State> {
+    let path = state_path(root);
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(State::default()),
+        Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
+    };
+    serde_json::from_str(&raw).with_context(|| {
+        format!(
+            "{} is corrupt. Delete it to re-run migrations (they are idempotent).",
+            path.display()
+        )
+    })
+}
+
+fn write_state(root: &Path, level: u32) -> Result<()> {
+    let state = State {
+        migration_level: level,
+        migrated_by: Some(build_stamp()),
+    };
+    let path = state_path(root);
+    let body = serde_json::to_string_pretty(&state)?;
+    write_atomic(&path, body.as_bytes())
+}
+
+/// Write via tmp + fsync + rename. A torn `.migration-state` would either
+/// re-run a migration (harmless, they're idempotent) or skip one (not
+/// harmless), so it's worth the two extra syscalls.
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let parent = path.parent().context("path has no parent")?;
+    std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    let tmp = parent.join(format!(
+        ".{}.tmp",
+        path.file_name().unwrap_or_default().to_string_lossy()
+    ));
+    {
+        let mut f = File::create(&tmp).with_context(|| format!("create {}", tmp.display()))?;
+        f.write_all(bytes)
+            .with_context(|| format!("write {}", tmp.display()))?;
+        f.sync_all()
+            .with_context(|| format!("fsync {}", tmp.display()))?;
+    }
+    std::fs::rename(&tmp, path)
+        .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))
+}
+
+// ── restore ───────────────────────────────────────────────────────────────
+
+/// Restore the config snapshot taken before migration `level`.
+///
+/// **Lossy, and says so.** Anything added since the snapshot — new wraps, new
+/// auto-rules — is discarded. Saving the current state to a directory is not
+/// sufficient on its own: the live config still silently reverts and the user
+/// is left hand-reconciling two files they didn't know had diverged, and the
+/// next `secreq x terraform` fails with nothing connecting it to the restore.
+/// So we render the diff and require confirmation.
+///
+/// Callers must invoke this **without** running [`run_pending`] first — the
+/// gate is exactly what's failing when a user needs this command.
+pub fn restore(level: u32, assume_yes: bool) -> Result<i32> {
+    let root = paths::secreq_root()?;
+    let dir = snapshot_dir(&root, level);
+    if !dir.is_dir() {
+        bail!(no_snapshot_message(&root, level));
+    }
+
+    let map: FileMap = serde_json::from_str(
+        &std::fs::read_to_string(dir.join("filemap.json"))
+            .with_context(|| format!("read {}", dir.join("filemap.json").display()))?,
+    )
+    .with_context(|| format!("parse {}", dir.join("filemap.json").display()))?;
+
+    let mut plan = Vec::new();
+    for entry in &map.files {
+        let snapshot_body = std::fs::read_to_string(dir.join(&entry.snapshot))
+            .with_context(|| format!("read snapshot {}", entry.snapshot))?;
+        let live = live_path(&root, entry);
+        let live_body = std::fs::read_to_string(&live).unwrap_or_default();
+        plan.push((entry, live, live_body, snapshot_body));
+    }
+
+    // Only *diverged* content needs a warning — but an unchanged config still
+    // needs the restore. Restoring is about the recorded **level** and the
+    // on-disk **layout**, not just the bytes: a user whose config never
+    // diverged is exactly the one for whom this must quietly work, and
+    // returning early here would leave them as stuck as before with a message
+    // claiming success.
+    let changed: Vec<_> = plan.iter().filter(|(_, _, a, b)| a != b).collect();
+
+    if changed.is_empty() {
+        println!("Config already matches the level-{level} snapshot; rolling back the level.");
+    } else {
+        println!("Restoring the level-{level} snapshot will DISCARD these changes:\n");
+        for (entry, live, live_body, snapshot_body) in &changed {
+            let diff = similar::TextDiff::from_lines(live_body.as_str(), snapshot_body.as_str());
+            println!(
+                "{}",
+                diff.unified_diff()
+                    .header(&format!("current {}", live.display()), &entry.snapshot)
+            );
+        }
+
+        if !assume_yes {
+            let ok = cliclack::confirm("Restore anyway?").interact()?;
+            if !ok {
+                println!("Aborted; nothing changed.");
+                return Ok(1);
+            }
+        }
+    }
+
+    // Save the current state before overwriting it, so a mistaken restore is
+    // itself recoverable.
+    let saved = snapshot_root(&root).join(format!("current-{}", now_stamp()));
+    std::fs::create_dir_all(&saved).with_context(|| format!("create {}", saved.display()))?;
+    for (entry, live, live_body, _) in &plan {
+        if live.exists() {
+            std::fs::write(saved.join(&entry.snapshot), live_body)
+                .with_context(|| format!("save current {}", live.display()))?;
+        }
+    }
+
+    for (entry, live, _, snapshot_body) in &plan {
+        // Drop whatever is at the destination first: after migration 0001 it's
+        // a symlink, and writing through it would land in the new root rather
+        // than restoring the old layout.
+        let _ = std::fs::remove_file(&entry.restore_to);
+        if let Some(parent) = entry.restore_to.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create {}", parent.display()))?;
+        }
+        write_atomic(&entry.restore_to, snapshot_body.as_bytes())?;
+
+        // Remove the forward artifact so a later re-migration doesn't find two
+        // real files that differ and refuse to guess.
+        //
+        // Heuristic, and only correct for migrations shaped like "this file
+        // moved" — which is all of them today. It's guarded on the paths
+        // actually differing, so an in-place content migration (where
+        // `restore_to` *is* the live path) doesn't delete what we just wrote.
+        // The day a migration needs different teardown is the day a `down`
+        // hook earns its place.
+        if live != &entry.restore_to {
+            let _ = std::fs::remove_file(live);
+        }
+    }
+
+    write_state(&root, level)?;
+    println!("\nRestored level {level}.");
+    println!("Your previous config was saved to {}", saved.display());
+    Ok(0)
+}
+
+/// Where the file described by `entry` lives *today*. Post-migration that's
+/// the new root; pre-migration it's still the recorded origin.
+fn live_path(root: &Path, entry: &FileEntry) -> PathBuf {
+    let at_root = root.join(&entry.snapshot);
+    if at_root.is_file() {
+        at_root
+    } else {
+        entry.restore_to.clone()
+    }
+}
+
+fn no_snapshot_message(root: &Path, level: u32) -> String {
+    let mut available: Vec<String> = std::fs::read_dir(snapshot_root(root))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.parse::<u32>().is_ok())
+        .collect();
+    available.sort();
+    if available.is_empty() {
+        format!(
+            "no snapshot for level {level} at {}.\n\
+             Snapshots only exist for migrations this install actually ran; a \
+             config that was already at the current level has nothing to go \
+             back to.",
+            snapshot_dir(root, level).display(),
+        )
+    } else {
+        format!(
+            "no snapshot for level {level}. Available: {}",
+            available.join(", ")
+        )
+    }
+}
+
+/// `Date::now`-free timestamp for naming the pre-restore save.
+fn now_stamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+struct LockGuard {
+    _file: File,
+}
+
+/// Blocking exclusive flock. Blocking is the point: a concurrent wrap should
+/// *wait* for the migration and then observe the new level, not fail. Unlike
+/// the pidfile lock this file is never unlinked, so there's no inode race to
+/// defend against.
+fn acquire_lock(root: &Path) -> Result<LockGuard> {
+    let path = root.join(LOCK_FILE);
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)
+        .with_context(|| format!("open migration lock {}", path.display()))?;
+    let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+    if ret != 0 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("flock {}", path.display()));
+    }
+    Ok(LockGuard { _file: file })
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct FileMap {
+    created_by: String,
+    files: Vec<FileEntry>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct FileEntry {
+    /// Basename within the snapshot dir.
+    snapshot: String,
+    /// Absolute restore target. Safe to store absolute because snapshots are
+    /// machine-local — same reasoning that keeps `.migration-state` out of
+    /// `wraps.json5`.
+    restore_to: PathBuf,
+}
+
+fn snapshot_root(root: &Path) -> PathBuf {
+    root.join(SNAPSHOT_DIR)
+}
+
+pub fn snapshot_dir(root: &Path, level: u32) -> PathBuf {
+    snapshot_root(root).join(level.to_string())
+}
+
+/// Capture the config as it stands *before* `m` runs, keyed by the level it
+/// migrates away from.
+///
+/// **Never overwrites an existing snapshot.** If a migration failed partway
+/// and re-runs, re-snapshotting would capture the half-migrated state and
+/// destroy the real pre-state — turning the safety net into the thing that
+/// loses the config. First write wins.
+fn snapshot_if_absent(ctx: &Ctx, m: &Migration) -> Result<()> {
+    let level = m.id - 1;
+    let dir = snapshot_dir(&ctx.root, level);
+    if dir.exists() {
+        return Ok(());
+    }
+
+    let sources: Vec<PathBuf> = (m.snapshot)(ctx)
+        .into_iter()
+        .filter(|p| p.is_file())
+        .collect();
+    if sources.is_empty() {
+        // Fresh install: nothing to snapshot. Don't create an empty dir —
+        // its absence is what tells `restore` there's nothing to go back to.
+        return Ok(());
+    }
+
+    // Stage in a sibling tmp dir and rename, so a crash can't leave a
+    // half-written snapshot that `dir.exists()` would then treat as good.
+    let staging = snapshot_root(&ctx.root).join(format!(".{level}.tmp"));
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging).with_context(|| format!("create {}", staging.display()))?;
+
+    let mut files = Vec::new();
+    for src in &sources {
+        let name = src
+            .file_name()
+            .context("snapshot source has no file name")?
+            .to_string_lossy()
+            .into_owned();
+        if files.iter().any(|e: &FileEntry| e.snapshot == name) {
+            bail!(
+                "snapshot name collision on {name}; migration {:04} must not \
+                 capture two files with the same basename",
+                m.id
+            );
+        }
+        std::fs::copy(src, staging.join(&name))
+            .with_context(|| format!("snapshot {}", src.display()))?;
+        files.push(FileEntry {
+            snapshot: name,
+            restore_to: src.clone(),
+        });
+    }
+
+    let map = FileMap {
+        created_by: build_stamp(),
+        files,
+    };
+    write_atomic(
+        &staging.join("filemap.json"),
+        serde_json::to_string_pretty(&map)?.as_bytes(),
+    )?;
+
+    std::fs::rename(&staging, &dir)
+        .with_context(|| format!("rename {} -> {}", staging.display(), dir.display()))?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn ctx_in(tmp: &TempDir) -> Ctx {
+        Ctx {
+            root: tmp.path().join("secreq"),
+            legacy_config_dir: Some(tmp.path().join("config/secreq")),
+            legacy_state_dir: Some(tmp.path().join("state/secreq")),
+        }
+    }
+
+    fn write(path: &Path, body: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+
+    #[test]
+    fn migration_ids_are_dense_and_one_based() {
+        // run_pending slices MIGRATIONS[level..], which is only correct if
+        // index == id - 1. A gap would silently run the wrong migrations.
+        for (i, m) in MIGRATIONS.iter().enumerate() {
+            assert_eq!(m.id as usize, i + 1, "migration {} out of order", m.name);
+        }
+    }
+
+    #[test]
+    fn fresh_install_stamps_latest_and_creates_no_legacy_dir() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_in(&tmp);
+        run_pending_in(&ctx).unwrap();
+
+        assert_eq!(
+            read_state(&ctx.root).unwrap().migration_level as usize,
+            MIGRATIONS.len()
+        );
+        // Symlinks are a compatibility artifact for upgraders; a new user
+        // has no legacy muscle memory to serve.
+        assert!(!ctx.legacy_config_dir.unwrap().exists());
+        // Nothing to snapshot, so no empty snapshot dir either.
+        assert!(!snapshot_dir(&ctx.root, 0).exists());
+    }
+
+    #[test]
+    fn moves_config_and_leaves_a_symlink_behind() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_in(&tmp);
+        let legacy = ctx.legacy_config_dir.clone().unwrap();
+        write(&legacy.join("wraps.json5"), "{ gh: {} }");
+        write(&legacy.join("auto-rules.json5"), "{ rules: [] }");
+
+        run_pending_in(&ctx).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(ctx.root.join("wraps.json5")).unwrap(),
+            "{ gh: {} }"
+        );
+        let link = legacy.join("wraps.json5");
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(
+            std::fs::read_link(&link).unwrap(),
+            ctx.root.join("wraps.json5")
+        );
+        // Old path still resolves — this is what lets an older secreq keep
+        // working after the migration.
+        assert_eq!(std::fs::read_to_string(&link).unwrap(), "{ gh: {} }");
+    }
+
+    #[test]
+    fn is_idempotent_across_repeated_runs() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_in(&tmp);
+        write(
+            &ctx.legacy_config_dir.clone().unwrap().join("wraps.json5"),
+            "{ gh: {} }",
+        );
+
+        run_pending_in(&ctx).unwrap();
+        run_pending_in(&ctx).unwrap();
+        run_pending_in(&ctx).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(ctx.root.join("wraps.json5")).unwrap(),
+            "{ gh: {} }"
+        );
+    }
+
+    #[test]
+    fn resumes_when_both_files_exist_and_match() {
+        // The state after a crash between copy and remove. Erroring here
+        // would wedge the user on a retry that can never succeed.
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_in(&tmp);
+        let legacy = ctx.legacy_config_dir.clone().unwrap();
+        write(&legacy.join("wraps.json5"), "{ gh: {} }");
+        write(&ctx.root.join("wraps.json5"), "{ gh: {} }");
+
+        run_pending_in(&ctx).unwrap();
+
+        assert!(legacy
+            .join("wraps.json5")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
+    #[test]
+    fn refuses_when_both_files_exist_and_differ() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_in(&tmp);
+        let legacy = ctx.legacy_config_dir.clone().unwrap();
+        write(&legacy.join("wraps.json5"), "{ gh: {} }");
+        write(&ctx.root.join("wraps.json5"), "{ aws: {} }");
+
+        let err = run_pending_in(&ctx).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("differ"), "unhelpful error: {msg}");
+        // Refusing means refusing: neither file is touched.
+        assert_eq!(
+            std::fs::read_to_string(legacy.join("wraps.json5")).unwrap(),
+            "{ gh: {} }"
+        );
+        assert_eq!(
+            std::fs::read_to_string(ctx.root.join("wraps.json5")).unwrap(),
+            "{ aws: {} }"
+        );
+    }
+
+    #[test]
+    fn snapshots_the_pre_migration_state() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_in(&tmp);
+        let legacy = ctx.legacy_config_dir.clone().unwrap();
+        write(&legacy.join("wraps.json5"), "{ gh: {} }");
+
+        run_pending_in(&ctx).unwrap();
+
+        let snap = snapshot_dir(&ctx.root, 0);
+        assert_eq!(
+            std::fs::read_to_string(snap.join("wraps.json5")).unwrap(),
+            "{ gh: {} }"
+        );
+        let map: FileMap =
+            serde_json::from_str(&std::fs::read_to_string(snap.join("filemap.json")).unwrap())
+                .unwrap();
+        assert_eq!(map.files.len(), 1);
+        assert_eq!(map.files[0].restore_to, legacy.join("wraps.json5"));
+    }
+
+    #[test]
+    fn snapshot_is_never_overwritten_on_retry() {
+        // A retry must not capture the half-migrated state over the real
+        // pre-state — that would make the safety net the thing that loses
+        // the config.
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_in(&tmp);
+        write(
+            &ctx.legacy_config_dir.clone().unwrap().join("wraps.json5"),
+            "original",
+        );
+
+        run_pending_in(&ctx).unwrap();
+        // Simulate a re-run from level 0 with the config already moved.
+        write_state(&ctx.root, 0).unwrap();
+        std::fs::write(ctx.root.join("wraps.json5"), "changed-after-migration").unwrap();
+        run_pending_in(&ctx).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(snapshot_dir(&ctx.root, 0).join("wraps.json5")).unwrap(),
+            "original"
+        );
+    }
+
+    #[test]
+    fn migrates_the_audit_log() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_in(&tmp);
+        write(
+            &ctx.legacy_state_dir.clone().unwrap().join("audit.log"),
+            "{\"decision\":\"approved\"}\n",
+        );
+
+        run_pending_in(&ctx).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(ctx.root.join("audit.log")).unwrap(),
+            "{\"decision\":\"approved\"}\n"
+        );
+        assert!(!ctx.legacy_state_dir.unwrap().join("audit.log").exists());
+    }
+
+    #[test]
+    fn downgrade_bails_with_a_restore_hint() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_in(&tmp);
+        std::fs::create_dir_all(&ctx.root).unwrap();
+        write_state(&ctx.root, MIGRATIONS.len() as u32 + 4).unwrap();
+
+        let err = run_pending_in(&ctx).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("migrate restore"), "no restore hint: {msg}");
+        assert!(msg.contains("older"), "doesn't explain the cause: {msg}");
+    }
+
+    #[test]
+    fn corrupt_state_file_says_how_to_recover() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_in(&tmp);
+        write(&state_path(&ctx.root), "not json at all");
+
+        let err = run_pending_in(&ctx).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("Delete it"), "unhelpful error: {msg}");
+    }
+}

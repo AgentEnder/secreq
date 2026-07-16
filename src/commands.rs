@@ -487,10 +487,7 @@ fn render_read_json(pairs: &[(String, String)]) -> String {
 /// optionally adds it to the shell's PATH config, and writes a minimal
 /// `wraps.json5`.
 pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Result<i32> {
-    let config_path = config_path
-        .map(PathBuf::from)
-        .or_else(wraps::default_config_path)
-        .context("could not determine config path")?;
+    let config_path = resolve_config_path(config_path)?;
 
     cliclack::intro("secreq init — first-time setup")?;
 
@@ -499,9 +496,10 @@ pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Re
     // tool (asdf, pip user-installs, etc.) dropping a competing `gh`
     // shim into the same dir. The dir is also brand-new on first init,
     // so the "is it on PATH?" answer is unambiguous.
-    let suggested = default_shim_dir
-        .or_else(|| dirs::home_dir().map(|h| h.join(".secreq").join("shims")))
-        .context("could not determine a default shim dir")?;
+    let suggested = match default_shim_dir {
+        Some(dir) => dir,
+        None => crate::paths::default_shims_dir()?,
+    };
     let shim_dir_input = prompt::read_with_default(
         "Where should secreq drop PATH shims?",
         &suggested.display().to_string(),
@@ -2092,10 +2090,10 @@ fn load_config_or_default(config_path: Option<&Path>) -> Result<WrapsConfig> {
 }
 
 fn resolve_config_path(config_path: Option<&Path>) -> Result<PathBuf> {
-    config_path
-        .map(PathBuf::from)
-        .or_else(wraps::default_config_path)
-        .context("could not determine config path (no XDG_CONFIG_HOME / no $HOME?)")
+    match config_path {
+        Some(p) => Ok(p.to_path_buf()),
+        None => crate::paths::wraps_path(),
+    }
 }
 
 /// A parsed env reference: the variable name and its `secret://` target.

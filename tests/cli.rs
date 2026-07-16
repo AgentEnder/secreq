@@ -13,21 +13,44 @@ fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_secreq")
 }
 
-/// Sandbox: a tempdir with `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, and a path
-/// at which we drop the wraps file. Returns `(dir, config_path)`.
+/// Sandbox: a tempdir rooting `$SECREQ_HOME`, plus a path at which we drop
+/// the wraps file. Returns `(dir, config_path)`.
 fn sandbox() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("config/secreq/wraps.json5");
+    let config_path = dir.path().join("secreq/wraps.json5");
     fs::create_dir_all(config_path.parent().unwrap()).unwrap();
     (dir, config_path)
 }
 
+/// Pin every path secreq can resolve into the sandbox.
+///
+/// `$SECREQ_HOME` alone is **not** enough, and getting this wrong mutates the
+/// developer's real home. `migrate` deliberately resolves the *pre-migration*
+/// locations through the old `$XDG_CONFIG_HOME` / `$XDG_STATE_HOME` logic
+/// (frozen history — see `migrate::legacy_config_dir`), so a run with only
+/// `$SECREQ_HOME` set probes the real `~/.config/secreq` and migrates it into
+/// the tempdir.
+///
+/// So we pin three, layered deliberately:
+/// - `$SECREQ_HOME` — the new root.
+/// - `$XDG_CONFIG_HOME` / `$XDG_STATE_HOME` — the legacy probe.
+/// - `$HOME` — the backstop. Every one of the above falls back to
+///   `dirs::home_dir()` when unset, so pinning `$HOME` means a lookup we
+///   forgot still can't escape into the developer's real files.
+///
+/// The XDG pins can go away once migration 0001 is old enough to delete.
+/// `$HOME` should stay.
+fn sandbox_env<'a>(cmd: &'a mut Command, dir: &Path) -> &'a mut Command {
+    cmd.env("SECREQ_HOME", dir.join("secreq"))
+        .env("XDG_CONFIG_HOME", dir.join("legacy-config"))
+        .env("XDG_STATE_HOME", dir.join("legacy-state"))
+        .env("HOME", dir.join("home"))
+}
+
 fn run_secreq(dir: &Path, args: &[&str]) -> std::process::Output {
-    Command::new(bin())
-        .args(args)
-        // Pin every state path into the sandbox.
-        .env("XDG_CONFIG_HOME", dir.join("config"))
-        .env("XDG_STATE_HOME", dir.join("state"))
+    let mut cmd = Command::new(bin());
+    cmd.args(args);
+    sandbox_env(&mut cmd, dir)
         // Wipe SHELL so init's auto-PATH-setup goes through `Unknown` (no
         // file writes) — tests focus on behavior, not shell-rc mutation.
         .env_remove("SHELL")
@@ -99,8 +122,10 @@ fn wrap_run_injects_env_and_masks_output_when_token_is_echoed() {
     let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
     let out = Command::new(bin())
         .args(["--yes", "x", "gh", "auth", "status"])
-        .env("XDG_CONFIG_HOME", dir.path().join("config"))
-        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("SECREQ_HOME", dir.path().join("secreq"))
+        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
+        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
+        .env("HOME", dir.path().join("home"))
         .env("PATH", &path)
         .env_remove("SECREQ_CONSENT_SOCK")
         .env("SECREQ_NO_DAEMON", "1")
@@ -135,8 +160,10 @@ fn raw_flag_disables_output_masking() {
 
     let out = Command::new(bin())
         .args(["--yes", "--raw", "x", "gh"])
-        .env("XDG_CONFIG_HOME", dir.path().join("config"))
-        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("SECREQ_HOME", dir.path().join("secreq"))
+        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
+        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
+        .env("HOME", dir.path().join("home"))
         .env("PATH", &path)
         .env_remove("SECREQ_CONSENT_SOCK")
         .env("SECREQ_NO_DAEMON", "1")
@@ -166,8 +193,10 @@ fn unwrapped_binary_passes_through_unchanged() {
 
     let out = Command::new(bin())
         .args(["x", "gh", "passthrough-args"])
-        .env("XDG_CONFIG_HOME", dir.path().join("config"))
-        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("SECREQ_HOME", dir.path().join("secreq"))
+        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
+        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
+        .env("HOME", dir.path().join("home"))
         .env("PATH", &path)
         .env_remove("SECREQ_CONSENT_SOCK")
         .env("SECREQ_NO_DAEMON", "1")
@@ -202,8 +231,10 @@ fn denies_without_terminal_or_yes() {
     // daemon (which would otherwise pop a GUI window).
     let out = Command::new(bin())
         .args(["x", "gh"])
-        .env("XDG_CONFIG_HOME", dir.path().join("config"))
-        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("SECREQ_HOME", dir.path().join("secreq"))
+        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
+        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
+        .env("HOME", dir.path().join("home"))
         .env("PATH", &path)
         .env("SECREQ_NO_DAEMON", "1")
         .output()
@@ -228,8 +259,10 @@ fn bare_unknown_command_is_not_a_wrap() {
 
     let out = Command::new(bin())
         .args(["gh", "auth", "status"])
-        .env("XDG_CONFIG_HOME", dir.path().join("config"))
-        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("SECREQ_HOME", dir.path().join("secreq"))
+        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
+        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
+        .env("HOME", dir.path().join("home"))
         .env("PATH", &path)
         .env("SECREQ_NO_DAEMON", "1")
         .output()
@@ -397,8 +430,10 @@ fn gate_only_wrap_denies_without_terminal_or_yes() {
 
     let out = Command::new(bin())
         .args(["x", "op", "read", "op://Personal/AWS/credential"])
-        .env("XDG_CONFIG_HOME", dir.path().join("config"))
-        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("SECREQ_HOME", dir.path().join("secreq"))
+        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
+        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
+        .env("HOME", dir.path().join("home"))
         .env("PATH", &path)
         .env("SECREQ_NO_DAEMON", "1")
         .output()
@@ -438,8 +473,10 @@ fn resolving_env_bypasses_the_gate_for_a_wrapped_provider() {
 
     let out = Command::new(bin())
         .args(["x", "op", "read", "op://Personal/AWS/credential"])
-        .env("XDG_CONFIG_HOME", dir.path().join("config"))
-        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("SECREQ_HOME", dir.path().join("secreq"))
+        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
+        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
+        .env("HOME", dir.path().join("home"))
         .env("PATH", &path)
         .env("SECREQ_NO_DAEMON", "1")
         // The marker secreq sets on a provider's retrieve subprocess.
@@ -549,8 +586,10 @@ fn doctor_flags_when_a_shim_is_shadowed_by_an_earlier_path_entry() {
     );
     let out = Command::new(bin())
         .args(["doctor"])
-        .env("XDG_CONFIG_HOME", dir.path().join("config"))
-        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("SECREQ_HOME", dir.path().join("secreq"))
+        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
+        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
+        .env("HOME", dir.path().join("home"))
         .env("PATH", &path)
         .env_remove("SECREQ_CONSENT_SOCK")
         .env("SECREQ_NO_DAEMON", "1")
@@ -592,8 +631,10 @@ fn doctor_is_happy_when_the_shim_is_first_on_path() {
     let path = format!("{}:{}", shim_dir.display(), std::env::var("PATH").unwrap());
     let out = Command::new(bin())
         .args(["doctor"])
-        .env("XDG_CONFIG_HOME", dir.path().join("config"))
-        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("SECREQ_HOME", dir.path().join("secreq"))
+        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
+        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
+        .env("HOME", dir.path().join("home"))
         .env("PATH", &path)
         .env_remove("SECREQ_CONSENT_SOCK")
         .env("SECREQ_NO_DAEMON", "1")
@@ -644,8 +685,10 @@ fn init_writes_config_with_shim_dir() {
     let out = Command::new(bin())
         .args(["init", "--shim-dir", shim_dir.to_str().unwrap()])
         // Pre-answer prompts: accept default shim dir.
-        .env("XDG_CONFIG_HOME", dir.path().join("config"))
-        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("SECREQ_HOME", dir.path().join("secreq"))
+        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
+        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
+        .env("HOME", dir.path().join("home"))
         .env_remove("SHELL")
         .env_remove("SECREQ_CONSENT_SOCK")
         // cliclack reads from the controlling terminal; closing stdin makes
@@ -680,8 +723,10 @@ fn run_ssh_setup(dir: &Path, home: &Path, shell: &str, args: &[&str]) -> std::pr
     let mut cmd = Command::new(bin());
     cmd.args(args)
         .env("HOME", home)
-        .env("XDG_CONFIG_HOME", dir.join("config"))
-        .env("XDG_STATE_HOME", dir.join("state"))
+        .env("SECREQ_HOME", dir.join("secreq"))
+        .env("XDG_CONFIG_HOME", dir.join("legacy-config"))
+        .env("XDG_STATE_HOME", dir.join("legacy-state"))
+        .env("HOME", dir.join("home"))
         .env("XDG_RUNTIME_DIR", dir.join("run"))
         .env_remove("SECREQ_CONSENT_SOCK")
         .env("SECREQ_NO_DAEMON", "1")
@@ -851,7 +896,7 @@ fn ssh_setup_scripted_does_only_client_wiring() {
 
     // No ssh identity was written: the config either doesn't exist or has no
     // `ssh` block.
-    let config_file = dir.path().join("config/secreq/wraps.json5");
+    let config_file = dir.path().join("secreq/wraps.json5");
     if config_file.exists() {
         let body = fs::read_to_string(&config_file).unwrap();
         assert!(
@@ -1042,7 +1087,7 @@ fn ssh_help_lists_subcommands() {
 }
 
 #[test]
-fn daemon_log_path_prints_state_dir_path_without_spawning() {
+fn daemon_log_path_prints_root_log_path_without_spawning() {
     let (dir, _config) = sandbox();
     // `daemon log-path` is pure: it prints the path and never starts a
     // daemon (so it's safe even with the daemon disabled).
@@ -1053,11 +1098,11 @@ fn daemon_log_path_prints_state_dir_path_without_spawning() {
         String::from_utf8_lossy(&out.stderr)
     );
     let printed = String::from_utf8_lossy(&out.stdout);
-    let expected = dir.path().join("state/secreq/daemon.log");
+    let expected = dir.path().join("secreq/daemon.log");
     assert_eq!(
         printed.trim(),
         expected.to_str().unwrap(),
-        "log-path should print <XDG_STATE_HOME>/secreq/daemon.log"
+        "log-path should print <SECREQ_HOME>/daemon.log"
     );
     // It must not have created the file or a daemon socket — pure print.
     assert!(!expected.exists(), "log-path must not create the log file");
@@ -1087,8 +1132,10 @@ fn read_refuses_re_entrant_call_during_resolution() {
     // set. `read` must refuse rather than deadlock on a second daemon round.
     let out = Command::new(bin())
         .args(["read", "op/Work/key"])
-        .env("XDG_CONFIG_HOME", dir.path().join("config"))
-        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("SECREQ_HOME", dir.path().join("secreq"))
+        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
+        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
+        .env("HOME", dir.path().join("home"))
         .env_remove("SECREQ_CONSENT_SOCK")
         .env("SECREQ_NO_DAEMON", "1")
         .env("SECREQ_RESOLVING", "1")
@@ -1137,4 +1184,176 @@ fn read_is_denied_when_the_daemon_is_disabled() {
         String::from_utf8_lossy(&out.stdout).trim().is_empty(),
         "denied read must print no value to stdout"
     );
+}
+
+// ── migrations ────────────────────────────────────────────────────────────
+
+/// Seed the sandbox's *legacy* config location, so the next `secreq` run
+/// performs migration 0001 for real.
+fn seed_legacy_config(dir: &Path, body: &str) -> PathBuf {
+    let legacy = dir.join("legacy-config/secreq/wraps.json5");
+    fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    fs::write(&legacy, body).unwrap();
+    legacy
+}
+
+#[test]
+fn first_run_migrates_legacy_config_and_leaves_a_working_symlink() {
+    let dir = tempfile::tempdir().unwrap();
+    let legacy = seed_legacy_config(dir.path(), r#"{ gh: { $reason: "x", env: {} } }"#);
+
+    // Any command triggers the gate; `wraps` just lists.
+    let out = run_secreq(dir.path(), &["wraps"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Config moved to the new root...
+    let moved = dir.path().join("secreq/wraps.json5");
+    assert_eq!(
+        fs::read_to_string(&moved).unwrap(),
+        r#"{ gh: { $reason: "x", env: {} } }"#
+    );
+    // ...and the old path is a symlink that still resolves, which is what
+    // keeps an older secreq working after the migration.
+    assert!(legacy.symlink_metadata().unwrap().file_type().is_symlink());
+    assert_eq!(
+        fs::read_to_string(&legacy).unwrap(),
+        r#"{ gh: { $reason: "x", env: {} } }"#
+    );
+}
+
+#[test]
+fn migration_is_idempotent_across_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    seed_legacy_config(dir.path(), r#"{ gh: { $reason: "x", env: {} } }"#);
+
+    for _ in 0..3 {
+        let out = run_secreq(dir.path(), &["wraps"]);
+        assert!(
+            out.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(dir.path().join("secreq/wraps.json5")).unwrap(),
+        r#"{ gh: { $reason: "x", env: {} } }"#
+    );
+}
+
+#[test]
+fn migrate_restore_reverts_to_the_snapshot_and_reports_what_it_discarded() {
+    let dir = tempfile::tempdir().unwrap();
+    let legacy = seed_legacy_config(dir.path(), r#"{ gh: { $reason: "original", env: {} } }"#);
+    run_secreq(dir.path(), &["wraps"]);
+
+    // Diverge from the snapshot, as a user would by adding a wrap.
+    let moved = dir.path().join("secreq/wraps.json5");
+    fs::write(
+        &moved,
+        r#"{ terraform: { $reason: "added later", env: {} } }"#,
+    )
+    .unwrap();
+
+    let out = run_secreq(dir.path(), &["--yes", "migrate", "restore", "0"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    // The loss must be itemized, not merely announced.
+    assert!(stdout.contains("DISCARD"), "no discard warning: {stdout}");
+    assert!(
+        stdout.contains("added later"),
+        "diff should name what's lost: {stdout}"
+    );
+
+    // The level-0 layout is back: a real file at the legacy path.
+    assert!(!legacy.symlink_metadata().unwrap().file_type().is_symlink());
+    assert_eq!(
+        fs::read_to_string(&legacy).unwrap(),
+        r#"{ gh: { $reason: "original", env: {} } }"#
+    );
+    // And the forward artifact is gone, so a re-migration can't find two real
+    // files that differ and refuse to guess.
+    assert!(!moved.exists(), "forward artifact should be cleaned up");
+}
+
+#[test]
+fn migrate_restore_saves_the_current_config_before_overwriting_it() {
+    let dir = tempfile::tempdir().unwrap();
+    seed_legacy_config(dir.path(), r#"{ gh: { $reason: "original", env: {} } }"#);
+    run_secreq(dir.path(), &["wraps"]);
+    fs::write(
+        dir.path().join("secreq/wraps.json5"),
+        r#"{ terraform: { $reason: "precious", env: {} } }"#,
+    )
+    .unwrap();
+
+    run_secreq(dir.path(), &["--yes", "migrate", "restore", "0"]);
+
+    // A mistaken restore must itself be recoverable.
+    let saved: Vec<_> = fs::read_dir(dir.path().join("secreq/migration-snapshots"))
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("current-"))
+        .collect();
+    assert_eq!(saved.len(), 1, "exactly one pre-restore save");
+    assert_eq!(
+        fs::read_to_string(saved[0].path().join("wraps.json5")).unwrap(),
+        r#"{ terraform: { $reason: "precious", env: {} } }"#
+    );
+}
+
+#[test]
+fn migrate_restore_is_reachable_even_when_the_gate_refuses_to_run() {
+    // The deadlock this guards: the downgrade error tells the user to run
+    // `secreq migrate restore`, but the gate is what emits that error. If
+    // `migrate` went through the gate, the remedy would be unreachable.
+    let dir = tempfile::tempdir().unwrap();
+    seed_legacy_config(dir.path(), r#"{ gh: { $reason: "original", env: {} } }"#);
+    run_secreq(dir.path(), &["wraps"]);
+
+    // Simulate a config migrated by a much newer secreq.
+    fs::write(
+        dir.path().join("secreq/.migration-state"),
+        r#"{ "migration_level": 99, "migrated_by": "9.9.9 (deadbeef +1)" }"#,
+    )
+    .unwrap();
+
+    // A normal command is refused...
+    let blocked = run_secreq(dir.path(), &["wraps"]);
+    assert!(!blocked.status.success(), "gate should refuse a downgrade");
+    let stderr = String::from_utf8_lossy(&blocked.stderr);
+    assert!(stderr.contains("migrate restore"), "no remedy: {stderr}");
+
+    // ...but the remedy it names still runs.
+    let out = run_secreq(dir.path(), &["--yes", "migrate", "restore", "0"]);
+    assert!(
+        out.status.success(),
+        "restore must bypass the gate; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // And the user is unblocked afterwards.
+    let after = run_secreq(dir.path(), &["wraps"]);
+    assert!(
+        after.status.success(),
+        "should work after restore; stderr: {}",
+        String::from_utf8_lossy(&after.stderr)
+    );
+}
+
+#[test]
+fn migrate_restore_names_available_levels_when_the_snapshot_is_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = run_secreq(dir.path(), &["--yes", "migrate", "restore", "7"]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("no snapshot"), "unhelpful: {stderr}");
 }

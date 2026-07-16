@@ -91,6 +91,15 @@ enum Command {
     /// Open the config in `$EDITOR`.
     Edit,
 
+    /// Inspect and roll back config migrations.
+    ///
+    /// secreq migrates its own config on first run after an upgrade, taking a
+    /// snapshot beforehand. This is how you get back to one.
+    Migrate {
+        #[command(subcommand)]
+        action: MigrateAction,
+    },
+
     /// Run or manage the consent daemon. Bare `secreq daemon` ensures a
     /// daemon is running in the background (spawning one if needed) and
     /// then tails its log until you Ctrl-C — handy for watching the
@@ -332,9 +341,46 @@ enum DaemonAction {
     },
 }
 
+#[derive(Subcommand)]
+enum MigrateAction {
+    /// Restore the config snapshot taken before migration <LEVEL>.
+    ///
+    /// Use this when a downgraded secreq refuses to run because your config
+    /// was migrated by a newer build. Lossy: anything added since that
+    /// snapshot is discarded. The diff is shown and confirmed first, and your
+    /// current config is saved alongside the snapshots before anything is
+    /// overwritten.
+    Restore {
+        /// Migration level to go back to (the snapshot is the config as it
+        /// stood *before* migration LEVEL+1 ran).
+        level: u32,
+    },
+}
+
 /// Parse args, dispatch, return the process exit code.
 pub fn run() -> i32 {
     let cli = Cli::parse();
+
+    // Every entry point passes through here — including the daemon, which
+    // re-execs `current_exe()` and lands back in this function (see
+    // `daemon::client`). So this single gate covers the whole binary.
+    //
+    // After `Cli::parse()` on purpose: `--help` and `--version` exit inside
+    // `parse()`, so they never touch disk. Failure is fatal because each
+    // migration is atomic — the old state is intact and a half-migrated tree
+    // that silently resolves the wrong secrets is never a thing we ship.
+    //
+    // `secreq migrate ...` deliberately bypasses the gate. The gate is exactly
+    // what's failing when a user needs `migrate restore`: it `bail!`s on the
+    // downgrade check, so gating it would make the command its own error
+    // message tells you to run permanently unreachable.
+    if !matches!(cli.command, Some(Command::Migrate { .. })) {
+        if let Err(e) = crate::migrate::run_pending() {
+            eprintln!("secreq: {e:#}");
+            return 1;
+        }
+    }
+
     let config = cli.config.as_deref();
 
     let result = match cli.command {
@@ -382,6 +428,9 @@ pub fn run() -> i32 {
         Some(Command::Check) => commands::check(config),
         Some(Command::Doctor) => commands::doctor(config),
         Some(Command::Edit) => commands::edit_cmd(config),
+        Some(Command::Migrate {
+            action: MigrateAction::Restore { level },
+        }) => crate::migrate::restore(level, cli.yes),
         Some(Command::Daemon { fg, action: None }) => {
             if fg {
                 crate::daemon::run()

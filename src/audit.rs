@@ -6,7 +6,6 @@
 
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -176,7 +175,7 @@ impl AuditEntry {
 /// Append an entry to the audit log, creating the state dir if needed. Audit
 /// failures are non-fatal to the user's command but are surfaced to the caller.
 pub fn append(entry: &AuditEntry) -> Result<()> {
-    let path = audit_log_path()?;
+    let path = crate::paths::audit_log_path()?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create state dir {}", parent.display()))?;
@@ -191,26 +190,11 @@ pub fn append(entry: &AuditEntry) -> Result<()> {
         .with_context(|| format!("failed to write audit log {}", path.display()))
 }
 
-/// `$XDG_STATE_HOME/secreq` (or `~/.local/state/secreq`) — the state directory.
-pub fn state_dir() -> Result<PathBuf> {
-    if let Some(xdg) = std::env::var_os("XDG_STATE_HOME") {
-        if !xdg.is_empty() {
-            return Ok(PathBuf::from(xdg).join("secreq"));
-        }
-    }
-    let home = dirs::home_dir().context("could not determine home directory")?;
-    Ok(home.join(".local").join("state").join("secreq"))
-}
-
-pub fn audit_log_path() -> Result<PathBuf> {
-    Ok(state_dir()?.join("audit.log"))
-}
-
 /// mtime of the audit log, or `None` if it doesn't exist yet. The daemon's
 /// history view uses this to decide whether to re-read the file (cheap stat
 /// vs. full reparse) between paints.
 pub fn audit_log_mtime() -> Option<SystemTime> {
-    let path = audit_log_path().ok()?;
+    let path = crate::paths::audit_log_path().ok()?;
     std::fs::metadata(path).ok()?.modified().ok()
 }
 
@@ -219,7 +203,7 @@ pub fn audit_log_mtime() -> Option<SystemTime> {
 /// log spans daemon versions, and a single bad line shouldn't blank the
 /// history view. Missing file returns an empty vec, not an error.
 pub fn read_history(limit: Option<usize>) -> Result<Vec<AuditEntry>> {
-    let path = audit_log_path()?;
+    let path = crate::paths::audit_log_path()?;
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -257,7 +241,7 @@ fn now_unix() -> u64 {
 /// [`read_history`] inside `f` reads it back. Restores the previous value
 /// afterwards.
 ///
-/// A single process-wide lock serializes every caller: `$XDG_STATE_HOME` is
+/// A single process-wide lock serializes every caller: `$SECREQ_HOME` is
 /// process-global, so two of these running at once (e.g. a `state` test and
 /// a `server` test in the same binary) would otherwise clobber each other's
 /// target dir. Shared here — not duplicated per module — so *all* audit-
@@ -268,12 +252,12 @@ pub(crate) fn with_temp_log<R>(f: impl FnOnce() -> R) -> R {
     static ENV_LOCK: Mutex<()> = Mutex::new(());
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().expect("tempdir");
-    let prev = std::env::var_os("XDG_STATE_HOME");
-    std::env::set_var("XDG_STATE_HOME", dir.path());
+    let prev = std::env::var_os(crate::paths::SECREQ_HOME_ENV);
+    std::env::set_var(crate::paths::SECREQ_HOME_ENV, dir.path());
     let out = f();
     match prev {
-        Some(v) => std::env::set_var("XDG_STATE_HOME", v),
-        None => std::env::remove_var("XDG_STATE_HOME"),
+        Some(v) => std::env::set_var(crate::paths::SECREQ_HOME_ENV, v),
+        None => std::env::remove_var(crate::paths::SECREQ_HOME_ENV),
     }
     out
 }
@@ -281,6 +265,7 @@ pub(crate) fn with_temp_log<R>(f: impl FnOnce() -> R) -> R {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn write_log(text: &str) -> tempfile::NamedTempFile {
         use std::io::Write as _;

@@ -125,9 +125,9 @@ pub fn run() -> Result<i32> {
         }
     };
 
-    let state: state::SharedState = match crate::rules::default_rules_path() {
-        Some(path) => Arc::new(Mutex::new(state::State::with_rules_path(path))),
-        None => Arc::new(Mutex::new(state::State::new())),
+    let state: state::SharedState = match crate::paths::rules_path() {
+        Ok(path) => Arc::new(Mutex::new(state::State::with_rules_path(path))),
+        Err(_) => Arc::new(Mutex::new(state::State::new())),
     };
     let shutdown_flag = state.lock().expect("state mutex").shutdown_flag();
 
@@ -140,8 +140,8 @@ pub fn run() -> Result<i32> {
     // control listener; its accept thread exits when this drops. A missing
     // or unparseable config simply yields no agent (best-effort) — the
     // control socket and existing wrap flow are unaffected.
-    let _agent_listener = match crate::wraps::default_config_path() {
-        Some(config_path) => match crate::wraps::WrapsConfig::load(&config_path) {
+    let _agent_listener = match crate::paths::wraps_path() {
+        Ok(config_path) => match crate::wraps::WrapsConfig::load(&config_path) {
             Ok(mut config) if !config.ssh.is_empty() => {
                 // Overlay built-in providers so a private-key reference can
                 // name a built-in scheme (e.g. `secret://op/...`) without an
@@ -165,7 +165,7 @@ pub fn run() -> Result<i32> {
                 None
             }
         },
-        None => None,
+        Err(_) => None,
     };
 
     // Whether the SSH agent is serving on `agent.sock`. Fixed for the

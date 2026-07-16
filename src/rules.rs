@@ -35,7 +35,7 @@
 //! passes it in.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -265,16 +265,6 @@ pub fn save_rules(path: &Path, rules: &[Rule]) -> Result<()> {
     std::fs::rename(&tmp, path)
         .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
     Ok(())
-}
-
-/// `$XDG_CONFIG_HOME/secreq/auto-rules.json5` (or
-/// `~/.config/secreq/auto-rules.json5`). Mirrors [`crate::wraps::default_config_path`].
-pub fn default_rules_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|h| h.join(".config")))?;
-    Some(base.join("secreq").join("auto-rules.json5"))
 }
 
 /// `mtime` of the rules file, or `None` if it doesn't exist. The

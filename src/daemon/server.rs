@@ -1246,14 +1246,7 @@ fn waiter_reply_to_daemon_msg(reply: WaiterReply) -> DaemonMsg {
 /// guarantees `daemon.pid`'s flock is the singleton primitive
 /// regardless of where on disk the file lives.
 pub fn socket_dir() -> Result<PathBuf> {
-    if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR") {
-        if !xdg.is_empty() {
-            return Ok(PathBuf::from(xdg).join("secreq"));
-        }
-    }
-    let cache = dirs::cache_dir()
-        .context("could not determine per-user cache dir for daemon socket (no $HOME?)")?;
-    Ok(cache.join("secreq"))
+    crate::paths::socket_dir()
 }
 
 /// Stable per-user socket path. Both client and daemon derive it the same

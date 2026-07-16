@@ -334,15 +334,6 @@ fn expand_tilde(raw: &str) -> PathBuf {
     PathBuf::from(raw)
 }
 
-/// Default location for the user's `wraps.json5`. Honors `XDG_CONFIG_HOME`.
-pub fn default_config_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|h| h.join(".config")))?;
-    Some(base.join("secreq").join("wraps.json5"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -44,7 +44,7 @@ fn write_config(config_path: &Path, body: &str) {
 #[test]
 fn run_resolves_ambient_secret_ref_for_the_child() {
     let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("config/secreq/wraps.json5");
+    let config = dir.path().join("secreq/wraps.json5");
     write_config(&config, fake_provider_config());
     let outfile = dir.path().join("captured");
 
@@ -63,8 +63,10 @@ fn run_resolves_ambient_secret_ref_for_the_child() {
             &format!("printf '%s' \"$SECRET\" > {}", outfile.display()),
         ])
         .env("SECRET", "secret://fake/thing")
-        .env("XDG_CONFIG_HOME", dir.path().join("config"))
-        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("SECREQ_HOME", dir.path().join("secreq"))
+        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
+        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
+        .env("HOME", dir.path().join("home"))
         .env_remove("SECREQ_CONSENT_SOCK")
         .env("SECREQ_NO_DAEMON", "1")
         .output()
@@ -89,7 +91,7 @@ fn run_passes_plain_env_vars_through_to_the_child() {
     // A non-reference env var must reach the child unchanged alongside any
     // resolved refs — `run` only rewrites `secret://` values.
     let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("config/secreq/wraps.json5");
+    let config = dir.path().join("secreq/wraps.json5");
     write_config(&config, fake_provider_config());
     let outfile = dir.path().join("captured");
 
@@ -109,8 +111,10 @@ fn run_passes_plain_env_vars_through_to_the_child() {
         ])
         .env("SECRET", "secret://fake/thing")
         .env("PLAIN", "just-a-literal")
-        .env("XDG_CONFIG_HOME", dir.path().join("config"))
-        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("SECREQ_HOME", dir.path().join("secreq"))
+        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
+        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
+        .env("HOME", dir.path().join("home"))
         .env_remove("SECREQ_CONSENT_SOCK")
         .env("SECREQ_NO_DAEMON", "1")
         .output()
@@ -136,7 +140,7 @@ fn run_resolves_ref_from_an_env_file() {
     // holds a `secret://` ref (not plaintext); `run` layers it under the
     // inherited env, scans it, and substitutes the resolved value.
     let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("config/secreq/wraps.json5");
+    let config = dir.path().join("secreq/wraps.json5");
     write_config(&config, fake_provider_config());
     let env_file = dir.path().join("the.env");
     fs::write(&env_file, "FROM_FILE=secret://fake/file-secret\n").unwrap();
@@ -155,8 +159,10 @@ fn run_resolves_ref_from_an_env_file() {
             "-c",
             &format!("printf '%s' \"$FROM_FILE\" > {}", outfile.display()),
         ])
-        .env("XDG_CONFIG_HOME", dir.path().join("config"))
-        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("SECREQ_HOME", dir.path().join("secreq"))
+        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
+        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
+        .env("HOME", dir.path().join("home"))
         .env_remove("SECREQ_CONSENT_SOCK")
         .env("SECREQ_NO_DAEMON", "1")
         .output()
@@ -184,7 +190,7 @@ fn run_uses_dotenvy_parsing_for_export_and_quotes() {
     // `export FROM_FILE` and a quoted value, breaking resolution — so this
     // proves the real parser is in the path.
     let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("config/secreq/wraps.json5");
+    let config = dir.path().join("secreq/wraps.json5");
     write_config(&config, fake_provider_config());
     let env_file = dir.path().join("the.env");
     fs::write(
@@ -207,8 +213,10 @@ fn run_uses_dotenvy_parsing_for_export_and_quotes() {
             "-c",
             &format!("printf '%s' \"$FROM_FILE\" > {}", outfile.display()),
         ])
-        .env("XDG_CONFIG_HOME", dir.path().join("config"))
-        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("SECREQ_HOME", dir.path().join("secreq"))
+        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
+        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
+        .env("HOME", dir.path().join("home"))
         .env_remove("SECREQ_CONSENT_SOCK")
         .env("SECREQ_NO_DAEMON", "1")
         .output()
@@ -236,7 +244,7 @@ fn run_stamps_and_propagates_the_session_marker() {
     // `outer run -> inner run -> sh` and captures what the innermost child
     // sees. No refs, so no daemon/GUI is touched.
     let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("config/secreq/wraps.json5");
+    let config = dir.path().join("secreq/wraps.json5");
     write_config(&config, fake_provider_config());
     let outfile = dir.path().join("captured");
     let bin = bin();
@@ -261,8 +269,10 @@ fn run_stamps_and_propagates_the_session_marker() {
         ])
         // Start clean: the test's own env must not pre-seed the marker.
         .env_remove("SECREQ_RUN_SESSION")
-        .env("XDG_CONFIG_HOME", dir.path().join("config"))
-        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("SECREQ_HOME", dir.path().join("secreq"))
+        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
+        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
+        .env("HOME", dir.path().join("home"))
         .env_remove("SECREQ_CONSENT_SOCK")
         .env("SECREQ_NO_DAEMON", "1")
         .output()

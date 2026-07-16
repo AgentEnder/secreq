@@ -329,7 +329,7 @@ fn install_audit_log(audit_entries: &[AuditEntry]) -> tempfile::TempDir {
         buf.push('\n');
     }
     std::fs::write(&audit_path, buf).expect("write audit.log");
-    std::env::set_var("XDG_STATE_HOME", tmp.path());
+    std::env::set_var("SECREQ_HOME", tmp.path());
     tmp
 }
 

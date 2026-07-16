@@ -119,13 +119,13 @@ fn stderr_is_tty() -> bool {
 /// (honours `$XDG_STATE_HOME`, same dir as `audit.log`). The accessor
 /// behind `secreq daemon log-path` and the `daemon` tail follower.
 pub fn log_path() -> anyhow::Result<PathBuf> {
-    Ok(crate::audit::state_dir()?.join("daemon.log"))
+    crate::paths::daemon_log_path()
 }
 
 /// Absolute path to the structured JSON-lines daemon log,
 /// `<state_dir>/daemon.jsonl` — one JSON object per line for `jq`/monitoring.
 pub fn jsonl_path() -> anyhow::Result<PathBuf> {
-    Ok(crate::audit::state_dir()?.join("daemon.jsonl"))
+    crate::paths::daemon_jsonl_path()
 }
 
 /// Open (creating if needed) a persistent log sink in append mode. Returns
