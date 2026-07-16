@@ -53,6 +53,25 @@ pub struct AuditEntry {
     /// non-SSH row, which omits it) deserialize cleanly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
+    /// The caller chain a **guest reported about itself** on a scoped-agent
+    /// row, already rendered for display (`"node → pnpm → postinstall"`);
+    /// `None` on every other row, and on guest rows that claimed nothing.
+    ///
+    /// The field name carries the caveat because a log outlives the context
+    /// it was written in: this is a **claim**, not a fact. It is deliberately
+    /// *not* merged into [`AuditEntry::callers`], which stays empty on these
+    /// rows — `callers` means "the host walked the process tree and saw
+    /// this", and the whole point of the scoped-agent design is that no such
+    /// walk is possible behind a guest. Filing a guest's story under the
+    /// field reserved for kernel-sourced provenance would launder it into
+    /// evidence, and `rules.rs` matches on `callers`.
+    ///
+    /// It is recorded because it is useful when the guest is honest and
+    /// interesting when it is not — a claimed chain that disagrees with what
+    /// a sandbox should be running is a signal worth having — and it is safe
+    /// to record precisely because nothing downstream reads it back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unverified_guest_chain: Option<String>,
 }
 
 /// One process in the audit-time caller chain. Mirrors the runtime
@@ -101,6 +120,9 @@ impl AuditEntry {
             decision: decision.as_str().to_owned(),
             rule_id: None,
             fingerprint: None,
+            // Local wraps have a real, kernel-sourced `callers`; there is no
+            // guest to be claiming anything.
+            unverified_guest_chain: None,
         }
     }
 
@@ -129,6 +151,7 @@ impl AuditEntry {
             decision: decision.as_str().to_owned(),
             rule_id: None,
             fingerprint: Some(fingerprint.to_owned()),
+            unverified_guest_chain: None,
         }
     }
 
@@ -145,7 +168,19 @@ impl AuditEntry {
     /// []` deliberately: a guest has no host-verifiable caller chain, and
     /// this row must not imply one existed (see the provenance section of
     /// `dev-docs/plans/2026-07-16-remote-secret-agent.md`).
-    pub fn agent_resolve(scope: &str, reference: &str, decision: Decision) -> AuditEntry {
+    ///
+    /// `guest_chain` is whatever the guest *claimed* about itself, already
+    /// rendered for display, or `None`. It lands in
+    /// [`AuditEntry::unverified_guest_chain`] — never in `callers`. The two
+    /// fields are kept apart on purpose: one is what the host saw, the other
+    /// is what the guest said, and a log that blurs them is worse than a log
+    /// that omits the claim entirely.
+    pub fn agent_resolve(
+        scope: &str,
+        reference: &str,
+        decision: Decision,
+        guest_chain: Option<&str>,
+    ) -> AuditEntry {
         AuditEntry {
             ts_unix: now_unix(),
             // A guest has no host cwd.
@@ -157,6 +192,7 @@ impl AuditEntry {
             decision: decision.as_str().to_owned(),
             rule_id: None,
             fingerprint: None,
+            unverified_guest_chain: guest_chain.map(str::to_owned),
         }
     }
 
@@ -188,6 +224,7 @@ impl AuditEntry {
             decision: Decision::Abandoned.as_str().to_owned(),
             rule_id: None,
             fingerprint: None,
+            unverified_guest_chain: None,
         }
     }
 
@@ -408,8 +445,12 @@ mod tests {
     fn agent_resolve_entry_carries_scope_and_ref_but_never_the_value() {
         let secret_value = "ghp_liveTokenValue_DEADBEEF";
 
-        let entry =
-            AuditEntry::agent_resolve("brain-nx-t5", "secret://op/Dev/gh/token", Decision::Approve);
+        let entry = AuditEntry::agent_resolve(
+            "brain-nx-t5",
+            "secret://op/Dev/gh/token",
+            Decision::Approve,
+            None,
+        );
         let json = serde_json::to_string(&entry).expect("serialize agent-resolve entry");
 
         assert!(
@@ -444,9 +485,64 @@ mod tests {
             "brain-nx-t5",
             "secret://op/Prod/aws/key",
             Decision::DenyOutOfScope,
+            None,
         );
         assert_eq!(entry.decision, "deny+out-of-scope");
         assert_ne!(entry.decision, Decision::Deny.as_str());
+    }
+
+    /// A guest's claimed chain is recorded, but **only** in the field named
+    /// for what it is. `callers` stays empty: that field means "the host
+    /// walked the process tree and saw this", and `rules.rs` matches on it.
+    /// A guest's story filed there would be laundered into evidence.
+    #[test]
+    fn agent_resolve_files_a_guest_chain_as_unverified_never_as_callers() {
+        let entry = AuditEntry::agent_resolve(
+            "brain-nx-t5",
+            "secret://op/Dev/gh/token",
+            Decision::Approve,
+            Some("node → pnpm → postinstall"),
+        );
+
+        assert_eq!(
+            entry.unverified_guest_chain.as_deref(),
+            Some("node → pnpm → postinstall")
+        );
+        assert!(
+            entry.callers.is_empty(),
+            "a guest's claim must never land in the kernel-sourced caller chain"
+        );
+
+        let json = serde_json::to_string(&entry).expect("serialize");
+        assert!(
+            json.contains("\"unverified_guest_chain\":\"node → pnpm → postinstall\""),
+            "the field name must carry the caveat into the log: {json}"
+        );
+        assert!(json.contains("\"callers\":[]"), "json: {json}");
+    }
+
+    /// A guest that claimed nothing writes no chain field at all — better an
+    /// absent field than an empty one that reads as "nothing was asking".
+    #[test]
+    fn agent_resolve_omits_the_chain_field_when_the_guest_claimed_nothing() {
+        let entry = AuditEntry::agent_resolve(
+            "brain-nx-t5",
+            "secret://op/Dev/gh/token",
+            Decision::Approve,
+            None,
+        );
+        let json = serde_json::to_string(&entry).expect("serialize");
+        assert!(!json.contains("unverified_guest_chain"), "json: {json}");
+    }
+
+    /// Rows written before this field existed must still deserialize — the
+    /// audit log is append-only and the UI streams the whole history back.
+    #[test]
+    fn rows_without_a_guest_chain_field_still_deserialize() {
+        let json = r#"{"ts_unix":1,"cwd":"","wrap":"agent:s","args":[],"callers":[],
+                       "secrets":["secret://op/a/b"],"decision":"approve"}"#;
+        let parsed: AuditEntry = serde_json::from_str(json).expect("older rows must parse");
+        assert!(parsed.unverified_guest_chain.is_none());
     }
 
     #[test]

@@ -463,6 +463,7 @@ mod tests {
             decision: decision.to_owned(),
             rule_id: None,
             fingerprint: None,
+            unverified_guest_chain: None,
         }
     }
 

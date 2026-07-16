@@ -2261,6 +2261,7 @@ mod tests {
             decision: decision.to_owned(),
             rule_id: None,
             fingerprint: None,
+            unverified_guest_chain: None,
         }
     }
 
@@ -2408,6 +2409,7 @@ mod tests {
             decision: "approve+auto".to_owned(),
             rule_id: rule_id.map(str::to_owned),
             fingerprint: None,
+            unverified_guest_chain: None,
         }
     }
 
@@ -2524,6 +2526,7 @@ mod tests {
             decision: decision.to_owned(),
             rule_id: None,
             fingerprint: None,
+            unverified_guest_chain: None,
         }
     }
 

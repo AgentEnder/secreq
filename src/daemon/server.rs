@@ -817,6 +817,14 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
             // this wrap socket reply, but Decision is shared so list them.
             crate::consent::Decision::ApproveSshSession => "Decision::ApproveSshSession",
             crate::consent::Decision::ApproveSshSessionAll => "Decision::ApproveSshSessionAll",
+            // Scoped-agent only: the user anchored a TTL'd grant to the
+            // scope. It crosses this socket as a normal decision reply — the
+            // *agent process* is the client that acts on it, remembering the
+            // grant in its own `ScopeApprovals`. The daemon deliberately
+            // remembers nothing here (`Ask::allow_remember` is false on these
+            // asks); a guest has no host parent for the daemon's cache to key
+            // on.
+            crate::consent::Decision::ApproveAgentSession => "Decision::ApproveAgentSession",
             crate::consent::Decision::Deny => "Decision::Deny",
             crate::consent::Decision::DenyAuto => "Decision::DenyAuto",
             // Scoped-agent only, and never sent as a reply from here: an

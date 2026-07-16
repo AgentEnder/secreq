@@ -208,10 +208,16 @@ fn submit_ssh(
 /// resolve, and — the load-bearing part — **`callers` is empty**: a guest
 /// has no host process tree, so the `agent` marker carries the host-declared
 /// scope as the principal instead.
+///
+/// `guest_chain` is what the guest *claimed* about itself — display-only,
+/// and rendered by the prompt behind an explicit "not verifiable" marker.
+/// It is passed as an already-rendered string exactly as
+/// `scoped_agent::GuestChain::display` produces one.
 fn submit_agent(
     state: &SharedState,
     scope: &str,
     reference: &str,
+    guest_chain: Option<&str>,
 ) -> mpsc::Receiver<secreq::daemon::state::WaiterReply> {
     let dedupe_key = DedupeKey {
         wrap: format!("agent:{scope}:{reference}"),
@@ -230,6 +236,7 @@ fn submit_agent(
         agent: Some(AgentAskInfo {
             scope: scope.to_owned(),
             reference: reference.to_owned(),
+            guest_chain: guest_chain.map(str::to_owned),
         }),
         allow_remember: false,
         nested_run: false,
@@ -293,6 +300,7 @@ fn audit_line(
         decision: decision.to_owned(),
         rule_id: None,
         fingerprint: None,
+        unverified_guest_chain: None,
     }
 }
 
@@ -301,7 +309,7 @@ fn audit_line(
 /// (no caller chain, no cwd, ref in `secrets`, `agent:<scope>` as the wrap).
 /// That's the whole thing this fixture exists to show.
 fn agent_audit_line(secs_ago: u64, scope: &str, reference: &str, decision: Decision) -> AuditEntry {
-    let mut entry = AuditEntry::agent_resolve(scope, reference, decision);
+    let mut entry = AuditEntry::agent_resolve(scope, reference, decision, None);
     entry.ts_unix = now_unix().saturating_sub(secs_ago);
     entry
 }
@@ -338,6 +346,7 @@ fn audit_line_traced(
         decision: decision.to_owned(),
         rule_id: None,
         fingerprint: None,
+        unverified_guest_chain: None,
     }
 }
 
@@ -360,6 +369,7 @@ fn audit_auto_fire(secs_ago: u64, rule_id: &str, decision: &str) -> AuditEntry {
         decision: decision.to_owned(),
         rule_id: Some(rule_id.to_owned()),
         fingerprint: None,
+        unverified_guest_chain: None,
     }
 }
 
@@ -700,11 +710,41 @@ fn agent_scope_pending() {
     // no ASKED BY tree and no IN row — a guest has no host process tree or
     // cwd, and rendering a chain-shaped widget here would imply we verified
     // something we cannot. See `src/scoped_agent/mod.rs`.
+    //
+    // This guest claimed nothing, so there is no GUEST SAYS row either
+    // (contrast `36-agent-guest-chain-pending`). The "Scope: Approve for 5
+    // min" action is the TTL grant that anchors an approval to the sandbox.
     render_prompt_fixture("34-agent-scope-pending", vec![], |state| {
         vec![submit_agent(
             state,
             "brain-nx-t5",
             "secret://op/Dev/gh/token",
+            None,
+        )]
+    });
+}
+
+#[test]
+#[ignore = "screenshot harness"]
+fn agent_guest_chain_pending() {
+    // The same scoped-agent prompt, but the guest volunteered a caller
+    // chain. This fixture exists to show the **marker**, which is the entire
+    // point of the surface: GUEST SAYS renders the claim, and the red
+    // "⚠ guest-reported — NOT verifiable" sits directly under it.
+    //
+    // Read the well top-to-bottom and it tells the truth in order: SECRET
+    // and SCOPE are host-declared facts, then — below them, dimmer, and
+    // explicitly disclaimed — what the guest says about itself. The chain
+    // never touches the decision or the approval cache; it is here for a
+    // human to weigh and for the audit log to record as a claim. See the
+    // "Decision: the sandbox is the principal" section of
+    // `dev-docs/plans/2026-07-16-remote-secret-agent.md`.
+    render_prompt_fixture("36-agent-guest-chain-pending", vec![], |state| {
+        vec![submit_agent(
+            state,
+            "brain-nx-t5",
+            "secret://op/Dev/gh/token",
+            Some("node → pnpm → postinstall"),
         )]
     });
 }

@@ -170,6 +170,12 @@ pub fn render_prompt_panel(
                                 ui.add_space(8.0);
                                 render_ssh_session_grants(ui, &th, row, actions_out);
                             }
+                            if row.representative.agent.is_some()
+                                && row.status == super::proto::RowStatus::Awaiting
+                            {
+                                ui.add_space(8.0);
+                                render_agent_session_grant(ui, &th, row, actions_out);
+                            }
                         }
                     }
                 });
@@ -362,6 +368,15 @@ fn render_evidence_well(
                 });
             });
             well_separator(ui, th);
+
+            // The guest's own story about itself, when it told one. Rendered
+            // *below* SCOPE and visibly marked, so the reading order is
+            // "here's what we know, and here's what we've merely been told" —
+            // never the reverse.
+            if let Some(chain) = &agent.guest_chain {
+                render_guest_chain(ui, th, chain);
+                well_separator(ui, th);
+            }
         } else if let Some(ssh) = &ask.ssh {
             well_row(ui, th, "SIGN WITH", |ui, th| {
                 ui.add(
@@ -429,6 +444,79 @@ fn render_evidence_well(
                     .color(color),
             );
         });
+    });
+}
+
+/// The guest's self-reported caller chain, and the marker that says not to
+/// believe it.
+///
+/// This row exists because the claim is genuinely useful — when the guest is
+/// honest, it is exactly the context the user wants; when it is not, the
+/// audit log has the lie on record. But it is the one thing in this prompt
+/// the host did not establish, and a consent UI that renders a claim and a
+/// fact identically has quietly turned itself into a forgery surface.
+///
+/// So the marker is not decoration:
+///
+/// - The label is `GUEST SAYS`, not `ASKED BY`. The local prompt's caller
+///   tree earns `ASKED BY` by being kernel-sourced; reusing that widget here
+///   would imply a check that never happened.
+/// - The caveat renders in `th.danger` and is not truncatable away — a
+///   warning that a long chain can push out of view is not a warning.
+/// - The chain arrives pre-sanitized (see `scoped_agent::GuestChain`), so it
+///   cannot paint its own second line claiming to be verified.
+fn render_guest_chain(ui: &mut egui::Ui, th: &Theme, chain: &str) {
+    well_row(ui, th, "GUEST SAYS", |ui, th| {
+        ui.vertical(|ui| {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(chain)
+                        .monospace()
+                        .size(th.body_size - 1.0)
+                        .color(th.dim),
+                )
+                .wrap(),
+            );
+            ui.add(egui::Label::new(
+                egui::RichText::new("⚠ guest-reported — NOT verifiable")
+                    .size(th.body_size - 2.0)
+                    .color(th.danger),
+            ));
+        });
+    });
+}
+
+/// The scoped-agent TTL grant, rendered like the SSH one: a quiet secondary
+/// action between the well and the footer, leaving the footer's Approve
+/// meaning "this request only".
+///
+/// Two buttons for two different things, which is the honest split — "yes,
+/// once" and "yes, and stop asking for a bit" are different amounts of trust
+/// and the user should be able to say which they mean. Only this one anchors
+/// a [`consent::AgentGrant`]; plain Approve anchors nothing.
+///
+/// The TTL is named on the button rather than buried in a tooltip: "Approve"
+/// that silently means "approve for five minutes" is a consent UI lying by
+/// omission.
+fn render_agent_session_grant(
+    ui: &mut egui::Ui,
+    th: &Theme,
+    row: &QueueRow,
+    actions_out: &mut Vec<PendingAction>,
+) {
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new("Scope:")
+                .size(th.body_size - 2.0)
+                .color(th.faint),
+        );
+        if quiet_button(ui, th, "Approve for 5 min").clicked() {
+            actions_out.push(PendingAction {
+                key: row.key.clone(),
+                decision: Decision::ApproveAgentSession,
+                scope: row_scope(row),
+            });
+        }
     });
 }
 

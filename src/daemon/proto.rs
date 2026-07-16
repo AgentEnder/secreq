@@ -286,12 +286,11 @@ pub struct SshAskInfo {
 /// ref itself *after* consent (see [`crate::scoped_agent::DaemonGate`]), so
 /// nothing secret rides this struct or the wire.
 ///
-/// Note what is **absent**: any guest-supplied provenance. Both fields
-/// originate on the host — the scope from the `agent open` invocation, the
-/// ref from an allowlist the host declared — so everything the prompt shows
-/// here is host-verifiable. (Build step B adds a *display-only*,
-/// explicitly-untrusted guest-reported chain; it must never become a
-/// decision or cache-key input.)
+/// Note which fields are **host-verifiable** and which is not, because the
+/// prompt says so out loud. `scope` comes from the `agent open` invocation
+/// and `reference` from an allowlist the host declared, so both are things
+/// the host itself asserted. `guest_chain` is the one piece the *guest*
+/// supplied, and it is display-only.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentAskInfo {
     /// The host-declared scope name (e.g. a sandbox name like
@@ -301,6 +300,27 @@ pub struct AgentAskInfo {
     /// the scope's allowlist admits: out-of-scope refs are denied before any
     /// ask is built.
     pub reference: String,
+    /// What the guest **claimed** is asking, already sanitized and rendered
+    /// for display (`"node → pnpm → postinstall"`); `None` when it claimed
+    /// nothing.
+    ///
+    /// **Display-only, and rendered with an explicit "not verifiable"
+    /// marker.** The host cannot check a word of it — that is the provenance
+    /// problem this whole design starts from — so it is offered to the *user*
+    /// as a hint and to nothing else as a fact. It is carried here rather
+    /// than in [`Ask::callers`] (which stays empty on these asks) precisely
+    /// so it cannot be mistaken for provenance: `callers` is kernel-sourced
+    /// and is what `rules.rs` matches on, and a guest able to write there
+    /// could name a process that fires an auto-approve rule.
+    ///
+    /// A pre-rendered `String` rather than a `Vec`: by the time a claim
+    /// crosses this socket it is a label, and handing it back the shape of a
+    /// caller list would only invite code to treat it like one.
+    ///
+    /// `#[serde(default)]` keeps the attach protocol back-compatible, same as
+    /// [`Ask::ssh`] and [`Ask::agent`].
+    #[serde(default)]
+    pub guest_chain: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]

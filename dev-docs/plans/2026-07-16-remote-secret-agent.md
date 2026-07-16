@@ -1,7 +1,7 @@
 # Remote secret agent — serving secrets to guest VMs
 
 Date: 2026-07-16
-Status: design (validated); **A implemented** (see "Build order" below)
+Status: design (validated); **A + B implemented** (see "Build order" below)
 
 *A guest VM resolves `secret://` refs from the HOST's secreq over a
 forwarded unix socket — gated by host-side consent, bounded by a
@@ -188,7 +188,9 @@ inspect.
   audit). Testable over a local unix socket; no VM. **Implemented** —
   `src/scoped_agent/`, `tests/scoped_agent.rs`.
 - **B — scope anchoring**: TTL-cached approvals keyed to the scope, +
-  the untrusted guest-chain display in the prompt. Needs A.
+  the untrusted guest-chain display in the prompt. **Implemented** —
+  `consent::{AgentAnchor, AgentGrant}`, `scoped_agent::{ScopeApprovals,
+  GuestChain, Clock}`, the prompt's GUEST SAYS row.
 - **C — guest client**: `secreq resolve <ref>` dialing `$SECREQ_SOCK`,
   and the env convention. Needs A.
 - **D — brain wiring** (brain project): `secreq agent open` + `ssh -R`
@@ -226,3 +228,69 @@ inspect.
   `agent:<scope>` with the ref in `secrets`, mirroring `ssh:<key_id>`.
 </content>
 </invoke>
+
+## Notes from implementing B
+
+- **The anchor is the scope; the grant is per-`(scope, ref)`.**
+  `consent::AgentGrant` mirrors `SshGrant` — an anchor plus a wall-clock
+  `expires_at` — but anchors on the host-declared scope name rather than
+  a kernel `(pid, start_time)`, because a guest has no host pid to
+  anchor on. It is *not* per-scope alone: approving `GH_TOKEN` for a
+  sandbox must not silently release `LINEAR_TOKEN` to it, since the user
+  was shown one ref and consented to that one. There is deliberately no
+  `AllKeys`-style wildcard (the SSH prompt has one); the allowlist is
+  already the coarse bound, and a second wildcard inside it would make
+  the prompt a rubber stamp.
+- **TTL is 5 minutes, half the SSH agent's 30.** A weaker principal
+  earns a shorter leash: an SSH grant covers one key driven by a local
+  session whose process tree the host can see; a scope grant covers
+  everything running in a VM the host cannot inspect at all.
+- **The cache lives in the agent process, not the daemon.** That is what
+  makes "the second request is silent" true at the `Gate` — the daemon
+  is never dialled on a hit, so no prompt can even be queued — and it
+  keeps `Ask::allow_remember` at `false`, holding the daemon's
+  parent-keyed cache (which keys on `(wrap, ppid, parent_start_time)`,
+  none of which means anything for a guest) out of the path. The
+  lifetime story falls out of where it lives: the cache is the process,
+  the process is the socket, the socket is the sandbox. Teardown drops
+  the grants with no invalidation logic to get wrong.
+- **`Gate` had to split into `consent` + `resolve`.** A fused "gate this
+  ref" call makes the cheap implementation of a TTL cache *also* cache
+  the secret. Splitting lets `handle_request` skip the prompt on a hit
+  while still resolving fresh every single time, which is the design's
+  "only the decision caches" invariant made structural rather than
+  remembered. It's also what makes the property observable: the test
+  gate counts prompts and resolves separately, and a cached release is
+  provably 1 prompt / 2 resolves.
+- **The guest chain is display-only, enforced by types.** The rule is
+  easy to state and easy to erode, so it isn't left to care:
+  - `GuestChain` implements neither `Hash` nor `Eq` nor `Ord`, and holds
+    a *rendered string* rather than the guest's list. There is no map it
+    can key and no comparison a policy branch can make — the invariant
+    fails to compile rather than failing in production.
+  - `ScopeApprovals::{granted, remember}` and `AgentGrant::matches` take
+    a scope and a ref and nothing else. There is no parameter to pass a
+    claim through, and no field on `AgentGrant` to store one in.
+  - It never enters `Ask::callers` (what `rules.rs` matches on and
+    `provenance.rs` fills from the kernel), only
+    `AgentAskInfo::guest_chain`, whose sole consumer is the prompt
+    renderer. A guest able to write to `callers` could name a process
+    that fires an auto-approve rule and collect a silent release.
+  - The audit row files it under `unverified_guest_chain`, never
+    `callers`. A log outlives its context; the field name has to carry
+    the caveat.
+  - The pinning test is behavioural, not structural: two requests with
+    **different** claimed chains and the same `(scope, ref)` hit the
+    same entry and raise one prompt. If the chain keyed anything, the
+    second would miss and re-prompt.
+- **A claim is untrusted input into a consent UI, so it's sanitized.**
+  `GuestChain::new` strips control characters (a chain of
+  `"node\n⚠ host-verified — TRUSTED"` must not be able to paint a line
+  forging the very marker that discredits it) and caps links and link
+  widths (a guest can put ~64 KiB in a frame, and a prompt it can flood
+  is a prompt whose SCOPE row scrolls away).
+- **The prompt says what Approve means.** The TTL grant is a quiet
+  secondary action — "Scope: Approve for 5 min" — reusing the SSH
+  prompt's session-grant idiom, leaving the footer's Approve as "this
+  request only". An "Approve" that silently meant "approve for five
+  minutes" would be a consent UI lying by omission.

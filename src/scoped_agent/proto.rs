@@ -53,11 +53,50 @@ pub enum Request {
     /// "Resolve this `secret://provider/locator` for me." Gated: allowed
     /// refs prompt for consent, refs outside the socket's declared scope
     /// are denied without one.
-    Resolve { reference: String },
+    Resolve {
+        reference: String,
+        /// What the guest **claims** is asking, nearest-first
+        /// (`["node", "pnpm", "postinstall"]`). Untrusted, optional, and
+        /// **display-only**: the host cannot check a word of it (see the
+        /// provenance section of
+        /// `dev-docs/plans/2026-07-16-remote-secret-agent.md`), so it is
+        /// shown to the user marked as a guest claim and is never allowed to
+        /// influence the decision or the cache key.
+        ///
+        /// It stays a raw `Vec<String>` for exactly as long as it is *wire
+        /// input*. [`super::handle_request`] converts it into a
+        /// [`super::GuestChain`] before any policy code can see it, and that
+        /// type — which implements neither `Hash` nor `Eq` — is the only
+        /// form that travels any further.
+        ///
+        /// `#[serde(default)]` keeps a guest that predates this field (a #41
+        /// client) decoding cleanly as "claimed nothing".
+        #[serde(default)]
+        guest_chain: Vec<String>,
+    },
     /// "What may I ask for?" Answers the scope's allowed ref **names**.
     /// Free — no prompt, no consent, mirroring the SSH agent's
     /// `REQUEST_IDENTITIES`.
     List,
+}
+
+impl Request {
+    /// A resolve that claims nothing about its caller.
+    pub fn resolve(reference: impl Into<String>) -> Request {
+        Request::Resolve {
+            reference: reference.into(),
+            guest_chain: Vec::new(),
+        }
+    }
+
+    /// A resolve carrying the guest's self-reported caller chain. See
+    /// [`Request::Resolve::guest_chain`]: display-only, never load-bearing.
+    pub fn resolve_claiming(reference: impl Into<String>, guest_chain: Vec<String>) -> Request {
+        Request::Resolve {
+            reference: reference.into(),
+            guest_chain,
+        }
+    }
 }
 
 /// One response, host → guest.
@@ -185,9 +224,11 @@ mod tests {
     #[test]
     fn requests_round_trip_through_a_frame() {
         for request in [
-            Request::Resolve {
-                reference: "secret://op/Dev/gh/token".to_owned(),
-            },
+            Request::resolve("secret://op/Dev/gh/token"),
+            Request::resolve_claiming(
+                "secret://op/Dev/gh/token",
+                vec!["node".to_owned(), "pnpm".to_owned()],
+            ),
             Request::List,
         ] {
             let frame = encode(&request).expect("encode");
@@ -216,24 +257,14 @@ mod tests {
     fn pipelined_frames_decode_independently() {
         let mut stream = Vec::new();
         write_message(&mut stream, &Request::List).expect("write list");
-        write_message(
-            &mut stream,
-            &Request::Resolve {
-                reference: "secret://op/Dev/gh/token".to_owned(),
-            },
-        )
-        .expect("write resolve");
+        write_message(&mut stream, &Request::resolve("secret://op/Dev/gh/token"))
+            .expect("write resolve");
 
         let mut cursor = std::io::Cursor::new(stream);
         let first: Request = read_message(&mut cursor).expect("read").expect("present");
         let second: Request = read_message(&mut cursor).expect("read").expect("present");
         assert_eq!(first, Request::List);
-        assert_eq!(
-            second,
-            Request::Resolve {
-                reference: "secret://op/Dev/gh/token".to_owned()
-            }
-        );
+        assert_eq!(second, Request::resolve("secret://op/Dev/gh/token"));
         // Third read hits a clean EOF between frames, not an error.
         let third: Option<Request> = read_message(&mut cursor).expect("read");
         assert!(third.is_none());
@@ -264,6 +295,17 @@ mod tests {
         let payload = br#"{"op":"enumerate"}"#;
         let decoded: Result<Request, _> = serde_json::from_slice::<Request>(payload);
         assert!(decoded.is_err(), "unknown verbs must not decode");
+    }
+
+    /// A resolve frame from a guest that predates `guest_chain` must still
+    /// decode — as "claimed nothing", not as an error. The field is an
+    /// optional embellishment on an existing verb; a #41 client that never
+    /// heard of it must keep working unchanged.
+    #[test]
+    fn resolve_without_a_guest_chain_decodes_as_claiming_nothing() {
+        let payload = br#"{"op":"resolve","reference":"secret://op/Dev/gh/token"}"#;
+        let decoded: Request = serde_json::from_slice(payload).expect("old frames must decode");
+        assert_eq!(decoded, Request::resolve("secret://op/Dev/gh/token"));
     }
 
     /// A clean EOF before any frame is `Ok(None)`, not an error.

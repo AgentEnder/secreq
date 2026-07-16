@@ -50,6 +50,13 @@ pub enum Decision {
     /// for *all keys* on the current anchor for the session TTL — "stop
     /// asking me about any of my keys in this session for a while."
     ApproveSshSessionAll,
+    /// Scoped-agent only: approve this release **and** remember an
+    /// [`AgentGrant`] for this `(scope, ref)` for the scope TTL (see
+    /// [`crate::scoped_agent`]). The scoped agent's own in-memory cache —
+    /// not the daemon's parent-keyed one, which this path never touches —
+    /// answers subsequent asks for the same ref from the same scope with
+    /// [`Decision::ApproveCached`] until the grant expires.
+    ApproveAgentSession,
     /// Do not release; the run is aborted.
     Deny,
     /// Denied by a matching auto-deny rule. The wrap client surfaces
@@ -85,6 +92,7 @@ impl Decision {
                 | Decision::ApproveAuto
                 | Decision::ApproveSshSession
                 | Decision::ApproveSshSessionAll
+                | Decision::ApproveAgentSession
         )
     }
 
@@ -96,6 +104,7 @@ impl Decision {
             Decision::ApproveAuto => "approve+auto",
             Decision::ApproveSshSession => "approve+ssh-session",
             Decision::ApproveSshSessionAll => "approve+ssh-session-all",
+            Decision::ApproveAgentSession => "approve+agent-session",
             Decision::Deny => "deny",
             Decision::DenyAuto => "deny+auto",
             Decision::DenyOutOfScope => "deny+out-of-scope",
@@ -202,6 +211,91 @@ impl SshGrant {
     }
 }
 
+// ── Scoped-agent grants: the same TTL model, a different anchor ───────────
+//
+// [`AgentGrant`] is the scoped-agent analogue of [`SshGrant`]. The shape is
+// deliberately the same — an anchor plus a wall-clock `expires_at` — because
+// the *reason* for a timer is the same one spelled out for SSH above: the
+// anchor can live for hours, so the anchor's own lifetime is too loose a
+// bound on a grant.
+//
+// What differs is what the anchor **is**, and that difference is the whole
+// scoped-agent design:
+//
+//   - An [`SshAnchor`] is `(pid, start_time)` — a kernel fact about a local
+//     process, read through `SO_PEERCRED` and walked by `provenance.rs`.
+//   - An [`AgentAnchor`] is a **scope name**: the sandbox the host declared
+//     when it ran `secreq agent open --scope <name>`. A guest has no host
+//     pid to anchor on (there is no local process behind another kernel, and
+//     over a forwarded socket the peer is the tunnel), so the anchor is the
+//     one thing about a guest the host *does* know unforgeably, because the
+//     host itself said it. See the provenance section of
+//     `dev-docs/plans/2026-07-16-remote-secret-agent.md`.
+//
+// The anchor's lifetime problem is if anything sharper here: a scoped socket
+// lives as long as the sandbox does, which is hours. Without the timer, one
+// approval at 9am would authorize every request the VM makes until teardown.
+//
+// **Every field of the key is a host-verifiable fact.** The scope is
+// host-declared; the reference is checked against the host-declared allowlist
+// before a grant is ever consulted. A guest's self-reported caller chain
+// (`scoped_agent::GuestChain`) is deliberately *not* representable here —
+// there is no field for it, and `matches` has no parameter for it. That is
+// not an oversight to be tidied up later: a guest-controlled cache key would
+// let a compromised guest claim a previously-approved chain and get a
+// **silent** release, which is exactly the attack the design's "guest input
+// may inform the display, never the decision or the cache key" invariant
+// exists to prevent.
+
+/// The anchor an [`AgentGrant`] is bound to: the **scope** — the sandbox
+/// name the host declared at `secreq agent open` time.
+///
+/// The scoped-agent counterpart to [`SshAnchor`]. Where that anchors on a
+/// kernel-sourced `(pid, start_time)`, this anchors on a name the *host*
+/// chose, because that is the only unforgeable statement available about a
+/// guest. See the module note above.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentAnchor {
+    pub scope: String,
+}
+
+/// Remembered scoped-agent approval: this scope may have this ref, without
+/// re-prompting, until `expires_at`.
+///
+/// Holds a **decision**, never material — the secret itself is re-resolved
+/// fresh on every release and zeroized (see [`crate::scoped_agent`]), so a
+/// grant is only ever permission to skip a prompt.
+///
+/// The grant is per-`(anchor, reference)` rather than per-anchor. Approving
+/// `GH_TOKEN` for a sandbox must not silently release `LINEAR_TOKEN` to it:
+/// the user was shown one ref and consented to that one. This mirrors
+/// [`SshGrantScope::OneKey`] — and, unlike the SSH prompt, there is
+/// deliberately no `AllKeys`-style wildcard, because a scope's allowlist is
+/// already the coarse bound and a second wildcard inside it would make the
+/// prompt a rubber stamp.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentGrant {
+    pub anchor: AgentAnchor,
+    /// The exact `secret://provider/locator` the user was shown.
+    pub reference: String,
+    /// Unix seconds after which this grant no longer matches.
+    pub expires_at: u64,
+}
+
+impl AgentGrant {
+    /// True iff this grant is for exactly this scope **and** this ref, and
+    /// has not expired (`now < expires_at`).
+    ///
+    /// `now` is passed in (Unix seconds) so callers own the clock — the
+    /// production lookup reads a [`crate::scoped_agent::Clock`], while tests
+    /// pass explicit values. Note the parameter list: scope and reference,
+    /// both host-verifiable, and nothing else. There is nowhere to put a
+    /// guest's claim about itself, by construction.
+    pub fn matches(&self, scope: &str, reference: &str, now: u64) -> bool {
+        self.anchor.scope == scope && self.reference == reference && now < self.expires_at
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,6 +310,10 @@ mod tests {
         assert_eq!(
             Decision::ApproveSshSessionAll.as_str(),
             "approve+ssh-session-all"
+        );
+        assert_eq!(
+            Decision::ApproveAgentSession.as_str(),
+            "approve+agent-session"
         );
         assert_eq!(Decision::Deny.as_str(), "deny");
         assert_eq!(Decision::DenyAuto.as_str(), "deny+auto");
@@ -258,6 +356,40 @@ mod tests {
         assert!(!grant.matches("github", 42, 1000, 5001)); // expired
     }
 
+    fn agent_grant(scope: &str, reference: &str, expires_at: u64) -> AgentGrant {
+        AgentGrant {
+            anchor: AgentAnchor {
+                scope: scope.to_owned(),
+            },
+            reference: reference.to_owned(),
+            expires_at,
+        }
+    }
+
+    #[test]
+    fn agent_grant_binds_scope_ref_and_expiry() {
+        let grant = agent_grant("brain-nx-t5", "secret://op/Dev/gh/token", 5000);
+
+        assert!(grant.matches("brain-nx-t5", "secret://op/Dev/gh/token", 4999));
+        // Expired: the same scope asking for the same ref must prompt again.
+        assert!(!grant.matches("brain-nx-t5", "secret://op/Dev/gh/token", 5000));
+        assert!(!grant.matches("brain-nx-t5", "secret://op/Dev/gh/token", 5001));
+        // A different sandbox never rides this scope's approval.
+        assert!(!grant.matches("brain-nx-t6", "secret://op/Dev/gh/token", 4999));
+        // A different ref never rides an approval the user gave for this
+        // one — they were shown `gh/token`, not `linear/token`.
+        assert!(!grant.matches("brain-nx-t5", "secret://op/Dev/linear/token", 4999));
+    }
+
+    /// `expires_at` is the exact instant of death: `now < expires_at`, so a
+    /// grant stamped `now + TTL` covers the full TTL and not a second more.
+    #[test]
+    fn agent_grant_expiry_boundary_is_exclusive() {
+        let grant = agent_grant("s", "secret://op/a/b", 300);
+        assert!(grant.matches("s", "secret://op/a/b", 299));
+        assert!(!grant.matches("s", "secret://op/a/b", 300));
+    }
+
     #[test]
     fn decision_approved() {
         assert!(Decision::Approve.approved());
@@ -266,6 +398,7 @@ mod tests {
         assert!(Decision::ApproveAuto.approved());
         assert!(Decision::ApproveSshSession.approved());
         assert!(Decision::ApproveSshSessionAll.approved());
+        assert!(Decision::ApproveAgentSession.approved());
         assert!(!Decision::Deny.approved());
         assert!(!Decision::DenyAuto.approved());
         assert!(!Decision::DenyOutOfScope.approved());

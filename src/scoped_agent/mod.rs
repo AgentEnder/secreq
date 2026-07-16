@@ -25,7 +25,7 @@
 //! prompt gates on the **scope** instead, which the host declared when it
 //! created the socket and which the guest therefore cannot forge.
 //!
-//! ## The three rules this module exists to enforce
+//! ## The four rules this module exists to enforce
 //!
 //! 1. **The allowlist is immutable for the socket's life.** [`Scope`] is
 //!    built once, at open time, from the host's `--allow` flags, and is
@@ -40,6 +40,42 @@
 //!    so the daemon prompts but resolves nothing and caches nothing. On
 //!    approve, [`DaemonGate`] resolves the ref itself through
 //!    [`crate::resolve::resolve_all`] — fresh, per call — and zeroizes.
+//! 4. **The gate rests only on host-verifiable facts.** A guest may narrate
+//!    its own caller chain ([`GuestChain`]); the user gets to read it, marked
+//!    as the claim it is, and nothing else in this module may act on it. See
+//!    below.
+//!
+//! ## Anchoring: what caches, and what cannot key the cache
+//!
+//! [`ScopeApprovals`] caches a **decision** — never material — against a
+//! [`crate::consent::AgentGrant`], so a sandbox that was approved for a ref
+//! isn't re-prompted for it for the next [`SCOPE_GRANT_TTL_SECS`] seconds.
+//! The anchor is the scope, mirroring the SSH agent's `SshAnchor`/`SshGrant`
+//! pair (and, like it, timer-bounded rather than lifetime-bounded, because a
+//! scoped socket lives as long as the sandbox — hours).
+//!
+//! The [`GuestChain`] is **display-only**, and this module is built so that
+//! it cannot be otherwise:
+//!
+//! - It reaches exactly one function, [`Gate::consent`], which returns a
+//!   [`Decision`] for a human to make — and it is rendered there marked
+//!   unverifiable. [`Gate::resolve`] has no parameter for it, so it cannot
+//!   even influence *which material* is produced after an approval.
+//! - It cannot key the cache: [`ScopeApprovals::granted`] and
+//!   [`ScopeApprovals::remember`] take a `&Scope` and a `&Reference` and
+//!   nothing else, and `AgentGrant` has no field to put one in.
+//! - It cannot be *made* to key anything: [`GuestChain`] implements neither
+//!   `Hash` nor `Eq` nor `Ord`, and holds a rendered display string rather
+//!   than the guest's list, so there is nothing to compare and no map that
+//!   will accept it.
+//! - It never enters [`Ask::callers`], which is what `rules.rs` matches on
+//!   and what `provenance.rs` fills from the kernel. A guest's story must not
+//!   be able to fire an auto-approve rule.
+//!
+//! Why so much fuss for a display string: a guest-controlled cache key would
+//! let a compromised guest replay a chain the user approved earlier and get a
+//! **silent** release — no prompt, no chance to notice. The prompt is the
+//! only place a claim is safe, because a human is reading it.
 
 pub mod proto;
 
@@ -48,14 +84,15 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use zeroize::Zeroize;
 
 use crate::audit::{self, AuditEntry};
-use crate::consent::Decision;
+use crate::consent::{AgentAnchor, AgentGrant, Decision};
 use crate::daemon::proto::{AgentAskInfo, Ask, DedupeKey};
 use crate::manifest::{Manifest, Provider};
 use crate::reference::Reference;
@@ -63,6 +100,25 @@ use crate::resolve::{resolve_all, ResolutionPlan, SecretRequest, Source};
 use crate::secret::SecretValue;
 
 use self::proto::{Request, Response};
+
+/// How long an approval anchors to its scope: **5 minutes**.
+///
+/// The same reasoning as `ssh_agent::SSH_SESSION_GRANT_TTL_SECS` (30
+/// minutes), landing shorter. Both anchors outlive any single request by
+/// hours, so both need a timer rather than a lifetime; the scoped agent takes
+/// the tighter bound because its anchor is *coarser*. An SSH grant covers one
+/// key used by one local session whose process tree the host can see; a scope
+/// grant covers **everything running in a VM the host cannot inspect at all**
+/// (see the design's "granularity is downgraded" note). A weaker principal
+/// earns a shorter leash.
+pub const SCOPE_GRANT_TTL_SECS: u64 = 300;
+
+/// How many links of a guest's claimed chain are shown, and how wide each may
+/// be. A guest can put ~64 KiB of anything in a frame; a prompt that a guest
+/// can flood is a prompt whose *real* content (the SCOPE row) scrolls away,
+/// which is a consent-UI attack rather than a cosmetic problem.
+const MAX_GUEST_CHAIN_LINKS: usize = 12;
+const MAX_GUEST_CHAIN_LINK_CHARS: usize = 48;
 
 /// A socket's declared scope: the principal name the consent prompt shows,
 /// and the exact set of refs it may ask for.
@@ -119,39 +175,249 @@ impl Scope {
     }
 }
 
-/// The outcome of gating (and, on approve, resolving) one **allowed** ref.
+/// What a guest **claims** is asking — `node → pnpm → postinstall` — after
+/// sanitizing. A claim, not a fact, and typed so that it can only ever be
+/// used as one.
 ///
-/// Carries the [`Decision`] on every arm so the caller writes one audit row
-/// per outcome with the decision that actually authorized (or refused) it —
-/// `Approve` vs `ApproveAuto` vs `DenyAuto` are meaningfully different in
-/// the log.
-pub enum GateOutcome {
-    /// Consent granted and the ref resolved fresh.
-    Approved {
-        decision: Decision,
-        value: SecretValue,
-    },
-    /// Consent refused (user clicked Deny, an auto-deny rule fired, or the
-    /// consent machinery was unreachable and we failed closed).
-    Denied { decision: Decision },
-    /// Approved, but resolution then failed. Distinct from `Denied`: the
-    /// user said yes and the *provider* broke, which the guest should see as
-    /// an error rather than a policy refusal.
-    Error { message: String },
+/// The host cannot verify a syllable of this (see the module docs): there is
+/// no host pid behind a guest, so there is nothing to check the story
+/// against. It is still worth showing — an honest guest's chain is exactly
+/// the context a user wants, and a *dishonest* one is a signal in the audit
+/// log — but only to a human, and only labelled.
+///
+/// ## Why this is a display string and not a `Vec<String>`
+///
+/// The type deliberately does not implement `Hash`, `Eq`, `Ord`, or
+/// `PartialEq`, and does not expose the guest's list. Those are not
+/// omissions to be filled in when something needs them; they are the
+/// enforcement. A cache keyed on a guest's claim would let a compromised
+/// guest replay an approved chain for a **silent** release, so the invariant
+/// "guest input never keys the cache" is worth more than the convenience of a
+/// derive. Without `Hash`/`Eq` there is no map this can key and no comparison
+/// a policy branch can make: the invariant fails to compile rather than
+/// failing in production.
+///
+/// Constructed once, at the wire boundary, by [`GuestChain::new`]. Past that
+/// point the guest's structure is gone — only a string for a label remains.
+#[derive(Debug, Clone, Default)]
+pub struct GuestChain(Option<String>);
+
+impl GuestChain {
+    /// Sanitize a guest's claimed chain into something safe to render.
+    ///
+    /// Untrusted input on its way into a **consent UI**, so this is a trust
+    /// boundary, not formatting:
+    ///
+    /// - **Control characters are stripped.** A chain of `"node\n⚠ verified
+    ///   by host"` must not be able to paint a second line into the prompt.
+    ///   Forging the very marker that says "don't trust me" would invert the
+    ///   whole feature.
+    /// - **Links and link widths are capped** ([`MAX_GUEST_CHAIN_LINKS`],
+    ///   [`MAX_GUEST_CHAIN_LINK_CHARS`]), so a guest can't push the SCOPE row
+    ///   — the part that is actually true — off the top of the prompt.
+    /// - **Empty claims collapse to `None`**, which renders no row at all
+    ///   rather than an empty one that reads as "nothing is asking".
+    pub fn new(claimed: Vec<String>) -> GuestChain {
+        let mut links: Vec<String> = claimed
+            .iter()
+            .map(|link| sanitize_link(link))
+            .filter(|link| !link.is_empty())
+            .take(MAX_GUEST_CHAIN_LINKS)
+            .collect();
+        if links.is_empty() {
+            return GuestChain(None);
+        }
+        // Say so when there was more, rather than silently presenting a
+        // truncated chain as the whole story.
+        if claimed.len() > links.len() {
+            links.push("…".to_owned());
+        }
+        GuestChain(Some(links.join(" → ")))
+    }
+
+    /// The rendered claim, for display next to an "unverifiable" marker, or
+    /// `None` when the guest claimed nothing.
+    ///
+    /// The only accessor there is. It returns a `&str` for a label and an
+    /// audit field — deliberately not the guest's list, because a list
+    /// invites iteration and iteration invites a policy branch.
+    pub fn display(&self) -> Option<&str> {
+        self.0.as_deref()
+    }
 }
 
-/// Gates one allowed ref: consent, then resolve.
+/// One link of a claimed chain: printable characters only, trimmed, capped.
+fn sanitize_link(link: &str) -> String {
+    link.chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_GUEST_CHAIN_LINK_CHARS)
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+
+/// The consent door, and the resolve behind it — deliberately two methods.
 ///
-/// A trait so the server's allowlist enforcement can be tested without a
-/// daemon or a display: a test gate records its calls, and the out-of-scope
-/// tests assert it was **never called** — which is the precise, observable
-/// meaning of "denied without a prompt", since this trait is the only door
-/// to the consent machinery.
+/// A trait so the server's policy can be tested without a daemon or a
+/// display: a test gate records its calls, and the out-of-scope and
+/// cache-hit tests assert [`Gate::consent`] was **never called** — the
+/// precise, observable meaning of "no prompt was raised", since this method
+/// is the only route to the consent machinery.
+///
+/// ## Why consent and resolve are separate
+///
+/// They cache differently, and that is the design's central invariant:
+/// *"resolve fresh, zeroize, never cache the material — only the decision
+/// caches"*. [`handle_request`] can skip [`consent`](Gate::consent) on a
+/// cache hit while still calling [`resolve`](Gate::resolve) every single
+/// time. Fusing them into one "gate this ref" call would make the cheap
+/// implementation of a TTL cache *also* cache the secret, which is exactly
+/// the mistake worth making structurally impossible.
+///
+/// Note what each method is trusted with. `consent` gets the [`GuestChain`]
+/// because a human is about to read it; `resolve` does not, because by then
+/// there is nothing left for a claim to legitimately affect.
 ///
 /// Implementations are only ever called for refs that [`Scope::allows`];
-/// [`handle_request`] enforces that before it gets here.
+/// [`handle_request`] enforces that first.
 pub trait Gate: Send + Sync {
-    fn resolve(&self, scope: &Scope, reference: &Reference) -> GateOutcome;
+    /// Ask the user (or the rules) about one allowed ref. Returns a
+    /// **decision only** — never material.
+    ///
+    /// `Err` means the consent machinery itself was unreachable, which is
+    /// distinct from a refusal: the guest is told the request errored rather
+    /// than that policy refused it. Either way nothing is released.
+    fn consent(
+        &self,
+        scope: &Scope,
+        reference: &Reference,
+        guest_chain: &GuestChain,
+    ) -> Result<Decision>;
+
+    /// Resolve an **already-approved** ref, fresh. Called on every release,
+    /// including one served from [`ScopeApprovals`] — the decision caches,
+    /// the value never does.
+    fn resolve(&self, scope: &Scope, reference: &Reference) -> Result<SecretValue>;
+}
+
+/// The clock [`ScopeApprovals`] expires grants against.
+///
+/// Injectable because the alternative is a test that sleeps for five
+/// minutes to prove one `if`. Production is [`SystemClock`]; tests hand in a
+/// clock they can wind forward, which is the only way expiry gets asserted
+/// as a *property* rather than assumed.
+pub trait Clock: Send + Sync {
+    /// Whole seconds since the Unix epoch.
+    fn now_unix(&self) -> u64;
+}
+
+/// The real clock: wall time, in Unix seconds.
+///
+/// Wall time (not a monotonic instant) because that is what
+/// `AgentGrant::expires_at` speaks, matching `SshGrant`. The tradeoff is
+/// inherited and deliberate: a backwards clock step can end a grant early
+/// (re-prompt — safe) but a forwards step can also end one early. Neither
+/// direction can *extend* a grant past its stamp, so the failure mode is
+/// always "ask the user again".
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now_unix(&self) -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            // A pre-epoch clock is absurd; treating it as 0 expires every
+            // grant, which is the safe direction.
+            .unwrap_or(0)
+    }
+}
+
+/// The scope anchor's approval cache: **decisions only**, clock-bounded.
+///
+/// Lives in the agent process rather than the daemon, which is what makes
+/// "the second request is silent" true at the [`Gate`] — the daemon is never
+/// dialled at all on a cache hit, so no prompt can even be queued. It also
+/// keeps the daemon's parent-keyed approvals cache out of this path entirely
+/// (`Ask::allow_remember` stays `false`): that cache keys on
+/// `(wrap, ppid, parent_start_time)`, and a guest has no host parent to key
+/// on, so its notion of identity is meaningless here.
+///
+/// The lifetime story falls out of where it lives: the cache is this
+/// process's memory, and this process is the socket, and the socket is the
+/// sandbox. Sandbox torn down → socket gone → grants gone, with no
+/// invalidation logic to get wrong.
+///
+/// **What may key an entry:** the scope and the ref, both host-verifiable.
+/// The method signatures below are the enforcement — there is no parameter
+/// for a guest's claim, so "the guest chain is not in the cache key" is a
+/// compile-time fact rather than a promise.
+pub struct ScopeApprovals {
+    grants: Mutex<Vec<AgentGrant>>,
+    clock: Arc<dyn Clock>,
+    ttl_secs: u64,
+}
+
+impl ScopeApprovals {
+    /// Production: the real clock, the standard TTL.
+    pub fn new() -> ScopeApprovals {
+        ScopeApprovals::with_clock(Arc::new(SystemClock), SCOPE_GRANT_TTL_SECS)
+    }
+
+    /// Testing seam: an injectable clock and TTL.
+    pub fn with_clock(clock: Arc<dyn Clock>, ttl_secs: u64) -> ScopeApprovals {
+        ScopeApprovals {
+            grants: Mutex::new(Vec::new()),
+            clock,
+            ttl_secs,
+        }
+    }
+
+    /// Is there a live grant letting `scope` have `reference` without a
+    /// prompt?
+    ///
+    /// Note the parameters: a host-declared scope and a ref the allowlist has
+    /// already admitted. Nothing a guest said can reach this decision,
+    /// because there is nowhere to pass it.
+    pub fn granted(&self, scope: &Scope, reference: &Reference) -> bool {
+        let now = self.clock.now_unix();
+        let mut grants = self.grants.lock().expect("scope approvals mutex");
+        // Prune on read: expired grants are dead weight, and dropping them
+        // here means a long-lived socket's cache can't accumulate every ref
+        // a chatty guest ever asked for.
+        grants.retain(|grant| now < grant.expires_at);
+        let reference = reference.to_string();
+        grants
+            .iter()
+            .any(|grant| grant.matches(scope.name(), &reference, now))
+    }
+
+    /// Remember that `scope` may have `reference` for the TTL.
+    ///
+    /// Only ever called with a decision the user actively gave (see
+    /// [`handle_request`]) — a denial has no path here, and could not express
+    /// itself if it did: an [`AgentGrant`] is *only* a permission, so there
+    /// is no such thing as a cached refusal to accidentally read as one.
+    pub fn remember(&self, scope: &Scope, reference: &Reference) {
+        let expires_at = self.clock.now_unix().saturating_add(self.ttl_secs);
+        let reference = reference.to_string();
+        let mut grants = self.grants.lock().expect("scope approvals mutex");
+        // Re-approving refreshes rather than stacking duplicates.
+        grants
+            .retain(|grant| !(grant.anchor.scope == *scope.name() && grant.reference == reference));
+        grants.push(AgentGrant {
+            anchor: AgentAnchor {
+                scope: scope.name().to_owned(),
+            },
+            reference,
+            expires_at,
+        });
+    }
+}
+
+impl Default for ScopeApprovals {
+    fn default() -> ScopeApprovals {
+        ScopeApprovals::new()
+    }
 }
 
 /// The production [`Gate`]: prompt through the consent daemon, then resolve
@@ -182,37 +448,27 @@ impl DaemonGate {
 }
 
 impl Gate for DaemonGate {
-    fn resolve(&self, scope: &Scope, reference: &Reference) -> GateOutcome {
-        let ask = agent_ask(scope, reference);
+    fn consent(
+        &self,
+        scope: &Scope,
+        reference: &Reference,
+        guest_chain: &GuestChain,
+    ) -> Result<Decision> {
+        let ask = agent_ask(scope, reference, guest_chain);
         // `show_indicator = false`: the wait indicator writes to the
         // *host's* stderr, which for a long-lived `agent open` is a log,
         // not a terminal a human is watching for this specific ref.
-        let outcome = match crate::daemon::client::request_consent(ask, false) {
-            Ok(outcome) => outcome,
-            // Fail closed. `request_consent` already folds "no daemon" and
-            // "no display" into a deny; an Err here is a real transport or
-            // daemon-side failure, and a guest must not get a secret out of
-            // one.
-            Err(err) => {
-                return GateOutcome::Error {
-                    message: format!("consent request failed: {err:#}"),
-                }
-            }
-        };
-        if !outcome.decision.approved() {
-            return GateOutcome::Denied {
-                decision: outcome.decision,
-            };
-        }
-        match resolve_fresh(&self.manifest, reference) {
-            Ok(value) => GateOutcome::Approved {
-                decision: outcome.decision,
-                value,
-            },
-            Err(err) => GateOutcome::Error {
-                message: format!("resolution failed after approval: {err:#}"),
-            },
-        }
+        //
+        // Fail closed on Err. `request_consent` already folds "no daemon"
+        // and "no display" into a deny; an Err here is a real transport or
+        // daemon-side failure, and a guest must not get a secret out of one.
+        let outcome =
+            crate::daemon::client::request_consent(ask, false).context("consent request failed")?;
+        Ok(outcome.decision)
+    }
+
+    fn resolve(&self, _scope: &Scope, reference: &Reference) -> Result<SecretValue> {
+        resolve_fresh(&self.manifest, reference)
     }
 }
 
@@ -253,22 +509,31 @@ fn resolve_fresh(manifest: &Manifest, reference: &Reference) -> Result<SecretVal
 
 /// Build the consent [`Ask`] for one scoped-agent resolve.
 ///
-/// Three fields carry the design decisions and are worth reading as such:
+/// Four fields carry the design decisions and are worth reading as such:
 ///
 /// - **`callers` is empty.** Not "not yet populated" — *empty on purpose*.
 ///   See the module docs: there is no host-verifiable caller chain behind a
 ///   guest, and displaying an unverifiable one as if it were provenance
 ///   would be theater. The scope is the principal.
+/// - **`agent.guest_chain` carries the guest's claim** — and it goes *here*,
+///   never into `callers`, however tempting the shape. `callers` is what
+///   `rules.rs` matches on and what `provenance.rs` fills from the kernel;
+///   a guest's story landing there could fire an auto-approve rule, which
+///   would hand a compromised guest a silent release by simply naming the
+///   right process. Two fields, because they are two different kinds of
+///   thing: one the host saw, one the guest said.
 /// - **`secrets` is empty.** The daemon decides; it does not resolve. See
 ///   [`DaemonGate`].
-/// - **`dedupe_key.wrap` names the scope *and* the ref.** Coalescing folds
-///   asks with an equal key into one queue entry answered by one decision,
-///   so a scope-only key would let a request for ref B ride a prompt the
-///   user saw for ref A — releasing a secret that was never shown. The
-///   audit row's `wrap` stays the coarser `agent:<scope>` (see
+/// - **`dedupe_key.wrap` names the scope *and* the ref — and nothing the
+///   guest said.** Coalescing folds asks with an equal key into one queue
+///   entry answered by one decision, so a scope-only key would let a request
+///   for ref B ride a prompt the user saw for ref A — releasing a secret that
+///   was never shown. By the same token the claimed chain must stay out of
+///   it: a key a guest can vary is a key a guest can *steer*. The audit row's
+///   `wrap` stays the coarser `agent:<scope>` (see
 ///   [`AuditEntry::agent_resolve`]); a dedupe key is an internal coalescing
 ///   identity and is free to be finer than a log label.
-fn agent_ask(scope: &Scope, reference: &Reference) -> Ask {
+fn agent_ask(scope: &Scope, reference: &Reference, guest_chain: &GuestChain) -> Ask {
     Ask {
         command: vec![format!("agent-resolve {reference}")],
         // A guest has no host cwd. Empty, like the SSH sign path's.
@@ -287,10 +552,13 @@ fn agent_ask(scope: &Scope, reference: &Reference) -> Ask {
         agent: Some(AgentAskInfo {
             scope: scope.name.clone(),
             reference: reference.to_string(),
+            guest_chain: guest_chain.display().map(str::to_owned),
         }),
-        // TTL-cached approvals per scope anchor are build step B; for now
-        // every allowed request prompts. `false` also keeps the daemon's
-        // parent-keyed approvals cache out of this path entirely.
+        // Approvals anchor to the scope in *this* process's
+        // [`ScopeApprovals`], not in the daemon: `false` keeps the daemon's
+        // parent-keyed cache — which keys on `(wrap, ppid,
+        // parent_start_time)`, none of which means anything for a guest —
+        // out of this path entirely.
         allow_remember: false,
         nested_run: false,
     }
@@ -298,12 +566,29 @@ fn agent_ask(scope: &Scope, reference: &Reference) -> Ask {
 
 /// Answer one request.
 ///
-/// **This function is where deny-without-prompt lives.** The [`Scope::allows`]
-/// check runs before `gate` is touched, so an out-of-scope ref is audited and
-/// refused without the consent machinery ever seeing it. Everything else the
-/// server does around this (framing, threads, zeroizing) is plumbing; this is
-/// the policy.
-pub fn handle_request(scope: &Scope, gate: &dyn Gate, request: Request) -> Response {
+/// **This function is where the policy lives.** Everything the server does
+/// around it (framing, threads, zeroizing) is plumbing. Three things happen
+/// here in a deliberate order:
+///
+/// 1. [`Scope::allows`] runs *before* `gate` is touched, so an out-of-scope
+///    ref is audited and refused without the consent machinery ever seeing
+///    it (deny-without-prompt).
+/// 2. [`ScopeApprovals::granted`] runs *before* [`Gate::consent`], so a
+///    request the scope was already approved for within the TTL is served
+///    silently — no daemon dial, no prompt, one `approve+cached` audit row.
+/// 3. [`Gate::resolve`] runs on **every** release, cached or not. The
+///    decision caches; the material never does.
+///
+/// The [`GuestChain`] threads through to exactly two places: [`Gate::consent`]
+/// (a human reads it) and the audit row (a human reads it later). It reaches
+/// neither the allowlist check nor the cache — see the module docs for why
+/// that is enforced by types rather than by care.
+pub fn handle_request(
+    scope: &Scope,
+    approvals: &ScopeApprovals,
+    gate: &dyn Gate,
+    request: Request,
+) -> Response {
     match request {
         Request::List => {
             // Listing is free — no prompt, no consent, no audit row. It
@@ -317,7 +602,16 @@ pub fn handle_request(scope: &Scope, gate: &dyn Gate, request: Request) -> Respo
                 refs: scope.allowed_refs(),
             }
         }
-        Request::Resolve { reference } => {
+        Request::Resolve {
+            reference,
+            guest_chain,
+        } => {
+            // The guest's claim stops being a list of strings *here*, at the
+            // wire boundary, and becomes an opaque display value. Nothing
+            // below this line can hash it, compare it, or branch on it —
+            // see [`GuestChain`].
+            let guest_chain = GuestChain::new(guest_chain);
+
             let Some(reference) = Reference::parse(&reference) else {
                 // Malformed input is an error, not a denial: nothing was
                 // refused because nothing coherent was asked. The message
@@ -328,8 +622,12 @@ pub fn handle_request(scope: &Scope, gate: &dyn Gate, request: Request) -> Respo
             };
 
             // ── The gate before the gate ──────────────────────────────
+            // Note what this asks about: the ref, against the host's
+            // allowlist. Not what the guest says is asking for it — a
+            // compromised guest naming a friendly-looking chain must get
+            // exactly as far as an honest one, which is nowhere.
             if !scope.allows(&reference) {
-                audit_release(scope, &reference, Decision::DenyOutOfScope);
+                audit_release(scope, &reference, Decision::DenyOutOfScope, &guest_chain);
                 log(
                     scope,
                     format_args!("← resolve {reference}: OUTSIDE SCOPE; denied without a prompt"),
@@ -337,9 +635,47 @@ pub fn handle_request(scope: &Scope, gate: &dyn Gate, request: Request) -> Respo
                 return Response::out_of_scope();
             }
 
+            // ── The anchor cache: host-verifiable facts only ──────────
+            // `granted` takes the scope and the ref. There is no third
+            // argument, so no story a guest tells can turn a miss into a
+            // hit — which is precisely the "silent release" this design
+            // refuses to sell.
+            let decision = if approvals.granted(scope, &reference) {
+                Decision::ApproveCached
+            } else {
+                match gate.consent(scope, &reference, &guest_chain) {
+                    Ok(decision) => decision,
+                    Err(err) => {
+                        let message = format!("consent request failed: {err:#}");
+                        log(scope, format_args!("← resolve {reference}: {message}"));
+                        return Response::Error { message };
+                    }
+                }
+            };
+
+            if !decision.approved() {
+                audit_release(scope, &reference, decision, &guest_chain);
+                log(
+                    scope,
+                    format_args!("← resolve {reference}: {}", decision.as_str()),
+                );
+                return Response::Denied {
+                    message: "denied".to_owned(),
+                };
+            }
+
+            // Only an approval the user actively anchored is remembered, and
+            // only after `approved()` above has already returned. A denial
+            // cannot reach this line, and an `AgentGrant` could not express
+            // one if it did.
+            if decision == Decision::ApproveAgentSession {
+                approvals.remember(scope, &reference);
+            }
+
+            // Fresh, every time — including on the cached-decision path.
             match gate.resolve(scope, &reference) {
-                GateOutcome::Approved { decision, value } => {
-                    audit_release(scope, &reference, decision);
+                Ok(value) => {
+                    audit_release(scope, &reference, decision, &guest_chain);
                     log(
                         scope,
                         format_args!("← resolve {reference}: {}", decision.as_str()),
@@ -352,21 +688,12 @@ pub fn handle_request(scope: &Scope, gate: &dyn Gate, request: Request) -> Respo
                         value: value.expose().to_owned(),
                     }
                 }
-                GateOutcome::Denied { decision } => {
-                    audit_release(scope, &reference, decision);
-                    log(
-                        scope,
-                        format_args!("← resolve {reference}: {}", decision.as_str()),
-                    );
-                    Response::Denied {
-                        message: "denied".to_owned(),
-                    }
-                }
-                GateOutcome::Error { message } => {
-                    log(
-                        scope,
-                        format_args!("← resolve {reference}: error: {message}"),
-                    );
+                // The user said yes and the *provider* broke. An error, not
+                // a policy refusal — a guest that conflated them would retry
+                // a denial, which is the click-training the design forbids.
+                Err(err) => {
+                    let message = format!("resolution failed after approval: {err:#}");
+                    log(scope, format_args!("← resolve {reference}: {message}"));
                     Response::Error { message }
                 }
             }
@@ -374,8 +701,8 @@ pub fn handle_request(scope: &Scope, gate: &dyn Gate, request: Request) -> Respo
     }
 }
 
-/// Write one audit row for a release attempt: scope + ref + decision, and
-/// **never the value**.
+/// Write one audit row for a release attempt: scope + ref + decision, the
+/// guest's claim marked as such, and **never the value**.
 ///
 /// The scoped agent is a *client* of the consent daemon, like the wrap
 /// client in `commands.rs` — so it writes its own rows, and this adds no new
@@ -385,8 +712,22 @@ pub fn handle_request(scope: &Scope, gate: &dyn Gate, request: Request) -> Respo
 /// missing row is a worse-than-nothing outcome, but failing a release the
 /// user just approved (or, worse, erroring differently on the deny path and
 /// leaking that a ref exists) would be worse still.
-fn audit_release(scope: &Scope, reference: &Reference, decision: Decision) {
-    let entry = AuditEntry::agent_resolve(scope.name(), &reference.to_string(), decision);
+///
+/// The guest's claim lands in `unverified_guest_chain`, never in `callers` —
+/// the row records both what the host knew (the scope) and what the guest
+/// said, without letting the second masquerade as the first.
+fn audit_release(
+    scope: &Scope,
+    reference: &Reference,
+    decision: Decision,
+    guest_chain: &GuestChain,
+) {
+    let entry = AuditEntry::agent_resolve(
+        scope.name(),
+        &reference.to_string(),
+        decision,
+        guest_chain.display(),
+    );
     if let Err(err) = audit::append(&entry) {
         log(
             scope,
@@ -440,7 +781,14 @@ pub fn open(socket_path: &Path, scope: Scope, gate: Arc<dyn Gate>) -> Result<()>
     );
 
     let guard = SocketGuard(socket_path.to_path_buf());
-    serve_on(listener, Arc::new(scope), gate);
+    // The approvals cache is created here and dropped with this process, so
+    // the grants a sandbox earns can never outlive the sandbox's socket.
+    serve_on(
+        listener,
+        Arc::new(scope),
+        Arc::new(ScopeApprovals::new()),
+        gate,
+    );
     drop(guard);
     Ok(())
 }
@@ -494,10 +842,11 @@ fn clear_stale_socket(socket_path: &Path) -> Result<()> {
 /// a human Ctrl-Cs it). Without this, every stop would leave a socket file
 /// behind.
 ///
-/// Exiting from the handler thread is safe here: there is no state to flush
-/// (approvals live in the daemon, audit rows are appended synchronously as
-/// they happen) and any in-flight resolve is one we *want* to abandon — the
-/// scope is going away.
+/// Exiting from the handler thread is safe here: there is no state worth
+/// flushing (audit rows are appended synchronously as they happen, and the
+/// [`ScopeApprovals`] grants are *meant* to die with the scope — they are
+/// deliberately never persisted) and any in-flight resolve is one we *want*
+/// to abandon: the scope is going away.
 fn install_signal_cleanup(socket_path: &Path) -> Result<()> {
     use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
     let path = socket_path.to_path_buf();
@@ -518,19 +867,31 @@ fn install_signal_cleanup(socket_path: &Path) -> Result<()> {
 /// Accept loop: one thread per connection.
 ///
 /// The testable entry point — a test binds a `UnixListener` on a tempdir
-/// path and calls this directly with a synthetic [`Gate`], no daemon and no
-/// VM. Mirrors `daemon/ssh_agent.rs::serve_on`.
-pub fn serve_on(listener: UnixListener, scope: Arc<Scope>, gate: Arc<dyn Gate>) {
+/// path and calls this directly with a synthetic [`Gate`] and a
+/// [`ScopeApprovals`] on a fake [`Clock`], no daemon and no VM. Mirrors
+/// `daemon/ssh_agent.rs::serve_on`.
+///
+/// `approvals` is shared across connections on purpose: a grant anchors to
+/// the **scope**, not to a TCP-ish session, so a guest that hangs up and
+/// redials within the TTL must not be re-prompted. The socket is the sandbox;
+/// one connection is just one of its processes.
+pub fn serve_on(
+    listener: UnixListener,
+    scope: Arc<Scope>,
+    approvals: Arc<ScopeApprovals>,
+    gate: Arc<dyn Gate>,
+) {
     for incoming in listener.incoming() {
         let Ok(stream) = incoming else {
             break; // Listener closed or unrecoverable accept error.
         };
         let scope = Arc::clone(&scope);
+        let approvals = Arc::clone(&approvals);
         let gate = Arc::clone(&gate);
         thread::Builder::new()
             .name("secreq-agent-conn".to_owned())
             .spawn(move || {
-                if let Err(err) = handle_connection(stream, &scope, gate.as_ref()) {
+                if let Err(err) = handle_connection(stream, &scope, &approvals, gate.as_ref()) {
                     log(&scope, format_args!("connection error: {err:#}"));
                 }
             })
@@ -541,10 +902,15 @@ pub fn serve_on(listener: UnixListener, scope: Arc<Scope>, gate: Arc<dyn Gate>) 
 /// Read framed requests off `stream` until the peer hangs up, answering each
 /// in turn. The connection is held open across calls so a guest can list and
 /// then resolve without redialing.
-fn handle_connection(mut stream: UnixStream, scope: &Scope, gate: &dyn Gate) -> Result<()> {
+fn handle_connection(
+    mut stream: UnixStream,
+    scope: &Scope,
+    approvals: &ScopeApprovals,
+    gate: &dyn Gate,
+) -> Result<()> {
     while let Some(payload) = proto::read_payload(&mut stream)? {
         let response = match serde_json::from_slice::<Request>(&payload) {
-            Ok(request) => handle_request(scope, gate, request),
+            Ok(request) => handle_request(scope, approvals, gate, request),
             // An unparseable frame is the guest's fault. Answer a defined
             // error and keep serving — and say nothing about what *would*
             // have parsed, so a malformed frame is not a probe.
@@ -598,39 +964,105 @@ mod tests {
         .expect("valid scope")
     }
 
-    /// A [`Gate`] that records every ref it was asked to gate and answers
-    /// with a canned outcome. The recording is the whole point: the
-    /// out-of-scope tests assert the recorder stayed **empty**, which is how
-    /// "no prompt was raised" is observable — this trait is the only path to
-    /// the consent machinery.
+    /// A [`Gate`] that records every **prompt** it was asked to raise and
+    /// answers with a canned decision.
+    ///
+    /// The recording is the whole point: `consent` is the only path to the
+    /// consent machinery, so "`prompts()` is empty" is precisely "no prompt
+    /// was raised" — an observable fact rather than a proxy for one. The
+    /// out-of-scope tests and the cache-hit tests both rest on it.
+    ///
+    /// `resolves` is recorded separately because the two must diverge: a
+    /// cached release prompts zero times and resolves once, which is the
+    /// "decision caches, material doesn't" invariant made countable.
     struct RecordingGate {
-        calls: Mutex<Vec<String>>,
+        prompts: Mutex<Vec<String>>,
+        resolves: Mutex<Vec<String>>,
+        /// What the guest claimed, as seen by `consent`. Asserted on to prove
+        /// the chain reaches the *prompt* — the one place it is allowed to go.
+        seen_chains: Mutex<Vec<Option<String>>>,
+        decision: Decision,
         value: String,
     }
 
     impl RecordingGate {
         fn new(value: &str) -> RecordingGate {
+            RecordingGate::deciding(Decision::Approve, value)
+        }
+
+        fn deciding(decision: Decision, value: &str) -> RecordingGate {
             RecordingGate {
-                calls: Mutex::new(Vec::new()),
+                prompts: Mutex::new(Vec::new()),
+                resolves: Mutex::new(Vec::new()),
+                seen_chains: Mutex::new(Vec::new()),
+                decision,
                 value: value.to_owned(),
             }
         }
-        fn calls(&self) -> Vec<String> {
-            self.calls.lock().expect("calls mutex").clone()
+
+        fn prompts(&self) -> Vec<String> {
+            self.prompts.lock().expect("prompts mutex").clone()
+        }
+
+        fn resolves(&self) -> Vec<String> {
+            self.resolves.lock().expect("resolves mutex").clone()
+        }
+
+        fn seen_chains(&self) -> Vec<Option<String>> {
+            self.seen_chains.lock().expect("chains mutex").clone()
         }
     }
 
     impl Gate for RecordingGate {
-        fn resolve(&self, _scope: &Scope, reference: &Reference) -> GateOutcome {
-            self.calls
+        fn consent(
+            &self,
+            _scope: &Scope,
+            reference: &Reference,
+            guest_chain: &GuestChain,
+        ) -> Result<Decision> {
+            self.prompts
                 .lock()
-                .expect("calls mutex")
+                .expect("prompts mutex")
                 .push(reference.to_string());
-            GateOutcome::Approved {
-                decision: Decision::Approve,
-                value: SecretValue::new(self.value.clone()),
-            }
+            self.seen_chains
+                .lock()
+                .expect("chains mutex")
+                .push(guest_chain.display().map(str::to_owned));
+            Ok(self.decision)
         }
+
+        fn resolve(&self, _scope: &Scope, reference: &Reference) -> Result<SecretValue> {
+            self.resolves
+                .lock()
+                .expect("resolves mutex")
+                .push(reference.to_string());
+            Ok(SecretValue::new(self.value.clone()))
+        }
+    }
+
+    /// A clock a test winds by hand. Expiry is a property worth asserting,
+    /// and a test that sleeps for five minutes to assert it would be deleted
+    /// by the first person who ran the suite.
+    struct FakeClock(Mutex<u64>);
+
+    impl FakeClock {
+        fn at(now: u64) -> Arc<FakeClock> {
+            Arc::new(FakeClock(Mutex::new(now)))
+        }
+        fn advance(&self, secs: u64) {
+            *self.0.lock().expect("clock mutex") += secs;
+        }
+    }
+
+    impl Clock for FakeClock {
+        fn now_unix(&self) -> u64 {
+            *self.0.lock().expect("clock mutex")
+        }
+    }
+
+    /// Approvals on a real clock, for tests that don't care about time.
+    fn approvals() -> ScopeApprovals {
+        ScopeApprovals::new()
     }
 
     #[test]
@@ -701,10 +1133,9 @@ mod tests {
 
             let response = handle_request(
                 &scope,
+                &approvals(),
                 &gate,
-                Request::Resolve {
-                    reference: "secret://op/Prod/aws/key".to_owned(),
-                },
+                Request::resolve("secret://op/Prod/aws/key"),
             );
 
             assert!(
@@ -712,7 +1143,7 @@ mod tests {
                 "out-of-scope ref must be denied, got {response:?}"
             );
             assert!(
-                gate.calls().is_empty(),
+                gate.prompts().is_empty(),
                 "the gate (and therefore the prompt) must never be reached for an out-of-scope ref"
             );
         });
@@ -728,10 +1159,9 @@ mod tests {
 
             handle_request(
                 &scope,
+                &approvals(),
                 &gate,
-                Request::Resolve {
-                    reference: "secret://op/Prod/aws/key".to_owned(),
-                },
+                Request::resolve("secret://op/Prod/aws/key"),
             );
 
             let history = audit::read_history(None).expect("read audit history");
@@ -755,10 +1185,9 @@ mod tests {
 
             let response = handle_request(
                 &scope,
+                &approvals(),
                 &gate,
-                Request::Resolve {
-                    reference: "secret://op/Dev/gh/token".to_owned(),
-                },
+                Request::resolve("secret://op/Dev/gh/token"),
             );
 
             assert_eq!(
@@ -767,7 +1196,8 @@ mod tests {
                     value: "ghp_token_value".to_owned()
                 }
             );
-            assert_eq!(gate.calls(), vec!["secret://op/Dev/gh/token"]);
+            assert_eq!(gate.prompts(), vec!["secret://op/Dev/gh/token"]);
+            assert_eq!(gate.resolves(), vec!["secret://op/Dev/gh/token"]);
 
             let history = audit::read_history(None).expect("read audit history");
             assert_eq!(history.len(), 1);
@@ -783,7 +1213,7 @@ mod tests {
             let scope = test_scope();
             let gate = RecordingGate::new("s3cret");
 
-            let response = handle_request(&scope, &gate, Request::List);
+            let response = handle_request(&scope, &approvals(), &gate, Request::List);
 
             assert_eq!(
                 response,
@@ -794,7 +1224,7 @@ mod tests {
                     ]
                 }
             );
-            assert!(gate.calls().is_empty(), "list must never prompt");
+            assert!(gate.prompts().is_empty(), "list must never prompt");
             assert!(
                 audit::read_history(None)
                     .expect("read audit history")
@@ -810,16 +1240,11 @@ mod tests {
             let scope = test_scope();
             let gate = RecordingGate::new("s3cret");
 
-            let response = handle_request(
-                &scope,
-                &gate,
-                Request::Resolve {
-                    reference: "not-a-ref".to_owned(),
-                },
-            );
+            let response =
+                handle_request(&scope, &approvals(), &gate, Request::resolve("not-a-ref"));
 
             assert!(matches!(response, Response::Error { .. }));
-            assert!(gate.calls().is_empty());
+            assert!(gate.prompts().is_empty());
         });
     }
 
@@ -829,7 +1254,7 @@ mod tests {
     fn agent_ask_gates_on_scope_with_no_provenance_and_no_secrets() {
         let scope = test_scope();
         let reference = reference("secret://op/Dev/gh/token");
-        let ask = agent_ask(&scope, &reference);
+        let ask = agent_ask(&scope, &reference, &GuestChain::default());
 
         let info = ask.agent.expect("agent asks carry AgentAskInfo");
         assert_eq!(info.scope, "brain-nx-t5");
@@ -848,14 +1273,334 @@ mod tests {
         assert!(!ask.allow_remember);
     }
 
+    /// A cached decision skips the prompt but **not** the resolve. This is
+    /// the invariant the split [`Gate`] exists to make expressible: one
+    /// prompt, two resolutions.
+    #[test]
+    fn a_cached_decision_skips_the_prompt_and_still_resolves_fresh() {
+        audit::with_temp_log(|| {
+            let scope = test_scope();
+            let gate = RecordingGate::deciding(Decision::ApproveAgentSession, "ghp_token_value");
+            let approvals = ScopeApprovals::with_clock(FakeClock::at(1000), 300);
+
+            for _ in 0..2 {
+                let response = handle_request(
+                    &scope,
+                    &approvals,
+                    &gate,
+                    Request::resolve("secret://op/Dev/gh/token"),
+                );
+                assert_eq!(
+                    response,
+                    Response::Value {
+                        value: "ghp_token_value".to_owned()
+                    }
+                );
+            }
+
+            assert_eq!(gate.prompts().len(), 1, "the second release must be silent");
+            assert_eq!(
+                gate.resolves().len(),
+                2,
+                "the decision caches; the material must not"
+            );
+        });
+    }
+
+    /// A denial must never populate the cache — a cached "no" that read back
+    /// as a hit would become a silent "yes".
+    #[test]
+    fn a_denial_populates_no_grant() {
+        audit::with_temp_log(|| {
+            let scope = test_scope();
+            let gate = RecordingGate::deciding(Decision::Deny, "ghp_token_value");
+            let approvals = ScopeApprovals::with_clock(FakeClock::at(1000), 300);
+
+            let response = handle_request(
+                &scope,
+                &approvals,
+                &gate,
+                Request::resolve("secret://op/Dev/gh/token"),
+            );
+
+            assert!(matches!(response, Response::Denied { .. }));
+            assert!(
+                approvals.grants.lock().expect("grants").is_empty(),
+                "a denial must leave the approvals cache untouched"
+            );
+            assert!(
+                gate.resolves().is_empty(),
+                "a denied ref must never be resolved"
+            );
+        });
+    }
+
+    /// `handle_request` hands the guest's claim to `consent` — and to
+    /// nothing else. The claim's *only* job is to be shown, so it must
+    /// actually arrive where it can be.
+    #[test]
+    fn handle_request_gives_the_claim_to_consent_and_the_cache_ignores_it() {
+        audit::with_temp_log(|| {
+            let scope = test_scope();
+            let gate = RecordingGate::deciding(Decision::ApproveAgentSession, "v");
+            let approvals = ScopeApprovals::with_clock(FakeClock::at(1000), 300);
+
+            handle_request(
+                &scope,
+                &approvals,
+                &gate,
+                Request::resolve_claiming(
+                    "secret://op/Dev/gh/token",
+                    vec!["node".to_owned(), "pnpm".to_owned()],
+                ),
+            );
+            // A different story, same scope + ref: rides the grant.
+            handle_request(
+                &scope,
+                &approvals,
+                &gate,
+                Request::resolve_claiming(
+                    "secret://op/Dev/gh/token",
+                    vec!["curl".to_owned(), "exfiltrate.sh".to_owned()],
+                ),
+            );
+
+            assert_eq!(
+                gate.seen_chains(),
+                vec![Some("node → pnpm".to_owned())],
+                "the claim must reach the prompt that was actually raised"
+            );
+            assert_eq!(
+                gate.prompts().len(),
+                1,
+                "and a different claim must not buy a second prompt — it is not in the key"
+            );
+        });
+    }
+
+    // ── GuestChain: sanitizing an untrusted claim for display ────────────
+
+    #[test]
+    fn guest_chain_renders_links_nearest_first() {
+        let chain = GuestChain::new(vec![
+            "node".to_owned(),
+            "pnpm".to_owned(),
+            "postinstall".to_owned(),
+        ]);
+        assert_eq!(chain.display(), Some("node → pnpm → postinstall"));
+    }
+
+    #[test]
+    fn an_empty_claim_renders_no_row_at_all() {
+        // Nothing claimed, and nothing but whitespace claimed, are the same
+        // thing: no row. An empty GUEST SAYS row would read as a positive
+        // assertion that nothing is asking.
+        assert!(GuestChain::new(vec![]).display().is_none());
+        assert!(GuestChain::default().display().is_none());
+        assert!(GuestChain::new(vec!["  ".to_owned(), String::new()])
+            .display()
+            .is_none());
+    }
+
+    /// A guest must not be able to paint its own lines into the consent
+    /// prompt — least of all a forged "verified" marker, which would invert
+    /// the entire feature.
+    #[test]
+    fn control_characters_are_stripped_from_a_claim() {
+        let chain = GuestChain::new(vec![
+            "node\n⚠ host-verified — TRUSTED".to_owned(),
+            "pnpm\r\t\x1b[31m".to_owned(),
+        ]);
+        let rendered = chain.display().expect("a chain was claimed");
+        assert!(
+            !rendered.contains('\n') && !rendered.contains('\r') && !rendered.contains('\x1b'),
+            "rendered: {rendered:?}"
+        );
+    }
+
+    /// A guest can put ~64 KiB in a frame. A prompt it can flood is a prompt
+    /// whose true content scrolls out of view, so the claim is capped — and
+    /// says when it was.
+    #[test]
+    fn an_overlong_claim_is_capped_and_marked_as_truncated() {
+        let claimed: Vec<String> = (0..100).map(|i| format!("proc{i}")).collect();
+        let rendered = GuestChain::new(claimed)
+            .display()
+            .expect("chain")
+            .to_owned();
+        assert_eq!(
+            rendered.matches(" → ").count(),
+            MAX_GUEST_CHAIN_LINKS,
+            "expected {MAX_GUEST_CHAIN_LINKS} links plus an ellipsis: {rendered}"
+        );
+        assert!(
+            rendered.ends_with("…"),
+            "a truncated chain must not present itself as the whole story: {rendered}"
+        );
+    }
+
+    #[test]
+    fn an_overwide_link_is_capped() {
+        let rendered = GuestChain::new(vec!["x".repeat(500)])
+            .display()
+            .expect("chain")
+            .to_owned();
+        assert_eq!(rendered.chars().count(), MAX_GUEST_CHAIN_LINK_CHARS);
+    }
+
+    // ── ScopeApprovals: the anchor cache ─────────────────────────────────
+
+    #[test]
+    fn approvals_are_a_miss_until_remembered_then_expire_on_the_clock() {
+        let scope = test_scope();
+        let gh = reference("secret://op/Dev/gh/token");
+        let clock = FakeClock::at(1000);
+        let approvals = ScopeApprovals::with_clock(clock.clone(), 300);
+
+        assert!(
+            !approvals.granted(&scope, &gh),
+            "nothing is granted at first"
+        );
+
+        approvals.remember(&scope, &gh);
+        assert!(approvals.granted(&scope, &gh));
+
+        clock.advance(299);
+        assert!(
+            approvals.granted(&scope, &gh),
+            "a grant covers its full TTL"
+        );
+
+        clock.advance(1);
+        assert!(!approvals.granted(&scope, &gh), "and not one second longer");
+    }
+
+    /// Re-approving refreshes the same entry rather than stacking copies —
+    /// a long-lived socket's cache must not grow without bound.
+    #[test]
+    fn remembering_the_same_grant_twice_refreshes_rather_than_stacks() {
+        let scope = test_scope();
+        let gh = reference("secret://op/Dev/gh/token");
+        let clock = FakeClock::at(1000);
+        let approvals = ScopeApprovals::with_clock(clock.clone(), 300);
+
+        approvals.remember(&scope, &gh);
+        clock.advance(200);
+        approvals.remember(&scope, &gh);
+
+        assert_eq!(
+            approvals.grants.lock().expect("grants").len(),
+            1,
+            "a refresh must replace the grant, not add a second one"
+        );
+        // The refresh moved the deadline: the original would have died at
+        // 1300, and we're past that.
+        clock.advance(200);
+        assert!(
+            approvals.granted(&scope, &gh),
+            "the refresh extended the TTL"
+        );
+    }
+
+    /// A grant is per-`(scope, ref)`: approving one ref must not release
+    /// another the user was never shown.
+    #[test]
+    fn a_grant_does_not_cover_a_different_ref() {
+        let scope = test_scope();
+        let approvals = ScopeApprovals::with_clock(FakeClock::at(1000), 300);
+
+        approvals.remember(&scope, &reference("secret://op/Dev/gh/token"));
+
+        assert!(!approvals.granted(&scope, &reference("secret://op/Dev/linear/token")));
+    }
+
+    /// A grant is per-scope: another sandbox never rides this one's
+    /// approval, which is the anchor doing its job.
+    #[test]
+    fn a_grant_does_not_cover_a_different_scope() {
+        let gh = reference("secret://op/Dev/gh/token");
+        let approvals = ScopeApprovals::with_clock(FakeClock::at(1000), 300);
+        let other = Scope::new("brain-nx-t6", vec![gh.clone()]).expect("valid scope");
+
+        approvals.remember(&test_scope(), &gh);
+
+        assert!(!approvals.granted(&other, &gh));
+    }
+
+    /// Expired grants are pruned on read, so a chatty guest can't make a
+    /// long-lived socket accumulate an entry per ref it ever asked for.
+    #[test]
+    fn expired_grants_are_pruned_on_lookup() {
+        let scope = test_scope();
+        let gh = reference("secret://op/Dev/gh/token");
+        let clock = FakeClock::at(1000);
+        let approvals = ScopeApprovals::with_clock(clock.clone(), 300);
+
+        approvals.remember(&scope, &gh);
+        clock.advance(301);
+        approvals.granted(&scope, &gh);
+
+        assert!(
+            approvals.grants.lock().expect("grants").is_empty(),
+            "a dead grant must not linger in the cache"
+        );
+    }
+
+    /// The claim rides the ask for the prompt to render — in the `agent`
+    /// marker, and **not** in `callers`. `callers` is what `rules.rs`
+    /// matches on and what `provenance.rs` fills from the kernel; a guest
+    /// able to write there could name a process that fires an auto-approve
+    /// rule and collect a silent release.
+    #[test]
+    fn agent_ask_carries_the_guest_claim_for_display_but_never_as_callers() {
+        let scope = test_scope();
+        let chain = GuestChain::new(vec!["node".to_owned(), "pnpm".to_owned()]);
+        let ask = agent_ask(&scope, &reference("secret://op/Dev/gh/token"), &chain);
+
+        let info = ask.agent.expect("agent asks carry AgentAskInfo");
+        assert_eq!(info.guest_chain.as_deref(), Some("node → pnpm"));
+        assert!(
+            ask.callers.is_empty(),
+            "a guest's claim must never be laundered into the kernel-sourced caller chain"
+        );
+    }
+
+    /// The dedupe key must not vary with anything the guest says. A key a
+    /// guest can steer is a coalescing identity a guest can steer.
+    #[test]
+    fn the_dedupe_key_is_unmoved_by_the_guest_claim() {
+        let scope = test_scope();
+        let gh = reference("secret://op/Dev/gh/token");
+
+        let quiet = agent_ask(&scope, &gh, &GuestChain::default());
+        let chatty = agent_ask(
+            &scope,
+            &gh,
+            &GuestChain::new(vec!["curl".to_owned(), "exfiltrate.sh".to_owned()]),
+        );
+
+        assert_eq!(
+            quiet.dedupe_key.wrap, chatty.dedupe_key.wrap,
+            "the coalescing identity must rest on host-verifiable facts alone"
+        );
+    }
+
     /// Two refs in one scope must produce distinct dedupe keys, or the
     /// daemon would coalesce them into a single prompt and answer one with
     /// the other's decision.
     #[test]
     fn dedupe_key_distinguishes_refs_within_a_scope() {
         let scope = test_scope();
-        let gh = agent_ask(&scope, &reference("secret://op/Dev/gh/token"));
-        let linear = agent_ask(&scope, &reference("secret://op/Dev/linear/token"));
+        let gh = agent_ask(
+            &scope,
+            &reference("secret://op/Dev/gh/token"),
+            &GuestChain::default(),
+        );
+        let linear = agent_ask(
+            &scope,
+            &reference("secret://op/Dev/linear/token"),
+            &GuestChain::default(),
+        );
         assert_ne!(
             gh.dedupe_key.wrap, linear.dedupe_key.wrap,
             "two refs from one scope must not coalesce into one prompt"
