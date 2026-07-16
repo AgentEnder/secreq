@@ -78,8 +78,18 @@ row is two lines of authorship cost; it's never wrong to write.
   are regenerated via `cargo run --example gen-schema` and
   `cargo run --example gen-auto-rules-schema`. A test in
   `tests/schema_drift.rs` fails CI if either is stale.
+- The design plan for the remote secret agent (serving `secret://`
+  refs to a guest VM over a scoped socket) lives at
+  `dev-docs/plans/2026-07-16-remote-secret-agent.md`. Its provenance
+  section is load-bearing: the scoped-agent path must **never** call
+  `daemon/peercred.rs` or `provenance.rs`, because a guest has no host
+  pid and a forwarded socket's peer is the tunnel (sshd), not the
+  asker. The host-declared scope is the principal instead.
 - The audit log is written by the **wrap client** (`commands.rs`)
-  after the daemon's reply lands. The daemon never writes audit
+  after the daemon's reply lands. The scoped agent
+  (`scoped_agent/mod.rs`) is also a client, so it writes its own rows
+  via `audit.rs::AuditEntry::agent_resolve` — that's the rule, not an
+  exception to it. The daemon never writes audit
   rows itself — **with two exceptions:**
     1. **SSH-agent signs.** There is no wrap client on the SSH path
        (the daemon *is* the agent), so the daemon records each sign

@@ -83,6 +83,13 @@ enum Command {
         action: SshAction,
     },
 
+    /// Manage scoped secret agent sockets — the host-side end of serving
+    /// `secret://` refs to a guest VM instead of copying tokens into it.
+    Agent {
+        #[command(subcommand)]
+        action: AgentAction,
+    },
+
     /// Validate the config.
     Check,
 
@@ -213,6 +220,41 @@ enum Command {
         /// `op/Work/key`. At least one is required.
         #[arg(value_name = "REF", required = true)]
         refs: Vec<String>,
+    },
+}
+
+/// Subcommands under `secreq agent …`.
+#[derive(Subcommand)]
+enum AgentAction {
+    /// Open a scoped, ephemeral socket that resolves `secret://` refs for a
+    /// guest, and serve it until interrupted.
+    ///
+    /// The scope name and the allowlist are declared **here, by you, at open
+    /// time**, and are immutable for the socket's life. A ref outside the
+    /// allowlist is denied without a prompt (and audited) — so a compromised
+    /// guest can neither train you to click through nor enumerate your vault
+    /// one prompt at a time. Every allowed request prompts for consent,
+    /// showing the scope as the principal: a guest has no host process tree,
+    /// so there is no caller chain to show.
+    ///
+    /// Forward the socket into a VM the way `ssh -A` forwards an agent:
+    ///
+    ///   secreq agent open --scope my-vm --allow secret://op/Dev/gh/token \
+    ///     --sock /tmp/secreq-my-vm.sock &
+    ///   ssh -R /run/secreq.sock:/tmp/secreq-my-vm.sock my-vm
+    Open {
+        /// The scope name shown in the consent prompt as the principal —
+        /// typically the sandbox / VM name.
+        #[arg(long, value_name = "NAME")]
+        scope: String,
+        /// A `secret://provider/locator` ref this socket may resolve.
+        /// Repeatable; at least one is required. Matched exactly — there is
+        /// no prefix or wildcard form, by design.
+        #[arg(long = "allow", value_name = "secret://…", required = true)]
+        allow: Vec<String>,
+        /// Where to bind the socket. Must not already exist.
+        #[arg(long, value_name = "PATH")]
+        sock: PathBuf,
     },
 }
 
@@ -425,6 +467,9 @@ pub fn run() -> i32 {
         Some(Command::Ssh {
             action: SshAction::Validate { name },
         }) => commands::ssh_test(name, config),
+        Some(Command::Agent {
+            action: AgentAction::Open { scope, allow, sock },
+        }) => commands::agent_open(&scope, &allow, &sock, config),
         Some(Command::Unwrap { binary }) => commands::unwrap_cmd(&binary, config),
         Some(Command::Wraps) => commands::wraps_list(config),
         Some(Command::Check) => commands::check(config),

@@ -56,6 +56,15 @@ pub enum Decision {
     /// the rule's configured `deny_message` (if any) to stderr before
     /// exiting 1.
     DenyAuto,
+    /// Scoped-agent only: the guest asked for a `secret://` ref outside
+    /// the allowlist its socket was opened with, so it was refused
+    /// **without a prompt** (see [`crate::scoped_agent`]). Distinct from
+    /// `Deny` for the same reason `ApproveCached` is distinct from
+    /// `Approve` — it records that *the user was never asked*. That
+    /// distinction is what lets someone reading the log tell "I refused
+    /// this" from "a guest probed for something it was never offered",
+    /// which is the signal a compromised sandbox would generate.
+    DenyOutOfScope,
     /// The requesting process (the wrap, or an ancestor that took it
     /// down with it) exited before the user decided — the ask was
     /// abandoned, not answered. No secret is released and nothing is
@@ -89,6 +98,7 @@ impl Decision {
             Decision::ApproveSshSessionAll => "approve+ssh-session-all",
             Decision::Deny => "deny",
             Decision::DenyAuto => "deny+auto",
+            Decision::DenyOutOfScope => "deny+out-of-scope",
             Decision::Abandoned => "abandoned",
         }
     }
@@ -209,6 +219,7 @@ mod tests {
         );
         assert_eq!(Decision::Deny.as_str(), "deny");
         assert_eq!(Decision::DenyAuto.as_str(), "deny+auto");
+        assert_eq!(Decision::DenyOutOfScope.as_str(), "deny+out-of-scope");
         assert_eq!(Decision::Abandoned.as_str(), "abandoned");
     }
 
@@ -257,6 +268,7 @@ mod tests {
         assert!(Decision::ApproveSshSessionAll.approved());
         assert!(!Decision::Deny.approved());
         assert!(!Decision::DenyAuto.approved());
+        assert!(!Decision::DenyOutOfScope.approved());
         // Abandoned is a non-decision (the caller vanished before the user
         // chose); it must never read as an approval.
         assert!(!Decision::Abandoned.approved());

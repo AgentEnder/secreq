@@ -47,6 +47,7 @@ serialised across fixtures.
 | `22-pending-arrival-highlight.png` | `pending_arrival_highlight` | Two asks queued: the focused ask plus the "1 more waiting" queue line (the old tab-badge pulse retired with the tab bar). |
 | `23-pending-resolving.png` | `pending_resolving` | An authorized ask whose secret is still resolving: read-only prompt, "Resolving…" in place of the button pair — provenance for a provider biometric prompt. |
 | `24-ssh-sign-pending.png` | `ssh_sign_pending` | An SSH sign ask: SIGN WITH fingerprint row, `$reason`, caller chain, quiet session-grant buttons (30 min / all keys), Deny/Approve pair. |
+| `34-agent-scope-pending.png` | `agent_scope_pending` | A guest VM's ask over a scoped agent socket: the header leads with the **sandbox**, because the host-declared scope *is* the principal. The well shows SECRET / SCOPE / HISTORY — and what's absent is the point: no ASKED BY tree and no IN row, because a guest has no host process tree or cwd, and a chain-shaped widget here would imply provenance we cannot verify. See `src/scoped_agent/mod.rs`. |
 | `28-prompt-many-secrets.png` | `prompt_many_secrets` | The `secreq run` 42-vars case: count as headline, secrets grouped by locator prefix (largest group first) in a scroll-capped grid; body scrolls, footer stays pinned. |
 | `29-prompt-macos-light.png` | `prompt_macos_light` | Fixture 02's ask following a light OS appearance. |
 | `30-prompt-windows-dark.png` | `prompt_windows_dark` | The Windows 11 ContentDialog idiom: footer strip with an equal-width button pair, affirmative first, WinUI accent. |
@@ -74,6 +75,7 @@ serialised across fixtures.
 | `19-rules-tab-by-recency.png` | `rules_tab_by_recency` | Rules sorted by Recent where count and recency disagree. |
 | `20-rules-tab-rules-and-suggestions.png` | `rules_tab_rules_and_suggestions` | Both sections at once: saved rules first, suggestions beneath. |
 | `27-audit-tab-abandoned.png` | `audit_tab_abandoned_row` | Audit view showing an `abandoned` row (`gh pr checkout 9420`) — a wrap that exited before the user decided, so the daemon reaped the ask and logged it itself. The faint dot+text "abandoned" verdict reads as a non-event, distinct from the danger-tinted "denied" on the neighbouring `aws` row and a real approve. |
+| `35-audit-tab-agent-out-of-scope.png` | `audit_tab_agent_out_of_scope_row` | Audit view showing a scoped agent's rows (`agent:brain-nx-t5`). The `deny+out-of-scope` row carries the "out of scope" tag: the guest asked for a ref its socket was never opened with, so it was refused **without a prompt** — distinct from the plain danger-tinted `deny` on the neighbouring `aws` row, where a ref *was* offered and the user refused it. A run of these rows is what a probing sandbox looks like. The agent rows deliberately carry no caller chain and no cwd. |
 | `32-manager-audit-windows-dark.png` | `manager_audit_windows_dark` | The Windows treatment: SelectorBar tabs with the accent underline over the audit rows. |
 | `33-manager-rules-gnome-light.png` | `manager_rules_gnome_light` | The GNOME light treatment: headerbar view switcher over Adwaita-style boxed rule lists. |
 

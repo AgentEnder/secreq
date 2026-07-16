@@ -13,6 +13,8 @@
 //! - [`provenance`]— walk the parent process tree for the consent prompt.
 //! - [`consent`]   — `Decision` enum + persistent approvals cache I/O.
 //! - [`daemon`]    — long-running consent daemon (socket + queue + egui UI).
+//! - [`scoped_agent`] — scoped, ephemeral socket serving `secret://` refs to
+//!   a guest VM, bounded by a host-declared allowlist.
 //! - [`audit`]     — append-only JSONL audit log (names only, never values).
 //! - [`exec`]      — PTY / piped child execution with masking + env injection.
 
@@ -69,6 +71,7 @@ pub mod reference;
 pub mod resolve;
 pub mod rules;
 pub mod schema;
+pub mod scoped_agent;
 pub mod secret;
 pub mod shim;
 pub mod ssh_selftest;

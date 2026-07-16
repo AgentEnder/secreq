@@ -509,7 +509,10 @@ pub(crate) struct WrapHistorySummary {
 }
 
 impl WrapHistorySummary {
-    fn is_empty(&self) -> bool {
+    /// `pub(crate)` so `prompt_ui` can branch on it: the scoped-agent
+    /// prompt substitutes its own empty-history wording, since the shared
+    /// one names a "caller" that a guest ask doesn't have.
+    pub(crate) fn is_empty(&self) -> bool {
         self.total_count == 0 && self.last_ts_unix.is_none()
     }
 }
@@ -548,7 +551,7 @@ fn summarize_history(
         out.total_count += 1;
         match e.decision.as_str() {
             "approve" | "approve+remember" | "approve+cached" => out.approve_count += 1,
-            "deny" => out.deny_count += 1,
+            "deny" | "deny+out-of-scope" => out.deny_count += 1,
             _ => {}
         }
     }
@@ -1963,6 +1966,16 @@ impl AuditVerdict {
                 tag: Some("auto"),
                 color: th.danger,
             },
+            // A guest asked a scoped agent socket for a ref outside its
+            // host-declared allowlist, so it was refused without a prompt.
+            // Danger-tinted like any deny, but tagged so it reads as "the
+            // user was never asked" — a run of these rows is what a sandbox
+            // probing for undeclared refs looks like.
+            "deny+out-of-scope" => AuditVerdict {
+                label: "denied",
+                tag: Some("out of scope"),
+                color: th.danger,
+            },
             // The requesting process exited before the user decided — not
             // an approve, not a deny. Rendered muted so it reads as a
             // non-event at a glance, distinct from a real verdict.
@@ -2155,7 +2168,7 @@ pub(crate) fn format_audit_line(
     // Color only the deny case — approve/approve+remember is the
     // expected path and shouldn't draw the eye.
     let (verb, color) = match summary.last_decision.as_deref() {
-        Some("deny") => ("denied", th.danger),
+        Some("deny") | Some("deny+out-of-scope") => ("denied", th.danger),
         Some("approve") | Some("approve+remember") | Some("approve+cached") => ("approved", th.dim),
         _ => ("seen", th.dim),
     };

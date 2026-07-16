@@ -362,6 +362,53 @@ pub fn run(
     crate::exec::run(command, &env_overrides, &secrets_for_masking, &cwd)
 }
 
+/// `secreq agent open --scope <name> --allow <ref>… --sock <path>` — bind a
+/// scoped, ephemeral socket serving `secret://` refs to a guest, and serve it
+/// until the process is interrupted.
+///
+/// This is the host-side end of the remote secret agent (design:
+/// `dev-docs/plans/2026-07-16-remote-secret-agent.md`). The scope name and
+/// allowlist are declared here and are immutable for the socket's life; the
+/// guest can only ask, never widen. Blocks — the socket's lifetime *is* this
+/// process's lifetime — so the caller (brain, at sandbox start) backgrounds
+/// it and kills it when the sandbox goes away.
+pub fn agent_open(
+    scope: &str,
+    allow: &[String],
+    sock: &Path,
+    config_path: Option<&Path>,
+) -> Result<i32> {
+    // Parse every ref up front so a typo in the host's own declaration fails
+    // loudly at open time, rather than turning into a mysterious deny for the
+    // guest hours later.
+    let mut refs: Vec<Reference> = Vec::with_capacity(allow.len());
+    for raw in allow {
+        let reference = Reference::parse_arg(raw).with_context(|| {
+            format!("`{raw}` is not a valid reference (expected `secret://provider/locator` or `provider/locator`)")
+        })?;
+        if !refs.contains(&reference) {
+            refs.push(reference);
+        }
+    }
+
+    let scope = crate::scoped_agent::Scope::new(scope, refs)?;
+    let config = load_config_or_default(config_path)?;
+    // The gate resolves through the user's configured providers; the daemon
+    // supplies only the decision.
+    let gate = std::sync::Arc::new(crate::scoped_agent::DaemonGate::new(
+        config.providers.clone(),
+    ));
+
+    eprintln!(
+        "secreq: scope `{}` serving {} ref(s) at {}",
+        scope.name(),
+        scope.allowed_refs().len(),
+        sock.display()
+    );
+    crate::scoped_agent::open(sock, scope, gate)?;
+    Ok(0)
+}
+
 /// `secreq read <ref>…` — resolve one or more secret references and print
 /// their values as a JSON object, mirroring `op read` but for every store.
 ///
@@ -2275,6 +2322,7 @@ pub(crate) fn build_ask(
         // Wrap / run asks are never SSH sign asks; only the in-process SSH
         // agent path sets this.
         ssh: None,
+        agent: None,
         allow_remember: spec.allow_remember,
         // Default to false (always-prompt). The `run` path sets it on the
         // returned ask when it detects it's nested under another run.

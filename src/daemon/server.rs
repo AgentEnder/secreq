@@ -819,6 +819,11 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
             crate::consent::Decision::ApproveSshSessionAll => "Decision::ApproveSshSessionAll",
             crate::consent::Decision::Deny => "Decision::Deny",
             crate::consent::Decision::DenyAuto => "Decision::DenyAuto",
+            // Scoped-agent only, and never sent as a reply from here: an
+            // out-of-scope ref is refused by `scoped_agent::handle_request`
+            // before any ask reaches this daemon. Named because Decision is
+            // shared.
+            crate::consent::Decision::DenyOutOfScope => "Decision::DenyOutOfScope",
             // Never sent as a wrap reply — an abandoned ask has no live
             // client to receive it — but Decision is shared, so name it.
             crate::consent::Decision::Abandoned => "Decision::Abandoned",
@@ -1344,6 +1349,7 @@ mod tests {
                     parent_start_time: 7,
                 },
                 ssh: None,
+                agent: None,
                 allow_remember: true,
                 nested_run: false,
             };

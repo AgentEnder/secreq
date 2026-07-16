@@ -2167,6 +2167,7 @@ mod tests {
             providers: HashMap::new(),
             dedupe_key,
             ssh: None,
+            agent: None,
             allow_remember: true,
             nested_run: false,
         }
@@ -2517,6 +2518,7 @@ mod tests {
                 parent_start_time: 0,
             },
             ssh: None,
+            agent: None,
             allow_remember: true,
             nested_run: false,
         }
@@ -2934,6 +2936,7 @@ mod tests {
                 parent_start_time: 0,
             },
             ssh: None,
+            agent: None,
             allow_remember: true,
             nested_run: false,
         };

@@ -132,6 +132,34 @@ impl AuditEntry {
         }
     }
 
+    /// Assemble a **scoped-agent resolve** audit row — one release attempt
+    /// by a guest against a scoped socket (see [`crate::scoped_agent`]).
+    ///
+    /// This is *not* a new daemon-writes-audit exception: the scoped agent
+    /// is a client of the consent daemon, like the wrap client, so it writes
+    /// its own rows.
+    ///
+    /// The row carries the **scope** (`wrap = "agent:<scope>"`, the
+    /// principal the prompt gated on), the **ref** (in `secrets` — an
+    /// address, never a value), and the **decision**. It carries `callers:
+    /// []` deliberately: a guest has no host-verifiable caller chain, and
+    /// this row must not imply one existed (see the provenance section of
+    /// `dev-docs/plans/2026-07-16-remote-secret-agent.md`).
+    pub fn agent_resolve(scope: &str, reference: &str, decision: Decision) -> AuditEntry {
+        AuditEntry {
+            ts_unix: now_unix(),
+            // A guest has no host cwd.
+            cwd: String::new(),
+            wrap: format!("agent:{scope}"),
+            args: Vec::new(),
+            callers: Vec::new(),
+            secrets: vec![reference.to_owned()],
+            decision: decision.as_str().to_owned(),
+            rule_id: None,
+            fingerprint: None,
+        }
+    }
+
     /// Assemble an **abandoned** audit row. The requesting process exited
     /// before the user decided, so there is no live wrap client to write
     /// this row — the daemon writes it directly (the second documented
@@ -371,6 +399,54 @@ mod tests {
         assert_eq!(parsed.wrap, "ssh:ssh.deploy");
         assert_eq!(parsed.callers.len(), 2);
         assert!(parsed.secrets.is_empty());
+    }
+
+    /// A scoped-agent row must record the scope, the ref, and the decision —
+    /// and must never carry the resolved value, nor invent a caller chain a
+    /// guest cannot have.
+    #[test]
+    fn agent_resolve_entry_carries_scope_and_ref_but_never_the_value() {
+        let secret_value = "ghp_liveTokenValue_DEADBEEF";
+
+        let entry =
+            AuditEntry::agent_resolve("brain-nx-t5", "secret://op/Dev/gh/token", Decision::Approve);
+        let json = serde_json::to_string(&entry).expect("serialize agent-resolve entry");
+
+        assert!(
+            json.contains("\"wrap\":\"agent:brain-nx-t5\""),
+            "json: {json}"
+        );
+        assert!(
+            json.contains("\"secrets\":[\"secret://op/Dev/gh/token\"]"),
+            "json: {json}"
+        );
+        assert!(json.contains("\"decision\":\"approve\""), "json: {json}");
+        // CRITICAL: the value never lands in the log.
+        assert!(
+            !json.contains(secret_value),
+            "secret value leaked into audit row: {json}"
+        );
+        // No fabricated provenance: the scope IS the principal.
+        assert!(json.contains("\"callers\":[]"), "json: {json}");
+
+        let parsed: AuditEntry = serde_json::from_str(&json).expect("round-trip");
+        assert_eq!(parsed.wrap, "agent:brain-nx-t5");
+        assert!(parsed.callers.is_empty());
+        assert!(parsed.fingerprint.is_none());
+    }
+
+    /// The out-of-scope denial is a distinct decision string, so a reader
+    /// can tell a guest probing for an undeclared ref from a user clicking
+    /// Deny on one it was offered.
+    #[test]
+    fn agent_resolve_records_out_of_scope_denials_distinctly() {
+        let entry = AuditEntry::agent_resolve(
+            "brain-nx-t5",
+            "secret://op/Prod/aws/key",
+            Decision::DenyOutOfScope,
+        );
+        assert_eq!(entry.decision, "deny+out-of-scope");
+        assert_ne!(entry.decision, Decision::Deny.as_str());
     }
 
     #[test]

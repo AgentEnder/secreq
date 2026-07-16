@@ -35,9 +35,10 @@ use egui::Vec2;
 use egui_kittest::Harness;
 
 use secreq::audit::AuditEntry;
+use secreq::consent::Decision;
 use secreq::daemon::manager_ui::{render_manager_panel, ManagerWindowState};
 use secreq::daemon::prompt_ui::{render_prompt_panel, PromptWindowState, PROMPT_DEFAULT_SIZE};
-use secreq::daemon::proto::{Ask, Caller, DedupeKey, SecretAsk, SshAskInfo};
+use secreq::daemon::proto::{AgentAskInfo, Ask, Caller, DedupeKey, SecretAsk, SshAskInfo};
 use secreq::daemon::state::{SharedState, State};
 use secreq::daemon::theme::OsFlavor;
 use secreq::daemon::ui::{AutoDenyToastView, RuleAction, RuleSort};
@@ -118,6 +119,7 @@ fn submit(
         providers: HashMap::new(),
         dedupe_key,
         ssh: None,
+        agent: None,
         allow_remember: true,
         nested_run: false,
     };
@@ -149,6 +151,7 @@ fn submit_run(
         providers: HashMap::new(),
         dedupe_key,
         ssh: None,
+        agent: None,
         allow_remember: false,
         nested_run: false,
     };
@@ -189,7 +192,46 @@ fn submit_ssh(
             fingerprint: fingerprint.to_owned(),
             reason: reason.map(str::to_owned),
         }),
+        agent: None,
         allow_remember: true,
+        nested_run: false,
+    };
+    let (tx, rx) = mpsc::channel();
+    state.lock().unwrap().submit_ask(ask, tx);
+    rx
+}
+
+/// Submit a scoped-agent ask — a guest VM resolving a `secret://` ref
+/// through a scoped socket. Mirrors `scoped_agent::agent_ask`: the dedupe
+/// wrap is `agent:<scope>:<ref>` (per-ref, so two refs from one scope can't
+/// coalesce into one prompt), there are no secrets for the daemon to
+/// resolve, and — the load-bearing part — **`callers` is empty**: a guest
+/// has no host process tree, so the `agent` marker carries the host-declared
+/// scope as the principal instead.
+fn submit_agent(
+    state: &SharedState,
+    scope: &str,
+    reference: &str,
+) -> mpsc::Receiver<secreq::daemon::state::WaiterReply> {
+    let dedupe_key = DedupeKey {
+        wrap: format!("agent:{scope}:{reference}"),
+        ppid: 4242,
+        parent_start_time: 0,
+    };
+    let ask = Ask {
+        command: vec![format!("agent-resolve {reference}")],
+        // A guest has no host cwd.
+        cwd: String::new(),
+        callers: vec![],
+        secrets: vec![],
+        providers: HashMap::new(),
+        dedupe_key,
+        ssh: None,
+        agent: Some(AgentAskInfo {
+            scope: scope.to_owned(),
+            reference: reference.to_owned(),
+        }),
+        allow_remember: false,
         nested_run: false,
     };
     let (tx, rx) = mpsc::channel();
@@ -223,6 +265,7 @@ fn pending(
         providers: HashMap::new(),
         dedupe_key,
         ssh: None,
+        agent: None,
         allow_remember: true,
         nested_run: false,
     };
@@ -251,6 +294,16 @@ fn audit_line(
         rule_id: None,
         fingerprint: None,
     }
+}
+
+/// A scoped-agent audit row, built through the **production constructor**
+/// rather than by hand — so the fixture can't quietly misrepresent the shape
+/// (no caller chain, no cwd, ref in `secrets`, `agent:<scope>` as the wrap).
+/// That's the whole thing this fixture exists to show.
+fn agent_audit_line(secs_ago: u64, scope: &str, reference: &str, decision: Decision) -> AuditEntry {
+    let mut entry = AuditEntry::agent_resolve(scope, reference, decision);
+    entry.ts_unix = now_unix().saturating_sub(secs_ago);
+    entry
 }
 
 /// Richer variant for fixtures that want to exercise the audit view's
@@ -633,6 +686,25 @@ fn ssh_sign_pending() {
                 caller(8120, "git", 1_700_002_000),
                 caller(7926, "zsh", 1_700_000_000),
             ],
+        )]
+    });
+}
+
+#[test]
+#[ignore = "screenshot harness"]
+fn agent_scope_pending() {
+    // A guest VM asked a scoped agent socket for a ref on its allowlist.
+    // This is the prompt's third variant, and the one where what's *absent*
+    // is the point: the header leads with the sandbox (the scope IS the
+    // principal), the well shows SECRET + SCOPE, and there is deliberately
+    // no ASKED BY tree and no IN row — a guest has no host process tree or
+    // cwd, and rendering a chain-shaped widget here would imply we verified
+    // something we cannot. See `src/scoped_agent/mod.rs`.
+    render_prompt_fixture("34-agent-scope-pending", vec![], |state| {
+        vec![submit_agent(
+            state,
+            "brain-nx-t5",
+            "secret://op/Dev/gh/token",
         )]
     });
 }
@@ -1095,6 +1167,49 @@ fn audit_tab_abandoned_row() {
     ];
     render_manager_fixture(
         "27-audit-tab-abandoned",
+        audit,
+        ManagerExtras {
+            window_state: Some(Box::new(|ws| ws.focus_audit_view())),
+            ..ManagerExtras::default()
+        },
+    );
+}
+
+#[test]
+#[ignore = "screenshot harness"]
+fn audit_tab_agent_out_of_scope_row() {
+    // The Audit view showing a scoped agent's rows. The `deny+out-of-scope`
+    // row is the reason this verdict exists: the guest asked for a ref its
+    // socket was never opened with, so it was refused *without a prompt* —
+    // the "out of scope" tag says the user was never asked, distinguishing
+    // it from the plain `deny` below (a ref that was offered and refused).
+    // A run of these rows is what a probing sandbox looks like.
+    //
+    // Note the rows carry no caller chain: a guest has no host process tree.
+    let audit = vec![
+        agent_audit_line(
+            60 * 2,
+            "brain-nx-t5",
+            "secret://op/Dev/gh/token",
+            Decision::Approve,
+        ),
+        agent_audit_line(
+            60 * 4,
+            "brain-nx-t5",
+            "secret://op/Prod/aws/root_key",
+            Decision::DenyOutOfScope,
+        ),
+        audit_line_traced(
+            60 * 9,
+            "aws",
+            &["s3", "ls", "s3://prod-backups/"],
+            &[(52312, "make", "make ci-deploy")],
+            &["AWS_ACCESS_KEY_ID"],
+            "deny",
+        ),
+    ];
+    render_manager_fixture(
+        "35-audit-tab-agent-out-of-scope",
         audit,
         ManagerExtras {
             window_state: Some(Box::new(|ws| ws.focus_audit_view())),

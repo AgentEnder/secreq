@@ -1,0 +1,228 @@
+# Remote secret agent — serving secrets to guest VMs
+
+Date: 2026-07-16
+Status: design (validated); **A implemented** (see "Build order" below)
+
+*A guest VM resolves `secret://` refs from the HOST's secreq over a
+forwarded unix socket — gated by host-side consent, bounded by a
+host-declared allowlist — instead of having tokens copied into it.*
+
+## Goal
+
+Today brain's `sandbox.seed` **copies** `GH_TOKEN` / `LINEAR_TOKEN` /
+`CLAUDE_CODE_OAUTH_TOKEN` into a VM's login profile. Open egress makes
+anything in that env exfiltratable, so the tokens are minimized but
+still *persisted in the guest*. Instead: the guest asks the host, per
+use, and nothing is persisted.
+
+This is the SSH-agent pattern applied to secret resolution — the same
+move secreq already made for signing.
+
+## The template: secreq's SSH agent
+
+`docs/ssh-agent.md` + `src/daemon/{ssh_agent,ssh_proto,peercred}.rs`
+already do this shape:
+
+- a per-user **daemon** serving a unix socket
+  (`~/Library/Caches/secreq/agent.sock`);
+- clients point at it by env (`SSH_AUTH_SOCK`) or config
+  (`IdentityAgent`);
+- **listing is free**, every **sign is gated** by consent;
+- approvals cache **per anchor** with a clock-bounded TTL (`SshAnchor` /
+  `SshGrant` / `SshGrantScope` in `consent.rs`);
+- the secret resolves **fresh** per use and is zeroized; only the result
+  leaves;
+- every use is **audited** (decision + caller chain, never the
+  material).
+
+Reuse: `resolve.rs` (`build_plan` / `resolve_all` / providers),
+`reference.rs` (`secret://` parsing), `consent.rs`, `audit.rs`,
+`daemon/{server,proto,state,cache,prompt_ui}.rs`.
+
+## Where the template breaks: provenance
+
+This is the crux, and it must be stated plainly rather than papered
+over.
+
+`peercred.rs` — *"The SSH client is a socket peer, not our parent, so we
+read its pid **from the kernel**"* — and `provenance.rs` — *"walks the
+parent process tree so the consent prompt can show the caller chain…
+**This is the 'awareness' the design is built around: you see what is
+asking before you allow.**"*
+
+secreq's consent rests on an **unforgeable kernel fact**: `SO_PEERCRED`
+→ pid → local process tree. **A guest VM has neither.** There is no
+local pid for a process inside another kernel, and over a forwarded
+socket `peer_pid()` returns the *tunnel* (sshd), not the asker. The
+guest cannot be made to prove what it is.
+
+### Decision: the sandbox is the principal
+
+- **Gate on the sandbox.** The host owns the socket→sandbox mapping (it
+  created the scoped socket and forwarded it), so *"sandbox
+  `brain-nx-t5` wants `GH_TOKEN`"* is unforgeable. This matches brain's
+  own invariant: **a sandbox is a workspace, not an identity**.
+- **Display the guest's self-reported chain, marked untrusted.** Useful
+  when the guest is honest; **never load-bearing** — not for the
+  decision, and never as a cache key. A guest-controlled cache key would
+  mean a compromised guest could claim a previously-approved chain and
+  get a *silent* release.
+- **Accept the loss of granularity.** One approval covers that sandbox
+  for the TTL. There is no per-process granularity because none is
+  verifiable, and inventing one would be theater.
+
+```
+┌─ secreq ───────────────────────────────┐
+│ sandbox  brain-nx-t5  (vm · lima)      │
+│ wants    GH_TOKEN                      │
+│          secret://op/Dev/gh/token      │
+│                                        │
+│ guest says: node → pnpm → postinstall  │
+│ ⚠ guest-reported — NOT verifiable      │
+│                                        │
+│   [Deny]  [Allow once]  [Allow 5 min]  │
+└────────────────────────────────────────┘
+```
+
+## Transport: SSH-forwarded unix socket (VM tier only)
+
+```
+host                              guest (vm)
+┌─────────────┐   ssh -R sock    ┌──────────────┐
+│ scoped sock │<=================│ SECREQ_SOCK  │
+│ + consent   │  (no listener)   │ → resolve    │
+└─────────────┘                  └──────────────┘
+```
+
+`ssh -R /guest/secreq.sock:/host/scoped.sock` — exactly how `ssh -A`
+already forwards `SSH_AUTH_SOCK`. **No network listener, no new auth
+surface**: SSH is the auth, and brain's VM sandboxes already dial over
+SSH (`Connection { kind: 'ssh' }`).
+
+**VM tier only.** brain's container tier attaches via `incus exec` with
+**no sshd in the guest** (`Connection { kind: 'exec' }`), so a forwarded
+socket can't serve it — containers keep `sandbox.seed` for now. A future
+`exec`-pump carrier could relay the same protocol; the protocol must not
+assume its carrier.
+
+## Scope + allowlist: declared by the host at open time
+
+The host declares what a socket may ask for, when it creates it:
+
+```sh
+secreq agent open \
+  --scope brain-nx-t5 \
+  --allow secret://op/Dev/gh/token \
+  --allow secret://op/Dev/linear/token \
+  --sock /tmp/secreq-brain-nx-t5.sock
+```
+
+- brain already knows this list — it is exactly `sandbox.seed.env`'s
+  refs, which today it *copies*. Same declaration, different verb.
+- **A ref outside the allowlist is denied without a prompt** (and
+  audited). Never train click-through, and never let a compromised guest
+  enumerate the vault one prompt at a time.
+- **No config coupling either way**: secreq doesn't read brain's
+  manifest; brain doesn't maintain a second list in `wraps.json5`.
+
+## Protocol
+
+Small and carrier-agnostic (framed request/response over the socket):
+
+- `resolve <secret://ref>` → the secret, or a denial. Resolved fresh per
+  call via `resolve.rs`, zeroized after; only the value crosses.
+- `list` → the scope's *allowed ref names* (never values). Free, no
+  prompt — mirrors "listing is free".
+- Everything else → error. No enumeration surface.
+
+### Wire format as implemented (A)
+
+`[u32 big-endian payload length][JSON payload]`, one frame per message,
+request and response alternating on a connection held open across calls.
+
+The framing is deliberately **carrier-agnostic**: it needs a reliable
+in-order byte stream and nothing else. No `SO_PEERCRED`, no fd passing,
+no line-orientation, no socket-only syscalls — so the same codec runs
+unchanged over a unix socket, an SSH-forwarded socket, or a future
+`incus exec` pump's stdin/stdout pipe pair. The length prefix (capped,
+like the SSH agent's `MAX_AGENT_MSG_LEN`) means a carrier that chunks or
+coalesces writes can't desynchronize the parser, which a line-delimited
+codec could not promise across an arbitrary pump.
+
+JSON payloads match `daemon/proto.rs`'s existing idiom and are
+self-describing, so an older guest and a newer host degrade to a defined
+error instead of a misparse.
+
+## Invariants
+
+- **No outward-acting credential is persisted in the guest** — that's
+  the point; it strengthens brain's `#16` trust boundary rather than
+  competing with it.
+- **The gate rests only on host-verifiable facts.** Guest input may
+  inform the display, never the decision or the cache key.
+- **Deny-by-default outside the declared scope**, silently (audited, no
+  prompt).
+- **Resolve fresh, zeroize, never cache the material** — only the
+  *decision* caches, per scope anchor, clock-bounded.
+- Every release (approved, cached, or denied) is audited with scope +
+  ref + decision — never the value.
+
+## Trust-model note: granularity is downgraded
+
+Mirroring `docs/ssh-agent.md`'s own "key custody is downgraded" note,
+state the tradeoff honestly:
+
+**For guest callers, secreq cannot see what is asking — only which
+sandbox.** Approving a sandbox approves *everything running in it* for
+the TTL, not one process. That is strictly weaker than the local
+wrap/SSH story, where the caller chain is kernel-sourced. What you gain
+over `seed`: nothing is persisted in the guest, each use is gated and
+audited, and a revoked approval takes effect immediately. If a workload
+needs per-process consent, it doesn't belong in a VM the host can't
+inspect.
+
+## Build order
+
+- **A — scoped agent + protocol + allowlist** (`secreq agent open`,
+  resolve/list, deny-outside-scope silently, consent per request,
+  audit). Testable over a local unix socket; no VM. **Implemented** —
+  `src/scoped_agent/`, `tests/scoped_agent.rs`.
+- **B — scope anchoring**: TTL-cached approvals keyed to the scope, +
+  the untrusted guest-chain display in the prompt. Needs A.
+- **C — guest client**: `secreq resolve <ref>` dialing `$SECREQ_SOCK`,
+  and the env convention. Needs A.
+- **D — brain wiring** (brain project): `secreq agent open` + `ssh -R`
+  at sandbox start, `SECREQ_SOCK` in the guest profile; VM tier stops
+  copying env. Needs A + C.
+
+## Notes from implementing A
+
+- **The gate is a decision, not a resolve.** The scoped agent sends the
+  daemon an `Ask` carrying **no `SecretAsk`** — exactly like
+  `ssh_agent.rs::sign_ask` — so the daemon prompts but resolves nothing
+  and caches nothing. On approve, the agent resolves the ref *itself*
+  through `resolve.rs::resolve_all` and zeroizes. Routing through the
+  daemon's resolve path (the way `secreq read` does) would have put the
+  material in the daemon's `SecretCache`, breaking the "resolve fresh,
+  never cache the material" invariant above.
+- **No peercred on this path.** `Ask.callers` is deliberately **empty**
+  and `daemon/peercred.rs` is never consulted for the scoped socket:
+  over a forwarded socket the peer pid is the tunnel (sshd), so a caller
+  chain here would be a fabricated one. The prompt renders the scope as
+  the principal instead (`AgentAskInfo` on the `Ask`).
+- **"Ephemeral" needed a signal handler, not just a `Drop`.** The accept
+  loop never returns, so the socket guard's `Drop` never runs — and a
+  signal is the *normal* stop (brain kills the process at sandbox
+  teardown). Without a SIGTERM/SIGINT/SIGHUP handler, every stop leaked
+  the socket file and the next `agent open` on that path failed. A
+  SIGKILL still leaks it (nothing can run), so `open` also reclaims a
+  socket path when it can *prove* nothing is listening (connect fails);
+  a path with a live listener is refused, since clobbering it would
+  silently redirect another scope's guest onto our allowlist.
+- **Dedupe key is finer than the audit label.** `dedupe_key.wrap` is
+  `agent:<scope>:<ref>` so two concurrent asks for *different* refs from
+  one scope can't coalesce into a single prompt (which would release a
+  ref the user was never shown). The audit row's `wrap` stays
+  `agent:<scope>` with the ref in `secrets`, mirroring `ssh:<key_id>`.
+</content>
+</invoke>

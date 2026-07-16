@@ -624,6 +624,10 @@ fn sign_ask(
             fingerprint: identity.fingerprint.clone(),
             reason: identity.reason.clone(),
         }),
+        // Not a scoped-agent ask: an SSH sign has a real, kernel-sourced
+        // caller chain, which is exactly what the scoped-agent path cannot
+        // have.
+        agent: None,
         // SSH grants are remembered via `SshGrant`, not the wrap approvals
         // cache; the `ssh.is_some()` guard already skips the cache write, so
         // this value is moot for SSH asks. Keep it `true` for consistency.

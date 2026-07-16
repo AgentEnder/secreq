@@ -262,7 +262,16 @@ fn title_job(ui: &egui::Ui, th: &Theme, row: &QueueRow) -> egui::text::LayoutJob
         ..Default::default()
     };
     let _ = ui;
-    if let Some(ssh) = &ask.ssh {
+    if let Some(agent) = &ask.agent {
+        // "sandbox `brain-nx-t5` wants `secret://op/Dev/gh/token`". The
+        // scope leads because it IS the principal here — there is no
+        // process name to lead with, and inventing one would misrepresent
+        // what we actually know (see `scoped_agent`'s module docs).
+        job.append("sandbox ", 0.0, prop.clone());
+        job.append(&agent.scope, 0.0, code.clone());
+        job.append(" wants ", 0.0, prop);
+        job.append(&agent.reference, 0.0, code);
+    } else if let Some(ssh) = &ask.ssh {
         let requester = ask
             .callers
             .first()
@@ -303,7 +312,57 @@ fn render_evidence_well(
     let ask = &row.representative;
     well_frame(th).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        if let Some(ssh) = &ask.ssh {
+        if let Some(agent) = &ask.agent {
+            // A guest's request has a different evidence shape from every
+            // local ask, and the well says so honestly:
+            //
+            // - SECRET is the ref itself (a guest asks by address; there's
+            //   no env-var name on this path).
+            // - ASKED BY gives way to SCOPE. We do NOT render a caller tree
+            //   — not an empty one, not a placeholder one. There is no
+            //   host-verifiable chain behind a guest (see `scoped_agent`),
+            //   and a chain-shaped widget here would imply we checked
+            //   something we did not.
+            // - IN (cwd) is dropped for the same reason: the guest's cwd is
+            //   in another kernel.
+            well_row(ui, th, "SECRET", |ui, th| {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(&agent.reference)
+                            .monospace()
+                            .size(th.body_size - 1.0)
+                            .color(th.fg),
+                    )
+                    .truncate(),
+                );
+            });
+            well_separator(ui, th);
+
+            well_row(ui, th, "SCOPE", |ui, th| {
+                ui.vertical(|ui| {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(&agent.scope)
+                                .monospace()
+                                .size(th.body_size - 1.0)
+                                .color(th.fg),
+                        )
+                        .truncate(),
+                    );
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(
+                                "host-declared · the guest's callers are not visible",
+                            )
+                            .size(th.body_size - 2.0)
+                            .color(th.dim),
+                        )
+                        .truncate(),
+                    );
+                });
+            });
+            well_separator(ui, th);
+        } else if let Some(ssh) = &ask.ssh {
             well_row(ui, th, "SIGN WITH", |ui, th| {
                 ui.add(
                     egui::Label::new(
@@ -323,28 +382,44 @@ fn render_evidence_well(
             well_separator(ui, th);
         }
 
-        well_row(ui, th, "ASKED BY", |ui, th| {
-            render_caller_tree(ui, th, row);
-        });
-        well_separator(ui, th);
+        // ASKED BY / IN are host-process facts. A scoped-agent ask has
+        // neither (its `agent` branch above rendered SCOPE in their place),
+        // so they're skipped rather than rendered empty.
+        if ask.agent.is_none() {
+            well_row(ui, th, "ASKED BY", |ui, th| {
+                render_caller_tree(ui, th, row);
+            });
+            well_separator(ui, th);
 
-        well_row(ui, th, "IN", |ui, th| {
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(&ask.cwd)
-                        .monospace()
-                        .size(th.body_size - 1.0)
-                        .color(th.fg),
-                )
-                .truncate(),
-            );
-        });
-        well_separator(ui, th);
+            well_row(ui, th, "IN", |ui, th| {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(&ask.cwd)
+                            .monospace()
+                            .size(th.body_size - 1.0)
+                            .color(th.fg),
+                    )
+                    .truncate(),
+                );
+            });
+            well_separator(ui, th);
+        }
 
         well_row(ui, th, "HISTORY", |ui, th| {
             let caller_name = ask.callers.first().map(|c| c.name.as_str());
-            let summary = state.audit.summarize(&row.key.wrap, caller_name);
-            let (line, color) = format_audit_line(&summary, super::ui::now_unix(), th);
+            let summary = state
+                .audit
+                .summarize(history_wrap(row).as_ref(), caller_name);
+            let (line, color) = if ask.agent.is_some() && summary.is_empty() {
+                // The shared empty-history line says "first request from
+                // this caller". There is no caller on this path — that's
+                // the entire point of the scoped-agent design — so saying
+                // so here would quietly contradict the SCOPE row directly
+                // above it. The scope is what has (or hasn't) asked before.
+                ("first request from this scope".to_owned(), th.dim)
+            } else {
+                format_audit_line(&summary, super::ui::now_unix(), th)
+            };
             // The prompt's well already sets context; drop the audit
             // line's "↳ " prefix, which belongs to the old card layout.
             let line = line.trim_start_matches("↳ ").to_owned();
@@ -355,6 +430,22 @@ fn render_evidence_well(
             );
         });
     });
+}
+
+/// The wrap label this row's HISTORY should be summarized against.
+///
+/// Usually the dedupe key's wrap. Scoped-agent asks are the exception: their
+/// dedupe key is `agent:<scope>:<ref>` (deliberately per-ref, so two refs
+/// from one scope can't coalesce into a single prompt — see
+/// `scoped_agent::agent_ask`), while their audit rows are written against
+/// the coarser `agent:<scope>`. Summarizing on the dedupe key would find
+/// nothing; this asks the question the user actually has — "what has this
+/// sandbox asked for before?"
+fn history_wrap(row: &QueueRow) -> std::borrow::Cow<'_, str> {
+    match &row.representative.agent {
+        Some(agent) => std::borrow::Cow::Owned(format!("agent:{}", agent.scope)),
+        None => std::borrow::Cow::Borrowed(row.key.wrap.as_str()),
+    }
 }
 
 fn secrets_label(n: usize) -> String {

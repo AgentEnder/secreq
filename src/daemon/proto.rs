@@ -220,6 +220,17 @@ pub struct Ask {
     /// not the `wraps.json5` config schema.
     #[serde(default)]
     pub ssh: Option<SshAskInfo>,
+    /// `Some` when this ask came from a **scoped agent socket** — a guest
+    /// (VM) resolving a `secret://` ref from this host through
+    /// [`crate::scoped_agent`]. The consent UI renders a scope variant: the
+    /// declared scope is the principal, and there is deliberately **no
+    /// caller chain** (`callers` is empty on these asks — a guest has no
+    /// host pid to walk; see the provenance section of
+    /// `dev-docs/plans/2026-07-16-remote-secret-agent.md`). `None` for every
+    /// local ask. `#[serde(default)]` keeps the attach protocol
+    /// back-compatible, same as [`Ask::ssh`].
+    #[serde(default)]
+    pub agent: Option<AgentAskInfo>,
     /// Whether an `ApproveRemember` decision on this ask may persist a
     /// remembered approval. `true` for wrap (`x`) asks; `false` for
     /// `secreq run`, whose fixed `"run"` identity would otherwise let one
@@ -265,6 +276,31 @@ pub struct SshAskInfo {
     /// signs carry no secrets to inject.
     #[serde(default)]
     pub reason: Option<String>,
+}
+
+/// Scoped-agent metadata carried on an [`Ask`] so the consent window can
+/// render a guest's request distinctly.
+///
+/// Holds only display addresses — the host-declared scope name and the
+/// requested `secret://` ref — never a value. The scoped agent resolves the
+/// ref itself *after* consent (see [`crate::scoped_agent::DaemonGate`]), so
+/// nothing secret rides this struct or the wire.
+///
+/// Note what is **absent**: any guest-supplied provenance. Both fields
+/// originate on the host — the scope from the `agent open` invocation, the
+/// ref from an allowlist the host declared — so everything the prompt shows
+/// here is host-verifiable. (Build step B adds a *display-only*,
+/// explicitly-untrusted guest-reported chain; it must never become a
+/// decision or cache-key input.)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentAskInfo {
+    /// The host-declared scope name (e.g. a sandbox name like
+    /// `brain-nx-t5`) — the principal the prompt gates on.
+    pub scope: String,
+    /// The `secret://provider/locator` ref the guest asked for. Always one
+    /// the scope's allowlist admits: out-of-scope refs are denied before any
+    /// ask is built.
+    pub reference: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
