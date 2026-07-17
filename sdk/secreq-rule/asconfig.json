@@ -1,0 +1,9 @@
+{
+  "options": {
+    "runtime": "stub",
+    "optimizeLevel": 2,
+    "shrinkLevel": 0,
+    "converge": false,
+    "noAssert": false
+  }
+}

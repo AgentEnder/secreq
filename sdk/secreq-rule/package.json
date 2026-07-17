@@ -1,0 +1,15 @@
+{
+  "name": "secreq-rule",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AssemblyScript helper for authoring secreq programmable auto-rules: RuleCtx / Decision types plus the linear-memory ABI glue and a build wrapper around asc.",
+  "license": "MIT",
+  "types": "assembly/index.ts",
+  "ascMain": "assembly/index.ts",
+  "bin": {
+    "secreq-rule-build": "bin/build.js"
+  },
+  "devDependencies": {
+    "assemblyscript": "^0.28.2"
+  }
+}
