@@ -17,7 +17,7 @@
 use eframe::egui;
 
 use crate::recommendations::{self, Suggestion};
-use crate::rules::Rule;
+use crate::rules::{Rule, WasmRefusal};
 
 use super::theme::{OsFlavor, Theme};
 use super::ui::{
@@ -171,6 +171,7 @@ pub fn render_manager_panel(
     ctx: &egui::Context,
     ui: &mut egui::Ui,
     rules: &[Rule],
+    wasm_refusals: &[WasmRefusal],
     viewer_mode: bool,
     state: &mut ManagerWindowState,
     rule_actions_out: &mut Vec<RuleAction>,
@@ -205,7 +206,9 @@ pub fn render_manager_panel(
     egui::Frame::new()
         .inner_margin(body_inset)
         .show(ui, |ui| match state.view {
-            ManagerView::Rules => render_rules_body(ui, rules, state, rule_actions_out),
+            ManagerView::Rules => {
+                render_rules_body(ui, rules, wasm_refusals, state, rule_actions_out)
+            }
             ManagerView::Audit => render_audit_page(
                 ctx,
                 ui,
@@ -224,6 +227,7 @@ pub fn render_manager_panel(
 fn render_rules_body(
     ui: &mut egui::Ui,
     rules: &[Rule],
+    wasm_refusals: &[WasmRefusal],
     state: &mut ManagerWindowState,
     rule_actions_out: &mut Vec<RuleAction>,
 ) {
@@ -250,7 +254,14 @@ fn render_rules_body(
         suggestion_sort: &mut state.suggestion_sort,
         rule_sort: &mut state.rule_sort,
     };
-    render_rules_page(ui, &rule_rows, &visible, &mut rules_ui, rule_actions_out);
+    render_rules_page(
+        ui,
+        &rule_rows,
+        wasm_refusals,
+        &visible,
+        &mut rules_ui,
+        rule_actions_out,
+    );
 }
 
 // ── Header chrome ────────────────────────────────────────────────────────

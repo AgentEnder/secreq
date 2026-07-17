@@ -163,6 +163,65 @@ impl Rule {
     }
 }
 
+/// Why a wasm rule was refused, coarse enough for a one-word list
+/// marker. The full reason string lives on [`WasmRefusal::reason`];
+/// this enum exists so `rules list` and the UI badge can say *what
+/// kind* of refusal happened without parsing prose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WasmRefusalCategory {
+    /// The referenced module file could not be read.
+    MissingModule,
+    /// The module bytes hash to something other than the recorded
+    /// sha256 — the module changed since registration.
+    Sha256Mismatch,
+    /// The module was read and hash-verified but the sandbox rejected
+    /// it (bad imports, wrong abort signature, oversized memory,
+    /// missing exports, …).
+    ModuleRejected,
+}
+
+impl WasmRefusalCategory {
+    /// Short human label for compact display (`rules list`, UI badge).
+    pub fn label(self) -> &'static str {
+        match self {
+            WasmRefusalCategory::MissingModule => "module missing",
+            WasmRefusalCategory::Sha256Mismatch => "sha256 mismatch",
+            WasmRefusalCategory::ModuleRejected => "module rejected",
+        }
+    }
+}
+
+/// One wasm rule refused at load time, retained so the refusal is
+/// visible outside the daemon log: `rules list`/`show` and the UI
+/// badge all render from this. Value-free by construction — `reason`
+/// names rules, files, and hashes, never secret values.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WasmRefusal {
+    /// Id of the refused rule (it stays in the ruleset, module-less,
+    /// so it can never fire).
+    pub rule_id: String,
+    pub category: WasmRefusalCategory,
+    /// Full formatted error chain naming the rule and module path.
+    pub reason: String,
+}
+
+/// Error from [`load_rule_module`]: the anyhow chain plus the coarse
+/// [`WasmRefusalCategory`] the refusal surfaces under. Converts into
+/// `anyhow::Error` (dropping the category) for mutation paths that
+/// abort outright rather than retaining refusal state.
+#[derive(Debug)]
+pub struct WasmLoadError {
+    pub category: WasmRefusalCategory,
+    pub source: anyhow::Error,
+}
+
+impl From<WasmLoadError> for anyhow::Error {
+    fn from(err: WasmLoadError) -> Self {
+        err.source
+    }
+}
+
 /// Lowercase-hex SHA-256 of `bytes`. Used to pin wasm rule modules in
 /// the rules file and to verify them on every load.
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -181,39 +240,55 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 /// containing the rules file — relative module paths resolve against
 /// it. Every failure (missing file, sha256 mismatch, compile/sandbox
 /// rejection) is an error naming the rule and the module path.
-pub fn load_rule_module(rule: &Rule, rules_dir: &Path) -> Result<Option<RuleModule>> {
+pub fn load_rule_module(
+    rule: &Rule,
+    rules_dir: &Path,
+) -> Result<Option<RuleModule>, WasmLoadError> {
     let Some(wasm) = &rule.wasm else {
         return Ok(None);
     };
     let path = rules_dir.join(&wasm.path);
-    let bytes = std::fs::read(&path).with_context(|| {
-        format!(
-            "read wasm module for rule `{}` (id {}): {}",
-            rule.name,
-            rule.id,
-            path.display()
-        )
-    })?;
+    let bytes = std::fs::read(&path)
+        .with_context(|| {
+            format!(
+                "read wasm module for rule `{}` (id {}): {}",
+                rule.name,
+                rule.id,
+                path.display()
+            )
+        })
+        .map_err(|source| WasmLoadError {
+            category: WasmRefusalCategory::MissingModule,
+            source,
+        })?;
     let actual = sha256_hex(&bytes);
     if !actual.eq_ignore_ascii_case(&wasm.sha256) {
-        bail!(
-            "sha256 mismatch for wasm rule `{}` (id {}): {} hashes to {actual} \
-             but the rules file expects {} — the module changed since the rule \
-             was registered; refusing to load this rule",
-            rule.name,
-            rule.id,
-            path.display(),
-            wasm.sha256,
-        );
+        return Err(WasmLoadError {
+            category: WasmRefusalCategory::Sha256Mismatch,
+            source: anyhow::anyhow!(
+                "sha256 mismatch for wasm rule `{}` (id {}): {} hashes to {actual} \
+                 but the rules file expects {} — the module changed since the rule \
+                 was registered; refusing to load this rule",
+                rule.name,
+                rule.id,
+                path.display(),
+                wasm.sha256,
+            ),
+        });
     }
-    let module = RuleModule::from_binary(&bytes).with_context(|| {
-        format!(
-            "compile wasm module for rule `{}` (id {}): {}",
-            rule.name,
-            rule.id,
-            path.display()
-        )
-    })?;
+    let module = RuleModule::from_binary(&bytes)
+        .with_context(|| {
+            format!(
+                "compile wasm module for rule `{}` (id {}): {}",
+                rule.name,
+                rule.id,
+                path.display()
+            )
+        })
+        .map_err(|source| WasmLoadError {
+            category: WasmRefusalCategory::ModuleRejected,
+            source,
+        })?;
     Ok(Some(module))
 }
 
@@ -361,12 +436,13 @@ pub struct LoadedRules {
     pub mtime: Option<SystemTime>,
     /// Compiled + hash-verified modules for the wasm rules in `rules`.
     pub modules: RuleModules,
-    /// One formatted error per wasm rule refused at load time (missing
+    /// One [`WasmRefusal`] per wasm rule refused at load time (missing
     /// module file, sha256 mismatch, compile/sandbox rejection). The
     /// rule itself stays in `rules` — visible to the UI and CLI — but
     /// has no entry in `modules`, so it can never fire. The caller
-    /// must surface these loudly (the daemon logs each one).
-    pub wasm_errors: Vec<String>,
+    /// must surface these loudly (the daemon logs each one and retains
+    /// them so list/show/UI render the refusal).
+    pub wasm_refusals: Vec<WasmRefusal>,
 }
 
 /// Load rules from `path`. A missing file returns an empty
@@ -383,7 +459,7 @@ pub struct LoadedRules {
 ///   existing "warn + empty ruleset" contract applies.
 /// - **Per-rule**: a wasm rule whose *referenced module* fails to load
 ///   (missing file, sha256 mismatch, sandbox rejection) refuses just
-///   that rule, recorded in [`LoadedRules::wasm_errors`]. A tampered
+///   that rule, recorded in [`LoadedRules::wasm_refusals`]. A tampered
 ///   or stale module is a loud security event, but it must not knock
 ///   out the user's other rules — in particular their protective
 ///   *deny* rules, which would otherwise stop firing exactly when
@@ -411,21 +487,25 @@ pub fn load_rules(path: &Path) -> Result<LoadedRules> {
     // Relative wasm paths anchor at the rules file's directory.
     let rules_dir = path.parent().unwrap_or(Path::new(""));
     let mut modules = RuleModules::new();
-    let mut wasm_errors = Vec::new();
+    let mut wasm_refusals = Vec::new();
     for rule in &parsed.rules {
         match load_rule_module(rule, rules_dir) {
             Ok(Some(module)) => {
                 modules.insert(rule.id.clone(), module);
             }
             Ok(None) => {}
-            Err(err) => wasm_errors.push(format!("{err:#}")),
+            Err(err) => wasm_refusals.push(WasmRefusal {
+                rule_id: rule.id.clone(),
+                category: err.category,
+                reason: format!("{:#}", err.source),
+            }),
         }
     }
     Ok(LoadedRules {
         rules: parsed.rules,
         mtime,
         modules,
-        wasm_errors,
+        wasm_refusals,
     })
 }
 
@@ -1472,7 +1552,11 @@ mod tests {
         });
         let loaded = load_with_module(rule.clone(), "mod.wasm", APPROVE_IF);
         assert_eq!(loaded.rules, vec![rule]);
-        assert!(loaded.wasm_errors.is_empty(), "{:?}", loaded.wasm_errors);
+        assert!(
+            loaded.wasm_refusals.is_empty(),
+            "{:?}",
+            loaded.wasm_refusals
+        );
         assert!(loaded.modules.contains_key("01"));
         // And the loaded module actually evaluates.
         let callers = &[("Cursor", "/Applications/Cursor.app/Contents/MacOS/Cursor")];
@@ -1497,7 +1581,11 @@ mod tests {
             sha256: sha256_hex(APPROVE_IF).to_uppercase(),
         });
         let loaded = load_with_module(rule, "mod.wasm", APPROVE_IF);
-        assert!(loaded.wasm_errors.is_empty(), "{:?}", loaded.wasm_errors);
+        assert!(
+            loaded.wasm_refusals.is_empty(),
+            "{:?}",
+            loaded.wasm_refusals
+        );
         assert!(loaded.modules.contains_key("01"));
     }
 
@@ -1526,8 +1614,11 @@ mod tests {
         let loaded = load_rules(&path).expect("per-rule refusal is not a load error");
         assert_eq!(loaded.rules.len(), 2);
         assert!(loaded.modules.is_empty());
-        assert_eq!(loaded.wasm_errors.len(), 1);
-        let msg = &loaded.wasm_errors[0];
+        assert_eq!(loaded.wasm_refusals.len(), 1);
+        let refusal = &loaded.wasm_refusals[0];
+        assert_eq!(refusal.rule_id, "01");
+        assert_eq!(refusal.category, WasmRefusalCategory::Sha256Mismatch);
+        let msg = &refusal.reason;
         assert!(
             msg.contains("sha256 mismatch") && msg.contains("tampered") && msg.contains("mod.wasm"),
             "error must name the rule and path: {msg}"
@@ -1551,8 +1642,11 @@ mod tests {
         });
         save_rules(&path, &[rule]).expect("save");
         let loaded = load_rules(&path).expect("load");
-        assert_eq!(loaded.wasm_errors.len(), 1);
-        let msg = &loaded.wasm_errors[0];
+        assert_eq!(loaded.wasm_refusals.len(), 1);
+        let refusal = &loaded.wasm_refusals[0];
+        assert_eq!(refusal.rule_id, "01");
+        assert_eq!(refusal.category, WasmRefusalCategory::MissingModule);
+        let msg = &refusal.reason;
         assert!(
             msg.contains("gone") && msg.contains("nonexistent.wasm"),
             "{msg}"

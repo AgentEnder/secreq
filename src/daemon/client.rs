@@ -131,8 +131,8 @@ pub fn request_consent(ask: Ask, show_indicator: bool) -> Result<ConsentOutcome>
         | DaemonMsg::AutoDenyToast { .. } => {
             bail!("daemon sent a consent-window streaming message on a one-shot Ask connection")
         }
-        DaemonMsg::RulesList { .. } => {
-            bail!("daemon replied RulesList to an Ask (expected Decision)")
+        DaemonMsg::RulesList { .. } | DaemonMsg::RuleAdded { .. } => {
+            bail!("daemon replied a rules message to an Ask (expected Decision)")
         }
         DaemonMsg::Hello { .. } => bail!("daemon replied Hello to an Ask (expected Decision)"),
     }
@@ -206,26 +206,58 @@ fn expect_window_opened(reply: DaemonMsg) -> Result<()> {
         | DaemonMsg::AutoDenyToast { .. } => {
             bail!("daemon sent a consent-window streaming message on a one-shot reply")
         }
-        DaemonMsg::RulesList { .. } => {
-            bail!("unexpected RulesList reply to ShowWindow/ShowViewer")
+        DaemonMsg::RulesList { .. } | DaemonMsg::RuleAdded { .. } => {
+            bail!("unexpected rules reply to ShowWindow/ShowViewer")
         }
         DaemonMsg::Hello { .. } => bail!("unexpected Hello reply to ShowWindow/ShowViewer"),
     }
 }
 
-/// `secreq rules list/show`: fetch the current ruleset. Auto-spawns
-/// the daemon if it isn't running so headless management works the
-/// same way as wrap invocation.
-pub fn list_rules() -> Result<Vec<crate::rules::Rule>> {
+/// `secreq rules list/show`: fetch the current ruleset plus any wasm
+/// rules refused at the daemon's last rules load (so list/show can
+/// render the refusal). Auto-spawns the daemon if it isn't running so
+/// headless management works the same way as wrap invocation.
+pub fn list_rules() -> Result<(Vec<crate::rules::Rule>, Vec<crate::rules::WasmRefusal>)> {
     if daemon_disabled() {
         bail!("{NO_DAEMON_ENV} is set; cannot reach the daemon. Unset it and try again.");
     }
     let socket = server::default_socket_path()?;
     let stream = connect_or_spawn(&socket)?;
     match send_and_recv(stream, ClientMsg::ListRules)? {
-        DaemonMsg::RulesList { rules } => Ok(rules),
+        DaemonMsg::RulesList {
+            rules,
+            wasm_refusals,
+        } => Ok((rules, wasm_refusals)),
         DaemonMsg::Err { message } => bail!("daemon error: {message}"),
         other => bail!("unexpected reply to ListRules: {other:?}"),
+    }
+}
+
+/// `secreq rules add-wasm`: register a compiled wasm module as a new
+/// rule. Sends the module's absolute path — the daemon reads, vets,
+/// copies into its store, and persists (see
+/// [`ClientMsg::AddWasmRule`]). Returns the rule as registered.
+pub fn add_wasm_rule(
+    name: &str,
+    module_path: &std::path::Path,
+    trained_secrets: std::collections::BTreeSet<String>,
+    allow_all_secrets: bool,
+) -> Result<crate::rules::Rule> {
+    if daemon_disabled() {
+        bail!("{NO_DAEMON_ENV} is set; cannot reach the daemon. Unset it and try again.");
+    }
+    let socket = server::default_socket_path()?;
+    let stream = connect_or_spawn(&socket)?;
+    let msg = ClientMsg::AddWasmRule {
+        name: name.to_owned(),
+        module_path: module_path.to_string_lossy().into_owned(),
+        trained_secrets,
+        allow_all_secrets,
+    };
+    match send_and_recv(stream, msg)? {
+        DaemonMsg::RuleAdded { rule } => Ok(*rule),
+        DaemonMsg::Err { message } => bail!("daemon error: {message}"),
+        other => bail!("unexpected reply to AddWasmRule: {other:?}"),
     }
 }
 
@@ -286,8 +318,8 @@ pub fn stop_daemon() -> Result<bool> {
         | DaemonMsg::AutoDenyToast { .. } => {
             bail!("daemon sent a consent-window streaming message on a Shutdown reply")
         }
-        DaemonMsg::RulesList { .. } => {
-            bail!("daemon replied RulesList to Shutdown (expected Ok)")
+        DaemonMsg::RulesList { .. } | DaemonMsg::RuleAdded { .. } => {
+            bail!("daemon replied a rules message to Shutdown (expected Ok)")
         }
         DaemonMsg::Hello { .. } => bail!("daemon replied Hello to Shutdown (expected Ok)"),
     }

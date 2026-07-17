@@ -818,6 +818,7 @@ pub(crate) struct RulesUi<'a> {
 pub(crate) fn render_rules_page(
     ui: &mut egui::Ui,
     rule_rows: &[(&Rule, RuleUsage)],
+    wasm_refusals: &[crate::rules::WasmRefusal],
     suggestions: &[Suggestion],
     state: &mut RulesUi,
     actions_out: &mut Vec<RuleAction>,
@@ -826,12 +827,20 @@ pub(crate) fn render_rules_page(
         render_rule_form(ui, state.draft, actions_out);
         return;
     }
-    render_rules_list(ui, rule_rows, suggestions, state, actions_out);
+    render_rules_list(
+        ui,
+        rule_rows,
+        wasm_refusals,
+        suggestions,
+        state,
+        actions_out,
+    );
 }
 
 fn render_rules_list(
     ui: &mut egui::Ui,
     rule_rows: &[(&Rule, RuleUsage)],
+    wasm_refusals: &[crate::rules::WasmRefusal],
     suggestions: &[Suggestion],
     state: &mut RulesUi,
     actions_out: &mut Vec<RuleAction>,
@@ -903,7 +912,8 @@ fn render_rules_list(
                 ui.add_space(8.0);
                 let now = now_unix();
                 for (rule, usage) in rule_rows {
-                    render_rules_row(ui, rule, *usage, now, state.draft, actions_out);
+                    let refusal = wasm_refusals.iter().find(|r| r.rule_id == rule.id);
+                    render_rules_row(ui, rule, refusal, *usage, now, state.draft, actions_out);
                     ui.add_space(8.0);
                 }
             }
@@ -1138,6 +1148,7 @@ fn suggestion_summary_line(s: &Suggestion) -> String {
 fn render_rules_row(
     ui: &mut egui::Ui,
     rule: &Rule,
+    refusal: Option<&crate::rules::WasmRefusal>,
     usage: RuleUsage,
     now_unix: u64,
     draft: &mut Option<RuleDraft>,
@@ -1177,6 +1188,23 @@ fn render_rules_row(
                     render_pill(ui, pill_text, pill_fg, pill_bg);
                 } else {
                     render_pill(ui, pill_text, th.dim, th.raised);
+                }
+
+                // Finding A: a wasm rule whose module was refused at
+                // load (sha256 mismatch, missing file, sandbox
+                // rejection) can never fire — badge it loudly instead
+                // of letting it pose as a healthy rule. The hover text
+                // carries the full reason (files and hashes only,
+                // never secret values).
+                if let Some(refusal) = refusal {
+                    ui.add_space(4.0);
+                    render_pill(ui, "refused", th.danger, soft_fill(th.danger));
+                    ui.label(
+                        egui::RichText::new(refusal.category.label())
+                            .size(10.5)
+                            .color(th.danger),
+                    )
+                    .on_hover_text(&refusal.reason);
                 }
 
                 ui.add_space(8.0);

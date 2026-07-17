@@ -211,6 +211,7 @@ fn spawn_reader(
                     | DaemonMsg::Decision { .. }
                     | DaemonMsg::Err { .. }
                     | DaemonMsg::RulesList { .. }
+                    | DaemonMsg::RuleAdded { .. }
                     | DaemonMsg::AutoDenyToast { .. } => {}
                 }
             }

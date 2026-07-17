@@ -138,10 +138,11 @@ enum Command {
     #[command(visible_alias = "ui")]
     View,
 
-    /// Manage auto-approve / auto-deny rules. Rules are created from
-    /// the consent window's Rules tab (or by hand-editing the rules
-    /// file). The CLI surface here covers the headless management
-    /// path: list, inspect, enable/disable, delete.
+    /// Manage auto-approve / auto-deny rules. Declarative rules are
+    /// created from the consent window's Rules tab (or by hand-editing
+    /// the rules file); compiled wasm rule modules are registered here
+    /// with `add-wasm`. The CLI surface covers the headless management
+    /// path: list, inspect, enable/disable, delete, add-wasm.
     Rules {
         #[command(subcommand)]
         action: Option<RulesAction>,
@@ -389,6 +390,30 @@ enum RulesAction {
     Disable { target: String },
     /// Delete a rule by id or exact name.
     Rm { target: String },
+    /// Register a compiled wasm rule module (built with the
+    /// `secreq-rule` SDK). The daemon vets the module in its sandbox,
+    /// copies it into the canonical store under the secreq root, pins
+    /// it by sha256, and persists the rule — a failed vetting
+    /// registers nothing. The module decides approve/pass/deny per
+    /// ask at evaluation time.
+    AddWasm {
+        /// Path to the compiled `.wasm` module.
+        file: std::path::PathBuf,
+        /// Rule name shown in the UI and audit log. Defaults to the
+        /// module's file stem.
+        #[arg(long)]
+        name: Option<String>,
+        /// Env-var name the rule is allowed to decide (the
+        /// trained-secrets guard). Repeatable. The rule never fires
+        /// for an ask requesting any name outside this set.
+        #[arg(long = "secret", value_name = "NAME")]
+        secret: Vec<String>,
+        /// Register with NO trained-secrets snapshot: the module will
+        /// be consulted for every ask across every wrap. Dangerous —
+        /// required explicitly when no --secret is given.
+        #[arg(long, conflicts_with = "secret")]
+        all_secrets: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -546,6 +571,12 @@ pub fn run() -> i32 {
             Some(RulesAction::Enable { target }) => commands::rules_set_enabled(&target, true),
             Some(RulesAction::Disable { target }) => commands::rules_set_enabled(&target, false),
             Some(RulesAction::Rm { target }) => commands::rules_rm(&target),
+            Some(RulesAction::AddWasm {
+                file,
+                name,
+                secret,
+                all_secrets,
+            }) => commands::rules_add_wasm(&file, name.as_deref(), &secret, all_secrets),
         },
         Some(Command::ConsentWindow { always_on_top }) => {
             crate::daemon::child::run(crate::daemon::child::WindowKind::Prompt, always_on_top)

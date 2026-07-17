@@ -531,7 +531,7 @@ fn render_manager_fixture(name: &str, audit_entries: Vec<AuditEntry>, extras: Ma
                 apply_theme_pin(&ctx, theme_pin);
                 secreq::daemon::ui::install_style(&ctx);
                 let mut rule_actions: Vec<RuleAction> = Vec::new();
-                render_manager_panel(&ctx, ui, &rules, viewer_mode, ws, &mut rule_actions);
+                render_manager_panel(&ctx, ui, &rules, &[], viewer_mode, ws, &mut rule_actions);
             },
             initial_state,
         );

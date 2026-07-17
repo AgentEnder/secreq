@@ -24,8 +24,10 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use std::collections::BTreeSet;
+
 use crate::consent::Decision;
-use crate::rules::Rule;
+use crate::rules::{Rule, WasmRefusal};
 
 /// Which manager view a window should open on. Carried on the wire when
 /// the prompt's "Open Manager…" affordance is clicked
@@ -176,7 +178,43 @@ pub enum ClientMsg {
     /// "Create this rule." The daemon validates the rule, persists it,
     /// and refreshes the in-memory ruleset. Replies `Ok` on success
     /// or `Err` on validation failure.
+    ///
+    /// A *wasm* rule with an empty `trained_secrets` snapshot is
+    /// refused on this path: an empty snapshot disables the
+    /// trained-secrets guard (unlimited blast radius), and the only
+    /// door that accepts it is [`ClientMsg::AddWasmRule`] with its
+    /// explicit `allow_all_secrets` opt-in — both doors carry the
+    /// same lock.
     AddRule { rule: Rule },
+    /// "Register this compiled wasm module as a new rule." Sent by
+    /// `secreq rules add-wasm`. Carries the module's *path*, not its
+    /// bytes: daemon and CLI run as the same user on the same machine,
+    /// so the daemon reading the file directly is the simpler correct
+    /// path (no binary payload on the line-based JSON wire). The CLI
+    /// canonicalizes to an absolute path first — the daemon's cwd is
+    /// not the caller's.
+    ///
+    /// The daemon vets the module in the wasm sandbox
+    /// (registration-time checks: imports, abort signature, memory
+    /// cap, exports), copies it into the canonical store
+    /// (`rules/<id>.wasm` under the secreq root), records its sha256,
+    /// and persists the rule. Replies [`DaemonMsg::RuleAdded`] with
+    /// the created rule, or `Err` — in which case nothing was
+    /// registered and no file was left behind.
+    ///
+    /// `trained_secrets` is the env-var-name snapshot the rule is
+    /// allowed to decide (the same guard UI-created rules get from the
+    /// ask they were trained on; the CLI sources it from `--secret`
+    /// flags). An empty set disables the guard — unlimited blast
+    /// radius — so it requires the explicit `allow_all_secrets` opt-in
+    /// or the daemon refuses the registration.
+    AddWasmRule {
+        name: String,
+        module_path: String,
+        trained_secrets: BTreeSet<String>,
+        #[serde(default)]
+        allow_all_secrets: bool,
+    },
     /// "Replace the rule with this `id` with the supplied content."
     /// Replies `Ok` on success, `Err` if the id is unknown.
     UpdateRule { rule: Rule },
@@ -429,8 +467,23 @@ pub enum DaemonMsg {
     /// too but produces noisier logs.
     ConsentExitPlease,
 
-    /// Reply to [`ClientMsg::ListRules`]. Carries the current ruleset.
-    RulesList { rules: Vec<Rule> },
+    /// Reply to [`ClientMsg::ListRules`]. Carries the current ruleset
+    /// plus every wasm rule refused at the last rules load (sha256
+    /// mismatch, missing module, sandbox rejection) — refused rules
+    /// stay in `rules` but can never fire, and list/show render the
+    /// refusal so it's visible outside the daemon log.
+    /// `#[serde(default)]` keeps older daemons decodable.
+    RulesList {
+        rules: Vec<Rule>,
+        #[serde(default)]
+        wasm_refusals: Vec<WasmRefusal>,
+    },
+    /// Reply to [`ClientMsg::AddWasmRule`]: the rule as registered
+    /// (with its minted id, stored module path, and recorded sha256)
+    /// so the CLI can print what was created. Boxed so this one-shot
+    /// admin reply doesn't inflate every `DaemonMsg` on the hot paths
+    /// (clippy: large_enum_variant).
+    RuleAdded { rule: Box<Rule> },
 
     /// One-shot toast push, sent the moment an auto-deny rule fires.
     /// The child stores it and renders a transient banner at the top
@@ -457,6 +510,10 @@ pub struct WireSnapshot {
     /// `#[serde(default)]` for back-compat with older daemons.
     #[serde(default)]
     pub rules: Vec<Rule>,
+    /// Wasm rules refused at the last rules load, so the manager's
+    /// Rules tab can badge them. `#[serde(default)]` for back-compat.
+    #[serde(default)]
+    pub wasm_refusals: Vec<WasmRefusal>,
 }
 
 /// Lifecycle state of a row the consent window renders.

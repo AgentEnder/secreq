@@ -257,6 +257,13 @@ pub struct State {
     /// hash verification or compilation is simply absent (its rule can
     /// never fire; the load path logged why).
     rule_modules: rules::RuleModules,
+    /// Wasm rules refused at the last rules load (sha256 mismatch,
+    /// missing module, sandbox rejection). Retained — not just WARN-
+    /// logged — so `rules list`/`show` and the manager UI can render
+    /// the refusal; a refused rule otherwise looks like a normal
+    /// enabled rule that mysteriously never fires. Kept in sync by
+    /// every path that rebuilds or mutates `rule_modules`.
+    wasm_refusals: Vec<rules::WasmRefusal>,
     /// The file's `mtime` at the moment we loaded it. The freshness
     /// check compares this against the live `mtime`; an advance means
     /// the user hand-edited the file, so we shut down so the next ask
@@ -297,6 +304,7 @@ impl Default for State {
             rules_path: None,
             rules: Vec::new(),
             rule_modules: rules::RuleModules::new(),
+            wasm_refusals: Vec::new(),
             rules_loaded_at: None,
             waiter_next_id: 1,
         }
@@ -350,11 +358,15 @@ struct BadgeSubscriber {
 /// log. Loud by design: a refused rule (sha256 mismatch, missing or
 /// uncompilable module) silently not firing would be indistinguishable
 /// from a rule that decided to pass.
-fn log_wasm_load_errors(errors: &[String]) {
-    for error in errors {
+fn log_wasm_load_errors(refusals: &[rules::WasmRefusal]) {
+    for refusal in refusals {
         super::log::log_at(
             "state",
-            format_args!("WARN: refusing wasm rule: {error} — this rule will not fire"),
+            format_args!(
+                "WARN: refusing wasm rule ({}): {} — this rule will not fire",
+                refusal.category.label(),
+                refusal.reason
+            ),
         );
     }
 }
@@ -375,9 +387,10 @@ impl State {
         let mut state = State::new();
         match rules::load_rules(&rules_path) {
             Ok(loaded) => {
-                log_wasm_load_errors(&loaded.wasm_errors);
+                log_wasm_load_errors(&loaded.wasm_refusals);
                 state.rules = loaded.rules;
                 state.rule_modules = loaded.modules;
+                state.wasm_refusals = loaded.wasm_refusals;
                 state.rules_loaded_at = loaded.mtime;
             }
             Err(err) => {
@@ -892,6 +905,7 @@ impl State {
             queue,
             viewer_mode: self.viewer_mode,
             rules: self.rules.clone(),
+            wasm_refusals: self.wasm_refusals.clone(),
         }
     }
 
@@ -1352,6 +1366,14 @@ impl State {
         self.rules.clone()
     }
 
+    /// Wasm rules refused at the last rules load, cloned for the
+    /// caller. Rides the `RulesList` reply and the wire snapshot so
+    /// list/show/UI can render a refused rule as refused instead of
+    /// as a normal enabled rule that never fires.
+    pub fn wasm_refusals_snapshot(&self) -> Vec<rules::WasmRefusal> {
+        self.wasm_refusals.clone()
+    }
+
     /// Reload the auto-rules file if its `mtime` has advanced since
     /// we last loaded it. Called at the top of every `handle_message`
     /// so any subsequent rule evaluation, list, or UI snapshot reflects
@@ -1388,9 +1410,10 @@ impl State {
         );
         match rules::load_rules(&path) {
             Ok(loaded) => {
-                log_wasm_load_errors(&loaded.wasm_errors);
+                log_wasm_load_errors(&loaded.wasm_refusals);
                 self.rules = loaded.rules;
                 self.rule_modules = loaded.modules;
+                self.wasm_refusals = loaded.wasm_refusals;
                 self.rules_loaded_at = loaded.mtime;
                 // Push the new ruleset to any attached consent window so
                 // the Rules tab UI reflects the edit immediately.
@@ -1460,48 +1483,142 @@ impl State {
     /// invalid, or (for a wasm rule) the module fails to load/verify —
     /// a broken module refuses the mutation loudly rather than
     /// admitting a rule that could never fire.
+    ///
+    /// This is the `AddRule` (raw IPC / UI) door, so it also enforces
+    /// the empty-snapshot guard on wasm rules: an empty
+    /// `trained_secrets` set disables the trained-secrets guard
+    /// entirely, and that opt-in belongs to `rules add-wasm
+    /// --all-secrets` (whose path enters through [`State::admit_rule`]
+    /// after enforcing it) — both doors carry the same lock.
     pub fn add_rule(&mut self, rule: Rule) -> Result<()> {
+        rule.validate_shape()?;
+        if rule.wasm.is_some() && rule.trained_secrets.is_empty() {
+            anyhow::bail!(
+                "refusing wasm rule `{}` with an empty trained-secrets snapshot: \
+                 the module would be consulted for every ask across every wrap, \
+                 and an Approve from it would auto-approve secrets it was never \
+                 trained on. Register it with `secreq rules add-wasm \
+                 --all-secrets` to accept that blast radius explicitly",
+                rule.name
+            );
+        }
+        self.admit_rule(rule)
+    }
+
+    /// The guarded insert behind [`State::add_rule`] and
+    /// [`State::add_wasm_rule`] (which enforces the empty-snapshot
+    /// opt-in itself before calling in). On persist failure the
+    /// in-memory push and any module-map insert are rolled back — a
+    /// rule that never reached disk must not stay fireable in memory
+    /// until restart.
+    fn admit_rule(&mut self, rule: Rule) -> Result<()> {
         rule.validate_shape()?;
         if self.rules.iter().any(|r| r.id == rule.id) {
             anyhow::bail!("rule with id `{}` already exists", rule.id);
         }
         self.install_rule_module(&rule)?;
         self.rules.push(rule);
-        self.persist_rules_and_refresh()?;
+        if let Err(err) = self.persist_rules_and_refresh() {
+            let rule = self.rules.pop().expect("pushed above");
+            self.rule_modules.remove(&rule.id);
+            return Err(err);
+        }
         self.broadcast_consent_update();
         Ok(())
     }
 
     /// Replace the rule whose id matches `rule.id`. Errors if no such
-    /// rule exists. Used by the UI's edit-form save path.
+    /// rule exists. Used by the UI's edit-form save path. On persist
+    /// failure the previous rule, its compiled-module entry, and its
+    /// refusal state are all restored — an update that never reached
+    /// disk must not change what can fire in memory.
     pub fn update_rule(&mut self, rule: Rule) -> Result<()> {
         rule.validate_shape()?;
-        if !self.rules.iter().any(|r| r.id == rule.id) {
+        let Some(pos) = self.rules.iter().position(|r| r.id == rule.id) else {
             anyhow::bail!("no rule with id `{}`", rule.id);
-        }
+        };
+        let prev_refusal = self
+            .wasm_refusals
+            .iter()
+            .find(|r| r.rule_id == rule.id)
+            .cloned();
         self.install_rule_module(&rule)?;
-        let slot = self
-            .rules
-            .iter_mut()
-            .find(|r| r.id == rule.id)
-            .expect("checked above");
-        *slot = rule;
-        self.persist_rules_and_refresh()?;
+        let prev = std::mem::replace(&mut self.rules[pos], rule);
+        if let Err(err) = self.persist_rules_and_refresh() {
+            // Roll back. Reinstall recompiles the previous rule's
+            // module from disk; if that module no longer loads (it was
+            // refused before the update), drop the entry so nothing
+            // stale can fire and restore the recorded refusal.
+            if let Err(reinstall) = self.install_rule_module(&prev) {
+                self.rule_modules.remove(&prev.id);
+                super::log::log_at(
+                    "state",
+                    format_args!(
+                        "WARN: rollback could not reinstall module for rule `{}` \
+                         (id {}): {reinstall:#}",
+                        prev.name, prev.id
+                    ),
+                );
+            }
+            if let Some(refusal) = prev_refusal {
+                self.wasm_refusals.push(refusal);
+            }
+            self.rules[pos] = prev;
+            return Err(err);
+        }
         self.broadcast_consent_update();
         Ok(())
     }
 
     /// Delete the rule with this id. Errors if no such rule exists.
+    /// If the rule's wasm module lives in the canonical store
+    /// (`rules/<id>.wasm` — where `add_wasm_rule` put it), the module
+    /// file is removed too so deletions don't accumulate orphans; a
+    /// module at any other path (hand-registered) is the user's file
+    /// and is left alone.
     pub fn delete_rule(&mut self, id: &str) -> Result<()> {
-        let before = self.rules.len();
-        self.rules.retain(|r| r.id != id);
-        if self.rules.len() == before {
+        let Some(pos) = self.rules.iter().position(|r| r.id == id) else {
             anyhow::bail!("no rule with id `{id}`");
-        }
+        };
+        let rule = self.rules.remove(pos);
         self.rule_modules.remove(id);
+        self.wasm_refusals.retain(|r| r.rule_id != id);
         self.persist_rules_and_refresh()?;
+        self.remove_stored_module(&rule);
         self.broadcast_consent_update();
         Ok(())
+    }
+
+    /// Best-effort removal of a deleted rule's module file, only when
+    /// it resolves to the canonical store path for its id. Failures
+    /// are logged, not returned — the rule is already gone from the
+    /// ruleset, which is the part that matters.
+    fn remove_stored_module(&self, rule: &Rule) {
+        let Some(wasm) = &rule.wasm else {
+            return;
+        };
+        let Ok(canonical) = crate::paths::rule_wasm_path(&rule.id) else {
+            return;
+        };
+        let rules_dir = self
+            .rules_path
+            .as_deref()
+            .and_then(Path::parent)
+            .unwrap_or(Path::new(""));
+        if rules_dir.join(&wasm.path) != canonical {
+            return;
+        }
+        if let Err(err) = std::fs::remove_file(&canonical) {
+            if err.kind() != std::io::ErrorKind::NotFound {
+                super::log::log_at(
+                    "state",
+                    format_args!(
+                        "WARN: could not remove stored wasm module {}: {err}",
+                        canonical.display()
+                    ),
+                );
+            }
+        }
     }
 
     /// Keep `rule_modules` consistent with `rule`: compile + verify
@@ -1522,7 +1639,126 @@ impl State {
                 self.rule_modules.remove(&rule.id);
             }
         }
+        // Either way the rule now has a working module (or none at
+        // all), so any refusal recorded against its id is stale.
+        self.wasm_refusals.retain(|r| r.rule_id != rule.id);
         Ok(())
+    }
+
+    /// Register a compiled wasm module as a new rule: the daemon-side
+    /// implementation of `secreq rules add-wasm` (via
+    /// [`super::proto::ClientMsg::AddWasmRule`]).
+    ///
+    /// Order is chosen so a failure at any step registers nothing and
+    /// leaves no file behind:
+    ///
+    /// 1. Refuse an empty `trained_secrets` snapshot unless
+    ///    `allow_all_secrets` — an empty snapshot disables the
+    ///    trained-secrets guard, letting the module decide every ask
+    ///    across every wrap.
+    /// 2. Vet the bytes in the wasm sandbox
+    ///    ([`crate::wasm_rules::RuleModule::from_binary`] — the
+    ///    registration-time checks) *before* anything touches disk.
+    /// 3. Copy the module into the canonical store
+    ///    ([`crate::paths::rule_wasm_path`]) and record its sha256.
+    /// 4. Admit the rule via [`State::admit_rule`] — which re-reads
+    ///    and re-verifies the stored file end-to-end, persists (with
+    ///    in-memory rollback on failure), and broadcasts like every
+    ///    other rule mutation. If that fails, the stored file is
+    ///    removed again.
+    pub fn add_wasm_rule(
+        &mut self,
+        name: &str,
+        module_bytes: &[u8],
+        trained_secrets: std::collections::BTreeSet<String>,
+        allow_all_secrets: bool,
+    ) -> Result<Rule> {
+        if trained_secrets.is_empty() && !allow_all_secrets {
+            anyhow::bail!(
+                "refusing to register wasm rule `{name}` with an empty trained-secrets \
+                 snapshot: the module would be consulted for every ask across every \
+                 wrap, and an Approve from it would auto-approve secrets it was never \
+                 trained on. Name the secrets it may decide, or opt in to the \
+                 unlimited blast radius explicitly"
+            );
+        }
+        crate::wasm_rules::RuleModule::from_binary(module_bytes)
+            .with_context(|| format!("vetting wasm module for rule `{name}`"))?;
+
+        // Mint an id that collides with neither an existing rule nor a
+        // leftover file in the store (both effectively impossible for
+        // 96-bit random ids, but a collision here would overwrite
+        // another rule's module).
+        let id = rules::new_rule_id();
+        if self.rules.iter().any(|r| r.id == id) {
+            anyhow::bail!("generated rule id `{id}` collides with an existing rule; retry");
+        }
+        let store = crate::paths::rule_wasm_path(&id)?;
+        if store.exists() {
+            anyhow::bail!(
+                "wasm module store path {} already exists; refusing to overwrite",
+                store.display()
+            );
+        }
+        let store_dir = crate::paths::rule_wasm_dir()?;
+        std::fs::create_dir_all(&store_dir)
+            .with_context(|| format!("create wasm rule store {}", store_dir.display()))?;
+        // Temp-write + rename so a crash mid-copy can't leave a
+        // half-written module that later hash-verifies as tampered. A
+        // failed write/rename cleans its own temp file up — a refused
+        // registration leaves nothing in the store, `.tmp` included.
+        let tmp = store.with_extension("wasm.tmp");
+        if let Err(err) =
+            std::fs::write(&tmp, module_bytes).with_context(|| format!("write {}", tmp.display()))
+        {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(err);
+        }
+        if let Err(err) = std::fs::rename(&tmp, &store)
+            .with_context(|| format!("rename {} -> {}", tmp.display(), store.display()))
+        {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(err);
+        }
+
+        // Record the store path relative to the rules file's directory
+        // when it lives underneath it (the production layout: both
+        // under the secreq root), absolute otherwise.
+        let rules_dir = self
+            .rules_path
+            .as_deref()
+            .and_then(Path::parent)
+            .unwrap_or(Path::new(""));
+        let recorded_path = store
+            .strip_prefix(rules_dir)
+            .unwrap_or(&store)
+            .to_string_lossy()
+            .into_owned();
+
+        let rule = Rule {
+            id,
+            name: name.to_owned(),
+            enabled: true,
+            decide: None,
+            r#match: None,
+            wasm: Some(crate::rules::WasmRule {
+                path: recorded_path,
+                sha256: rules::sha256_hex(module_bytes),
+            }),
+            trained_secrets,
+            deny_message: None,
+            created_at_unix: rules::now_unix(),
+        };
+        // `admit_rule`, not `add_rule`: the empty-snapshot opt-in was
+        // already enforced above, with the flag to prove it.
+        if let Err(err) = self.admit_rule(rule.clone()) {
+            // Nothing was registered (admit_rule rolled back any
+            // in-memory state); don't leave the copied module orphaned
+            // in the store either.
+            let _ = std::fs::remove_file(&store);
+            return Err(err);
+        }
+        Ok(rule)
     }
 
     /// Toggle the `enabled` bit on this rule. Cheaper-path equivalent
@@ -3394,7 +3630,10 @@ mod tests {
 
     /// A wasm rule pointing at the checked-in `approve_if` fixture
     /// (approves `gh api --get …` under Cursor.app, passes otherwise),
-    /// with its module bytes dropped beside the rules file.
+    /// with its module bytes dropped beside the rules file. Trained on
+    /// `GITHUB_TOKEN` — the empty-snapshot guard on `add_rule` refuses
+    /// unscoped wasm rules, and the asks these tests evaluate request
+    /// exactly that name.
     fn wasm_rule_with_module(dir: &std::path::Path, id: &str) -> Rule {
         const APPROVE_IF: &[u8] = include_bytes!("../../tests/fixtures/wasm_rules/approve_if.wasm");
         std::fs::write(dir.join(format!("{id}.wasm")), APPROVE_IF).expect("write module");
@@ -3408,7 +3647,7 @@ mod tests {
                 path: format!("{id}.wasm"),
                 sha256: crate::rules::sha256_hex(APPROVE_IF),
             }),
-            trained_secrets: Default::default(),
+            trained_secrets: ["GITHUB_TOKEN".to_owned()].into_iter().collect(),
             deny_message: None,
             created_at_unix: 0,
         }
@@ -3508,6 +3747,334 @@ mod tests {
         assert!(state.rule_modules.contains_key("wasm01"));
         state.delete_rule("wasm01").expect("delete");
         assert!(state.rule_modules.is_empty());
+    }
+
+    // ── `add_wasm_rule` (the `rules add-wasm` registration path) ──────
+
+    const APPROVE_IF_BYTES: &[u8] =
+        include_bytes!("../../tests/fixtures/wasm_rules/approve_if.wasm");
+
+    /// The canonical wasm store under the `#[cfg(test)]` fallback
+    /// secreq root is shared by every test in this process, so tests
+    /// that write to it (or assert on its listing) serialize through
+    /// this lock to keep the "no orphan left behind" assertions
+    /// race-free.
+    fn store_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Names of the files currently in the canonical wasm store
+    /// ([`crate::paths::rule_wasm_dir`]); empty when the dir doesn't
+    /// exist. Used to assert a failed registration leaves no orphan.
+    fn store_listing() -> std::collections::BTreeSet<String> {
+        let dir = crate::paths::rule_wasm_dir().expect("store dir");
+        match std::fs::read_dir(dir) {
+            Ok(entries) => entries
+                .filter_map(|e| Some(e.ok()?.file_name().to_string_lossy().into_owned()))
+                .collect(),
+            Err(_) => Default::default(),
+        }
+    }
+
+    fn trained_github() -> std::collections::BTreeSet<String> {
+        ["GITHUB_TOKEN".to_owned()].into_iter().collect()
+    }
+
+    #[test]
+    fn add_wasm_rule_round_trips_store_persist_and_evaluate() {
+        let _store = store_lock();
+        // The full registration flow: bytes in → vetted → copied into
+        // the canonical store → sha256 pinned → rule persisted — and
+        // the rule fires on the next evaluation, both in this daemon
+        // and in a fresh one loading the persisted file.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        let mut state = State::with_rules_path(path.clone());
+
+        let rule = state
+            .add_wasm_rule("cursor gh reads", APPROVE_IF_BYTES, trained_github(), false)
+            .expect("register");
+
+        // The module was copied into the canonical store, byte-exact.
+        let store = crate::paths::rule_wasm_path(&rule.id).expect("store path");
+        assert_eq!(
+            std::fs::read(&store).expect("stored module"),
+            APPROVE_IF_BYTES
+        );
+        // The rule pins the store content by hash.
+        let wasm = rule.wasm.as_ref().expect("wasm rule");
+        assert_eq!(wasm.sha256, crate::rules::sha256_hex(APPROVE_IF_BYTES));
+        assert!(state.wasm_refusals_snapshot().is_empty());
+
+        // Fires in this daemon…
+        let hit = state
+            .evaluate_rules_for_ask(&cursor_ask())
+            .expect("must fire");
+        assert_eq!(hit.rule_id, rule.id);
+        assert_eq!(hit.decide, RuleDecision::Approve);
+
+        // …and in a fresh daemon loading the persisted rules file.
+        let reloaded = State::with_rules_path(path);
+        assert_eq!(reloaded.rules_snapshot(), vec![rule.clone()]);
+        assert!(reloaded.wasm_refusals_snapshot().is_empty());
+        let hit = reloaded
+            .evaluate_rules_for_ask(&cursor_ask())
+            .expect("must fire after reload");
+        assert_eq!(hit.rule_id, rule.id);
+    }
+
+    #[test]
+    fn add_wasm_rule_vetting_rejection_registers_nothing_and_leaves_no_orphan() {
+        let _store = store_lock();
+        // A module the sandbox refuses (WASI import) must fail loudly
+        // with nothing persisted: no rule, no file in the store.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        let mut state = State::with_rules_path(path.clone());
+
+        let bad = wat::parse_str(include_str!(
+            "../../tests/fixtures/wasm_rules/bad_import_wasi.wat"
+        ))
+        .expect("assemble wat");
+        let store_before = store_listing();
+        let err = format!(
+            "{:#}",
+            state
+                .add_wasm_rule("smuggler", &bad, trained_github(), false)
+                .expect_err("must refuse")
+        );
+        assert!(err.contains("vetting wasm module"), "{err}");
+        assert!(state.rules_snapshot().is_empty());
+        assert_eq!(
+            store_listing(),
+            store_before,
+            "a refused registration must not leave module bytes in the store"
+        );
+        assert!(crate::rules::load_rules(&path)
+            .expect("load")
+            .rules
+            .is_empty());
+    }
+
+    #[test]
+    fn add_wasm_rule_refuses_an_empty_snapshot_without_the_opt_in() {
+        let _store = store_lock();
+        // Finding B: an empty trained-secrets set disables the guard —
+        // unlimited blast radius — so it demands the explicit opt-in.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        let mut state = State::with_rules_path(path);
+
+        let err = format!(
+            "{:#}",
+            state
+                .add_wasm_rule("greedy", APPROVE_IF_BYTES, Default::default(), false)
+                .expect_err("must refuse")
+        );
+        assert!(err.contains("trained-secrets"), "{err}");
+        assert!(state.rules_snapshot().is_empty());
+
+        // The explicit opt-in registers with the guard disabled.
+        let rule = state
+            .add_wasm_rule("greedy", APPROVE_IF_BYTES, Default::default(), true)
+            .expect("opt-in registers");
+        assert!(rule.trained_secrets.is_empty());
+        // Clean up the store entry this test just created.
+        state.delete_rule(&rule.id).expect("delete");
+    }
+
+    #[test]
+    fn tampered_store_module_is_retained_as_a_visible_refusal() {
+        let _store = store_lock();
+        // Finding A: a sha256-mismatched module must not render as a
+        // healthy rule. The refusal is retained in State (and thus on
+        // the RulesList reply and the wire snapshot), and the rule can
+        // never fire.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        let mut state = State::with_rules_path(path.clone());
+        let rule = state
+            .add_wasm_rule("tamper me", APPROVE_IF_BYTES, trained_github(), false)
+            .expect("register");
+        let store = crate::paths::rule_wasm_path(&rule.id).expect("store path");
+        std::fs::write(&store, b"not the registered module").expect("tamper");
+
+        // A fresh load (daemon restart / mtime reload) refuses the rule.
+        let mut state = State::with_rules_path(path);
+        let refusals = state.wasm_refusals_snapshot();
+        assert_eq!(refusals.len(), 1);
+        assert_eq!(refusals[0].rule_id, rule.id);
+        assert_eq!(
+            refusals[0].category,
+            crate::rules::WasmRefusalCategory::Sha256Mismatch
+        );
+        assert!(refusals[0].reason.contains("sha256 mismatch"));
+        // The rule is still listed (visible to list/show/UI)…
+        assert_eq!(state.rules_snapshot(), vec![rule.clone()]);
+        // …the wire snapshot carries the refusal for the UI badge…
+        assert_eq!(state.snapshot_for_wire().wasm_refusals, refusals);
+        // …but it can never fire.
+        assert!(state.evaluate_rules_for_ask(&cursor_ask()).is_none());
+
+        // Deleting the refused rule clears the refusal and the stored
+        // module file.
+        state.delete_rule(&rule.id).expect("delete");
+        assert!(state.wasm_refusals_snapshot().is_empty());
+        assert!(!store.exists(), "delete must remove the stored module");
+    }
+
+    #[test]
+    fn add_rule_refuses_an_unscoped_wasm_rule_on_the_raw_ipc_door() {
+        // Finding B, second door: a raw `AddRule` must not sidestep
+        // the empty-snapshot guard that `AddWasmRule` enforces.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        let mut state = State::with_rules_path(path);
+        let mut rule = wasm_rule_with_module(dir.path(), "wasm01");
+        rule.trained_secrets.clear();
+        let err = format!("{:#}", state.add_rule(rule).expect_err("must refuse"));
+        assert!(err.contains("trained-secrets"), "{err}");
+        assert!(err.contains("--all-secrets"), "{err}");
+        assert!(state.rules_snapshot().is_empty());
+    }
+
+    #[test]
+    fn add_rule_rolls_back_in_memory_state_when_persist_fails() {
+        // Persist failure must unwind the in-memory push: a rule that
+        // never reached disk staying fireable until restart would
+        // contradict "a failed mutation registers nothing". The rules
+        // path's parent is a *file*, so `save_rules`' create_dir_all
+        // fails deterministically.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, b"a file where a directory must go").expect("write blocker");
+        let mut state = State::with_rules_path(blocker.join("auto-rules.json5"));
+
+        let rule = mk_rule("01", "gh", RuleDecision::Approve, Some("gh api"));
+        state.add_rule(rule).expect_err("persist must fail");
+        assert!(
+            state.rules_snapshot().is_empty(),
+            "an unpersisted rule must not stay in memory"
+        );
+        let ask = ask_with_secret("gh", &["gh", "api", "--get", "/repos/x"], "GITHUB_TOKEN");
+        assert!(state.evaluate_rules_for_ask(&ask).is_none());
+    }
+
+    #[test]
+    fn add_wasm_rule_rolls_back_module_and_store_when_persist_fails() {
+        let _store = store_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, b"a file where a directory must go").expect("write blocker");
+        let mut state = State::with_rules_path(blocker.join("auto-rules.json5"));
+
+        let store_before = store_listing();
+        state
+            .add_wasm_rule("doomed", APPROVE_IF_BYTES, trained_github(), false)
+            .expect_err("persist must fail");
+        assert!(state.rules_snapshot().is_empty());
+        assert!(
+            state.rule_modules.is_empty(),
+            "rollback must evict the compiled module"
+        );
+        assert_eq!(
+            store_listing(),
+            store_before,
+            "rollback must remove the copied module from the store"
+        );
+    }
+
+    #[test]
+    fn update_rule_rolls_back_rule_and_module_when_persist_fails() {
+        // Seed a working wasm rule, then make the rules dir read-only
+        // so the update's persist fails. The previous rule AND its
+        // compiled module must survive — otherwise the daemon would
+        // run an update that never reached disk.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        let rule = wasm_rule_with_module(dir.path(), "wasm01");
+        crate::rules::save_rules(&path, std::slice::from_ref(&rule)).expect("seed");
+        let mut state = State::with_rules_path(path);
+        assert!(state.rule_modules.contains_key("wasm01"));
+
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555))
+            .expect("make dir read-only");
+        let declarative = mk_rule("wasm01", "gh", RuleDecision::Approve, Some("gh api"));
+        let result = state.update_rule(declarative);
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755))
+            .expect("restore dir perms");
+
+        result.expect_err("persist must fail");
+        assert_eq!(
+            state.rules_snapshot(),
+            vec![rule],
+            "the previous rule must be restored"
+        );
+        assert!(
+            state.rule_modules.contains_key("wasm01"),
+            "the previous compiled module must be restored"
+        );
+        let hit = state
+            .evaluate_rules_for_ask(&cursor_ask())
+            .expect("previous wasm rule must still fire");
+        assert_eq!(hit.rule_id, "wasm01");
+    }
+
+    #[test]
+    fn update_rule_with_a_working_module_clears_the_refusal() {
+        // The heal path: a refused rule (module swapped on disk) is
+        // fixed by updating its recorded sha256 to match the module
+        // that's actually there. The refusal must clear and the rule
+        // must load again.
+        const ALWAYS_PASS: &[u8] =
+            include_bytes!("../../tests/fixtures/wasm_rules/always_pass.wasm");
+        let _store = store_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        let mut state = State::with_rules_path(path.clone());
+        let rule = state
+            .add_wasm_rule("heal me", APPROVE_IF_BYTES, trained_github(), false)
+            .expect("register");
+        let store = crate::paths::rule_wasm_path(&rule.id).expect("store path");
+        std::fs::write(&store, ALWAYS_PASS).expect("swap module");
+
+        // Fresh load refuses the rule (recorded sha no longer matches).
+        let mut state = State::with_rules_path(path);
+        assert_eq!(state.wasm_refusals_snapshot().len(), 1);
+        assert!(!state.rule_modules.contains_key(&rule.id));
+
+        // Update the rule to pin the module that's actually on disk.
+        let mut healed = rule.clone();
+        healed.wasm.as_mut().expect("wasm").sha256 = crate::rules::sha256_hex(ALWAYS_PASS);
+        state.update_rule(healed.clone()).expect("heal");
+        assert!(
+            state.wasm_refusals_snapshot().is_empty(),
+            "a successful update must clear the stale refusal"
+        );
+        assert!(state.rule_modules.contains_key(&rule.id));
+        assert_eq!(state.rules_snapshot(), vec![healed]);
+
+        // Clean up the shared-store module this test registered.
+        state.delete_rule(&rule.id).expect("delete");
+    }
+
+    #[test]
+    fn delete_rule_leaves_a_non_canonical_module_file_alone() {
+        // A hand-registered rule pointing at the user's own module
+        // path must not have its file deleted with the rule — only
+        // modules in the canonical store are ours to remove.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        let rule = wasm_rule_with_module(dir.path(), "wasm01");
+        crate::rules::save_rules(&path, std::slice::from_ref(&rule)).expect("save");
+        let mut state = State::with_rules_path(path);
+        state.delete_rule("wasm01").expect("delete");
+        assert!(
+            dir.path().join("wasm01.wasm").exists(),
+            "user-owned module file must survive rule deletion"
+        );
     }
 
     #[test]
