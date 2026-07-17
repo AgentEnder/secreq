@@ -228,7 +228,12 @@ fn redundant_with_existing_rules(s: &Suggestion, rules: &[Rule]) -> bool {
         cwd: &cwd,
         requested_secret_names: &secrets,
     };
-    match rules::evaluate(rules, &ctx) {
+    // No compiled wasm modules here: the suggestion engine runs in the
+    // consent-window child, which has the ruleset but not the daemon's
+    // module cache — and a wasm rule's verdict is per-ask anyway, so it
+    // can't statically "cover" a cluster. Wasm rules therefore never
+    // make a suggestion redundant.
+    match rules::evaluate(rules, &rules::RuleModules::new(), &ctx).hit {
         Some(hit) => matches!(
             (hit.decide, s.decide),
             (rules::RuleDecision::Approve, SuggestionDecision::Approve)
@@ -472,8 +477,9 @@ mod tests {
             id: id.to_owned(),
             name: id.to_owned(),
             enabled: true,
-            decide,
-            r#match: m,
+            decide: Some(decide),
+            r#match: Some(m),
+            wasm: None,
             trained_secrets: BTreeSet::new(),
             deny_message: None,
             created_at_unix: 0,

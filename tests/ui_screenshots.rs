@@ -1313,13 +1313,14 @@ fn sample_rule(id: &str, name: &str, decide: RuleDecision, argv: Option<&str>) -
         id: id.to_owned(),
         name: name.to_owned(),
         enabled: true,
-        decide,
-        r#match: RuleMatch {
+        decide: Some(decide),
+        r#match: Some(RuleMatch {
             wrap: "gh".to_owned(),
             argv: argv.map(Pattern::parse),
             ancestor: Some(Pattern::parse("Cursor.app")),
             cwd: None,
-        },
+        }),
+        wasm: None,
         trained_secrets: ["GITHUB_TOKEN".to_owned()].into_iter().collect(),
         deny_message: if decide == RuleDecision::Deny {
             Some("Destructive gh operations are policy-denied.".to_owned())

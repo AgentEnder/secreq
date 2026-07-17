@@ -1777,13 +1777,17 @@ pub fn rules_list() -> Result<i32> {
     );
     for r in &rules {
         let enabled = if r.enabled { "yes" } else { "no" };
+        // A wasm rule has no static decision — the module returns one
+        // per ask — and no match clause to take a wrap from.
         let decide = match r.decide {
-            crate::rules::RuleDecision::Approve => "approve",
-            crate::rules::RuleDecision::Deny => "deny",
+            Some(crate::rules::RuleDecision::Approve) => "approve",
+            Some(crate::rules::RuleDecision::Deny) => "deny",
+            None => "wasm",
         };
+        let wrap = r.r#match.as_ref().map_or("(wasm)", |m| m.wrap.as_str());
         println!(
             "{:<24}  {:<8}  {:<8}  {:<16}  {}",
-            r.id, decide, enabled, r.r#match.wrap, r.name
+            r.id, decide, enabled, wrap, r.name
         );
     }
     Ok(0)
@@ -1800,19 +1804,26 @@ pub fn rules_show(target: &str) -> Result<i32> {
     println!(
         "decide:         {}",
         match rule.decide {
-            crate::rules::RuleDecision::Approve => "approve",
-            crate::rules::RuleDecision::Deny => "deny",
+            Some(crate::rules::RuleDecision::Approve) => "approve",
+            Some(crate::rules::RuleDecision::Deny) => "deny",
+            None => "wasm (module decides per ask)",
         }
     );
-    println!("wrap:           {}", rule.r#match.wrap);
-    if let Some(p) = &rule.r#match.argv {
-        println!("argv match:     {}", p.as_str());
+    if let Some(m) = &rule.r#match {
+        println!("wrap:           {}", m.wrap);
+        if let Some(p) = &m.argv {
+            println!("argv match:     {}", p.as_str());
+        }
+        if let Some(p) = &m.ancestor {
+            println!("ancestor match: {}", p.as_str());
+        }
+        if let Some(p) = &m.cwd {
+            println!("cwd match:      {}", p.as_str());
+        }
     }
-    if let Some(p) = &rule.r#match.ancestor {
-        println!("ancestor match: {}", p.as_str());
-    }
-    if let Some(p) = &rule.r#match.cwd {
-        println!("cwd match:      {}", p.as_str());
+    if let Some(w) = &rule.wasm {
+        println!("wasm module:    {}", w.path);
+        println!("wasm sha256:    {}", w.sha256);
     }
     if !rule.trained_secrets.is_empty() {
         let names: Vec<_> = rule.trained_secrets.iter().cloned().collect();

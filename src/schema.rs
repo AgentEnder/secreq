@@ -102,7 +102,8 @@ pub fn auto_rules_schema() -> Value {
         "additionalProperties": false,
         "definitions": {
             "Rule": rule_schema(),
-            "RuleMatch": rule_match_schema()
+            "RuleMatch": rule_match_schema(),
+            "WasmRule": wasm_rule_schema()
         }
     })
 }
@@ -110,8 +111,24 @@ pub fn auto_rules_schema() -> Value {
 fn rule_schema() -> Value {
     json!({
         "type": "object",
-        "description": "One auto-decision rule.",
-        "required": ["id", "name", "enabled", "decide", "match"],
+        "description": "One auto-decision rule. Exactly one of two shapes: declarative (`decide` + `match`, `wasm` absent) or wasm (`wasm` alone — the compiled module returns approve/pass/deny at evaluation time, so `decide` and `deny_message` must be absent).",
+        "required": ["id", "name", "enabled"],
+        "oneOf": [
+            {
+                "description": "Declarative rule: static decide + match clause.",
+                "required": ["decide", "match"],
+                "not": { "required": ["wasm"] }
+            },
+            {
+                "description": "Wasm rule: the module decides. `decide`/`match`/`deny_message` are forbidden — the decision (and any deny reason) is the module's return value.",
+                "required": ["wasm"],
+                "allOf": [
+                    { "not": { "required": ["decide"] } },
+                    { "not": { "required": ["match"] } },
+                    { "not": { "required": ["deny_message"] } }
+                ]
+            }
+        ],
         "properties": {
             "id": {
                 "type": "string",
@@ -128,23 +145,44 @@ fn rule_schema() -> Value {
             "decide": {
                 "type": "string",
                 "enum": ["approve", "deny"],
-                "description": "Direction this rule fires when it matches. Among matching rules, any deny wins; otherwise the most-specific approve wins."
+                "description": "Direction a declarative rule fires when it matches. Among matching rules, any deny wins; otherwise the most-specific approve wins (a wasm rule that returns a decision counts as maximally specific). Forbidden on wasm rules."
             },
             "match": { "$ref": "#/definitions/RuleMatch" },
+            "wasm": { "$ref": "#/definitions/WasmRule" },
             "trained_secrets": {
                 "type": "array",
                 "items": { "type": "string" },
                 "uniqueItems": true,
-                "description": "Snapshot of env-var names the rule was created against. Rule will NOT fire if the ask requests anything outside this set — the trained-secrets guard. Empty array disables the guard (legit for hand-edited rules)."
+                "description": "Snapshot of env-var names the rule was created against. Rule will NOT fire if the ask requests anything outside this set — the trained-secrets guard, applied to declarative and wasm rules alike (a wasm module is never even run for an out-of-snapshot ask). Empty array disables the guard (legit for hand-edited rules)."
             },
             "deny_message": {
                 "type": "string",
-                "description": "Message printed to stderr on auto-deny and shown in the consent window's toast. Only meaningful when `decide == deny`."
+                "description": "Message printed to stderr on auto-deny and shown in the consent window's toast. Only meaningful when `decide == deny`; forbidden on wasm rules (the module returns its own reason)."
             },
             "created_at_unix": {
                 "type": "integer",
                 "minimum": 0,
                 "description": "Seconds since the Unix epoch at creation. Informational only."
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn wasm_rule_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "Reference to a compiled wasm rule module, evaluated in the secreq sandbox (no WASI, fuel-metered, memory-capped). The module exports `decide(ctx)` returning approve, pass (rule does not match), or deny with a reason. A runtime error makes the rule not match — the ask falls through to the interactive prompt, never to an auto-approve.",
+        "required": ["path", "sha256"],
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Path to the compiled `.wasm` module. Relative paths resolve against the directory containing `auto-rules.json5`; the canonical home is `rules/<id>.wasm` under the secreq root."
+            },
+            "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-fA-F]{64}$",
+                "description": "Hex SHA-256 of the module bytes, recorded at registration and verified on every load. A mismatch refuses this rule (it can never fire) with a loud daemon-log error; other rules keep working."
             }
         },
         "additionalProperties": false

@@ -14,7 +14,7 @@
 //! (or when resolution fails after approval).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -251,6 +251,12 @@ pub struct State {
     /// DeleteRule / SetRuleEnabled, kept in sync with the on-disk
     /// file by every mutation path that writes the file.
     rules: Vec<Rule>,
+    /// Compiled wasm modules for the wasm rules in `rules`, keyed by
+    /// rule id. Built once per rules load / mutation — never per ask —
+    /// so evaluation only ever instantiates, and a module that failed
+    /// hash verification or compilation is simply absent (its rule can
+    /// never fire; the load path logged why).
+    rule_modules: rules::RuleModules,
     /// The file's `mtime` at the moment we loaded it. The freshness
     /// check compares this against the live `mtime`; an advance means
     /// the user hand-edited the file, so we shut down so the next ask
@@ -290,6 +296,7 @@ impl Default for State {
             queue_empty_since: Some(Instant::now()),
             rules_path: None,
             rules: Vec::new(),
+            rule_modules: rules::RuleModules::new(),
             rules_loaded_at: None,
             waiter_next_id: 1,
         }
@@ -339,6 +346,19 @@ struct BadgeSubscriber {
     tx: mpsc::Sender<super::proto::DaemonMsg>,
 }
 
+/// Surface every per-rule wasm refusal from a rules load in the daemon
+/// log. Loud by design: a refused rule (sha256 mismatch, missing or
+/// uncompilable module) silently not firing would be indistinguishable
+/// from a rule that decided to pass.
+fn log_wasm_load_errors(errors: &[String]) {
+    for error in errors {
+        super::log::log_at(
+            "state",
+            format_args!("WARN: refusing wasm rule: {error} — this rule will not fire"),
+        );
+    }
+}
+
 impl State {
     pub fn new() -> State {
         State::default()
@@ -355,7 +375,9 @@ impl State {
         let mut state = State::new();
         match rules::load_rules(&rules_path) {
             Ok(loaded) => {
+                log_wasm_load_errors(&loaded.wasm_errors);
                 state.rules = loaded.rules;
+                state.rule_modules = loaded.modules;
                 state.rules_loaded_at = loaded.mtime;
             }
             Err(err) => {
@@ -1366,7 +1388,9 @@ impl State {
         );
         match rules::load_rules(&path) {
             Ok(loaded) => {
+                log_wasm_load_errors(&loaded.wasm_errors);
                 self.rules = loaded.rules;
+                self.rule_modules = loaded.modules;
                 self.rules_loaded_at = loaded.mtime;
                 // Push the new ruleset to any attached consent window so
                 // the Rules tab UI reflects the edit immediately.
@@ -1392,6 +1416,12 @@ impl State {
     /// `None` for "fall through to the interactive prompt." The
     /// caller (server.rs) consumes the hit and builds the
     /// `DaemonMsg::Decision`.
+    ///
+    /// A wasm rule that errors at evaluate time does not match (fail
+    /// safe to the prompt — see `rules::evaluate`); the failure is
+    /// logged here so the falling-through is never silent. The ask
+    /// then takes the interactive path, whose decision is audited as
+    /// usual.
     pub fn evaluate_rules_for_ask(&self, ask: &Ask) -> Option<RuleHit> {
         if self.rules.is_empty() {
             return None;
@@ -1410,16 +1440,32 @@ impl State {
             cwd: &ask.cwd,
             requested_secret_names: &requested,
         };
-        rules::evaluate(&self.rules, &ctx)
+        let evaluation = rules::evaluate(&self.rules, &self.rule_modules, &ctx);
+        for failure in &evaluation.wasm_failures {
+            super::log::log_at(
+                "state",
+                format_args!(
+                    "WARN: wasm rule `{}` (id {}) errored evaluating wrap `{}`: {} \
+                     — treating the rule as not matching; falling through to the prompt",
+                    failure.rule_name, failure.rule_id, ask.dedupe_key.wrap, failure.error,
+                ),
+            );
+        }
+        evaluation.hit
     }
 
     /// Insert a new rule, persist, and refresh `rules_loaded_at` so
     /// the freshness check doesn't trigger on our own write. Returns
-    /// an error if the id collides with an existing rule.
+    /// an error if the id collides with an existing rule, the shape is
+    /// invalid, or (for a wasm rule) the module fails to load/verify —
+    /// a broken module refuses the mutation loudly rather than
+    /// admitting a rule that could never fire.
     pub fn add_rule(&mut self, rule: Rule) -> Result<()> {
+        rule.validate_shape()?;
         if self.rules.iter().any(|r| r.id == rule.id) {
             anyhow::bail!("rule with id `{}` already exists", rule.id);
         }
+        self.install_rule_module(&rule)?;
         self.rules.push(rule);
         self.persist_rules_and_refresh()?;
         self.broadcast_consent_update();
@@ -1429,9 +1475,16 @@ impl State {
     /// Replace the rule whose id matches `rule.id`. Errors if no such
     /// rule exists. Used by the UI's edit-form save path.
     pub fn update_rule(&mut self, rule: Rule) -> Result<()> {
-        let Some(slot) = self.rules.iter_mut().find(|r| r.id == rule.id) else {
+        rule.validate_shape()?;
+        if !self.rules.iter().any(|r| r.id == rule.id) {
             anyhow::bail!("no rule with id `{}`", rule.id);
-        };
+        }
+        self.install_rule_module(&rule)?;
+        let slot = self
+            .rules
+            .iter_mut()
+            .find(|r| r.id == rule.id)
+            .expect("checked above");
         *slot = rule;
         self.persist_rules_and_refresh()?;
         self.broadcast_consent_update();
@@ -1445,8 +1498,30 @@ impl State {
         if self.rules.len() == before {
             anyhow::bail!("no rule with id `{id}`");
         }
+        self.rule_modules.remove(id);
         self.persist_rules_and_refresh()?;
         self.broadcast_consent_update();
+        Ok(())
+    }
+
+    /// Keep `rule_modules` consistent with `rule`: compile + verify
+    /// the referenced module for a wasm rule (relative paths anchor at
+    /// the rules file's directory), or drop any stale entry when the
+    /// rule is (now) declarative. Errors abort the mutation.
+    fn install_rule_module(&mut self, rule: &Rule) -> Result<()> {
+        let rules_dir = self
+            .rules_path
+            .as_deref()
+            .and_then(Path::parent)
+            .unwrap_or(Path::new(""));
+        match rules::load_rule_module(rule, rules_dir)? {
+            Some(module) => {
+                self.rule_modules.insert(rule.id.clone(), module);
+            }
+            None => {
+                self.rule_modules.remove(&rule.id);
+            }
+        }
         Ok(())
     }
 
@@ -2484,13 +2559,14 @@ mod tests {
             id: id.to_owned(),
             name: id.to_owned(),
             enabled: true,
-            decide,
-            r#match: RuleMatch {
+            decide: Some(decide),
+            r#match: Some(RuleMatch {
                 wrap: wrap.to_owned(),
                 argv: argv.map(crate::rules::Pattern::parse),
                 ancestor: None,
                 cwd: None,
-            },
+            }),
+            wasm: None,
             trained_secrets: ["GITHUB_TOKEN".to_owned()].into_iter().collect(),
             deny_message: None,
             created_at_unix: 0,
@@ -3314,6 +3390,124 @@ mod tests {
             .expect("rule should fire");
         assert_eq!(hit.rule_id, "01");
         assert_eq!(hit.decide, RuleDecision::Approve);
+    }
+
+    /// A wasm rule pointing at the checked-in `approve_if` fixture
+    /// (approves `gh api --get …` under Cursor.app, passes otherwise),
+    /// with its module bytes dropped beside the rules file.
+    fn wasm_rule_with_module(dir: &std::path::Path, id: &str) -> Rule {
+        const APPROVE_IF: &[u8] = include_bytes!("../../tests/fixtures/wasm_rules/approve_if.wasm");
+        std::fs::write(dir.join(format!("{id}.wasm")), APPROVE_IF).expect("write module");
+        Rule {
+            id: id.to_owned(),
+            name: "wasm approve".to_owned(),
+            enabled: true,
+            decide: None,
+            r#match: None,
+            wasm: Some(crate::rules::WasmRule {
+                path: format!("{id}.wasm"),
+                sha256: crate::rules::sha256_hex(APPROVE_IF),
+            }),
+            trained_secrets: Default::default(),
+            deny_message: None,
+            created_at_unix: 0,
+        }
+    }
+
+    fn cursor_ask() -> Ask {
+        let mut ask = ask_with_secret("gh", &["gh", "api", "--get", "/repos/x"], "GITHUB_TOKEN");
+        ask.callers = vec![super::super::proto::Caller {
+            pid: 1,
+            name: "Cursor".to_owned(),
+            command: "/Applications/Cursor.app/Contents/MacOS/Cursor".to_owned(),
+            start_time: 0,
+        }];
+        ask
+    }
+
+    #[test]
+    fn with_rules_path_compiles_wasm_modules_and_the_rule_fires() {
+        // Daemon wiring end-to-end: startup load compiles + verifies
+        // the module once, and an Ask flowing through
+        // evaluate_rules_for_ask gets the module's decision with the
+        // wasm rule's id (so audit attribution works like any rule).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        let rule = wasm_rule_with_module(dir.path(), "wasm01");
+        crate::rules::save_rules(&path, &[rule]).expect("save");
+        let state = State::with_rules_path(path);
+        let hit = state
+            .evaluate_rules_for_ask(&cursor_ask())
+            .expect("wasm rule should fire");
+        assert_eq!(hit.rule_id, "wasm01");
+        assert_eq!(hit.decide, RuleDecision::Approve);
+
+        // And the module's Pass verdict falls through to the prompt.
+        let other = ask_with_secret("gh", &["gh", "repo", "delete", "x"], "GITHUB_TOKEN");
+        assert!(state.evaluate_rules_for_ask(&other).is_none());
+    }
+
+    #[test]
+    fn add_rule_refuses_a_wasm_rule_whose_module_hash_mismatches() {
+        // The IPC mutation path must enforce the same sha256 pinning
+        // as the load path — loudly, aborting the mutation.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        let mut state = State::with_rules_path(path);
+        let mut rule = wasm_rule_with_module(dir.path(), "wasm01");
+        rule.wasm.as_mut().expect("wasm rule").sha256 = crate::rules::sha256_hex(b"not the module");
+        let err = format!("{:#}", state.add_rule(rule).expect_err("must refuse"));
+        assert!(err.contains("sha256 mismatch"), "{err}");
+        assert!(state.rules.is_empty(), "refused rule must not be admitted");
+    }
+
+    #[test]
+    fn add_rule_rejects_an_invalid_shape() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        let mut state = State::with_rules_path(path);
+        let mut rule = mk_rule("01", "gh", RuleDecision::Approve, None);
+        rule.wasm = Some(crate::rules::WasmRule {
+            path: "01.wasm".to_owned(),
+            sha256: "00".to_owned(),
+        });
+        let err = format!("{:#}", state.add_rule(rule).expect_err("must refuse"));
+        assert!(err.contains("both"), "{err}");
+    }
+
+    #[test]
+    fn update_rule_to_declarative_drops_the_stale_module() {
+        // The wasm → declarative transition is only reachable via raw
+        // IPC (the UI hides Edit for wasm rules), which is exactly the
+        // path that regresses unnoticed: install_rule_module's None arm
+        // must evict the compiled module, or a later mutation reusing
+        // the id would evaluate stale guest code.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        let rule = wasm_rule_with_module(dir.path(), "wasm01");
+        crate::rules::save_rules(&path, std::slice::from_ref(&rule)).expect("save");
+        let mut state = State::with_rules_path(path);
+        assert!(state.rule_modules.contains_key("wasm01"));
+
+        let declarative = mk_rule("wasm01", "gh", RuleDecision::Approve, Some("gh api"));
+        state.update_rule(declarative.clone()).expect("update");
+        assert!(
+            state.rule_modules.is_empty(),
+            "rewriting a wasm rule as declarative must drop its compiled module"
+        );
+        assert_eq!(state.rules, vec![declarative]);
+    }
+
+    #[test]
+    fn delete_rule_drops_the_compiled_module() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        let rule = wasm_rule_with_module(dir.path(), "wasm01");
+        crate::rules::save_rules(&path, std::slice::from_ref(&rule)).expect("save");
+        let mut state = State::with_rules_path(path);
+        assert!(state.rule_modules.contains_key("wasm01"));
+        state.delete_rule("wasm01").expect("delete");
+        assert!(state.rule_modules.is_empty());
     }
 
     #[test]

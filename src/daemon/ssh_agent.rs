@@ -863,13 +863,14 @@ mod tests {
             id: id.to_owned(),
             name: id.to_owned(),
             enabled: true,
-            decide,
-            r#match: crate::rules::RuleMatch {
+            decide: Some(decide),
+            r#match: Some(crate::rules::RuleMatch {
                 wrap: format!("ssh:{wrap_key}"),
                 argv: None,
                 ancestor: None,
                 cwd: None,
-            },
+            }),
+            wasm: None,
             trained_secrets: Default::default(),
             deny_message: None,
             created_at_unix: 0,

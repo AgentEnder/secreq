@@ -4084,6 +4084,7 @@ dependencies = [
  "rsa",
  "serde",
  "serde_json",
+ "sha2",
  "signal-hook",
  "similar",
  "ssh-encoding",
