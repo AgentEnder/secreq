@@ -298,6 +298,34 @@ on queued requests. Clicking the window's close button exits viewer
 mode and hides the window (the daemon keeps running). Auto-spawns the
 daemon if it isn't running.
 
+### `rules`
+
+```
+secreq rules                          # list (default action)
+secreq rules show <id|name>
+secreq rules enable <id|name>
+secreq rules disable <id|name>
+secreq rules rm <id|name>
+secreq rules add-wasm <file.wasm> [--name <name>] (--secret <NAME>... | --all-secrets)
+```
+
+Headless management of auto-approve / auto-deny rules. Declarative
+rules are created from the consent window's Rules tab; the CLI covers
+list, inspect, enable/disable, delete — and `add-wasm`, which registers
+a compiled programmable rule module (see
+[wasm-rules.md](./wasm-rules.md)). `<id|name>` matches by id first,
+then exact name.
+
+- `list` marks a wasm rule whose module was refused at the daemon's
+  last rules load with `[REFUSED: <reason>]`; `show` prints the
+  module path, pinned sha256, and full refusal reason.
+- `add-wasm` has the daemon vet the module in its sandbox, copy it
+  into `~/.secreq/rules/`, and pin it by sha256 — a failed vetting
+  registers nothing. `--secret` (repeatable) sets the trained-secrets
+  guard; with no `--secret` you must pass `--all-secrets` to accept
+  explicitly that the module is consulted for every ask.
+- `rm` also deletes the rule's canonically-stored module file.
+
 ### `x`
 
 ```

@@ -1,0 +1,17 @@
+{
+  "name": "npm-publish-guard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Worked example of a programmable secreq auto-rule: gate `npm publish` on the checkout it runs from.",
+  "license": "MIT",
+  "scripts": {
+    "test": "asp --verbose",
+    "build": "secreq-rule-build assembly/rule.ts -o rule.wasm"
+  },
+  "devDependencies": {
+    "@as-pect/cli": "^9.0.0",
+    "assemblyscript": "^0.28.2",
+    "secreq-rule": "file:../.."
+  }
+}
