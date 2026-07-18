@@ -206,7 +206,6 @@ mod tests {
             legacy_config_dir: Some(tmp.path().join("config/secreq")),
             legacy_state_dir: Some(tmp.path().join("state/secreq")),
             legacy_runtime_dir: Some(tmp.path().join("runtime/secreq")),
-            dirty: false,
         }
     }
 
@@ -219,7 +218,6 @@ mod tests {
             legacy_config_dir: None,
             legacy_state_dir: None,
             legacy_runtime_dir: None,
-            dirty: false,
         };
         run(&ctx).unwrap();
     }
