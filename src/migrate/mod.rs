@@ -182,6 +182,63 @@ pub fn run_pending_in(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
+/// The read-only counterpart to [`run_pending`], for background/service roles
+/// (the daemon, `agent open`, the consent/manager/badge window children, and
+/// `resolve`). It reads the recorded level and refuses on a mismatch, but never
+/// takes the lock, applies a migration, or stamps the state.
+///
+/// Why service roles must not apply: every role re-execs `current_exe()` back
+/// through `cli::run`, so *any* build's background process used to be able to
+/// bump the shared `.migration-state`. A worktree dev build's `agent open` did
+/// exactly that — stamping a level the installed release daemon then read as a
+/// downgrade and refused, bricking every command. Migrations are now applied
+/// only by deliberate foreground commands (which also restart a stale daemon
+/// via the `BUILD_ID` handshake); a service that finds itself out of step
+/// refuses loudly instead of silently poisoning the level for other builds.
+pub fn verify_current() -> Result<()> {
+    let root = paths::secreq_root()?;
+    verify_current_in(&root)
+}
+
+fn verify_current_in(root: &Path) -> Result<()> {
+    let state = read_state(root)?;
+    let level = state.migration_level as usize;
+
+    if level > MIGRATIONS.len() {
+        // Config migrated by a newer build than this one — the real downgrade.
+        let ctx = Ctx {
+            root: root.to_path_buf(),
+            home: None,
+            legacy_config_dir: None,
+            legacy_state_dir: None,
+            legacy_runtime_dir: None,
+        };
+        bail!(downgrade_message(&ctx, &state));
+    }
+    if level < MIGRATIONS.len() {
+        // This binary ships migrations the config hasn't seen, but a service
+        // role won't apply them (that's a foreground decision). In the normal
+        // flow this never happens: the foreground command that spawns the
+        // daemon migrates first, and it re-execs the same binary. It only
+        // trips when a service is launched from a newer build than whatever
+        // last ran a foreground command.
+        bail!(pending_message(root, &state));
+    }
+    Ok(())
+}
+
+fn pending_message(root: &Path, state: &State) -> String {
+    format!(
+        "{} records migration level {}, but this secreq ships {}.\n\
+         This is a background/service process, which never applies migrations.\n\
+         Run any foreground secreq command (e.g. `secreq doctor`) or `secreq migrate`\n\
+         to apply the pending migration(s), then retry.\n",
+        state_path(root).display(),
+        state.migration_level,
+        MIGRATIONS.len(),
+    )
+}
+
 fn downgrade_message(ctx: &Ctx, state: &State) -> String {
     let by = state
         .migrated_by
@@ -571,6 +628,49 @@ mod tests {
         assert!(!ctx.legacy_config_dir.unwrap().exists());
         // Nothing to snapshot, so no empty snapshot dir either.
         assert!(!snapshot_dir(&ctx.root, 0).exists());
+    }
+
+    #[test]
+    fn verify_current_is_ok_and_inert_when_at_level() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("secreq");
+        write_state(&root, MIGRATIONS.len() as u32).unwrap();
+
+        verify_current_in(&root).unwrap();
+
+        // Read-only: the recorded level is untouched, no lock/snapshot appears.
+        assert_eq!(
+            read_state(&root).unwrap().migration_level as usize,
+            MIGRATIONS.len()
+        );
+        assert!(!root.join(".migration.lock").exists());
+    }
+
+    #[test]
+    fn verify_current_below_level_refuses_and_applies_nothing() {
+        // Regression: a service role (agent open / daemon) launched from a
+        // build with pending migrations must NOT migrate — it used to, bumping
+        // the shared level an older installed build then refused.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("secreq");
+
+        let err = verify_current_in(&root).unwrap_err().to_string();
+        assert!(err.contains("background/service"), "got: {err}");
+
+        // Nothing stamped, nothing created — the level stays untouched.
+        assert!(!state_path(&root).exists());
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn verify_current_above_level_bails_downgrade() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("secreq");
+        write_state(&root, MIGRATIONS.len() as u32 + 1).unwrap();
+
+        let err = verify_current_in(&root).unwrap_err().to_string();
+        // The same restore hint the foreground gate gives.
+        assert!(err.contains("migrate restore"), "got: {err}");
     }
 
     #[test]

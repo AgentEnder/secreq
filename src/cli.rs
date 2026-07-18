@@ -467,24 +467,39 @@ enum MigrateAction {
 pub fn run() -> i32 {
     let cli = Cli::parse();
 
-    // Every entry point passes through here — including the daemon, which
-    // re-execs `current_exe()` and lands back in this function (see
-    // `daemon::client`). So this single gate covers the whole binary.
+    // The migration gate. Every entry point passes through here — including the
+    // daemon and its window children, which re-exec `current_exe()` and land
+    // back in this function (see `daemon::client`).
     //
     // After `Cli::parse()` on purpose: `--help` and `--version` exit inside
     // `parse()`, so they never touch disk. Failure is fatal because each
     // migration is atomic — the old state is intact and a half-migrated tree
     // that silently resolves the wrong secrets is never a thing we ship.
     //
-    // `secreq migrate ...` deliberately bypasses the gate. The gate is exactly
-    // what's failing when a user needs `migrate restore`: it `bail!`s on the
-    // downgrade check, so gating it would make the command its own error
-    // message tells you to run permanently unreachable.
-    if !matches!(cli.command, Some(Command::Migrate { .. })) {
-        if let Err(e) = crate::migrate::run_pending() {
-            eprintln!("secreq: {e:#}");
-            return 1;
-        }
+    // Only DELIBERATE FOREGROUND commands apply migrations. Background/service
+    // roles verify read-only (never apply, never stamp), so a mismatched-build
+    // service can't silently bump the shared level and lock out other builds —
+    // the bug this split fixes. `secreq migrate ...` bypasses the gate entirely:
+    // the gate's own downgrade `bail!` is what a user runs `migrate restore` to
+    // escape, so gating it would make that command unreachable.
+    let gate = match &cli.command {
+        Some(Command::Migrate { .. }) => Ok(()),
+        // Verify-only: the daemon, the host-side agent socket, the three
+        // daemon-spawned window children, and the remote-only `resolve`.
+        Some(
+            Command::Daemon { .. }
+            | Command::Agent { .. }
+            | Command::ConsentWindow { .. }
+            | Command::ManagerWindow { .. }
+            | Command::PendingBadge
+            | Command::Resolve { .. },
+        ) => crate::migrate::verify_current(),
+        // Everything else is a foreground command: apply pending migrations.
+        _ => crate::migrate::run_pending(),
+    };
+    if let Err(e) = gate {
+        eprintln!("secreq: {e:#}");
+        return 1;
     }
 
     let config = cli.config.as_deref();
