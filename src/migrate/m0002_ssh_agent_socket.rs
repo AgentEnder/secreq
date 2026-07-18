@@ -363,6 +363,7 @@ mod tests {
             legacy_config_dir: None,
             legacy_state_dir: None,
             legacy_runtime_dir: None,
+            dirty: false,
         };
         run(&ctx).unwrap();
         assert!(snapshot_files(&ctx).is_empty());
@@ -385,6 +386,7 @@ mod tests {
             legacy_config_dir: None,
             legacy_state_dir: None,
             legacy_runtime_dir: None,
+            dirty: false,
         };
 
         let files = snapshot_files(&ctx);

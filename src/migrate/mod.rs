@@ -61,6 +61,12 @@ pub struct Ctx {
     /// lives with the migration that needs it; only the resolved value is
     /// injected here so tests can substitute a tempdir.
     pub legacy_runtime_dir: Option<PathBuf>,
+    /// True when this binary was built from an uncommitted working tree
+    /// (`SECREQ_BUILD_ID` carries `-dirty`). A dirty dev build must NOT apply
+    /// or persist migrations against a real config: doing so stamps a level an
+    /// installed release build then reads as a downgrade and refuses (it did).
+    /// Injected (not read from `BUILD_ID` in-fn) so tests drive both paths.
+    pub dirty: bool,
 }
 
 struct Migration {
@@ -142,6 +148,7 @@ pub fn run_pending() -> Result<()> {
         legacy_config_dir: legacy_config_dir(),
         legacy_state_dir: legacy_state_dir(),
         legacy_runtime_dir: m0002_ssh_agent_socket::legacy_runtime_dir(),
+        dirty: crate::BUILD_ID.contains("-dirty"),
     };
     run_pending_in(&ctx)
 }
@@ -160,6 +167,17 @@ pub fn run_pending_in(ctx: &Ctx) -> Result<()> {
     // wrapped command and the consent-prompt child spawns per prompt, so the
     // steady-state cost must stay at one small read.
     if level == MIGRATIONS.len() {
+        return Ok(());
+    }
+
+    // A dirty (uncommitted) dev build never applies or persists a migration
+    // against a real config. Running one bumped a user's shared migration
+    // level to a number their installed release build then refused as a
+    // downgrade. Dev-test migrations via `cargo test` (which drives the whole
+    // MIGRATIONS list with an injected non-dirty Ctx), never by pointing the
+    // dirty binary at ~/.secreq. The downgrade bail above still fires — a
+    // config newer than even this build is a real problem, dirty or not.
+    if ctx.dirty {
         return Ok(());
     }
 
@@ -539,6 +557,7 @@ mod tests {
             legacy_config_dir: Some(tmp.path().join("config/secreq")),
             legacy_state_dir: Some(tmp.path().join("state/secreq")),
             legacy_runtime_dir: Some(tmp.path().join("runtime/secreq")),
+            dirty: false,
         }
     }
 
@@ -571,6 +590,31 @@ mod tests {
         assert!(!ctx.legacy_config_dir.unwrap().exists());
         // Nothing to snapshot, so no empty snapshot dir either.
         assert!(!snapshot_dir(&ctx.root, 0).exists());
+    }
+
+    #[test]
+    fn dirty_build_applies_nothing_and_stamps_no_level() {
+        // Regression: a dirty dev build pointed at a real config used to run
+        // its (possibly newer) migrations and stamp the shared level, which an
+        // installed release build then read as a downgrade and refused.
+        let tmp = TempDir::new().unwrap();
+        let mut dirty = ctx_in(&tmp);
+        dirty.dirty = true;
+
+        run_pending_in(&dirty).unwrap();
+
+        // It touched nothing: no state stamped, no migration applied.
+        assert!(!state_path(&dirty.root).exists());
+        assert!(!dirty.root.exists());
+
+        // A release build on the same config still migrates normally — the
+        // dirty gate only skips the dirty binary, not the release path.
+        let release = ctx_in(&tmp); // dirty: false
+        run_pending_in(&release).unwrap();
+        assert_eq!(
+            read_state(&release.root).unwrap().migration_level as usize,
+            MIGRATIONS.len()
+        );
     }
 
     #[test]
