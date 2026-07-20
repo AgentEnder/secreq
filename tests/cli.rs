@@ -33,6 +33,7 @@ fn run_secreq(dir: &Path, args: &[&str]) -> std::process::Output {
         .env_remove("SHELL")
         // Wipe any inherited consent socket from the test runner.
         .env_remove("SECREQ_CONSENT_SOCK")
+        .env_remove("GITHUB_TOKEN")
         // Disable the consent daemon entirely; otherwise tests would pop
         // a native window on the developer's machine and hang waiting for
         // a click. Tests that need consent use `--yes` instead.
@@ -103,6 +104,7 @@ fn wrap_run_injects_env_and_masks_output_when_token_is_echoed() {
         .env("XDG_STATE_HOME", dir.path().join("state"))
         .env("PATH", &path)
         .env_remove("SECREQ_CONSENT_SOCK")
+        .env_remove("GITHUB_TOKEN")
         .env("SECREQ_NO_DAEMON", "1")
         .output()
         .unwrap();
@@ -139,6 +141,7 @@ fn raw_flag_disables_output_masking() {
         .env("XDG_STATE_HOME", dir.path().join("state"))
         .env("PATH", &path)
         .env_remove("SECREQ_CONSENT_SOCK")
+        .env_remove("GITHUB_TOKEN")
         .env("SECREQ_NO_DAEMON", "1")
         .output()
         .unwrap();
@@ -154,6 +157,17 @@ fn raw_flag_disables_output_masking() {
 /// Run `secreq x` with the fake-`gh` sandbox wired up: fake binary on PATH,
 /// echo provider config in place, daemon disabled. `root` is the tempdir.
 fn run_x(root: &Path, bin_dir: &Path, args: &[&str]) -> std::process::Output {
+    run_x_env(root, bin_dir, args, &[])
+}
+
+/// [`run_x`], with extra env vars set on the secreq process — for the
+/// parent-env-satisfaction tests, which hinge on what secreq inherits.
+fn run_x_env(
+    root: &Path,
+    bin_dir: &Path,
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> std::process::Output {
     let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
     let mut cmd = Command::new(bin());
     cmd.args(args);
@@ -161,9 +175,14 @@ fn run_x(root: &Path, bin_dir: &Path, args: &[&str]) -> std::process::Output {
         .env("XDG_STATE_HOME", root.join("state"))
         .env("PATH", &path)
         .env_remove("SECREQ_CONSENT_SOCK")
-        .env("SECREQ_NO_DAEMON", "1")
-        .output()
-        .unwrap()
+        // The developer's real GITHUB_TOKEN must never satisfy (or leak
+        // into) a test wrap — every test starts from "not present".
+        .env_remove("GITHUB_TOKEN")
+        .env("SECREQ_NO_DAEMON", "1");
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+    cmd.output().unwrap()
 }
 
 /// Sandbox + fake gh + echo-provider config, for the `x` argv-contract tests.
@@ -175,6 +194,120 @@ fn x_fixture() -> (tempfile::TempDir, PathBuf) {
     install_fake_gh(&bin_dir);
     write_config(&config, &echo_provider_config(&shim_dir));
     (dir, bin_dir)
+}
+
+// ── parent-env satisfaction: already-present secrets need no consent ──────
+
+#[test]
+fn x_skips_consent_when_parent_env_already_holds_real_values() {
+    let (dir, bin_dir) = x_fixture();
+    // No --sq-yes and no daemon: if secreq asked for consent, this would
+    // fail. With GITHUB_TOKEN already carrying a real (non-marker) value,
+    // there is nothing to inject, so the run must pass straight through.
+    let out = run_x_env(
+        dir.path(),
+        &bin_dir,
+        &["x", "gh", "auth", "status"],
+        &[("GITHUB_TOKEN", "already-present-value")],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("argv=auth status"), "got: {stdout}");
+    // The parent's value flows through untouched — secreq released nothing,
+    // so there is nothing of its own to mask.
+    assert!(
+        stdout.contains("GITHUB_TOKEN=already-present-value"),
+        "got: {stdout}"
+    );
+}
+
+#[test]
+fn x_still_gates_when_parent_env_value_is_a_secret_marker() {
+    let (dir, bin_dir) = x_fixture();
+    // A `secret://…` marker is a request FOR injection, not a value —
+    // consent is still required, and with the daemon disabled that fails.
+    let out = run_x_env(
+        dir.path(),
+        &bin_dir,
+        &["x", "gh"],
+        &[("GITHUB_TOKEN", "secret://fake/the-token-value")],
+    );
+    assert!(!out.status.success());
+}
+
+#[test]
+fn x_still_gates_when_parent_env_value_is_empty() {
+    let (dir, bin_dir) = x_fixture();
+    // An empty string is "not present" for satisfaction purposes.
+    let out = run_x_env(dir.path(), &bin_dir, &["x", "gh"], &[("GITHUB_TOKEN", "")]);
+    assert!(!out.status.success());
+}
+
+#[test]
+fn x_resolves_only_the_env_vars_the_parent_is_missing() {
+    let (dir, config) = sandbox();
+    let bin_dir = dir.path().join("realbin");
+    let shim_dir = dir.path().join("shims");
+    // A wrap with two secrets; the fake binary echoes both.
+    write_config(
+        &config,
+        &format!(
+            r#"{{
+                $shim_dir: "{shim}",
+                gh: {{
+                    env: {{
+                        GITHUB_TOKEN: "secret://fake/the-token-value",
+                        EXTRA_SECRET: "secret://fake/extra-value",
+                    }},
+                }},
+                providers: {{
+                    fake: {{ retrieve: ["printf", "%s", "{{locator}}"] }},
+                }},
+            }}"#,
+            shim = shim_dir.display(),
+        ),
+    );
+    fs::create_dir_all(&bin_dir).unwrap();
+    let fake = bin_dir.join("gh");
+    fs::write(
+        &fake,
+        "#!/bin/sh\necho \"GITHUB_TOKEN=$GITHUB_TOKEN\"\necho \"EXTRA_SECRET=$EXTRA_SECRET\"\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(&fake).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&fake, perms).unwrap();
+
+    // GITHUB_TOKEN is satisfied by the parent; EXTRA_SECRET is not, so the
+    // run still needs approval (--sq-yes here) and resolves ONLY the
+    // missing var. The satisfied one keeps the parent's value, unmasked;
+    // the resolved one is injected and masked.
+    let out = run_x_env(
+        dir.path(),
+        &bin_dir,
+        &["x", "--sq-yes", "gh"],
+        &[("GITHUB_TOKEN", "parent-token-value")],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("GITHUB_TOKEN=parent-token-value"),
+        "got: {stdout}"
+    );
+    assert!(
+        stdout.contains("EXTRA_SECRET=********"),
+        "expected the missing var resolved and masked; got: {stdout}"
+    );
+    assert!(!stdout.contains("extra-value"), "got: {stdout}");
 }
 
 // ── `x` argv contract: everything after the wrap name belongs to the binary ──
@@ -341,6 +474,7 @@ fn unwrapped_binary_passes_through_unchanged() {
         .env("XDG_STATE_HOME", dir.path().join("state"))
         .env("PATH", &path)
         .env_remove("SECREQ_CONSENT_SOCK")
+        .env_remove("GITHUB_TOKEN")
         .env("SECREQ_NO_DAEMON", "1")
         .output()
         .unwrap();
@@ -724,6 +858,7 @@ fn doctor_flags_when_a_shim_is_shadowed_by_an_earlier_path_entry() {
         .env("XDG_STATE_HOME", dir.path().join("state"))
         .env("PATH", &path)
         .env_remove("SECREQ_CONSENT_SOCK")
+        .env_remove("GITHUB_TOKEN")
         .env("SECREQ_NO_DAEMON", "1")
         .output()
         .unwrap();
@@ -767,6 +902,7 @@ fn doctor_is_happy_when_the_shim_is_first_on_path() {
         .env("XDG_STATE_HOME", dir.path().join("state"))
         .env("PATH", &path)
         .env_remove("SECREQ_CONSENT_SOCK")
+        .env_remove("GITHUB_TOKEN")
         .env("SECREQ_NO_DAEMON", "1")
         .output()
         .unwrap();
@@ -819,6 +955,7 @@ fn init_writes_config_with_shim_dir() {
         .env("XDG_STATE_HOME", dir.path().join("state"))
         .env_remove("SHELL")
         .env_remove("SECREQ_CONSENT_SOCK")
+        .env_remove("GITHUB_TOKEN")
         // cliclack reads from the controlling terminal; closing stdin makes
         // its `interact` call error out, which the init command surfaces.
         .stdin(std::process::Stdio::null())
@@ -855,6 +992,7 @@ fn run_ssh_setup(dir: &Path, home: &Path, shell: &str, args: &[&str]) -> std::pr
         .env("XDG_STATE_HOME", dir.join("state"))
         .env("XDG_RUNTIME_DIR", dir.join("run"))
         .env_remove("SECREQ_CONSENT_SOCK")
+        .env_remove("GITHUB_TOKEN")
         .env("SECREQ_NO_DAEMON", "1")
         .stdin(std::process::Stdio::null());
     if shell.is_empty() {
@@ -1261,6 +1399,7 @@ fn read_refuses_re_entrant_call_during_resolution() {
         .env("XDG_CONFIG_HOME", dir.path().join("config"))
         .env("XDG_STATE_HOME", dir.path().join("state"))
         .env_remove("SECREQ_CONSENT_SOCK")
+        .env_remove("GITHUB_TOKEN")
         .env("SECREQ_NO_DAEMON", "1")
         .env("SECREQ_RESOLVING", "1")
         .output()

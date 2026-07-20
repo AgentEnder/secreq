@@ -67,9 +67,24 @@ pub fn wrap_run(
         return passthrough_unwrapped(binary, args, config.shim_dir.as_deref());
     }
 
-    let Some(wrap) = config.wraps.get(binary).cloned() else {
+    let Some(mut wrap) = config.wraps.get(binary).cloned() else {
         return passthrough_unwrapped(binary, args, config.shim_dir.as_deref());
     };
+
+    // Parent-env satisfaction: an env entry whose variable already holds a
+    // real value in OUR environment — non-empty and not a `secret://…`
+    // marker — needs nothing injected; the child inherits the parent's
+    // value as-is. Consent gates the release of secret material *by
+    // secreq*, so a satisfied entry drops out of the ask entirely, and a
+    // wrap whose entries are ALL satisfied runs without any consent (the
+    // wrap-and-run mirror of `run`'s "nothing to resolve" fast path).
+    // Deliberately not applied to gate-only wraps (empty `env`): those
+    // exist to gate the binary itself, not to inject.
+    let had_env_entries = !wrap.env.is_empty();
+    wrap.env.retain(|name, _| !parent_env_satisfies(name));
+    if had_env_entries && wrap.env.is_empty() {
+        return passthrough_unwrapped(binary, args, config.shim_dir.as_deref());
+    }
 
     // `caller_chain` already drops `secreq` self-frames during its walk
     // (see `provenance::caller_chain`), so the chain we get back is the
@@ -149,6 +164,17 @@ pub fn wrap_run(
     let cwd = std::env::current_dir().context("could not determine current directory")?;
 
     crate::exec::run(&command, &env_overrides, &secrets_for_masking, &cwd)
+}
+
+/// Does the parent environment already satisfy a wrap env entry? True when
+/// the variable is set to a non-empty value that isn't a `secret://…`
+/// marker. A marker means "inject here" (the `run`-style convention), and
+/// an empty value is treated as absent. A non-UTF-8 value can't be a
+/// marker, so it counts as satisfied.
+fn parent_env_satisfies(name: &str) -> bool {
+    std::env::var_os(name).is_some_and(|value| {
+        !value.is_empty() && !value.to_str().is_some_and(Reference::looks_like_ref)
+    })
 }
 
 /// Merge env-file pairs UNDER the inherited environment (inherited wins).

@@ -344,7 +344,15 @@ with `x`.
    `<WRAP>` on PATH (excluding our shim dir to avoid recursion) and exec
    it with no injection. This makes blanket-aliasing of binaries safe even
    before you've wrapped each one.
-3. **If a wrap exists**:
+3. **Drop `env` entries the parent environment already satisfies**: a
+   variable that is already set to a non-empty value that isn't a
+   `secret://…` marker needs no injection — the child inherits the
+   parent's value as-is. Consent gates the release of secret material
+   *by secreq*, so if **every** entry is satisfied the run passes through
+   with no prompt at all; if only some are, the prompt asks for (and
+   resolution fetches) only the missing ones. Gate-only wraps (no `env`)
+   are exempt — they still always gate.
+4. **If a wrap exists** (with at least one entry still to resolve):
    - Walk the parent process tree for the consent prompt.
    - Hand off to the consent daemon (auto-spawning it if no socket is
      live). The daemon checks its in-memory cache keyed on
