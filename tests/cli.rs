@@ -98,7 +98,7 @@ fn wrap_run_injects_env_and_masks_output_when_token_is_echoed() {
     // Put the fake gh on PATH so secreq's find_real_binary picks it up.
     let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
     let out = Command::new(bin())
-        .args(["--yes", "x", "gh", "auth", "status"])
+        .args(["x", "--sq-yes", "gh", "auth", "status"])
         .env("XDG_CONFIG_HOME", dir.path().join("config"))
         .env("XDG_STATE_HOME", dir.path().join("state"))
         .env("PATH", &path)
@@ -134,7 +134,7 @@ fn raw_flag_disables_output_masking() {
     let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
 
     let out = Command::new(bin())
-        .args(["--yes", "--raw", "x", "gh"])
+        .args(["x", "--sq-yes", "--sq-raw", "gh"])
         .env("XDG_CONFIG_HOME", dir.path().join("config"))
         .env("XDG_STATE_HOME", dir.path().join("state"))
         .env("PATH", &path)
@@ -149,6 +149,177 @@ fn raw_flag_disables_output_masking() {
         stdout.contains("GITHUB_TOKEN=the-token-value"),
         "got: {stdout}"
     );
+}
+
+/// Run `secreq x` with the fake-`gh` sandbox wired up: fake binary on PATH,
+/// echo provider config in place, daemon disabled. `root` is the tempdir.
+fn run_x(root: &Path, bin_dir: &Path, args: &[&str]) -> std::process::Output {
+    let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
+    let mut cmd = Command::new(bin());
+    cmd.args(args);
+    cmd.env("XDG_CONFIG_HOME", root.join("config"))
+        .env("XDG_STATE_HOME", root.join("state"))
+        .env("PATH", &path)
+        .env_remove("SECREQ_CONSENT_SOCK")
+        .env("SECREQ_NO_DAEMON", "1")
+        .output()
+        .unwrap()
+}
+
+/// Sandbox + fake gh + echo-provider config, for the `x` argv-contract tests.
+/// Returns `(tempdir, bin_dir)`; the config lives at the sandbox default path.
+fn x_fixture() -> (tempfile::TempDir, PathBuf) {
+    let (dir, config) = sandbox();
+    let bin_dir = dir.path().join("realbin");
+    let shim_dir = dir.path().join("shims");
+    install_fake_gh(&bin_dir);
+    write_config(&config, &echo_provider_config(&shim_dir));
+    (dir, bin_dir)
+}
+
+// ── `x` argv contract: everything after the wrap name belongs to the binary ──
+
+#[test]
+fn x_forwards_leading_help_flag_to_the_binary() {
+    let (dir, bin_dir) = x_fixture();
+    let out = run_x(dir.path(), &bin_dir, &["x", "--sq-yes", "gh", "--help"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("argv=--help"), "got: {stdout}");
+}
+
+#[test]
+fn x_forwards_flags_secreq_used_to_intercept() {
+    let (dir, bin_dir) = x_fixture();
+    // Every one of these used to be eaten by clap (`--config` even swallowed
+    // the following token). All must now reach the binary verbatim.
+    let out = run_x(
+        dir.path(),
+        &bin_dir,
+        &["x", "--sq-yes", "gh", "--raw", "-y", "--config", "somefile"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("argv=--raw -y --config somefile"),
+        "got: {stdout}"
+    );
+    // `--raw` went to the binary, NOT to secreq: output is still masked.
+    assert!(stdout.contains("GITHUB_TOKEN=********"), "got: {stdout}");
+}
+
+#[test]
+fn x_recognizes_sq_flags_after_the_wrap_name() {
+    let (dir, bin_dir) = x_fixture();
+    // The shim prepends `x <wrap>`, so a user's `gh --sq-raw …` arrives with
+    // the sq-flags after the wrap name. They must still apply to secreq.
+    let out = run_x(
+        dir.path(),
+        &bin_dir,
+        &["x", "gh", "--sq-yes", "--sq-raw", "auth"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("argv=auth"), "got: {stdout}");
+    assert!(
+        stdout.contains("GITHUB_TOKEN=the-token-value"),
+        "got: {stdout}"
+    );
+}
+
+#[test]
+fn x_rejects_unknown_sq_flags() {
+    let (dir, bin_dir) = x_fixture();
+    let out = run_x(dir.path(), &bin_dir, &["x", "gh", "--sq-bogus"]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("--sq-bogus"), "got: {stderr}");
+}
+
+#[test]
+fn x_double_dash_stops_sq_extraction() {
+    let (dir, bin_dir) = x_fixture();
+    let out = run_x(
+        dir.path(),
+        &bin_dir,
+        &["x", "--sq-yes", "gh", "--", "--sq-raw"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // The `--` and everything after it forward verbatim; `--sq-raw` was NOT
+    // applied to secreq, so output stays masked.
+    assert!(stdout.contains("argv=-- --sq-raw"), "got: {stdout}");
+    assert!(stdout.contains("GITHUB_TOKEN=********"), "got: {stdout}");
+}
+
+#[test]
+fn x_sq_config_selects_the_config_file() {
+    // Config lives ONLY at a non-default path; --sq-config must find it.
+    let dir = tempfile::tempdir().unwrap();
+    let bin_dir = dir.path().join("realbin");
+    let shim_dir = dir.path().join("shims");
+    install_fake_gh(&bin_dir);
+    let alt = dir.path().join("alt-wraps.json5");
+    write_config(&alt, &echo_provider_config(&shim_dir));
+    let out = run_x(
+        dir.path(),
+        &bin_dir,
+        &["x", "--sq-yes", "--sq-config", alt.to_str().unwrap(), "gh"],
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("GITHUB_TOKEN=********"), "got: {stdout}");
+}
+
+#[test]
+fn x_without_a_wrap_name_prints_usage() {
+    let (dir, bin_dir) = x_fixture();
+    let out = run_x(dir.path(), &bin_dir, &["x"]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("--sq-"), "got: {stderr}");
+}
+
+#[test]
+fn x_sq_help_prints_help() {
+    let (dir, bin_dir) = x_fixture();
+    let out = run_x(dir.path(), &bin_dir, &["x", "--sq-help"]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("--sq-raw"), "got: {stdout}");
+    assert!(stdout.contains("--sq-config"), "got: {stdout}");
+}
+
+#[test]
+fn global_flags_before_x_point_at_the_sq_form() {
+    let (dir, bin_dir) = x_fixture();
+    // `secreq --yes x gh` reaches clap (argv[1] != "x"); the stub arm must
+    // reject it with a pointer to the reserved-prefix form rather than
+    // silently dropping flags or forwarding wrong args.
+    let out = run_x(dir.path(), &bin_dir, &["--yes", "x", "gh"]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("--sq-"), "got: {stderr}");
 }
 
 #[test]
