@@ -76,7 +76,7 @@ multi-secret invocation), `keychain` (macOS), `lastpass`, `pass` (Unix).
   us, including subprocesses of `npm` / `make` / `cargo` / IDE tooling.
   Aliases would miss those.
 - **Multi-provider output masking.** Any value resolved through any
-  provider gets redacted on the wrapped binary's stdout/stderr. `--raw`
+  provider gets redacted on the wrapped binary's stdout/stderr. `--sq-raw`
   opts out for `pbcopy`-style flows.
 - **Provenance-aware SSH agent.** Point `SSH_AUTH_SOCK` at secreq and each
   key signature is gated by the same consent prompt — you see who's asking
