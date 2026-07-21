@@ -24,20 +24,23 @@ use crate::ssh_setup;
 )]
 struct Cli {
     /// Use a specific config file instead of `$XDG_CONFIG_HOME/secreq/wraps.json5`.
+    /// For `x` use `--sq-config`.
     #[arg(long, global = true, value_name = "PATH")]
     config: Option<PathBuf>,
 
     /// Skip output masking. The wrapped binary still runs with secrets in
     /// its env; only redaction of its stdout/stderr is disabled.
-    /// Applies only to wrap-and-run, not admin verbs.
+    /// Applies only to `run`, not admin verbs; for `x` use `--sq-raw`.
     #[arg(long, global = true)]
     raw: bool,
 
     /// Auto-approve without prompting. Composes through nested runs.
+    /// For `x` use `--sq-yes`.
     #[arg(long, short = 'y', global = true)]
     yes: bool,
 
     /// Don't read or write the remembered-approval cache.
+    /// For `x` use `--sq-no-remember`.
     #[arg(long, global = true)]
     no_remember: bool,
 
@@ -180,13 +183,16 @@ enum Command {
 
     /// Run a wrapped binary through secreq: consent → inject secrets → exec
     /// the real binary with output masking. This is what the PATH shims call
-    /// (`exec secreq x <wrap> "$@"`). Run it directly to wrap a one-off.
+    /// (`exec secreq x <wrap> "$@"`). `x` owns no ordinary flags: everything
+    /// after the wrap name is forwarded to the binary verbatim (so
+    /// `<wrap> --help` reaches the binary, not secreq), and secreq's own
+    /// options use the reserved `--sq-` prefix — `secreq x --sq-help` lists
+    /// them. Parsed by hand in `run_x`, never by clap; this variant exists so
+    /// `secreq --help` documents the verb.
     X {
-        /// The wrap (binary) name, e.g. `gh`.
-        wrap: String,
-        /// Arguments forwarded to the wrapped binary.
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        /// Wrap name plus forwarded args; see `secreq x --sq-help`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
+        _args: Vec<String>,
     },
 
     /// `op run`, but for every secret store: resolve every
@@ -438,8 +444,159 @@ enum MigrateAction {
     },
 }
 
+/// Help text for `secreq x`, hand-written because `x` is hand-parsed.
+const X_USAGE: &str = "\
+Usage: secreq x [--sq-OPTIONS] <wrap> [args…]
+
+Run a wrapped binary through secreq: consent → inject secrets → exec the
+real binary with output masking. This is what the PATH shims call
+(`exec secreq x <wrap> \"$@\"`). Run it directly to wrap a one-off.
+
+`x` owns no ordinary flags: every argument except the wrap name is forwarded
+to the wrapped binary untouched, so `<wrap> --help` reaches the binary. The
+options secreq keeps for itself use the reserved `--sq-` prefix and are
+recognized before or after the wrap name:
+
+      --sq-config <PATH>  Use a specific config file instead of
+                          `$XDG_CONFIG_HOME/secreq/wraps.json5`
+      --sq-raw            Skip output masking. The binary still runs with
+                          secrets in its env; only redaction is disabled
+      --sq-yes            Auto-approve without prompting
+      --sq-no-remember    Don't read or write the remembered-approval cache
+      --sq-help           Print this help
+      --                  Stop --sq- recognition: everything after a literal
+                          `--` is forwarded as-is
+";
+
+/// A parsed `secreq x` invocation: the wrap name, the argv to forward, and
+/// the `--sq-*` options secreq kept for itself.
+struct XInvocation {
+    wrap: String,
+    args: Vec<String>,
+    config: Option<PathBuf>,
+    opts: WrapRunOpts,
+}
+
+enum XParse {
+    Help,
+    Run(XInvocation),
+}
+
+/// Hand parser for `secreq x` argv (everything after the `x` token).
+///
+/// The first token that isn't a recognized `--sq-*` option is the wrap name;
+/// every other unrecognized token is forwarded verbatim — including tokens
+/// that look like flags. `--sq-*` options are recognized before or after the
+/// wrap name (the shim prepends `x <wrap>`, so a user's `gh --sq-raw …`
+/// arrives with the option after the wrap name). An unrecognized `--sq-*`
+/// token is an error, not a forward: the prefix is reserved so a typo can't
+/// silently change which process receives the flag.
+fn parse_x_argv(mut argv: impl Iterator<Item = String>) -> Result<XParse, String> {
+    let mut wrap: Option<String> = None;
+    let mut args: Vec<String> = Vec::new();
+    let mut config: Option<PathBuf> = None;
+    let (mut raw, mut yes, mut no_remember) = (false, false, false);
+    let mut extracting = true;
+
+    while let Some(tok) = argv.next() {
+        if extracting {
+            match tok.as_str() {
+                "--sq-help" => return Ok(XParse::Help),
+                "--sq-raw" => {
+                    raw = true;
+                    continue;
+                }
+                "--sq-yes" => {
+                    yes = true;
+                    continue;
+                }
+                "--sq-no-remember" => {
+                    no_remember = true;
+                    continue;
+                }
+                "--sq-config" => {
+                    let value = argv
+                        .next()
+                        .ok_or_else(|| "--sq-config requires a value".to_owned())?;
+                    config = Some(PathBuf::from(value));
+                    continue;
+                }
+                "--" => {
+                    extracting = false;
+                    // Before the wrap name, `--` is the conventional
+                    // options/command separator and isn't forwarded; after
+                    // the wrap name it belongs to the binary's own grammar.
+                    if wrap.is_some() {
+                        args.push(tok);
+                    }
+                    continue;
+                }
+                t if t.starts_with("--sq-config=") => {
+                    config = Some(PathBuf::from(&t["--sq-config=".len()..]));
+                    continue;
+                }
+                t if t.starts_with("--sq-") => {
+                    return Err(format!(
+                        "unknown option `{t}` (--sq- is reserved for secreq)"
+                    ));
+                }
+                _ => {}
+            }
+        }
+        match wrap {
+            None => wrap = Some(tok),
+            Some(_) => args.push(tok),
+        }
+    }
+
+    let Some(wrap) = wrap else {
+        return Err("missing wrap name".to_owned());
+    };
+    Ok(XParse::Run(XInvocation {
+        wrap,
+        args,
+        config,
+        opts: WrapRunOpts {
+            raw,
+            no_remember,
+            assume_yes: yes,
+        },
+    }))
+}
+
+/// Dispatch `secreq x` from raw argv, bypassing clap entirely.
+fn run_x() -> i32 {
+    match parse_x_argv(std::env::args().skip(2)) {
+        Ok(XParse::Help) => {
+            print!("{X_USAGE}");
+            0
+        }
+        Ok(XParse::Run(inv)) => {
+            match commands::wrap_run(&inv.wrap, &inv.args, inv.opts, inv.config.as_deref()) {
+                Ok(code) => code,
+                Err(err) => {
+                    eprintln!("secreq: error: {err:#}");
+                    1
+                }
+            }
+        }
+        Err(msg) => {
+            eprintln!("secreq: {msg}\n\n{X_USAGE}");
+            2
+        }
+    }
+}
+
 /// Parse args, dispatch, return the process exit code.
 pub fn run() -> i32 {
+    // `secreq x` never reaches clap: everything after the wrap name belongs
+    // to the wrapped binary, and clap can't express "parse nothing" — its
+    // help/version flags and the global flags would eat leading tokens like
+    // `<wrap> --help` (the shim path makes that the user's `--help`).
+    if std::env::args().nth(1).as_deref() == Some("x") {
+        return run_x();
+    }
+
     let cli = Cli::parse();
 
     // Every entry point passes through here — including the daemon, which
@@ -561,16 +718,18 @@ pub fn run() -> i32 {
             )
         }
         Some(Command::PendingBadge) => crate::daemon::badge::run(),
-        Some(Command::X { wrap, args }) => commands::wrap_run(
-            &wrap,
-            &args,
-            WrapRunOpts {
-                raw: cli.raw,
-                no_remember: cli.no_remember,
-                assume_yes: cli.yes,
-            },
-            config,
-        ),
+        // Plain `secreq x …` never gets here — `run` intercepts it before
+        // clap. Reachable only as `secreq <global flags> x …`, and global
+        // flags deliberately don't compose with `x`: a leading flag would be
+        // indistinguishable from the wrapped binary's own argv — the exact
+        // ambiguity the reserved `--sq-` prefix exists to prevent.
+        Some(Command::X { .. }) => {
+            eprintln!(
+                "secreq: global flags don't apply to `x`; use the reserved --sq- forms after \
+                 `x` instead (e.g. `secreq x --sq-yes <wrap> [args…]`; see `secreq x --sq-help`)"
+            );
+            return 2;
+        }
         Some(Command::Run { env_file, command }) => commands::run(
             &command,
             &env_file,

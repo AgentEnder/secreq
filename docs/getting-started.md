@@ -19,7 +19,8 @@ If you want the full command reference, that's [`cli.md`](./cli.md).
 - A graphical session if you're on Linux/BSD: `secreq`'s consent
   prompt is a native window. On macOS the WindowServer is always
   available; on Linux/BSD you need `$DISPLAY` or `$WAYLAND_DISPLAY`.
-  Headless? Use the `--yes` flag on a per-invocation basis.
+  Headless? Use the `--sq-yes` flag (`--yes` for `run`) on a
+  per-invocation basis.
 
 ## 1. Install
 
@@ -137,16 +138,21 @@ covers.
 - **`secreq view`** opens the daemon's window in viewer mode (pinned)
   so you can browse the audit log of past grants. The audit log
   records names only, never values.
-- **`--yes`** bypasses the consent daemon entirely and is the
+- **`--sq-yes`** bypasses the consent daemon entirely and is the
   supported path for scripted/CI runs:
 
   ```sh
-  secreq --yes x gh repo list
+  secreq x --sq-yes gh repo list
   ```
 
-- **`--raw`** disables output masking for the wrap-and-run path. Use
+- **`--sq-raw`** disables output masking for the wrap-and-run path. Use
   it when you actually want the resolved value to reach stdout (e.g.
-  `secreq --raw x gh auth token | pbcopy`).
+  `secreq x --sq-raw gh auth token | pbcopy`).
+
+  The `--sq-` prefix is reserved for secreq: on the `x` path everything
+  else in argv — `--help`, `-y`, whatever — forwards to the wrapped
+  binary untouched, so `gh --help` through the shim means gh's help,
+  not secreq's.
 
 ## SSH keys, too
 

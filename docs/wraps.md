@@ -70,6 +70,19 @@ gh: {
 | `$reason` | string | Rationale shown in the consent prompt for context. |
 | `env` | object (optional) | Environment variables to inject. Each value is a `secret://provider/locator` reference (full ref only — bare locators aren't supported here, unlike the old manifest model). Omit (or leave empty) to make a [gate-only wrap](#gate-only-wraps). |
 
+### Already-satisfied env vars
+
+An `env` entry whose variable is **already set in the calling
+environment** — to a non-empty value that isn't a `secret://…` marker —
+is skipped: nothing is resolved or injected for it, and the child simply
+inherits the parent's value. If every entry is satisfied this way, the
+run needs no consent at all and passes straight through (secreq releases
+nothing, so there is nothing to approve). A partially-satisfied wrap
+prompts only for the missing variables. This keeps wrapped binaries
+cheap inside environments that pre-inject credentials (CI, a shell where
+you've exported the token yourself, a nested `secreq run`). Gate-only
+wraps are unaffected — with no `env` to satisfy, they always gate.
+
 ### Gate-only wraps
 
 A wrap with no `env` is a **gate-only wrap**: invoking the binary still

@@ -8,16 +8,20 @@ wrap-and-run path is what fires when a PATH shim invokes
 
 ```
 secreq [GLOBAL OPTIONS] <ADMIN VERB> ...      # init, wrap, unwrap, wraps, check, doctor, edit, ssh
-secreq [GLOBAL OPTIONS] x <WRAP> [ARGS...]    # wrap-and-run
+secreq x [--sq-OPTIONS] <WRAP> [ARGS...]      # wrap-and-run; global options do NOT apply
 secreq [GLOBAL OPTIONS] run [--env-file F]… -- <CMD> [ARGS...]   # resolve ambient refs
 ```
 
 ## Global options
 
+These apply to the admin verbs and `run` — **not to `x`**, whose argv
+belongs to the wrapped binary (see [`x`](#x) for its reserved `--sq-`
+options).
+
 | Flag | Effect |
 |---|---|
 | `--config <PATH>` | Use this config instead of `$XDG_CONFIG_HOME/secreq/wraps.json5`. |
-| `--raw` | Disable output masking for the `x` / `run` paths. |
+| `--raw` | Disable output masking for the `run` path. |
 | `-y`, `--yes` | Auto-approve without prompting (resolves client-side, no daemon); intended for scripted/CI runs. |
 | `-h`, `--help` | Print help. |
 | `-V`, `--version` | Print version. |
@@ -301,7 +305,7 @@ daemon if it isn't running.
 ### `x`
 
 ```
-secreq x <WRAP> [ARGS...]
+secreq x [--sq-OPTIONS] <WRAP> [ARGS...]
 ```
 
 The wrap-and-run verb. Most of the time you don't invoke this by hand —
@@ -310,6 +314,29 @@ script that execs `secreq x <WRAP> "$@"`, so anything that does
 `execvp("<WRAP>", …)` (interactive shells, `npm`, `make`, IDEs) routes
 through us.
 
+#### Argv contract
+
+Because the shim forwards the user's argv wholesale, `x` owns **no
+ordinary flags**: every argument except the wrap name reaches the wrapped
+binary untouched — `gh --help`, `gh -y`, `gh --config foo` all mean gh's
+flags, never secreq's. The options secreq keeps for itself use the
+reserved `--sq-` prefix, recognized before or after the wrap name (so
+`gh --sq-raw api …` works through the shim):
+
+| Flag | Effect |
+|---|---|
+| `--sq-config <PATH>` | Use this config instead of `$XDG_CONFIG_HOME/secreq/wraps.json5`. |
+| `--sq-raw` | Disable output masking; secrets are still injected. |
+| `--sq-yes` | Auto-approve without prompting (resolves client-side, no daemon). |
+| `--sq-no-remember` | Don't read or write the remembered-approval cache. |
+| `--sq-help` | Print `x`'s help. |
+| `--` | Stop `--sq-` recognition; everything after a literal `--` forwards as-is. |
+
+An unrecognized `--sq-*` argument is an error (exit 2), not a forward —
+the prefix is reserved so a typo can't silently hand the flag to the
+wrong process. The global options (`--raw`, `--yes`, …) do not compose
+with `x`.
+
 #### Flow
 
 1. Load the config. Look up `<WRAP>` in `wraps`.
@@ -317,7 +344,15 @@ through us.
    `<WRAP>` on PATH (excluding our shim dir to avoid recursion) and exec
    it with no injection. This makes blanket-aliasing of binaries safe even
    before you've wrapped each one.
-3. **If a wrap exists**:
+3. **Drop `env` entries the parent environment already satisfies**: a
+   variable that is already set to a non-empty value that isn't a
+   `secret://…` marker needs no injection — the child inherits the
+   parent's value as-is. Consent gates the release of secret material
+   *by secreq*, so if **every** entry is satisfied the run passes through
+   with no prompt at all; if only some are, the prompt asks for (and
+   resolution fetches) only the missing ones. Gate-only wraps (no `env`)
+   are exempt — they still always gate.
+4. **If a wrap exists** (with at least one entry still to resolve):
    - Walk the parent process tree for the consent prompt.
    - Hand off to the consent daemon (auto-spawning it if no socket is
      live). The daemon checks its in-memory cache keyed on
@@ -329,7 +364,7 @@ through us.
    - Build the child command: real binary path + forwarded args; child
      env layered with the resolved values.
    - Spawn in a PTY (or piped if non-tty), streaming output through a
-     masking filter that redacts any resolved value (unless `--raw`).
+     masking filter that redacts any resolved value (unless `--sq-raw`).
 
 #### Exit codes
 
@@ -337,7 +372,7 @@ through us.
 |---|---|
 | 0 | Child exited cleanly. |
 | 1 | Consent denied, or provider resolution failed. |
-| 2 | `secreq` invoked with no command. |
+| 2 | Usage error: `secreq` invoked with no command, `x` with no wrap name, or an unknown `--sq-*` option. |
 | child's | Otherwise the child's exit code propagates. |
 
 ### `run`

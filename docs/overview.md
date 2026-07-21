@@ -73,7 +73,7 @@ provenance-aware consent**. Nobody else covers all three.
    │  find the real `gh` on PATH (skipping our shim dir to avoid recursion)
    │  spawn it with secrets in env                                       │
    │  stream stdout/stderr through a multi-secret masker that redacts   │
-   │  any resolved value that appears in output (unless `--raw`)        │
+   │  any resolved value that appears in output (unless `--sq-raw`)     │
    └───────────────────────────────────────────────────────────────────┘
 ```
 
