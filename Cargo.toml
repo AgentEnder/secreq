@@ -64,6 +64,19 @@ similar = "2"
 # the env-loading entry points.
 dotenvy = "0.15"
 
+# SHA-256 of registered wasm rule modules (`rules::sha256_hex`), verified
+# on every rules load so a module that drifted from what the user
+# registered is refused. Already in the tree transitively via `rsa` /
+# `ssh-key`, so the direct dependency costs nothing extra to build.
+sha2 = "0.10"
+
+# Sandboxed execution of user-compiled wasm rule modules (`wasm_rules`).
+# Minimal feature set on purpose: `cranelift` + `runtime` compile and run
+# core wasm; no `wat`, no WASI, no component model — a rule module's only
+# window on the world is the ctx we hand it. `anyhow` enables the
+# `From<wasmtime::Error> for anyhow::Error` impl our error plumbing uses.
+wasmtime = { version = "46.0.1", default-features = false, features = ["cranelift", "runtime", "anyhow"] }
+
 # macOS-only.
 #
 # `winit` re-exported for platform extension traits in `daemon/mod.rs`.
@@ -81,3 +94,6 @@ objc2-foundation = "0.3"
 tempfile = "3"
 egui_kittest = { version = "0.34", features = ["wgpu", "snapshot", "eframe"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Assembles the hand-written .wat fixtures in tests/fixtures/wasm_rules/
+# at test time. Dev-only: the production loader accepts binaries only.
+wat = "1.253.0"

@@ -7,6 +7,7 @@
 //! ~/.secreq/
 //!   wraps.json5            config
 //!   auto-rules.json5       config
+//!   rules/                 compiled wasm rule modules (<rule-id>.wasm)
 //!   audit.log              append-only, daemon + wrap clients
 //!   daemon.log
 //!   daemon.jsonl
@@ -96,6 +97,36 @@ pub fn wraps_path() -> Result<PathBuf> {
 
 pub fn rules_path() -> Result<PathBuf> {
     Ok(secreq_root()?.join("auto-rules.json5"))
+}
+
+/// Directory holding registered wasm rule modules (`rules/<id>.wasm`).
+pub fn rule_wasm_dir() -> Result<PathBuf> {
+    Ok(secreq_root()?.join("rules"))
+}
+
+/// Canonical on-disk home for rule `rule_id`'s compiled wasm module.
+/// `auto-rules.json5` records the (root-relative) path alongside the
+/// module's sha256; this helper is where the registration tooling puts
+/// the bytes.
+///
+/// Ids minted by [`crate::rules::new_rule_id`] are lowercase hex, but a
+/// hand-edited file can carry any string — and deriving a filename from
+/// it makes "no path separators" a new constraint, exactly like the
+/// scope-socket case below. Rejected, not sanitized, for the same
+/// aliasing reason.
+pub fn rule_wasm_path(rule_id: &str) -> Result<PathBuf> {
+    let bad = rule_id.is_empty()
+        || rule_id == "."
+        || rule_id == ".."
+        || rule_id.contains('/')
+        || rule_id.contains('\0');
+    if bad {
+        anyhow::bail!(
+            "rule id {rule_id:?} can't be used as a wasm module filename \
+             (no `/`, and not `.` or `..`)"
+        );
+    }
+    Ok(rule_wasm_dir()?.join(format!("{rule_id}.wasm")))
 }
 
 pub fn audit_log_path() -> Result<PathBuf> {
@@ -248,6 +279,24 @@ mod tests {
     fn empty_xdg_runtime_dir_is_treated_as_unset() {
         let dir = socket_dir_from(Some(OsString::from("")), Path::new("/home/ada/.secreq"));
         assert_eq!(dir, PathBuf::from("/home/ada/.secreq/run"));
+    }
+
+    #[test]
+    fn rule_wasm_path_is_named_after_the_rule_id() {
+        let path = rule_wasm_path("0a1b2c").unwrap();
+        assert!(path.ends_with("rules/0a1b2c.wasm"), "{}", path.display());
+    }
+
+    /// Same constraint as scope names: an id with a separator would
+    /// resolve outside `rules/` entirely.
+    #[test]
+    fn a_rule_id_that_would_escape_the_rules_dir_is_refused() {
+        for escape in ["../../tmp/evil", "a/b", "..", ".", ""] {
+            assert!(
+                rule_wasm_path(escape).is_err(),
+                "{escape:?} must be refused"
+            );
+        }
     }
 
     #[test]

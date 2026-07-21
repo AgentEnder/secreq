@@ -660,6 +660,7 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
         ClientMsg::RaiseConsentRequested => "RaiseConsentRequested",
         ClientMsg::ListRules => "ListRules",
         ClientMsg::AddRule { .. } => "AddRule",
+        ClientMsg::AddWasmRule { .. } => "AddWasmRule",
         ClientMsg::UpdateRule { .. } => "UpdateRule",
         ClientMsg::DeleteRule { .. } => "DeleteRule",
         ClientMsg::SetRuleEnabled { .. } => "SetRuleEnabled",
@@ -762,8 +763,35 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
             let guard = state.lock().expect("state mutex");
             DaemonMsg::RulesList {
                 rules: guard.rules_snapshot(),
+                wasm_refusals: guard.wasm_refusals_snapshot(),
             }
         }
+        // `secreq rules add-wasm`. The wire carries the module's
+        // (absolute) path, not its bytes — same-user, same-machine, so
+        // the daemon reads the file itself, then vets/copies/persists
+        // in `State::add_wasm_rule`. A read failure here registers
+        // nothing.
+        ClientMsg::AddWasmRule {
+            name,
+            module_path,
+            trained_secrets,
+            allow_all_secrets,
+        } => match read_wasm_module_bytes(&module_path) {
+            Ok(bytes) => {
+                let mut guard = state.lock().expect("state mutex");
+                match guard.add_wasm_rule(&name, &bytes, trained_secrets, allow_all_secrets) {
+                    Ok(rule) => DaemonMsg::RuleAdded {
+                        rule: Box::new(rule),
+                    },
+                    Err(err) => DaemonMsg::Err {
+                        message: format!("{err:#}"),
+                    },
+                }
+            }
+            Err(err) => DaemonMsg::Err {
+                message: format!("{err:#}"),
+            },
+        },
         ClientMsg::AddRule { rule } => {
             let mut guard = state.lock().expect("state mutex");
             match guard.add_rule(rule) {
@@ -840,6 +868,7 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
         DaemonMsg::ConsentUpdate { .. } => "ConsentUpdate",
         DaemonMsg::ConsentExitPlease => "ConsentExitPlease",
         DaemonMsg::RulesList { .. } => "RulesList",
+        DaemonMsg::RuleAdded { .. } => "RuleAdded",
         DaemonMsg::AutoDenyToast { .. } => "AutoDenyToast",
     };
     super::log::log_at("server", format_args!("→ DaemonMsg::{reply_tag}"));
@@ -1052,6 +1081,33 @@ fn park_ask_and_watch(
     // on the dropped sender; join so the socket outlives any pending write.
     let _ = reply_thread.join();
     Ok(())
+}
+
+/// Upper bound on a to-be-registered wasm module's size. Real rule
+/// modules are KB-scale (the SDK fixtures compile to a few KB); the
+/// generous cap only exists so a mistaken path from the client can't
+/// balloon daemon memory before the sandbox vetting rejects the bytes
+/// anyway.
+const MAX_WASM_MODULE_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Read a to-be-registered module defensively. The path is
+/// client-supplied (same user, so not a privilege boundary — but the
+/// daemon must not wedge itself on a typo): it must be a regular file
+/// — a FIFO would block this connection thread forever — and within
+/// [`MAX_WASM_MODULE_BYTES`].
+fn read_wasm_module_bytes(path: &str) -> Result<Vec<u8>> {
+    let meta = std::fs::metadata(path).with_context(|| format!("stat wasm module {path}"))?;
+    if !meta.is_file() {
+        anyhow::bail!("wasm module {path} is not a regular file");
+    }
+    if meta.len() > MAX_WASM_MODULE_BYTES {
+        anyhow::bail!(
+            "wasm module {path} is {} bytes, over the {MAX_WASM_MODULE_BYTES}-byte \
+             registration cap — rule modules are expected to be KB-scale",
+            meta.len()
+        );
+    }
+    std::fs::read(path).with_context(|| format!("read wasm module {path}"))
 }
 
 /// Apply a rule-mutation ClientMsg to State. Used by the streaming
@@ -1448,13 +1504,14 @@ mod tests {
             id: "abc123".to_owned(),
             name: "test rule".to_owned(),
             enabled: true,
-            decide: RuleDecision::Approve,
-            r#match: RuleMatch {
+            decide: Some(RuleDecision::Approve),
+            r#match: Some(RuleMatch {
                 wrap: "gh".to_owned(),
                 argv: Some(Pattern::parse("gh api")),
                 ancestor: None,
                 cwd: None,
-            },
+            }),
+            wasm: None,
             trained_secrets: BTreeSet::new(),
             deny_message: None,
             created_at_unix: 0,
@@ -1467,6 +1524,78 @@ mod tests {
         assert_eq!(loaded.rules, vec![rule.clone()]);
         // In-memory: State sees it too.
         assert_eq!(state.lock().unwrap().rules_snapshot(), vec![rule]);
+    }
+
+    /// The one-shot `AddWasmRule` path end to end: the CLI ships a
+    /// module *path*, the daemon reads + vets + stores + persists, and
+    /// the follow-up `ListRules` reply carries the new rule with no
+    /// refusals. Also the guard: an empty trained-secrets snapshot
+    /// without the opt-in is refused with nothing registered.
+    #[test]
+    fn add_wasm_rule_over_ipc_registers_and_lists() {
+        use std::sync::{Arc, Mutex};
+
+        const APPROVE_IF: &[u8] = include_bytes!("../../tests/fixtures/wasm_rules/approve_if.wasm");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let module_src = dir.path().join("uploaded.wasm");
+        std::fs::write(&module_src, APPROVE_IF).expect("write module");
+        let rules_path = dir.path().join("auto-rules.json5");
+        let state: SharedState = Arc::new(Mutex::new(super::super::state::State::with_rules_path(
+            rules_path,
+        )));
+
+        // Empty snapshot without the opt-in: refused, nothing listed.
+        let reply = handle_message(
+            ClientMsg::AddWasmRule {
+                name: "greedy".to_owned(),
+                module_path: module_src.to_string_lossy().into_owned(),
+                trained_secrets: Default::default(),
+                allow_all_secrets: false,
+            },
+            state.clone(),
+        );
+        match reply {
+            DaemonMsg::Err { message } => {
+                assert!(message.contains("trained-secrets"), "{message}")
+            }
+            other => panic!("expected Err, got {other:?}"),
+        }
+
+        // With a trained snapshot: registered, and visible via ListRules.
+        let trained: std::collections::BTreeSet<String> =
+            ["GITHUB_TOKEN".to_owned()].into_iter().collect();
+        let reply = handle_message(
+            ClientMsg::AddWasmRule {
+                name: "cursor gh reads".to_owned(),
+                module_path: module_src.to_string_lossy().into_owned(),
+                trained_secrets: trained.clone(),
+                allow_all_secrets: false,
+            },
+            state.clone(),
+        );
+        let rule = match reply {
+            DaemonMsg::RuleAdded { rule } => *rule,
+            other => panic!("expected RuleAdded, got {other:?}"),
+        };
+        assert_eq!(rule.trained_secrets, trained);
+        assert_eq!(
+            rule.wasm.as_ref().expect("wasm").sha256,
+            crate::rules::sha256_hex(APPROVE_IF)
+        );
+
+        match handle_message(ClientMsg::ListRules, state.clone()) {
+            DaemonMsg::RulesList {
+                rules,
+                wasm_refusals,
+            } => {
+                assert_eq!(rules, vec![rule.clone()]);
+                assert!(wasm_refusals.is_empty(), "{wasm_refusals:?}");
+            }
+            other => panic!("expected RulesList, got {other:?}"),
+        }
+
+        // Clean up the shared-store module this test registered.
+        state.lock().unwrap().delete_rule(&rule.id).expect("delete");
     }
 
     #[test]
@@ -1485,13 +1614,14 @@ mod tests {
             id: "to-delete".to_owned(),
             name: "to delete".to_owned(),
             enabled: true,
-            decide: RuleDecision::Deny,
-            r#match: RuleMatch {
+            decide: Some(RuleDecision::Deny),
+            r#match: Some(RuleMatch {
                 wrap: "gh".to_owned(),
                 argv: None,
                 ancestor: None,
                 cwd: None,
-            },
+            }),
+            wasm: None,
             trained_secrets: BTreeSet::new(),
             deny_message: Some("blocked".to_owned()),
             created_at_unix: 0,

@@ -122,6 +122,7 @@ pub fn run(kind: WindowKind, always_on_top: bool) -> Result<i32> {
         queue: Vec::new(),
         viewer_mode: false,
         rules: Vec::new(),
+        wasm_refusals: Vec::new(),
     }));
     // Shared with the reader: the latest auto-deny toast and the local
     // wall-clock time we received it. Only the prompt renders it; the
@@ -324,7 +325,8 @@ fn spawn_reader(
                     | DaemonMsg::WindowOpened { .. }
                     | DaemonMsg::Decision { .. }
                     | DaemonMsg::Err { .. }
-                    | DaemonMsg::RulesList { .. } => {
+                    | DaemonMsg::RulesList { .. }
+                    | DaemonMsg::RuleAdded { .. } => {
                         // Belong to the one-shot path; ignore quietly.
                     }
                 }
@@ -503,6 +505,7 @@ impl eframe::App for ChildApp {
                     &ctx,
                     ui,
                     &wire.rules,
+                    &wire.wasm_refusals,
                     wire.viewer_mode,
                     manager_state,
                     &mut rule_actions,

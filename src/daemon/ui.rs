@@ -203,31 +203,24 @@ impl RuleDraft {
         }
     }
 
+    /// Seed the form from an existing **declarative** rule. Wasm rules
+    /// never reach this — the list hides their Edit button (the form
+    /// only edits match clauses; saving one over a wasm rule would
+    /// silently rewrite it as declarative) — so a `None` match/decide
+    /// just falls back to the blank defaults.
     pub(crate) fn from_rule(rule: &Rule) -> RuleDraft {
+        let pattern_str =
+            |p: Option<&Pattern>| p.map(|p| p.as_str().to_owned()).unwrap_or_default();
+        let m = rule.r#match.as_ref();
         RuleDraft {
             id: Some(rule.id.clone()),
             name: rule.name.clone(),
             enabled: rule.enabled,
-            decide: rule.decide.into(),
-            wrap: rule.r#match.wrap.clone(),
-            argv: rule
-                .r#match
-                .argv
-                .as_ref()
-                .map(|p| p.as_str().to_owned())
-                .unwrap_or_default(),
-            ancestor: rule
-                .r#match
-                .ancestor
-                .as_ref()
-                .map(|p| p.as_str().to_owned())
-                .unwrap_or_default(),
-            cwd: rule
-                .r#match
-                .cwd
-                .as_ref()
-                .map(|p| p.as_str().to_owned())
-                .unwrap_or_default(),
+            decide: rule.decide.map(Into::into).unwrap_or_default(),
+            wrap: m.map(|m| m.wrap.clone()).unwrap_or_default(),
+            argv: pattern_str(m.and_then(|m| m.argv.as_ref())),
+            ancestor: pattern_str(m.and_then(|m| m.ancestor.as_ref())),
+            cwd: pattern_str(m.and_then(|m| m.cwd.as_ref())),
             deny_message: rule.deny_message.clone().unwrap_or_default(),
             trained_secrets: rule.trained_secrets.clone(),
         }
@@ -269,13 +262,16 @@ impl RuleDraft {
             id,
             name: name.to_owned(),
             enabled: self.enabled,
-            decide: self.decide.into(),
-            r#match: RuleMatch {
+            decide: Some(self.decide.into()),
+            r#match: Some(RuleMatch {
                 wrap: wrap.to_owned(),
                 argv: optional_pattern(&self.argv),
                 ancestor: optional_pattern(&self.ancestor),
                 cwd: optional_pattern(&self.cwd),
-            },
+            }),
+            // The form authors declarative rules only; wasm rules are
+            // registered via the CLI.
+            wasm: None,
             trained_secrets: self.trained_secrets,
             deny_message,
             created_at_unix: created_at,
@@ -822,6 +818,7 @@ pub(crate) struct RulesUi<'a> {
 pub(crate) fn render_rules_page(
     ui: &mut egui::Ui,
     rule_rows: &[(&Rule, RuleUsage)],
+    wasm_refusals: &[crate::rules::WasmRefusal],
     suggestions: &[Suggestion],
     state: &mut RulesUi,
     actions_out: &mut Vec<RuleAction>,
@@ -830,12 +827,20 @@ pub(crate) fn render_rules_page(
         render_rule_form(ui, state.draft, actions_out);
         return;
     }
-    render_rules_list(ui, rule_rows, suggestions, state, actions_out);
+    render_rules_list(
+        ui,
+        rule_rows,
+        wasm_refusals,
+        suggestions,
+        state,
+        actions_out,
+    );
 }
 
 fn render_rules_list(
     ui: &mut egui::Ui,
     rule_rows: &[(&Rule, RuleUsage)],
+    wasm_refusals: &[crate::rules::WasmRefusal],
     suggestions: &[Suggestion],
     state: &mut RulesUi,
     actions_out: &mut Vec<RuleAction>,
@@ -907,7 +912,8 @@ fn render_rules_list(
                 ui.add_space(8.0);
                 let now = now_unix();
                 for (rule, usage) in rule_rows {
-                    render_rules_row(ui, rule, *usage, now, state.draft, actions_out);
+                    let refusal = wasm_refusals.iter().find(|r| r.rule_id == rule.id);
+                    render_rules_row(ui, rule, refusal, *usage, now, state.draft, actions_out);
                     ui.add_space(8.0);
                 }
             }
@@ -1142,6 +1148,7 @@ fn suggestion_summary_line(s: &Suggestion) -> String {
 fn render_rules_row(
     ui: &mut egui::Ui,
     rule: &Rule,
+    refusal: Option<&crate::rules::WasmRefusal>,
     usage: RuleUsage,
     now_unix: u64,
     draft: &mut Option<RuleDraft>,
@@ -1165,19 +1172,39 @@ fn render_rules_row(
                     });
                 }
 
-                // Decide pill — green for approve, red for deny. A
+                // Decide pill — green for approve, red for deny; a
+                // wasm rule has no static side (its module returns the
+                // decision per ask) so it gets a neutral "wasm" chip. A
                 // disabled rule fades the pill to a neutral grey chip
                 // so the live semantic colour is reserved for rules
                 // that can actually fire.
                 let (pill_fg, pill_text) = match rule.decide {
-                    RuleDecision::Approve => (th.ok, "approve"),
-                    RuleDecision::Deny => (th.danger, "deny"),
+                    Some(RuleDecision::Approve) => (th.ok, "approve"),
+                    Some(RuleDecision::Deny) => (th.danger, "deny"),
+                    None => (th.dim, "wasm"),
                 };
                 let pill_bg = soft_fill(pill_fg);
                 if rule.enabled {
                     render_pill(ui, pill_text, pill_fg, pill_bg);
                 } else {
                     render_pill(ui, pill_text, th.dim, th.raised);
+                }
+
+                // Finding A: a wasm rule whose module was refused at
+                // load (sha256 mismatch, missing file, sandbox
+                // rejection) can never fire — badge it loudly instead
+                // of letting it pose as a healthy rule. The hover text
+                // carries the full reason (files and hashes only,
+                // never secret values).
+                if let Some(refusal) = refusal {
+                    ui.add_space(4.0);
+                    render_pill(ui, "refused", th.danger, soft_fill(th.danger));
+                    ui.label(
+                        egui::RichText::new(refusal.category.label())
+                            .size(10.5)
+                            .color(th.danger),
+                    )
+                    .on_hover_text(&refusal.reason);
                 }
 
                 ui.add_space(8.0);
@@ -1191,7 +1218,11 @@ fn render_rules_row(
                     if ui.button("Delete").clicked() {
                         actions_out.push(RuleAction::Delete(rule.id.clone()));
                     }
-                    if ui.button("Edit").clicked() {
+                    // The form edits declarative match clauses only;
+                    // offering it for a wasm rule would let a Save
+                    // silently rewrite the rule as declarative. Wasm
+                    // rules are re-registered via the CLI instead.
+                    if rule.wasm.is_none() && ui.button("Edit").clicked() {
                         *draft = Some(RuleDraft::from_rule(rule));
                     }
                 });
@@ -1235,16 +1266,20 @@ fn render_rules_row(
 
 /// One-line summary of the rule's match clause for the list view.
 /// Skips empty match fields; collapses to "wrap: gh" when nothing
-/// else is constrained.
+/// else is constrained. A wasm rule summarizes as its module path.
 fn rule_summary_line(rule: &Rule) -> String {
-    let mut parts = vec![format!("wrap: {}", rule.r#match.wrap)];
-    if let Some(p) = &rule.r#match.argv {
+    let Some(m) = &rule.r#match else {
+        let path = rule.wasm.as_ref().map_or("?", |w| w.path.as_str());
+        return format!("wasm: '{path}'");
+    };
+    let mut parts = vec![format!("wrap: {}", m.wrap)];
+    if let Some(p) = &m.argv {
         parts.push(format!("argv: '{}'", p.as_str()));
     }
-    if let Some(p) = &rule.r#match.ancestor {
+    if let Some(p) = &m.ancestor {
         parts.push(format!("ancestor: '{}'", p.as_str()));
     }
-    if let Some(p) = &rule.r#match.cwd {
+    if let Some(p) = &m.cwd {
         parts.push(format!("cwd: '{}'", p.as_str()));
     }
     parts.join(" · ")
@@ -2435,13 +2470,14 @@ mod tests {
             id: id.to_owned(),
             name: name.to_owned(),
             enabled: true,
-            decide: RuleDecision::Approve,
-            r#match: RuleMatch {
+            decide: Some(RuleDecision::Approve),
+            r#match: Some(RuleMatch {
                 wrap: "gh".to_owned(),
                 argv: None,
                 ancestor: None,
                 cwd: None,
-            },
+            }),
+            wasm: None,
             trained_secrets: std::collections::BTreeSet::new(),
             deny_message: None,
             created_at_unix: 0,

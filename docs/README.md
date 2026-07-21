@@ -17,6 +17,7 @@ consent ceremony** — the wedge nobody else covers.
 | **Picking or defining a provider** | [providers.md](./providers.md). |
 | **Using `secreq` as your SSH agent** | [ssh-agent.md](./ssh-agent.md) — onboarding (`ssh add`, `daemon install`, `ssh setup`), config, the key-custody tradeoff. |
 | **Getting secrets into a VM sandbox without copying them** | [secret-agent.md](./secret-agent.md) — `agent open` on the host, `secreq resolve` + `SECREQ_SOCK` in the guest. |
+| **Writing a programmable auto-rule** | [wasm-rules.md](./wasm-rules.md) — author a rule as code, test it, compile it to a sandboxed wasm module, register it with `rules add-wasm`. |
 | **Understanding what the daemon window shows** | [consent-window.md](./consent-window.md) — pending tree, audit log, viewer mode. |
 
 ## Documentation map
@@ -43,6 +44,10 @@ consent ceremony** — the wedge nobody else covers.
 - **[consent-window.md](./consent-window.md)** — the daemon UI: the
   pending tree, approve-all-at-an-ancestor semantics, the audit log
   tab, audit log JSONL format.
+- **[wasm-rules.md](./wasm-rules.md)** — programmable auto-rules: the
+  sandbox trust model, the `secreq-rule` authoring SDK, unit-testing
+  and compiling a rule, `rules add-wasm` registration, sha256 pinning
+  and refusal states.
 - **[wraps.schema.json](./wraps.schema.json)** — JSON Schema for
   `wraps.json5`. Generated; don't edit by hand.
 

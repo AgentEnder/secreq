@@ -531,7 +531,7 @@ fn render_manager_fixture(name: &str, audit_entries: Vec<AuditEntry>, extras: Ma
                 apply_theme_pin(&ctx, theme_pin);
                 secreq::daemon::ui::install_style(&ctx);
                 let mut rule_actions: Vec<RuleAction> = Vec::new();
-                render_manager_panel(&ctx, ui, &rules, viewer_mode, ws, &mut rule_actions);
+                render_manager_panel(&ctx, ui, &rules, &[], viewer_mode, ws, &mut rule_actions);
             },
             initial_state,
         );
@@ -1313,13 +1313,14 @@ fn sample_rule(id: &str, name: &str, decide: RuleDecision, argv: Option<&str>) -
         id: id.to_owned(),
         name: name.to_owned(),
         enabled: true,
-        decide,
-        r#match: RuleMatch {
+        decide: Some(decide),
+        r#match: Some(RuleMatch {
             wrap: "gh".to_owned(),
             argv: argv.map(Pattern::parse),
             ancestor: Some(Pattern::parse("Cursor.app")),
             cwd: None,
-        },
+        }),
+        wasm: None,
         trained_secrets: ["GITHUB_TOKEN".to_owned()].into_iter().collect(),
         deny_message: if decide == RuleDecision::Deny {
             Some("Destructive gh operations are policy-denied.".to_owned())
