@@ -115,8 +115,7 @@ no embedded JS engine. Scaffold a package:
 ```sh
 mkdir my-rule && cd my-rule
 npm init -y
-npm install --save-dev assemblyscript @as-pect/cli \
-  "secreq-rule@file:/path/to/secreq/sdk/secreq-rule"
+npm install --save-dev assemblyscript @as-pect/cli secreq-rule
 mkdir -p assembly
 ```
 

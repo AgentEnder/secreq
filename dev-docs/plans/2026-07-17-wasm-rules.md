@@ -241,7 +241,10 @@ surface disproportionate to the window).
   ABI glue (`abi.ts`), stub-runtime JSON (`json.ts`), and
   `secreq-rule-build` (wraps `asc`; generates the ABI entry around the
   author's `decide`; `--raw` compiles hand-implemented-ABI modules —
-  used by the fixture rebuild).
+  used by the fixture rebuild). Published to npm as `secreq-rule` so
+  external authors `npm install secreq-rule` rather than vendoring the
+  package; it ships AssemblyScript source (no compile step), and
+  `tests/sdk_publish.rs` guards the `files` allowlist against drift.
 - asc 0.28 resolves bare `import "secreq-rule"` to the package's root
   `index.ts` (it does not consult `ascMain`), so the package carries a
   root re-export. The generated entry must import the ABI glue through

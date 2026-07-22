@@ -50,3 +50,22 @@ Kept in lock-step with `src/wasm_rules.rs`:
   decision JSON: `"approve"`, `"pass"`, or `{"deny": "reason"}`.
 
 You never deal with this directly — `secreq-rule-build` generates the glue.
+
+## Publishing (maintainers)
+
+The package ships AssemblyScript **source** (`assembly/*.ts`, the root
+`index.ts`) plus the plain-JS build wrapper (`bin/build.js`) — there is no
+compile step, so publishing is just:
+
+```sh
+cd sdk/secreq-rule
+npm publish            # runs from a clean checkout; needs npm auth
+```
+
+The `files` allowlist in `package.json` pins exactly what ships
+(`assembly/`, `bin/`, `index.ts`, `asconfig.json`; npm always adds
+`package.json` + `README.md`). `tests/sdk_publish.rs` guards that the
+allowlist still covers everything `secreq-rule-build` reaches for at
+consume time, so a new imported file can't silently drop out of the
+tarball. Verify the tarball contents before publishing with
+`npm pack --dry-run`.
