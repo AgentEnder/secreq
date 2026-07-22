@@ -22,7 +22,7 @@ use crate::rules::{Rule, WasmRefusal};
 use super::theme::{OsFlavor, Theme};
 use super::ui::{
     now_unix, paint_search_glyph, render_audit_page, render_rules_page, rule_usage_index,
-    AuditCache, RuleAction, RuleDraft, RuleSort, RuleUsage, RulesUi,
+    AuditCache, RuleAction, RuleDraft, RuleSort, RuleUsage, RulesUi, ScaffoldPanel,
 };
 
 pub use super::proto::ManagerFocus;
@@ -61,6 +61,9 @@ pub struct ManagerWindowState {
     pub(crate) view: ManagerView,
     /// `Some` while the rule create/edit form is open on the Rules view.
     pub(crate) rules_draft: Option<RuleDraft>,
+    /// The "Write a programmatic rule" scaffold card's state (detected
+    /// editors, persisted preference, what's been scaffolded this session).
+    pub(crate) scaffold: ScaffoldPanel,
     /// Suggestion keys the user dismissed this session.
     pub(crate) dismissed_suggestions: std::collections::HashSet<String>,
     /// Ordering of the suggestion cards.
@@ -90,6 +93,7 @@ impl ManagerWindowState {
         ManagerWindowState {
             view: ManagerView::Rules,
             rules_draft: None,
+            scaffold: ScaffoldPanel::new(),
             dismissed_suggestions: std::collections::HashSet::new(),
             suggestion_sort: crate::recommendations::SuggestionSort::default(),
             rule_sort: RuleSort::default(),
@@ -155,6 +159,30 @@ impl ManagerWindowState {
     pub fn open_edit_rule_form(&mut self, rule: &Rule) {
         self.view = ManagerView::Rules;
         self.rules_draft = Some(RuleDraft::from_rule(rule));
+    }
+
+    /// Seed the scaffold card's detected editors + persisted preference
+    /// without probing the host. Harness entry point so the screenshot
+    /// fixtures render a fixed editor set regardless of what's installed
+    /// on the regenerating machine.
+    pub fn seed_scaffold_editors(
+        &mut self,
+        editors: Vec<crate::rule_scaffold::Editor>,
+        preferred: Option<String>,
+    ) {
+        self.scaffold.seed_for_test(editors, preferred);
+    }
+
+    /// Put the scaffold card into its post-scaffold state (the split-
+    /// button appears, targeting `entry`). Harness entry point.
+    pub fn mark_scaffolded(&mut self, entry: std::path::PathBuf) {
+        self.scaffold.mark_scaffolded_for_test(entry);
+    }
+
+    /// Force the "Open in editor" split-button's dropdown open. Harness
+    /// entry point for the expanded-menu fixture.
+    pub fn open_scaffold_dropdown(&mut self) {
+        self.scaffold.open_dropdown_for_test();
     }
 }
 
@@ -253,6 +281,7 @@ fn render_rules_body(
         dismissed: &mut state.dismissed_suggestions,
         suggestion_sort: &mut state.suggestion_sort,
         rule_sort: &mut state.rule_sort,
+        scaffold: &mut state.scaffold,
     };
     render_rules_page(
         ui,

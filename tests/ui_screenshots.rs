@@ -27,7 +27,7 @@
 //!   `AuditCache` path), at the manager's production viewport size.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -43,6 +43,7 @@ use secreq::daemon::state::{SharedState, State};
 use secreq::daemon::theme::OsFlavor;
 use secreq::daemon::ui::{AutoDenyToastView, RuleAction, RuleSort};
 use secreq::recommendations::SuggestionSort;
+use secreq::rule_scaffold::Editor;
 use secreq::rules::{Pattern, Rule, RuleDecision, RuleMatch};
 
 /// Where the regenerated PNGs land. Relative to the workspace root,
@@ -1479,6 +1480,63 @@ fn rules_form_edit_deny() {
         vec![],
         ManagerExtras {
             window_state: Some(Box::new(move |ws| ws.open_edit_rule_form(&rule))),
+            ..ManagerExtras::default()
+        },
+    );
+}
+
+/// A deterministic editor set for the scaffold fixtures, so the PNGs
+/// don't depend on what's installed on the regenerating machine.
+fn sample_editors() -> Vec<Editor> {
+    vec![
+        Editor::new("code", "VS Code", "code"),
+        Editor::new("cursor", "Cursor", "cursor"),
+        Editor::new("zed", "Zed", "zed"),
+        Editor::new("nvim", "Neovim", "nvim"),
+    ]
+}
+
+#[test]
+#[ignore = "screenshot harness"]
+fn rules_scaffold_open_in_editor() {
+    // The programmatic-rule scaffold card in its post-scaffold state: a
+    // rule has been scaffolded, so the GitHub-style "Open in editor"
+    // split-button is showing, defaulting to the persisted preference
+    // (Cursor). Seeded editors keep the button deterministic.
+    render_manager_fixture(
+        "37-rules-scaffold-open-in-editor",
+        vec![],
+        ManagerExtras {
+            window_state: Some(Box::new(|ws| {
+                ws.focus_rules_view();
+                ws.seed_scaffold_editors(sample_editors(), Some("cursor".to_owned()));
+                ws.mark_scaffolded(PathBuf::from(
+                    "/Users/example/.secreq/rule-drafts/rule-1a2b3c4d/rule.ts",
+                ));
+            })),
+            ..ManagerExtras::default()
+        },
+    );
+}
+
+#[test]
+#[ignore = "screenshot harness"]
+fn rules_scaffold_editor_picker() {
+    // The split-button's dropdown expanded — the editor picker. The
+    // currently-selected editor (Cursor) carries a check; picking a
+    // different one makes it the new default.
+    render_manager_fixture(
+        "38-rules-scaffold-editor-picker",
+        vec![],
+        ManagerExtras {
+            window_state: Some(Box::new(|ws| {
+                ws.focus_rules_view();
+                ws.seed_scaffold_editors(sample_editors(), Some("cursor".to_owned()));
+                ws.mark_scaffolded(PathBuf::from(
+                    "/Users/example/.secreq/rule-drafts/rule-1a2b3c4d/rule.ts",
+                ));
+                ws.open_scaffold_dropdown();
+            })),
             ..ManagerExtras::default()
         },
     );

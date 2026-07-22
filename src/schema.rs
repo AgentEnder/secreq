@@ -32,6 +32,10 @@ pub fn wraps_schema() -> Value {
                 "type": "string",
                 "description": "URL or path of this JSON Schema. Ignored by `secreq`."
             },
+            "$editor": {
+                "type": "string",
+                "description": "Editor the rule editor's 'Open in editor' split-button opens by default (an editor id such as `code`, `cursor`, `zed`, or `nvim`). Machine-local, like `$shim_dir`; written when you pick an editor in the Rules view of `secreq view`."
+            },
             "$shim_dir": {
                 "type": "string",
                 "description": "Directory where `secreq wrap` drops PATH shims. Set by `secreq init`. Supports a leading `~/`."

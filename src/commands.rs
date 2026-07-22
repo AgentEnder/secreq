@@ -2876,6 +2876,18 @@ fn config_to_json_value(config: &WrapsConfig) -> Result<serde_json::Value> {
             serde_json::Value::String(shim.display().to_string()),
         );
     }
+    // Preserve the reserved machine-local toggles across a rewrite — a
+    // wrap-add / ssh-add must not silently drop a user's `$wait_indicator`
+    // or `$editor` (which the rule editor writes on an editor pick).
+    if let Some(on) = config.wait_indicator {
+        root.insert(wraps::WAIT_INDICATOR_KEY.to_owned(), serde_json::Value::Bool(on));
+    }
+    if let Some(editor) = &config.editor {
+        root.insert(
+            wraps::EDITOR_KEY.to_owned(),
+            serde_json::Value::String(editor.clone()),
+        );
+    }
     for (name, wrap) in &config.wraps {
         let mut obj = serde_json::Map::new();
         if let Some(reason) = &wrap.reason {
@@ -3496,6 +3508,25 @@ mod tests {
         assert_eq!(id.public_key, "ssh-ed25519 AAAAC3NzaC1lZDI1 me@mac");
         assert_eq!(id.private_key.provider, "op");
         assert_eq!(id.private_key.locator, "Private/GitHub/private key");
+    }
+
+    #[test]
+    fn write_config_preserves_editor_and_wait_indicator() {
+        // A later `wrap add` / `ssh add` rewrites the whole file via
+        // `write_config`; the reserved machine-local toggles must survive
+        // so a GUI-set `$editor` (and a hand-set `$wait_indicator`) aren't
+        // silently dropped.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wraps.json5");
+
+        let mut config = WrapsConfig::default();
+        config.editor = Some("zed".to_owned());
+        config.wait_indicator = Some(false);
+        write_config(&path, &config).unwrap();
+
+        let reloaded = WrapsConfig::load(&path).unwrap();
+        assert_eq!(reloaded.editor.as_deref(), Some("zed"));
+        assert_eq!(reloaded.wait_indicator, Some(false));
     }
 
     // ── rules list/show rendering + add-wasm flag validation ─────────

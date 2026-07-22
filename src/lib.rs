@@ -69,6 +69,7 @@ pub mod provider;
 pub mod recommendations;
 pub mod reference;
 pub mod resolve;
+pub mod rule_scaffold;
 pub mod rules;
 pub mod schema;
 pub mod scoped_agent;

@@ -45,6 +45,7 @@ JSON5: comments, unquoted keys, trailing commas, single-quoted strings.
 |---|---|
 | `$shim_dir` | Where `secreq wrap` drops PATH shims. Tilde-expansion (`~/`) honored. Set by `secreq init`. |
 | `$wait_indicator` | Boolean (default `true`). Whether a wrap prints a "waiting for approval" indicator to stderr while blocked on the consent prompt — a spinner on a TTY, a timestamped line (reprinted every 30s) on a pipe. Set `false` to silence. The `SECREQ_NO_WAIT_INDICATOR` env var silences it per-invocation regardless of this setting. |
+| `$editor` | Editor id (e.g. `code`, `cursor`, `zed`, `nvim`) the rule editor's "Open in editor" split-button opens by default. Machine-local, like `$shim_dir`; written when you pick an editor in the Rules view of `secreq view`. |
 | `$schema` | Editor pointer; ignored at runtime. |
 | `providers` | Provider scheme definitions. Optional — see [providers.md](./providers.md). |
 | Any other identifier | A **wrap** (binary name). |
@@ -220,9 +221,9 @@ and use `secreq edit` for surgical edits you want to keep verbatim.
 
 ## What `secreq` ignores
 
-- Top-level keys starting with `$` other than `$shim_dir` and
-  `$wait_indicator` are reserved metadata (e.g. `$schema`, future
-  `$version`).
+- Top-level keys starting with `$` other than `$shim_dir`,
+  `$wait_indicator`, and `$editor` are reserved metadata (e.g. `$schema`,
+  future `$version`).
 - Per-wrap `$description` is accepted and currently ignored at runtime
   (parity with future tooling).
 - Comments, trailing commas, and JSON5 syntax sugar are accepted on read

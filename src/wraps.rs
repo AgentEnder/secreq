@@ -58,6 +58,12 @@ pub const SSH_KEY: &str = "ssh";
 /// approval" indicator. Absent / `true` = shown; `false` = silenced.
 pub const WAIT_INDICATOR_KEY: &str = "$wait_indicator";
 
+/// `$editor` — the editor the rule-editor's "Open in editor" split-button
+/// defaults to (an id from [`crate::rule_scaffold`]'s catalog, e.g.
+/// `"code"`). Machine-local like `$shim_dir`; written by the rule editor
+/// when the user picks an editor.
+pub const EDITOR_KEY: &str = "$editor";
+
 /// Top-level configuration loaded from `wraps.json5`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct WrapsConfig {
@@ -73,6 +79,10 @@ pub struct WrapsConfig {
     /// for approval" indicator. `None` means unset (defaults to enabled); see
     /// [`WrapsConfig::wait_indicator_enabled`].
     pub wait_indicator: Option<bool>,
+    /// `$editor` — the rule editor's preferred "Open in editor" target
+    /// (an editor id). `None` means the split-button falls back to the
+    /// first detected editor.
+    pub editor: Option<String>,
 }
 
 /// One SSH identity served by the agent. The public key is stored inline
@@ -139,6 +149,12 @@ impl WrapsConfig {
                     })?;
                     config.wait_indicator = Some(on);
                 }
+                EDITOR_KEY => {
+                    let raw = value.as_str().with_context(|| {
+                        format!("{source_label}: `{EDITOR_KEY}` must be a string")
+                    })?;
+                    config.editor = Some(raw.to_owned());
+                }
                 other if other.starts_with('$') => {
                     // `$schema`, `$version`, future metadata — silently ignored.
                     continue;
@@ -169,6 +185,7 @@ impl WrapsConfig {
             providers: builtin_providers(),
             ssh: BTreeMap::new(),
             wait_indicator: None,
+            editor: None,
         }
     }
 
@@ -396,6 +413,27 @@ mod tests {
         let err = WrapsConfig::parse(r#"{ $wait_indicator: "yes" }"#, "t").unwrap_err();
         assert!(
             format!("{err:#}").contains("$wait_indicator"),
+            "error should name the offending key: {err:#}"
+        );
+    }
+
+    #[test]
+    fn editor_preference_parses_and_defaults_none() {
+        let none = WrapsConfig::parse(r#"{ gh: { env: {} } }"#, "t").unwrap();
+        assert_eq!(none.editor, None);
+
+        let set = WrapsConfig::parse(r#"{ $editor: "code", gh: { env: {} } }"#, "t").unwrap();
+        assert_eq!(set.editor.as_deref(), Some("code"));
+        // The reserved key doesn't leak into the wrap map.
+        assert!(set.wraps.contains_key("gh"));
+        assert!(!set.wraps.contains_key("$editor"));
+    }
+
+    #[test]
+    fn editor_preference_rejects_non_string() {
+        let err = WrapsConfig::parse(r#"{ $editor: 42 }"#, "t").unwrap_err();
+        assert!(
+            format!("{err:#}").contains("$editor"),
             "error should name the offending key: {err:#}"
         );
     }

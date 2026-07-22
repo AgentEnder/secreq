@@ -108,6 +108,20 @@ ABI is documented in `sdk/secreq-rule/README.md` and
 
 ## Write a rule
 
+### Scaffold from the rule editor (one click)
+
+The fastest path is the Rules view in `secreq view`. The **"Write a
+programmatic rule"** card at the top scaffolds a starter project on disk
+(`$SECREQ_HOME/rule-drafts/<slug>/rule.ts` plus a README) and offers a
+GitHub-style **"Open in editor"** split-button: the primary action opens
+the scaffold in your preferred editor, and the caret picks from the
+editors detected on your machine. Your choice is remembered as the
+reserved `$editor` key in `wraps.json5`, so the button defaults to it
+next time. Land in your editor, edit `decide`, then compile and register
+(below).
+
+### Scaffold by hand
+
 Rules are written in [AssemblyScript](https://www.assemblyscript.org)
 — TypeScript syntax, compiled ahead-of-time to a tiny wasm module with
 no embedded JS engine. Scaffold a package:

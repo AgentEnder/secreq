@@ -15,6 +15,7 @@
 //!   helpers (width-measured truncation, durations).
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use eframe::egui;
@@ -22,6 +23,7 @@ use eframe::egui;
 use crate::audit::{self, AuditCaller, AuditEntry};
 use crate::consent::Decision;
 use crate::recommendations::{Suggestion, SuggestionDecision, SuggestionSort};
+use crate::rule_scaffold::{self, Editor};
 use crate::rules::{Pattern, Rule, RuleDecision, RuleMatch};
 
 use super::manager_ui::ManagerView;
@@ -805,6 +807,367 @@ fn audit_entry_matches(entry: &AuditEntry, query: &str) -> bool {
 // `rules_draft` is `Some`). The form covers both Create and Edit; the
 // `id` field of the draft discriminates which.
 
+// ── Programmatic-rule scaffold panel ───────────────────────────────────────
+//
+// The prominent "Write a programmatic rule" card at the top of the Rules
+// list. It scaffolds a wasm-rule project on disk (via
+// [`crate::rule_scaffold`]) and then offers a GitHub-style split-button
+// that opens the scaffold in the user's editor — primary action runs the
+// preferred editor, the caret picks a different detected one and makes it
+// the new default (persisted to `$editor`).
+
+/// A transient status line shown under the scaffold panel after an
+/// action. Info is the success path; Error surfaces a failed scaffold or
+/// launch without tearing down the panel.
+enum ScaffoldStatus {
+    Info(String),
+    Error(String),
+}
+
+/// Everything the scaffold panel remembers across frames. Session-scoped,
+/// like the rest of [`super::manager_ui::ManagerWindowState`]. Detection
+/// and the persisted preference are probed once, lazily, on first render
+/// — the screenshot harness seeds them instead so it never touches the
+/// host (see [`ScaffoldPanel::seed_for_test`]).
+pub struct ScaffoldPanel {
+    /// Editors detected on this machine, in catalog order. Empty after a
+    /// probe that found none; `probed` distinguishes "not yet probed".
+    editors: Vec<Editor>,
+    /// The persisted preferred-editor id (`$editor`), if set.
+    preferred: Option<String>,
+    /// Whether detection + preference-load has run. Guards the one-time
+    /// host probe.
+    probed: bool,
+    /// The entry file scaffolded this session — enables the split-button.
+    scaffolded: Option<PathBuf>,
+    /// Whether the split-button's editor dropdown is expanded.
+    dropdown_open: bool,
+    /// Transient status line under the panel.
+    status: Option<ScaffoldStatus>,
+}
+
+impl ScaffoldPanel {
+    pub(crate) fn new() -> ScaffoldPanel {
+        ScaffoldPanel {
+            editors: Vec::new(),
+            preferred: None,
+            probed: false,
+            scaffolded: None,
+            dropdown_open: false,
+            status: None,
+        }
+    }
+
+    /// Run editor detection and load the persisted preference exactly
+    /// once. A no-op after the first call — or if a fixture already
+    /// seeded state, keeping the harness off the host.
+    fn ensure_probed(&mut self) {
+        if self.probed {
+            return;
+        }
+        self.editors = rule_scaffold::detect_editors();
+        self.preferred = rule_scaffold::preferred_editor();
+        self.probed = true;
+    }
+
+    /// The editor the primary button targets: the persisted preference if
+    /// it's still installed, else the first detected editor.
+    fn primary(&self) -> Option<&Editor> {
+        self.preferred
+            .as_deref()
+            .and_then(|id| self.editors.iter().find(|e| e.id == id))
+            .or_else(|| self.editors.first())
+    }
+
+    /// Seed detected editors + preference without touching the host.
+    /// Marks the panel probed so real detection never runs. Harness-only
+    /// entry point (the production path probes lazily).
+    pub fn seed_for_test(&mut self, editors: Vec<Editor>, preferred: Option<String>) {
+        self.editors = editors;
+        self.preferred = preferred;
+        self.probed = true;
+    }
+
+    /// Pretend a scaffold happened at `entry`, so a fixture can render the
+    /// post-scaffold state (the split-button appears).
+    pub fn mark_scaffolded_for_test(&mut self, entry: PathBuf) {
+        self.scaffolded = Some(entry);
+    }
+
+    /// Force the split-button's editor dropdown open, so a fixture can
+    /// render the expanded menu.
+    pub fn open_dropdown_for_test(&mut self) {
+        self.dropdown_open = true;
+    }
+}
+
+impl Default for ScaffoldPanel {
+    fn default() -> Self {
+        ScaffoldPanel::new()
+    }
+}
+
+/// What the user did with the "Open in editor" split-button this frame.
+enum SplitAction {
+    /// Primary segment clicked — open in the currently-selected editor.
+    Primary,
+    /// A dropdown entry was picked — open in it and make it the default.
+    Pick(String),
+    /// Nothing this frame.
+    None,
+}
+
+/// The prominent scaffold card. Lazily probes editors, renders the
+/// pitch + "Scaffold a rule" button, and — once something is scaffolded
+/// — the "Open in editor" split-button.
+fn render_scaffold_panel(ui: &mut egui::Ui, panel: &mut ScaffoldPanel) {
+    panel.ensure_probed();
+    let th = Theme::of(ui.ctx());
+    egui::Frame::new()
+        .fill(th.well)
+        .stroke(egui::Stroke::new(1.0, th.accent.gamma_multiply(0.55)))
+        .inner_margin(egui::Margin::same(14))
+        .corner_radius(egui::CornerRadius::same(th.well_radius))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                render_pill(ui, "programmatic", th.accent, soft_fill(th.accent));
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new("Write a programmatic rule")
+                        .strong()
+                        .size(15.0)
+                        .color(th.fg),
+                );
+            });
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(
+                    "The primary way to author auto-approvals: a sandboxed \
+                     decide(ctx) function with the full power of code. Scaffold \
+                     a starter project and open it in your editor.",
+                )
+                .color(th.dim)
+                .size(11.5),
+            );
+            ui.add_space(10.0);
+
+            ui.horizontal(|ui| {
+                if render_primary_button(ui, "Scaffold a rule", true).clicked() {
+                    match rule_scaffold::scaffold_new_rule() {
+                        Ok(scaffold) => {
+                            panel.status = Some(ScaffoldStatus::Info(format!(
+                                "Scaffolded {}",
+                                scaffold.dir.display()
+                            )));
+                            panel.scaffolded = Some(scaffold.entry);
+                        }
+                        Err(err) => {
+                            panel.status =
+                                Some(ScaffoldStatus::Error(format!("Scaffold failed: {err:#}")));
+                        }
+                    }
+                }
+                if panel.scaffolded.is_some() {
+                    ui.add_space(8.0);
+                    render_open_in_editor(ui, panel);
+                }
+            });
+
+            if let Some(status) = &panel.status {
+                ui.add_space(8.0);
+                let (color, text) = match status {
+                    ScaffoldStatus::Info(m) => (th.dim, m.as_str()),
+                    ScaffoldStatus::Error(m) => (th.danger, m.as_str()),
+                };
+                ui.label(
+                    egui::RichText::new(text)
+                        .color(color)
+                        .size(11.0)
+                        .family(egui::FontFamily::Monospace),
+                );
+            }
+        });
+}
+
+/// The "Open in editor" split-button plus the effect of clicking it:
+/// launch the chosen editor on the scaffolded file, and (for a dropdown
+/// pick) persist the choice as the new `$editor` default.
+fn render_open_in_editor(ui: &mut egui::Ui, panel: &mut ScaffoldPanel) {
+    let th = Theme::of(ui.ctx());
+    let Some(primary) = panel.primary().cloned() else {
+        // Nothing installed — a dead button would be worse than a hint.
+        ui.label(
+            egui::RichText::new("No editor detected on PATH")
+                .color(th.faint)
+                .size(11.0),
+        );
+        return;
+    };
+    let path = panel.scaffolded.clone();
+    let options = panel.editors.clone();
+    let action = render_split_button(
+        ui,
+        &format!("Open in {}", primary.display),
+        &options,
+        &primary.id,
+        &mut panel.dropdown_open,
+    );
+
+    // Resolve which editor to open (if any) and whether the pick should
+    // stick, then do the one launch at the end — keeps the borrow of
+    // `panel` simple (no closure over it).
+    let to_open: Option<Editor> = match action {
+        SplitAction::Primary => Some(primary),
+        SplitAction::Pick(id) => {
+            let picked = options.iter().find(|e| e.id == id).cloned();
+            if picked.is_some() {
+                // The pick sticks: update the in-memory preference so the
+                // primary label updates immediately, and persist it.
+                panel.preferred = Some(id.clone());
+                if let Err(err) = rule_scaffold::save_preferred_editor(&id) {
+                    panel.status = Some(ScaffoldStatus::Error(format!(
+                        "couldn't save editor preference: {err:#}"
+                    )));
+                }
+            }
+            picked
+        }
+        SplitAction::None => None,
+    };
+
+    if let (Some(editor), Some(path)) = (to_open, path) {
+        if let Err(err) = rule_scaffold::launch_editor(&editor, &path) {
+            panel.status = Some(ScaffoldStatus::Error(format!("{err:#}")));
+        }
+    }
+}
+
+/// A GitHub-style split/dropdown button: an accent primary segment
+/// (`primary_label`) fused to a caret segment that toggles a menu of
+/// `options`. Returns what was clicked; `open` holds the menu's
+/// expanded state across frames.
+fn render_split_button(
+    ui: &mut egui::Ui,
+    primary_label: &str,
+    options: &[Editor],
+    selected_id: &str,
+    open: &mut bool,
+) -> SplitAction {
+    let th = Theme::of(ui.ctx());
+    let r = th.btn_radius;
+    let mut action = SplitAction::None;
+
+    ui.horizontal(|ui| {
+        // Fuse the two segments: no gap between them.
+        ui.spacing_mut().item_spacing.x = 1.0;
+
+        // Primary segment — left corners rounded, right corners square.
+        let primary = egui::Button::new(
+            egui::RichText::new(primary_label)
+                .color(egui::Color32::WHITE)
+                .strong()
+                .size(12.5),
+        )
+        .fill(th.accent)
+        .corner_radius(egui::CornerRadius {
+            nw: r,
+            sw: r,
+            ne: 0,
+            se: 0,
+        })
+        .min_size(egui::Vec2::new(0.0, 30.0));
+        let p = ui.add(primary);
+        if p.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if p.clicked() {
+            action = SplitAction::Primary;
+            *open = false;
+        }
+
+        // Caret segment — right corners rounded, left corners square.
+        let caret = egui::Button::new(
+            egui::RichText::new("\u{25be}")
+                .color(egui::Color32::WHITE)
+                .size(12.5),
+        )
+        .fill(th.accent)
+        .corner_radius(egui::CornerRadius {
+            nw: 0,
+            sw: 0,
+            ne: r,
+            se: r,
+        })
+        .min_size(egui::Vec2::new(26.0, 30.0));
+        let c = ui.add(caret);
+        if c.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        let caret_rect = c.rect;
+        if c.clicked() {
+            *open = !*open;
+        }
+
+        if *open {
+            let area = egui::Area::new(ui.id().with("editor-dropdown"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(egui::pos2(p.rect.left(), c.rect.bottom() + 4.0))
+                .show(ui.ctx(), |ui| {
+                    let mut picked: Option<String> = None;
+                    egui::Frame::new()
+                        .fill(th.raised)
+                        .stroke(egui::Stroke::new(1.0, th.rule))
+                        .corner_radius(egui::CornerRadius::same(6))
+                        .inner_margin(egui::Margin::same(4))
+                        .show(ui, |ui| {
+                            ui.set_min_width(180.0);
+                            for editor in options {
+                                let is_sel = editor.id == selected_id;
+                                let label = if is_sel {
+                                    egui::RichText::new(format!("{}  \u{2713}", editor.display))
+                                        .color(th.fg)
+                                        .strong()
+                                } else {
+                                    egui::RichText::new(&editor.display).color(th.fg)
+                                };
+                                let resp = ui.add(
+                                    egui::Label::new(label)
+                                        .sense(egui::Sense::click())
+                                        .selectable(false),
+                                );
+                                if resp.hovered() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                }
+                                if resp.clicked() {
+                                    picked = Some(editor.id.clone());
+                                }
+                            }
+                        });
+                    picked
+                });
+
+            let picked = area.inner;
+            let menu_rect = area.response.rect;
+            if let Some(id) = picked {
+                action = SplitAction::Pick(id);
+                *open = false;
+            } else if ui.input(|i| i.pointer.any_click()) {
+                // A click that landed outside both the menu and the caret
+                // dismisses it (the caret's own click already toggled).
+                let in_menu = ui
+                    .ctx()
+                    .pointer_interact_pos()
+                    .is_some_and(|pos| menu_rect.contains(pos) || caret_rect.contains(pos));
+                if !in_menu {
+                    *open = false;
+                }
+            }
+        }
+    });
+
+    action
+}
+
 /// Mutable UI state the rules page threads into its sub-renderers.
 /// Bundled so the render fns stay under the argument-count lint while
 /// each field still maps 1:1 onto a `ManagerWindowState` slot.
@@ -813,6 +1176,7 @@ pub(crate) struct RulesUi<'a> {
     pub(crate) dismissed: &'a mut HashSet<String>,
     pub(crate) suggestion_sort: &'a mut SuggestionSort,
     pub(crate) rule_sort: &'a mut RuleSort,
+    pub(crate) scaffold: &'a mut ScaffoldPanel,
 }
 
 pub(crate) fn render_rules_page(
@@ -849,6 +1213,12 @@ fn render_rules_list(
     let has_suggestions = !suggestions.is_empty();
     let has_rules = !rule_rows.is_empty();
 
+    // The programmatic-rule path leads — it's the primary way to author
+    // auto-approvals — so its scaffold card sits above the declarative
+    // "+ New rule" affordance.
+    render_scaffold_panel(ui, state.scaffold);
+    ui.add_space(12.0);
+
     ui.horizontal(|ui| {
         if ui.button("+ New rule").clicked() {
             *state.draft = Some(RuleDraft::fresh());
@@ -856,8 +1226,8 @@ fn render_rules_list(
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new(
-                "Rules fire before the consent prompt. Deny rules win; \
-                 most-specific approve wins ties.",
+                "Or add a simple declarative rule. Rules fire before the \
+                 consent prompt. Deny rules win; most-specific approve wins ties.",
             )
             .color(th.dim)
             .size(11.0),
@@ -867,7 +1237,7 @@ fn render_rules_list(
 
     if !has_suggestions && !has_rules {
         ui.vertical_centered(|ui| {
-            ui.add_space(32.0);
+            ui.add_space(24.0);
             ui.label(
                 egui::RichText::new("No rules yet.")
                     .size(16.0)
@@ -877,8 +1247,8 @@ fn render_rules_list(
             ui.add_space(4.0);
             ui.label(
                 egui::RichText::new(
-                    "Add a rule to auto-approve or auto-deny matching asks \
-                     without prompting.",
+                    "Scaffold a programmatic rule above, or add a declarative \
+                     rule to auto-approve or auto-deny matching asks.",
                 )
                 .color(th.dim),
             );
