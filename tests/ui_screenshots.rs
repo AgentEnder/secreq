@@ -891,9 +891,13 @@ fn pending_with_deny_history() {
 #[test]
 #[ignore = "screenshot harness"]
 fn auto_deny_toast_on_pending() {
-    // The transient toast that appears at the top of the prompt when an
-    // auto-deny rule fires. Caller in the production child is the
-    // reader thread; here we just hand the harness a synthetic toast.
+    // The transient toast the renderer draws at the top of the prompt
+    // when handed an auto-deny badge. Caller in the production child is
+    // the reader thread; here we just hand the harness a synthetic toast
+    // to exercise the primitive. (In production the child suppresses the
+    // toast the moment an ask is on screen — see `toast_to_render` — so
+    // this exact "badge over a live approval" composition is a
+    // renderer-level unit, not a state the running app presents.)
     let toast = AutoDenyToastView {
         rule_name: "Block gh destructive ops".to_owned(),
         deny_message: Some("Destructive gh operations are policy-denied.".to_owned()),
