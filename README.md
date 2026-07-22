@@ -14,10 +14,24 @@ the two tools coexist; they solve different problems.
 
 ## Install
 
+One command from a clone — builds release, installs onto PATH, and runs
+first-time setup:
+
+```sh
+bash scripts/install.sh
+```
+
+Prefer to drive cargo yourself:
+
 ```sh
 cargo install --path .
 # or: cargo build --release  →  target/release/secreq
 ```
+
+To share a prebuilt binary internally (no Rust toolchain on the other end),
+run `scripts/package-release.sh` to produce a
+`secreq-<version>-<os>-<arch>.tar.gz`; the recipient extracts it and runs the
+bundled `./install.sh`. See [`docs/getting-started.md`](./docs/getting-started.md#1-install).
 
 ## Use
 
