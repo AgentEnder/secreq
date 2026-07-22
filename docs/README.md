@@ -19,6 +19,7 @@ consent ceremony** — the wedge nobody else covers.
 | **Getting secrets into a VM sandbox without copying them** | [secret-agent.md](./secret-agent.md) — `agent open` on the host, `secreq resolve` + `SECREQ_SOCK` in the guest. |
 | **Writing a programmable auto-rule** | [wasm-rules.md](./wasm-rules.md) — author a rule as code, test it, compile it to a sandboxed wasm module, register it with `rules add-wasm`. |
 | **Understanding what the daemon window shows** | [consent-window.md](./consent-window.md) — pending tree, audit log, viewer mode. |
+| **Stuck — something isn't working** | [troubleshooting.md](./troubleshooting.md) — no consent window, dev-build home traps, PATH shadowing, locked providers, where the logs live. |
 
 ## Documentation map
 
@@ -48,6 +49,12 @@ consent ceremony** — the wedge nobody else covers.
   sandbox trust model, the `secreq-rule` authoring SDK, unit-testing
   and compiling a rule, `rules add-wasm` registration, sha256 pinning
   and refusal states.
+- **[troubleshooting.md](./troubleshooting.md)** — FAQ and fixes for the
+  common first-week snags: the consent window never appearing (no
+  display / stale daemon), dev builds corrupting your real `~/.secreq`
+  via migrations, shim/PATH shadowing (the zsh + Homebrew ordering
+  gotcha), a missing or locked provider CLI, and where the logs and
+  audit log live for self-diagnosis.
 - **[wraps.schema.json](./wraps.schema.json)** — JSON Schema for
   `wraps.json5`. Generated; don't edit by hand.
 
