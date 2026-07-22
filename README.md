@@ -14,6 +14,25 @@ the two tools coexist; they solve different problems.
 
 ## Install
 
+### Prebuilt binaries
+
+Each [GitHub Release](../../releases) ships checksummed tarballs for macOS
+(x86_64 + aarch64) and Linux (x86_64 + aarch64). Download the one for your
+platform, verify it, and drop `secreq` on your `PATH`:
+
+```sh
+tar xzf secreq-<version>-<target>.tar.gz
+sha256sum -c SHA256SUMS            # or: shasum -a 256 -c SHA256SUMS
+install secreq-<version>-<target>/secreq ~/.local/bin/secreq
+secreq --version                  # prints the semver and the build id
+```
+
+`SHA256SUMS` is signed with [cosign](https://github.com/sigstore/cosign)
+keyless — see [`dev-docs/RELEASING.md`](./dev-docs/RELEASING.md) to verify the
+signature and for the full release process.
+
+### From source
+
 ```sh
 cargo install --path .
 # or: cargo build --release  →  target/release/secreq

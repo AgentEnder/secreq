@@ -1,0 +1,243 @@
+name: Release
+
+# Cut a GitHub Release from a SemVer tag. Push `vX.Y.Z` (see
+# dev-docs/RELEASING.md) and this workflow cross-compiles secreq for the four
+# first-class targets on native runners, verifies each artifact self-reports
+# the tagged commit's SECREQ_BUILD_ID, checksums every tarball, keyless-signs
+# the checksum manifest with cosign, and publishes the Release with the notes
+# from CHANGELOG.md.
+on:
+  push:
+    tags:
+      - "v*"
+  # Manual re-run against an already-pushed tag (e.g. to re-upload assets).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re-)release, e.g. v0.1.0"
+        required: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # create the Release and upload assets
+  id-token: write # cosign keyless (Sigstore OIDC) signing — no stored secret
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # One native runner per target: cross-compiling the eframe/wgpu wayland+x11
+  # stack is painful, and building natively also lets each job *run* its own
+  # binary to verify the stamped build id.
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: aarch64-apple-darwin
+            os: macos-14
+    steps:
+      # Full history so build.rs sees the tagged commit's real short sha
+      # (and a clean tree, so the id carries no `-dirty` marker).
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Resolve version from tag
+        id: ver
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      # Same wayland/xkbcommon/xcb stack the CI build links (no-op on macOS).
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin secreq
+
+      # The build id is only meaningful if it names the tagged commit and the
+      # tree was clean. Both binaries here are native, so we can just run them.
+      - name: Verify stamped build id
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="target/${{ matrix.target }}/release/secreq"
+          GIT_SHA="$(git rev-parse --short=12 HEAD)"
+          VER_OUT="$("$BIN" --version)"
+          echo "secreq --version → $VER_OUT"
+          if ! grep -q "$GIT_SHA" <<<"$VER_OUT"; then
+            echo "::error::--version ($VER_OUT) is missing the tagged commit sha ($GIT_SHA)"
+            exit 1
+          fi
+          if grep -q -- "-dirty" <<<"$VER_OUT"; then
+            echo "::error::released build was cut from a dirty tree: $VER_OUT"
+            exit 1
+          fi
+
+      - name: Package tarball and checksum
+        id: pkg
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          TARGET="${{ matrix.target }}"
+          STAGE="secreq-${VERSION}-${TARGET}"
+          mkdir "$STAGE"
+          cp "target/${TARGET}/release/secreq" "$STAGE/"
+          cp README.md LICENSE CHANGELOG.md "$STAGE/"
+          tar -czf "${STAGE}.tar.gz" "$STAGE"
+          if command -v sha256sum >/dev/null; then
+            sha256sum "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
+          else
+            shasum -a 256 "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
+          fi
+          echo "stage=$STAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pkg.outputs.stage }}
+          path: |
+            ${{ steps.pkg.outputs.stage }}.tar.gz
+            ${{ steps.pkg.outputs.stage }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Resolve version from tag
+        id: ver
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      # A mistagged release (tag vs Cargo.toml version drift) is a silent
+      # footgun for install channels; fail loudly instead.
+      - name: Verify tag matches Cargo.toml version
+        shell: bash
+        run: |
+          set -euo pipefail
+          CARGO_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          TAG_VERSION="${{ steps.ver.outputs.version }}"
+          if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::tag v$TAG_VERSION does not match Cargo.toml version $CARGO_VERSION"
+            exit 1
+          fi
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Aggregate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          rm -f ./*.sha256 # fold the per-target files into one manifest
+          sha256sum ./*.tar.gz > SHA256SUMS
+          echo "== SHA256SUMS =="
+          cat SHA256SUMS
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" { flag=1; next }
+            flag && /^## \[/ { flag=0 }
+            flag { print }
+          ' CHANGELOG.md | sed -e '/./,$!d' > notes.md
+          if [ ! -s notes.md ]; then
+            echo "No CHANGELOG entry for $VERSION; falling back to auto-generated notes." >&2
+            echo "no_notes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no_notes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # Keyless (Sigstore) signature over the checksum manifest — the identity
+      # is this workflow's OIDC token, so there is no private key to store.
+      # Verify with:
+      #   cosign verify-blob --certificate SHA256SUMS.pem \
+      #     --signature SHA256SUMS.sig \
+      #     --certificate-identity-regexp '.*' \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      #     SHA256SUMS
+      - name: Sign checksum manifest (keyless)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          cosign sign-blob --yes \
+            --output-signature SHA256SUMS.sig \
+            --output-certificate SHA256SUMS.pem \
+            SHA256SUMS
+
+      - name: Create or update the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.ver.outputs.tag }}"
+          NOTES_ARGS=(--notes-file notes.md)
+          if [ "${{ steps.notes.outputs.no_notes }}" = "true" ]; then
+            NOTES_ARGS=(--generate-notes)
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "secreq $TAG" "${NOTES_ARGS[@]}"
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" \
+              --title "secreq $TAG" \
+              "${NOTES_ARGS[@]}" \
+              dist/*
+          fi
