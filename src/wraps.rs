@@ -1,8 +1,9 @@
 //! The `wraps.json5` config model: per-binary wraps.
 //!
 //! `secreq` resolves secrets *for specific binaries you've wrapped*. The
-//! config lives at `$XDG_CONFIG_HOME/secreq/wraps.json5` (user-scope only —
-//! there's no project scope; that's varlock's territory). Each top-level
+//! config lives at `~/.secreq/wraps.json5` (`$SECREQ_HOME/wraps.json5`;
+//! user-scope only — there's no project scope; that's varlock's
+//! territory). Each top-level
 //! key (other than reserved `providers` and `$`-prefixed metadata) names a
 //! binary; its value is the wrap config for that binary.
 //!

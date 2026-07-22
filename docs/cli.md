@@ -20,7 +20,7 @@ options).
 
 | Flag | Effect |
 |---|---|
-| `--config <PATH>` | Use this config instead of `$XDG_CONFIG_HOME/secreq/wraps.json5`. |
+| `--config <PATH>` | Use this config instead of `~/.secreq/wraps.json5`. |
 | `--raw` | Disable output masking for the `run` path. |
 | `-y`, `--yes` | Auto-approve without prompting (resolves client-side, no daemon); intended for scripted/CI runs. |
 | `-h`, `--help` | Print help. |
@@ -353,7 +353,7 @@ reserved `--sq-` prefix, recognized before or after the wrap name (so
 
 | Flag | Effect |
 |---|---|
-| `--sq-config <PATH>` | Use this config instead of `$XDG_CONFIG_HOME/secreq/wraps.json5`. |
+| `--sq-config <PATH>` | Use this config instead of `~/.secreq/wraps.json5`. |
 | `--sq-raw` | Disable output masking; secrets are still injected. |
 | `--sq-yes` | Auto-approve without prompting (resolves client-side, no daemon). |
 | `--sq-no-remember` | Don't read or write the remembered-approval cache. |
@@ -531,7 +531,8 @@ nothing for `--yes`, `--no-remember`, or `--config` to act on.
 | Variable | When |
 |---|---|
 | `SHELL` | `init` reads this to choose which shell config to edit. |
-| `XDG_CONFIG_HOME` | Config discovery. Falls back to `~/.config`. |
+| `SECREQ_HOME` | Root for `secreq`'s config — `wraps.json5` and `auto-rules.json5` live directly under it. Falls back to `~/.secreq`. |
+| `XDG_CONFIG_HOME` | Legacy config location (`secreq/wraps.json5`) that the first-run root migration copies into `~/.secreq`; no longer used for discovery. Falls back to `~/.config`. |
 | `XDG_STATE_HOME` | Audit log (`secreq/audit.log`) and the daemon's persistent log (`secreq/daemon.log`, see `secreq daemon log-path`) live here. Falls back to `~/.local/state`. The approvals cache is in-memory only — `secreq daemon stop` clears it. |
 | `XDG_RUNTIME_DIR` | Consent daemon socket + pidfile. Falls back to `$TMPDIR/secreq-<uid>`. |
 | `EDITOR` / `VISUAL` | Used by `secreq edit`. |

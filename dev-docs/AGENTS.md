@@ -18,7 +18,7 @@ gh repo list   # now: PATH shim → secreq → consent → resolve → real gh
 1. `init` creates a config file and a PATH shim directory; optionally
    wires that directory into your shell's PATH via `.zshenv` / `.bashrc` /
    `conf.d/secreq.fish`.
-2. `wrap` adds an entry to `~/.config/secreq/wraps.json5` and drops a
+2. `wrap` adds an entry to `~/.secreq/wraps.json5` and drops a
    shim at `<shim_dir>/<binary>` whose body is `exec secreq <binary> "$@"`.
 3. Any `execvp` call to `<binary>` — from your shell, from npm postinstalls,
    from IDE subprocesses — resolves the shim, which calls into secreq.
@@ -112,9 +112,10 @@ If you're changing the wire metadata the prompt can show, also update
 ### Add an integration test
 
 Put it in `tests/cli.rs`. Use the `bin()` helper for the binary path and
-`tempfile::tempdir()` for sandboxing. Always set `XDG_CONFIG_HOME` and
-`XDG_STATE_HOME` into the tempdir so audit/remember files don't pollute
-the developer's home.
+`tempfile::tempdir()` for sandboxing. Drive the tempdir through
+`sandbox_env`, which pins `$SECREQ_HOME` (the config/audit/remember root)
+into it — plus the legacy `$XDG_CONFIG_HOME` / `$XDG_STATE_HOME` probe and
+`$HOME` backstop — so nothing pollutes the developer's home.
 
 ## Invariants you must not break
 
@@ -164,8 +165,9 @@ cargo run --example gen-schema | diff -q - docs/wraps.schema.json  # no schema d
 - **Fake provider via `printf`/`sh`** for most integration tests — avoids
   triggering real Keychain / `op` invocations (which would prompt for
   biometrics).
-- **Sandbox per test**: tempdir + `XDG_CONFIG_HOME=…` + `XDG_STATE_HOME=…`
-  to keep state out of the developer's real home.
+- **Sandbox per test**: tempdir rooted with `SECREQ_HOME=…` (via
+  `sandbox_env`, which also pins the legacy `XDG_CONFIG_HOME` / `XDG_STATE_HOME`
+  probe and `HOME`) to keep state out of the developer's real home.
 - **`env("SECREQ_NO_DAEMON", "1")`** in test commands — disables the
   consent daemon entirely so cargo test never pops a GUI window. Tests
   that *should* succeed pass `--yes`; tests that exercise the deny path

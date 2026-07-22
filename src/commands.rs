@@ -2,7 +2,7 @@
 //!
 //! The center of gravity is [`wrap_run`] — the external-subcommand handler
 //! invoked when the user runs `secreq <BINARY> [args…]`. Everything else is
-//! admin verbs that read/write `~/.config/secreq/wraps.json5`.
+//! admin verbs that read/write `~/.secreq/wraps.json5`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;

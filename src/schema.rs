@@ -23,7 +23,7 @@ pub fn wraps_schema() -> Value {
         "$id": "https://secreq.dev/schema/wraps.schema.json",
         "title": "secreq wraps config",
         "description": "Per-binary wrap configuration for `secreq` \
-            (`$XDG_CONFIG_HOME/secreq/wraps.json5`). Top-level keys are \
+            (`~/.secreq/wraps.json5`, or `$SECREQ_HOME/wraps.json5`). Top-level keys are \
             binary names; reserved keys are `providers` and any \
             `$`-prefixed metadata. See docs/wraps.md.",
         "type": "object",
@@ -85,7 +85,7 @@ pub fn auto_rules_schema() -> Value {
         "$id": "https://secreq.dev/schema/auto-rules.schema.json",
         "title": "secreq auto-rules config",
         "description": "Persisted auto-approve / auto-deny rules for `secreq` \
-            (`$XDG_CONFIG_HOME/secreq/auto-rules.json5`). Owned by the consent \
+            (`~/.secreq/auto-rules.json5`, or `$SECREQ_HOME/auto-rules.json5`). Owned by the consent \
             daemon; clients normally don't edit the file directly.",
         "type": "object",
         "properties": {
