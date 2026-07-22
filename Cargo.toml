@@ -4,6 +4,28 @@ version = "0.1.0"
 edition = "2021"
 description = "Per-binary CLI wrapper that injects credentials from your secret store of choice — 1Password Shell Plugins, but generic and multi-provider"
 license = "MIT"
+readme = "README.md"
+homepage = "https://secreq.dev"
+repository = "https://github.com/AgentEnder/secreq"
+documentation = "https://secreq.dev"
+# crates.io caps this at 5; each must be <= 20 chars and start alphanumeric.
+keywords = ["secrets", "credentials", "1password", "ssh-agent", "cli"]
+# Both are canonical crates.io category slugs (see `cargo publish` validation).
+categories = ["command-line-utilities", "authentication"]
+# Keep the published tarball lean and buildable from a bare checkout: drop the
+# contributor docs, the AssemblyScript SDK, CI config, test fixtures, the
+# distribution scaffolding, and the stray daemon log. None are needed to
+# `cargo install secreq`, and together they blow past crates.io's size budget.
+exclude = [
+    "/dev-docs",
+    "/docs/ui-screenshots",
+    "/sdk",
+    "/.github",
+    "/tests/fixtures",
+    "/dist",
+    "/out.log",
+    "/TODO.md",
+]
 
 [[bin]]
 name = "secreq"
