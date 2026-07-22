@@ -1,0 +1,8 @@
+# Force use of the Bug report / Feature request templates. Security
+# reports must never be filed as public issues — see SECURITY.md for the
+# private disclosure channel.
+blank_issues_enabled: false
+# Maintainers: once the repository is published, add `contact_links` here
+# pointing at the private security-advisory form
+# (https://github.com/<owner>/<repo>/security/advisories/new) and, if you
+# enable them, Discussions — so the issue chooser surfaces both.
