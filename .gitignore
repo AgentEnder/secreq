@@ -1,1 +1,8 @@
+# Rust build output
 /target
+
+# Node dependencies (SDK + examples)
+node_modules/
+
+# Logs and scratch output
+*.log
