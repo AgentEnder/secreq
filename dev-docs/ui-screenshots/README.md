@@ -67,6 +67,8 @@ serialised across fixtures.
 | `09-rules-tab-list.png` | `rules_tab_list_populated` | Rules list: enabled approve, enabled deny with deny-message, disabled rule; usage footnotes and the Most used / Recent sort toggle. |
 | `10-rules-form-new.png` | `rules_form_new` | Blank rule form opened via "+ New rule". |
 | `11-rules-form-edit-deny.png` | `rules_form_edit_deny` | Edit form pre-filled from a deny rule — deny-message text area + trained-secrets chip. |
+| `37-rules-scaffold-open-in-editor.png` | `rules_scaffold_open_in_editor` | The "Write a programmatic rule" card in its post-scaffold state: pitch + the GitHub-style "Open in editor" split-button, defaulting to the persisted editor preference (Cursor). |
+| `38-rules-scaffold-editor-picker.png` | `rules_scaffold_editor_picker` | The split-button's dropdown expanded — the detected-editor picker, with the current default (Cursor) checked; picking another makes it the new default (persisted to `$editor`). |
 | `13-rules-tab-suggestions.png` | `rules_tab_suggestions` | Suggestion cards from the recommendation engine (cluster counts + recency lines). |
 | `14-audit-tab-with-pending.png` | `audit_tab_with_pending` | Audit view while an ask is still queued — browsing history in the manager while the prompt window holds the decision. |
 | `15-audit-tab-search-filtering.png` | `audit_tab_search_filtering` | Header search populated (`gh`): filtered rows + "N of M" count. |

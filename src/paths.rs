@@ -8,6 +8,7 @@
 //!   wraps.json5            config
 //!   auto-rules.json5       config
 //!   rules/                 compiled wasm rule modules (<rule-id>.wasm)
+//!   rule-drafts/           scaffolded programmatic-rule source projects
 //!   audit.log              append-only, daemon + wrap clients
 //!   daemon.log
 //!   daemon.jsonl
@@ -102,6 +103,14 @@ pub fn rules_path() -> Result<PathBuf> {
 /// Directory holding registered wasm rule modules (`rules/<id>.wasm`).
 pub fn rule_wasm_dir() -> Result<PathBuf> {
     Ok(secreq_root()?.join("rules"))
+}
+
+/// Directory holding scaffolded programmatic-rule **source** projects,
+/// each a subdirectory the rule editor generates and opens in the user's
+/// editor. Distinct from [`rule_wasm_dir`], which holds the compiled,
+/// registered `.wasm` modules.
+pub fn rule_drafts_dir() -> Result<PathBuf> {
+    Ok(secreq_root()?.join("rule-drafts"))
 }
 
 /// Canonical on-disk home for rule `rule_id`'s compiled wasm module.
