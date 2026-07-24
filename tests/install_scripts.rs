@@ -106,18 +106,31 @@ fn package_layout_matches_install_expectations() {
     );
 }
 
+/// `dist/` is shared: package-release.sh writes throwaway tarballs there, but
+/// the Homebrew formula and the curl|sh installer are tracked files under the
+/// same directory. Ignoring `/dist` wholesale would swallow them, so assert the
+/// contract git actually enforces rather than a literal .gitignore line.
 #[test]
-fn dist_is_gitignored() {
-    let ignore = read(".gitignore");
-    let ignores_dist = ignore
-        .lines()
-        .map(|l| l.trim())
-        .any(|l| l == "/dist" || l == "dist" || l == "/dist/" || l == "dist/");
+fn dist_tarballs_are_ignored_but_tracked_dist_files_are_not() {
+    let ignored = |rel: &str| {
+        Command::new("git")
+            .args(["check-ignore", "-q", rel])
+            .current_dir(repo_root())
+            .status()
+            .expect("git check-ignore must run")
+            .success()
+    };
+
     assert!(
-        ignores_dist,
-        "/dist (package-release.sh's output dir) must be gitignored so tarballs \
-         aren't committed; .gitignore has:\n{ignore}"
+        ignored("dist/secreq-0.1.0-darwin-arm64.tar.gz"),
+        "package-release.sh's tarballs must be gitignored so they aren't committed"
     );
+    for tracked in ["dist/install.sh", "dist/homebrew/secreq.rb"] {
+        assert!(
+            !ignored(tracked),
+            "{tracked} is a tracked distribution file — .gitignore must not swallow it"
+        );
+    }
 }
 
 /// Keep the docs honest: getting-started must actually mention the script so a
