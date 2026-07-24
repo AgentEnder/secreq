@@ -24,6 +24,32 @@ If you want the full command reference, that's [`cli.md`](./cli.md).
 
 ## 1. Install
 
+**Internal / coworker path (recommended).** One command from a fresh clone:
+it compiles the release binary, installs it onto your PATH, and hands off to
+`secreq init` for the shim-directory + PATH wiring (step 2 below).
+
+```sh
+bash scripts/install.sh
+```
+
+By default the binary lands in `~/.local/bin`; override with
+`--bin-dir <dir>` (or `$SECREQ_BIN_DIR`). Pass `--no-init` to install the
+binary only. If the script's stdin isn't a terminal (piped/CI), it installs
+the binary and prints the `secreq init` command to run yourself.
+
+**Even easier — a prebuilt binary.** If a teammate shared a release tarball
+(`secreq-<version>-<os>-<arch>.tar.gz`, produced by
+`scripts/package-release.sh`), you skip compilation entirely:
+
+```sh
+tar xzf secreq-*-*.tar.gz
+cd secreq-*-*/
+./install.sh              # installs the bundled binary, no Rust toolchain needed
+```
+
+**By hand.** The script wraps these — reach for them if you'd rather drive
+cargo yourself:
+
 ```sh
 # macOS / Linux, one-liner (downloads + verifies the release binary):
 curl -fsSL https://secreq.dev/install.sh | sh

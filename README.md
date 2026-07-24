@@ -14,6 +14,15 @@ the two tools coexist; they solve different problems.
 
 ## Install
 
+One command from a clone — builds release, installs onto PATH, and runs
+first-time setup:
+
+```sh
+bash scripts/install.sh
+```
+
+Prefer to drive cargo yourself:
+
 ```sh
 # macOS / Linux — detects your platform, downloads + verifies the release binary:
 curl -fsSL https://secreq.dev/install.sh | sh
@@ -59,6 +68,11 @@ cargo install --path .
 `secreq` is a Unix tool: **macOS and Linux are first-class, Windows is
 not supported.** Check [`docs/platform-support.md`](./docs/platform-support.md)
 before you invest in setup.
+
+To share a prebuilt binary internally (no Rust toolchain on the other end),
+run `scripts/package-release.sh` to produce a
+`secreq-<version>-<os>-<arch>.tar.gz`; the recipient extracts it and runs the
+bundled `./install.sh`. See [`docs/getting-started.md`](./docs/getting-started.md#1-install).
 
 ## Use
 

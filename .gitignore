@@ -6,3 +6,7 @@ node_modules/
 
 # Logs and scratch output
 *.log
+
+# Release tarballs from scripts/package-release.sh. NOT /dist wholesale —
+# dist/install.sh and dist/homebrew/ are tracked.
+/dist/*.tar.gz
