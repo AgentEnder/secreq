@@ -12,10 +12,12 @@
 # Cutting a release only makes sense from the trunk.
 allow-branch = ["main"]
 
-# Not published to crates.io (no upstream registry entry yet); the GitHub
-# Release is the distribution channel. Flip `publish` to true once the crate
-# is registered.
-publish = false
+# Publish the crate to crates.io as part of the release so `cargo install
+# secreq` works. cargo-release runs `cargo publish` before it tags, so the
+# maintainer must be `cargo login`'d (or have CARGO_REGISTRY_TOKEN set) — see
+# dev-docs/RELEASING.md. The GitHub Release (binaries) is still cut by the
+# tag-triggered workflow; the two channels are independent.
+publish = true
 
 # Tag locally; the maintainer pushes the tag explicitly with
 # `git push --follow-tags` so a release is never an accidental side effect of

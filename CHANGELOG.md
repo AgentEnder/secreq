@@ -12,6 +12,15 @@ the GitHub Release using the notes from the matching section below.
 
 ## [Unreleased]
 
+### Added
+
+- **Public distribution channels.** Install with `curl -fsSL
+  https://secreq.dev/install.sh | sh` (detects OS/arch, downloads the release
+  binary, and verifies it against the signed `SHA256SUMS`), `brew install
+  AgentEnder/secreq/secreq`, or `cargo install secreq`. The release workflow
+  now also generates the Homebrew formula from the real checksums, and
+  cargo-release publishes the crate to crates.io. See [`docs/install.md`](docs/install.md).
+
 ## [0.1.0] - 2026-07-22
 
 Initial release.

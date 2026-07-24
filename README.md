@@ -14,22 +14,40 @@ the two tools coexist; they solve different problems.
 
 ## Install
 
+```sh
+# macOS / Linux — detects your platform, downloads + verifies the release binary:
+curl -fsSL https://secreq.dev/install.sh | sh
+
+# Homebrew (macOS / Linuxbrew):
+brew install AgentEnder/secreq/secreq
+
+# Rust toolchain (any target, builds from source):
+cargo install secreq
+```
+
+All three install the same self-contained `secreq` binary; none of them
+create any wraps — run `secreq init` afterward for that. Full matrix, including
+manual prebuilt-binary install and signature verification, in
+[`docs/install.md`](./docs/install.md).
+
+`secreq --version` confirms the install and prints the semver + build id.
+
 ### Prebuilt binaries
 
-Each [GitHub Release](../../releases) ships checksummed tarballs for macOS
-(x86_64 + aarch64) and Linux (x86_64 + aarch64). Download the one for your
-platform, verify it, and drop `secreq` on your `PATH`:
+Each [GitHub Release](https://github.com/AgentEnder/secreq/releases) ships
+checksummed tarballs for macOS (x86_64 + aarch64) and Linux (x86_64 +
+aarch64), with a `SHA256SUMS` manifest signed with
+[cosign](https://github.com/sigstore/cosign) keyless. Download, verify, and
+drop `secreq` on your `PATH`:
 
 ```sh
 tar xzf secreq-<version>-<target>.tar.gz
 sha256sum -c SHA256SUMS            # or: shasum -a 256 -c SHA256SUMS
 install secreq-<version>-<target>/secreq ~/.local/bin/secreq
-secreq --version                  # prints the semver and the build id
 ```
 
-`SHA256SUMS` is signed with [cosign](https://github.com/sigstore/cosign)
-keyless — see [`dev-docs/RELEASING.md`](./dev-docs/RELEASING.md) to verify the
-signature and for the full release process.
+See [`docs/install.md`](./docs/install.md) to verify the cosign signature and
+[`dev-docs/RELEASING.md`](./dev-docs/RELEASING.md) for the full release process.
 
 ### From source
 
@@ -115,6 +133,7 @@ End-user docs live in [`docs/`](./docs/):
 
 | Reading | For |
 |---|---|
+| [`docs/install.md`](./docs/install.md) | Every install channel — curl \| sh, Homebrew, `cargo install`, prebuilt binaries + verification |
 | [`docs/getting-started.md`](./docs/getting-started.md) | First-time walkthrough: install → init → first wrap → first run |
 | [`docs/overview.md`](./docs/overview.md) | What `secreq` is + mental model |
 | [`docs/cli.md`](./docs/cli.md) | Every subcommand, every flag, the wrap-and-run flow |

@@ -25,11 +25,18 @@ If you want the full command reference, that's [`cli.md`](./cli.md).
 ## 1. Install
 
 ```sh
-cargo install --path .
-# or build the release binary:
-cargo build --release   # → target/release/secreq
+# macOS / Linux, one-liner (downloads + verifies the release binary):
+curl -fsSL https://secreq.dev/install.sh | sh
+
+# …or Homebrew:
+brew install AgentEnder/secreq/secreq
+
+# …or from crates.io / a local checkout:
+cargo install secreq
+cargo install --path .   # build this checkout instead
 ```
 
+See [install.md](./install.md) for every channel and how to verify a download.
 Confirm:
 
 ```sh

@@ -182,6 +182,19 @@ jobs:
           echo "== SHA256SUMS =="
           cat SHA256SUMS
 
+      # Fill the Homebrew formula's per-arch sha256 values from the manifest we
+      # just built, then ship it as a release asset the tap
+      # (AgentEnder/homebrew-secreq) pulls. Keeps the formula's checksums
+      # honest without a second build.
+      - name: Generate Homebrew formula
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          bash dist/homebrew/gen-formula.sh \
+            --version "$VERSION" --checksums dist/SHA256SUMS > dist/secreq.rb
+          echo "== secreq.rb ==" && cat dist/secreq.rb
+
       - name: Extract release notes from CHANGELOG
         id: notes
         shell: bash

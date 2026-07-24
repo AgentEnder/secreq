@@ -10,6 +10,7 @@ consent ceremony** — the wedge nobody else covers.
 
 | If you're… | Read |
 |---|---|
+| **Installing `secreq`** | [install.md](./install.md) — curl \| sh, Homebrew, `cargo install`, or a verified prebuilt binary. |
 | **New to `secreq`** | [getting-started.md](./getting-started.md) — five-minute walkthrough from install to first wrap. |
 | **Looking for the design rationale** | [overview.md](./overview.md) — what it is, what problem it solves, the mental model. |
 | **Looking up a command or flag** | [cli.md](./cli.md) — full reference. |
@@ -23,6 +24,9 @@ consent ceremony** — the wedge nobody else covers.
 
 ## Documentation map
 
+- **[install.md](./install.md)** — every install channel (curl | sh,
+  Homebrew, `cargo install`, prebuilt binaries) and how to verify a
+  download's checksum and cosign signature.
 - **[getting-started.md](./getting-started.md)** — concrete first-run
   walkthrough.
 - **[overview.md](./overview.md)** — design rationale, mental model,

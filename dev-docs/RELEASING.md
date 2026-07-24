@@ -1,11 +1,20 @@
 # Releasing secreq
 
-secreq ships as prebuilt, checksummed binaries attached to a GitHub Release.
+secreq ships through four channels, all cut from one tagged release:
+
+- **GitHub Release** — prebuilt, checksummed, cosign-signed binaries.
+- **crates.io** — `cargo install secreq` (published by cargo-release).
+- **Homebrew** — the `AgentEnder/homebrew-secreq` tap.
+- **curl | sh** — [`dist/install.sh`](../dist/install.sh) pulls the GitHub
+  Release asset for the caller's platform.
+
 The flow has two halves:
 
-1. **Local (cargo-release):** bump the version, roll the CHANGELOG, tag.
+1. **Local (cargo-release):** bump the version, roll the CHANGELOG, publish the
+   crate to crates.io, tag.
 2. **CI (`.github/workflows/release.yml`):** on the pushed tag, cross-compile,
-   verify the stamped build id, checksum, sign, and publish the Release.
+   verify the stamped build id, checksum, sign, generate the Homebrew formula,
+   and publish the GitHub Release.
 
 You only ever run the local half by hand; pushing the tag does the rest.
 
@@ -14,6 +23,10 @@ You only ever run the local half by hand; pushing the tag does the rest.
 - [`cargo-release`](https://github.com/crate-ci/cargo-release):
   `cargo install cargo-release`.
 - Push access to the repository (the tag push triggers the release workflow).
+- A crates.io token with publish rights for `secreq`: `cargo login` (or export
+  `CARGO_REGISTRY_TOKEN`). `release.toml` sets `publish = true`, so
+  cargo-release runs `cargo publish` as part of the release — without a token
+  the `--execute` run fails at that step.
 
 ## Cut a release
 
@@ -40,7 +53,9 @@ You only ever run the local half by hand; pushing the tag does the rest.
 
    `release.toml` sets `push = false`, so this commits and tags locally but
    does **not** push — a release is never an accidental side effect of a
-   routine `git push`.
+   routine `git push`. It **does** publish the crate to crates.io (this is the
+   irreversible step; a crates.io version can never be re-published), so make
+   sure the dry-run looked right first.
 
 4. Push the release commit and its tag:
 
@@ -76,12 +91,48 @@ Triggered by any `v*` tag (`.github/workflows/release.yml`):
     SHA256SUMS
   ```
 
+- **Generates the Homebrew formula.** `dist/homebrew/gen-formula.sh` fills the
+  per-arch `sha256` fields from the just-built `SHA256SUMS` and the result is
+  uploaded as the `secreq.rb` release asset (see [Homebrew](#homebrew-tap)).
 - **Publishes** the GitHub Release, using the notes extracted from the matching
   `CHANGELOG.md` section, with all `secreq-<version>-<target>.tar.gz` tarballs,
-  the `SHA256SUMS` manifest, and its signature/certificate attached.
+  the `SHA256SUMS` manifest, its signature/certificate, and `secreq.rb`
+  attached.
 
 Each tarball contains the `secreq` binary plus `README.md`, `LICENSE`, and
 `CHANGELOG.md`.
+
+## crates.io
+
+cargo-release publishes `secreq` to crates.io during the local `--execute`
+step (`publish = true` in `release.toml`). The publish metadata lives in
+`Cargo.toml`'s `[package]` table — `description`, `keywords`, `categories`,
+`repository`, `homepage`, `readme`, and an `exclude` list that keeps the
+contributor docs, the AssemblyScript SDK, and test fixtures out of the
+uploaded tarball. `tests/dist_channels.rs` guards the crates.io constraints
+(≤5 keywords, ≤20 chars each, required fields present) so a bad manifest fails
+CI instead of `cargo publish`.
+
+## Homebrew tap
+
+The formula is generated, never hand-edited. `dist/homebrew/gen-formula.sh`
+is the source of truth; the committed `dist/homebrew/secreq.rb` is its output
+with all-zero `sha256` sentinels (there are no real digests until the binaries
+exist). `tests/dist_channels.rs` fails if the committed formula drifts from the
+crate version or the release target matrix, so **after a version bump,
+regenerate it**:
+
+```sh
+bash dist/homebrew/gen-formula.sh --version "$(cargo pkgid | sed 's/.*#//')" \
+  > dist/homebrew/secreq.rb
+```
+
+At release time the workflow re-runs the generator with the real `SHA256SUMS`
+and uploads the filled-in `secreq.rb` as a release asset. The tap repo
+(`AgentEnder/homebrew-secreq`, which backs `brew install
+AgentEnder/secreq/secreq`) tracks that asset — copy the released `secreq.rb`
+into the tap's `Formula/secreq.rb`, or point the tap's updater at the release
+asset URL.
 
 ## Re-running a release
 
