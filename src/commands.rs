@@ -726,6 +726,7 @@ fn render_read_json(pairs: &[(String, String)]) -> String {
 pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Result<i32> {
     let config_path = resolve_config_path(config_path)?;
 
+    crate::term::soft_reset();
     cliclack::intro("secreq init — first-time setup")?;
 
     // 1. Pick the shim dir. Default to a dedicated `~/.secreq/shims` so
@@ -931,6 +932,9 @@ fn ssh_setup_core(
     // path scripts and tests rely on.
     let scripted = assume_yes && method.is_some();
 
+    if !scripted {
+        crate::term::soft_reset();
+    }
     if !scripted && !undo {
         // Step 1: identity. Non-fatal — warn and continue on any error.
         if let Err(err) = ssh_setup_identity_step(config_path) {
@@ -1598,6 +1602,7 @@ pub fn wrap(args: WrapArgs, config_path: Option<&Path>) -> Result<i32> {
     // scripts.
     let interactive = args.envs.is_empty() && std::io::stdin().is_terminal();
     if interactive {
+        crate::term::soft_reset();
         cliclack::intro(format!("Wrap `{}`", args.binary))?;
     }
 
@@ -1762,6 +1767,7 @@ enum MenuAction {
 /// dispatch into the chosen verb. Non-TTY invocations never reach here —
 /// `cli::run` keeps the exit-2 usage hint for shims, pipes, and CI.
 pub fn interactive_menu(config_path: Option<&Path>, assume_yes: bool) -> Result<i32> {
+    crate::term::soft_reset();
     cliclack::intro("secreq — what do you want to do?")?;
     let action = cliclack::select("Select an action")
         .item(MenuAction::View, "Open the viewer window", "view")
@@ -2163,6 +2169,7 @@ fn daemon_install_core(undo: bool, assume_yes: bool) -> Result<()> {
     let home = dirs::home_dir().context("could not determine $HOME")?;
     let service_file = autostart::service_file_path(&home, platform);
 
+    crate::term::soft_reset();
     if undo {
         cliclack::intro("secreq daemon install --undo")?;
         // Best-effort unload first; an unloaded-already service isn't an error

@@ -371,6 +371,7 @@ pub fn restore(level: u32, assume_yes: bool) -> Result<i32> {
         }
 
         if !assume_yes {
+            crate::term::soft_reset();
             let ok = cliclack::confirm("Restore anyway?").interact()?;
             if !ok {
                 println!("Aborted; nothing changed.");

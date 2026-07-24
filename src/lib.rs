@@ -77,5 +77,6 @@ pub mod shim;
 pub mod ssh_selftest;
 pub mod ssh_setup;
 pub mod ssh_sign;
+pub mod term;
 pub mod wasm_rules;
 pub mod wraps;
