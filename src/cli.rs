@@ -641,15 +641,22 @@ pub fn run() -> i32 {
     // escape, so gating it would make that command unreachable.
     let gate = match &cli.command {
         Some(Command::Migrate { .. }) => Ok(()),
-        // Verify-only: the daemon, the host-side agent socket, the three
-        // daemon-spawned window children, and the remote-only `resolve`.
+        // `resolve` also bypasses the gate, for the opposite reason: it runs
+        // in a guest whose only secreq usage *is* `resolve` (dial
+        // `$SECREQ_SOCK`, print). It reads no local config — the
+        // host-declared scope is the principal — so the guest's migration
+        // level protects nothing, no foreground command ever runs there to
+        // stamp it, and verifying would brick every fresh guest. It must not
+        // apply either: a guest has no business writing host-shaped state.
+        Some(Command::Resolve { .. }) => Ok(()),
+        // Verify-only: the daemon, the host-side agent socket, and the three
+        // daemon-spawned window children.
         Some(
             Command::Daemon { .. }
             | Command::Agent { .. }
             | Command::ConsentWindow { .. }
             | Command::ManagerWindow { .. }
-            | Command::PendingBadge
-            | Command::Resolve { .. },
+            | Command::PendingBadge,
         ) => crate::migrate::verify_current(),
         // Everything else is a foreground command: apply pending migrations.
         _ => crate::migrate::run_pending(),
