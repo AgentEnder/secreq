@@ -6,10 +6,12 @@
 //! writing a parseable JSON line to the structured `<state_dir>/daemon.jsonl`
 //! (the human-format sibling is `daemon.log`).
 //!
-//! It runs in its own process (one test binary per file), so setting
-//! `SECREQ_HOME` to a tempdir fully isolates the log location — and
-//! it never spawns a real daemon, so it can't collide with the
-//! singleton pidfile lock or disturb a developer's running daemon.
+//! It runs in its own process (one test binary per file) and pins the
+//! environment via `common::Sandbox::enter`, so the log location is fully
+//! isolated — and it never spawns a real daemon, so it can't collide with
+//! the singleton pidfile lock or disturb a developer's running daemon.
+
+mod common;
 
 use std::io::BufRead;
 
@@ -17,17 +19,15 @@ use secreq::daemon::log;
 
 #[test]
 fn sample_resources_writes_a_structured_resource_line() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    // Isolate the persistent-log location to our tempdir. Every secreq path
-    // hangs off `$SECREQ_HOME`, so this one var is the whole sandbox.
-    std::env::set_var("SECREQ_HOME", tmp.path());
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
 
     let mut sys = log::prime_resource_sampler();
     log::sample_resources(&mut sys);
 
     // The structured JSON sink is `daemon.jsonl` (the human `daemon.log` is
     // its sibling); the resource envelope is asserted against the JSON.
-    let jsonl_path = tmp.path().join("daemon.jsonl");
+    let jsonl_path = sb.root().join("daemon.jsonl");
     let file = std::fs::File::open(&jsonl_path)
         .unwrap_or_else(|e| panic!("daemon.jsonl should exist at {}: {e}", jsonl_path.display()));
 

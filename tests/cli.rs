@@ -1,69 +1,17 @@
 //! End-to-end tests driving the built `secreq` binary against the per-binary
-//! wrap model. Each test sandboxes config + state into a tempdir so it can't
-//! touch the developer's real `~/.config/secreq` or `~/.local/state/secreq`.
+//! wrap model. Each test isolates config, state, and sockets through
+//! [`common::Sandbox`] so it can't touch the developer's real
+//! `~/.config/secreq` or `~/.local/state/secreq` — see `tests/common/mod.rs`
+//! for why each environment variable is pinned or removed.
 //!
 //! A `printf`/`sh` "fake provider" stands in for real stores so the tests
 //! never trigger Touch ID / `op` biometrics.
 
+mod common;
+
+use common::Sandbox;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_secreq")
-}
-
-/// Sandbox: a tempdir rooting `$SECREQ_HOME`, plus a path at which we drop
-/// the wraps file. Returns `(dir, config_path)`.
-fn sandbox() -> (tempfile::TempDir, PathBuf) {
-    let dir = tempfile::tempdir().unwrap();
-    let config_path = dir.path().join("secreq/wraps.json5");
-    fs::create_dir_all(config_path.parent().unwrap()).unwrap();
-    (dir, config_path)
-}
-
-/// Pin every path secreq can resolve into the sandbox.
-///
-/// `$SECREQ_HOME` alone is **not** enough, and getting this wrong mutates the
-/// developer's real home. `migrate` deliberately resolves the *pre-migration*
-/// locations through the old `$XDG_CONFIG_HOME` / `$XDG_STATE_HOME` logic
-/// (frozen history — see `migrate::legacy_config_dir`), so a run with only
-/// `$SECREQ_HOME` set probes the real `~/.config/secreq` and migrates it into
-/// the tempdir.
-///
-/// So we pin three, layered deliberately:
-/// - `$SECREQ_HOME` — the new root.
-/// - `$XDG_CONFIG_HOME` / `$XDG_STATE_HOME` — the legacy probe.
-/// - `$HOME` — the backstop. Every one of the above falls back to
-///   `dirs::home_dir()` when unset, so pinning `$HOME` means a lookup we
-///   forgot still can't escape into the developer's real files.
-///
-/// The XDG pins can go away once migration 0001 is old enough to delete.
-/// `$HOME` should stay.
-fn sandbox_env<'a>(cmd: &'a mut Command, dir: &Path) -> &'a mut Command {
-    cmd.env("SECREQ_HOME", dir.join("secreq"))
-        .env("XDG_CONFIG_HOME", dir.join("legacy-config"))
-        .env("XDG_STATE_HOME", dir.join("legacy-state"))
-        .env("HOME", dir.join("home"))
-}
-
-fn run_secreq(dir: &Path, args: &[&str]) -> std::process::Output {
-    let mut cmd = Command::new(bin());
-    cmd.args(args);
-    sandbox_env(&mut cmd, dir)
-        // Wipe SHELL so init's auto-PATH-setup goes through `Unknown` (no
-        // file writes) — tests focus on behavior, not shell-rc mutation.
-        .env_remove("SHELL")
-        // Wipe any inherited consent socket from the test runner.
-        .env_remove("SECREQ_CONSENT_SOCK")
-        .env_remove("GITHUB_TOKEN")
-        // Disable the consent daemon entirely; otherwise tests would pop
-        // a native window on the developer's machine and hang waiting for
-        // a click. Tests that need consent use `--yes` instead.
-        .env("SECREQ_NO_DAEMON", "1")
-        .output()
-        .unwrap()
-}
 
 /// Write a config with a single wrap using a fake "echo" provider whose
 /// retrieve template prints the locator back. Useful for non-biometric
@@ -113,24 +61,17 @@ fn install_fake_gh(bin_dir: &Path) {
 
 #[test]
 fn wrap_run_injects_env_and_masks_output_when_token_is_echoed() {
-    let (dir, config) = sandbox();
-    let bin_dir = dir.path().join("realbin");
-    let shim_dir = dir.path().join("shims");
+    let sb = Sandbox::new();
+    let bin_dir = sb.path().join("realbin");
+    let shim_dir = sb.path().join("shims");
     install_fake_gh(&bin_dir);
-    write_config(&config, &echo_provider_config(&shim_dir));
+    write_config(&sb.config_path(), &echo_provider_config(&shim_dir));
 
     // Put the fake gh on PATH so secreq's find_real_binary picks it up.
     let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
-    let out = Command::new(bin())
-        .args(["x", "--sq-yes", "gh", "auth", "status"])
-        .env("SECREQ_HOME", dir.path().join("secreq"))
-        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
-        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
-        .env("HOME", dir.path().join("home"))
+    let out = sb
+        .cmd(&["x", "--sq-yes", "gh", "auth", "status"])
         .env("PATH", &path)
-        .env_remove("SECREQ_CONSENT_SOCK")
-        .env_remove("GITHUB_TOKEN")
-        .env("SECREQ_NO_DAEMON", "1")
         .output()
         .unwrap();
 
@@ -153,23 +94,16 @@ fn wrap_run_injects_env_and_masks_output_when_token_is_echoed() {
 
 #[test]
 fn raw_flag_disables_output_masking() {
-    let (dir, config) = sandbox();
-    let bin_dir = dir.path().join("realbin");
-    let shim_dir = dir.path().join("shims");
+    let sb = Sandbox::new();
+    let bin_dir = sb.path().join("realbin");
+    let shim_dir = sb.path().join("shims");
     install_fake_gh(&bin_dir);
-    write_config(&config, &echo_provider_config(&shim_dir));
+    write_config(&sb.config_path(), &echo_provider_config(&shim_dir));
     let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
 
-    let out = Command::new(bin())
-        .args(["x", "--sq-yes", "--sq-raw", "gh"])
-        .env("SECREQ_HOME", dir.path().join("secreq"))
-        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
-        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
-        .env("HOME", dir.path().join("home"))
+    let out = sb
+        .cmd(&["x", "--sq-yes", "--sq-raw", "gh"])
         .env("PATH", &path)
-        .env_remove("SECREQ_CONSENT_SOCK")
-        .env_remove("GITHUB_TOKEN")
-        .env("SECREQ_NO_DAEMON", "1")
         .output()
         .unwrap();
     assert!(out.status.success());
@@ -182,29 +116,25 @@ fn raw_flag_disables_output_masking() {
 }
 
 /// Run `secreq x` with the fake-`gh` sandbox wired up: fake binary on PATH,
-/// echo provider config in place, daemon disabled. `root` is the tempdir.
-fn run_x(root: &Path, bin_dir: &Path, args: &[&str]) -> std::process::Output {
-    run_x_env(root, bin_dir, args, &[])
+/// echo provider config in place, daemon disabled.
+fn run_x(sb: &Sandbox, bin_dir: &Path, args: &[&str]) -> std::process::Output {
+    run_x_env(sb, bin_dir, args, &[])
 }
 
 /// [`run_x`], with extra env vars set on the secreq process — for the
 /// parent-env-satisfaction tests, which hinge on what secreq inherits.
+/// `Sandbox::cmd` removes `GITHUB_TOKEN` (the developer's real token must
+/// never satisfy — or leak into — a test wrap), and the extras here win
+/// because later `.env()` calls override.
 fn run_x_env(
-    root: &Path,
+    sb: &Sandbox,
     bin_dir: &Path,
     args: &[&str],
     envs: &[(&str, &str)],
 ) -> std::process::Output {
     let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
-    let mut cmd = Command::new(bin());
-    cmd.args(args);
-    sandbox_env(&mut cmd, root)
-        .env("PATH", &path)
-        .env_remove("SECREQ_CONSENT_SOCK")
-        // The developer's real GITHUB_TOKEN must never satisfy (or leak
-        // into) a test wrap — every test starts from "not present".
-        .env_remove("GITHUB_TOKEN")
-        .env("SECREQ_NO_DAEMON", "1");
+    let mut cmd = sb.cmd(args);
+    cmd.env("PATH", &path);
     for (k, v) in envs {
         cmd.env(k, v);
     }
@@ -212,26 +142,26 @@ fn run_x_env(
 }
 
 /// Sandbox + fake gh + echo-provider config, for the `x` argv-contract tests.
-/// Returns `(tempdir, bin_dir)`; the config lives at the sandbox default path.
-fn x_fixture() -> (tempfile::TempDir, PathBuf) {
-    let (dir, config) = sandbox();
-    let bin_dir = dir.path().join("realbin");
-    let shim_dir = dir.path().join("shims");
+/// Returns `(sandbox, bin_dir)`; the config lives at the sandbox default path.
+fn x_fixture() -> (Sandbox, PathBuf) {
+    let sb = Sandbox::new();
+    let bin_dir = sb.path().join("realbin");
+    let shim_dir = sb.path().join("shims");
     install_fake_gh(&bin_dir);
-    write_config(&config, &echo_provider_config(&shim_dir));
-    (dir, bin_dir)
+    write_config(&sb.config_path(), &echo_provider_config(&shim_dir));
+    (sb, bin_dir)
 }
 
 // ── parent-env satisfaction: already-present secrets need no consent ──────
 
 #[test]
 fn x_skips_consent_when_parent_env_already_holds_real_values() {
-    let (dir, bin_dir) = x_fixture();
+    let (sb, bin_dir) = x_fixture();
     // No --sq-yes and no daemon: if secreq asked for consent, this would
     // fail. With GITHUB_TOKEN already carrying a real (non-marker) value,
     // there is nothing to inject, so the run must pass straight through.
     let out = run_x_env(
-        dir.path(),
+        &sb,
         &bin_dir,
         &["x", "gh", "auth", "status"],
         &[("GITHUB_TOKEN", "already-present-value")],
@@ -253,11 +183,11 @@ fn x_skips_consent_when_parent_env_already_holds_real_values() {
 
 #[test]
 fn x_still_gates_when_parent_env_value_is_a_secret_marker() {
-    let (dir, bin_dir) = x_fixture();
+    let (sb, bin_dir) = x_fixture();
     // A `secret://…` marker is a request FOR injection, not a value —
     // consent is still required, and with the daemon disabled that fails.
     let out = run_x_env(
-        dir.path(),
+        &sb,
         &bin_dir,
         &["x", "gh"],
         &[("GITHUB_TOKEN", "secret://fake/the-token-value")],
@@ -267,20 +197,20 @@ fn x_still_gates_when_parent_env_value_is_a_secret_marker() {
 
 #[test]
 fn x_still_gates_when_parent_env_value_is_empty() {
-    let (dir, bin_dir) = x_fixture();
+    let (sb, bin_dir) = x_fixture();
     // An empty string is "not present" for satisfaction purposes.
-    let out = run_x_env(dir.path(), &bin_dir, &["x", "gh"], &[("GITHUB_TOKEN", "")]);
+    let out = run_x_env(&sb, &bin_dir, &["x", "gh"], &[("GITHUB_TOKEN", "")]);
     assert!(!out.status.success());
 }
 
 #[test]
 fn x_resolves_only_the_env_vars_the_parent_is_missing() {
-    let (dir, config) = sandbox();
-    let bin_dir = dir.path().join("realbin");
-    let shim_dir = dir.path().join("shims");
+    let sb = Sandbox::new();
+    let bin_dir = sb.path().join("realbin");
+    let shim_dir = sb.path().join("shims");
     // A wrap with two secrets; the fake binary echoes both.
     write_config(
-        &config,
+        &sb.config_path(),
         &format!(
             r#"{{
                 $shim_dir: "{shim}",
@@ -314,7 +244,7 @@ fn x_resolves_only_the_env_vars_the_parent_is_missing() {
     // missing var. The satisfied one keeps the parent's value, unmasked;
     // the resolved one is injected and masked.
     let out = run_x_env(
-        dir.path(),
+        &sb,
         &bin_dir,
         &["x", "--sq-yes", "gh"],
         &[("GITHUB_TOKEN", "parent-token-value")],
@@ -340,8 +270,8 @@ fn x_resolves_only_the_env_vars_the_parent_is_missing() {
 
 #[test]
 fn x_forwards_leading_help_flag_to_the_binary() {
-    let (dir, bin_dir) = x_fixture();
-    let out = run_x(dir.path(), &bin_dir, &["x", "--sq-yes", "gh", "--help"]);
+    let (sb, bin_dir) = x_fixture();
+    let out = run_x(&sb, &bin_dir, &["x", "--sq-yes", "gh", "--help"]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -353,11 +283,11 @@ fn x_forwards_leading_help_flag_to_the_binary() {
 
 #[test]
 fn x_forwards_flags_secreq_used_to_intercept() {
-    let (dir, bin_dir) = x_fixture();
+    let (sb, bin_dir) = x_fixture();
     // Every one of these used to be eaten by clap (`--config` even swallowed
     // the following token). All must now reach the binary verbatim.
     let out = run_x(
-        dir.path(),
+        &sb,
         &bin_dir,
         &["x", "--sq-yes", "gh", "--raw", "-y", "--config", "somefile"],
     );
@@ -377,14 +307,10 @@ fn x_forwards_flags_secreq_used_to_intercept() {
 
 #[test]
 fn x_recognizes_sq_flags_after_the_wrap_name() {
-    let (dir, bin_dir) = x_fixture();
+    let (sb, bin_dir) = x_fixture();
     // The shim prepends `x <wrap>`, so a user's `gh --sq-raw …` arrives with
     // the sq-flags after the wrap name. They must still apply to secreq.
-    let out = run_x(
-        dir.path(),
-        &bin_dir,
-        &["x", "gh", "--sq-yes", "--sq-raw", "auth"],
-    );
+    let out = run_x(&sb, &bin_dir, &["x", "gh", "--sq-yes", "--sq-raw", "auth"]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -400,8 +326,8 @@ fn x_recognizes_sq_flags_after_the_wrap_name() {
 
 #[test]
 fn x_rejects_unknown_sq_flags() {
-    let (dir, bin_dir) = x_fixture();
-    let out = run_x(dir.path(), &bin_dir, &["x", "gh", "--sq-bogus"]);
+    let (sb, bin_dir) = x_fixture();
+    let out = run_x(&sb, &bin_dir, &["x", "gh", "--sq-bogus"]);
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("--sq-bogus"), "got: {stderr}");
@@ -409,12 +335,8 @@ fn x_rejects_unknown_sq_flags() {
 
 #[test]
 fn x_double_dash_stops_sq_extraction() {
-    let (dir, bin_dir) = x_fixture();
-    let out = run_x(
-        dir.path(),
-        &bin_dir,
-        &["x", "--sq-yes", "gh", "--", "--sq-raw"],
-    );
+    let (sb, bin_dir) = x_fixture();
+    let out = run_x(&sb, &bin_dir, &["x", "--sq-yes", "gh", "--", "--sq-raw"]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -430,14 +352,14 @@ fn x_double_dash_stops_sq_extraction() {
 #[test]
 fn x_sq_config_selects_the_config_file() {
     // Config lives ONLY at a non-default path; --sq-config must find it.
-    let dir = tempfile::tempdir().unwrap();
-    let bin_dir = dir.path().join("realbin");
-    let shim_dir = dir.path().join("shims");
+    let sb = Sandbox::new();
+    let bin_dir = sb.path().join("realbin");
+    let shim_dir = sb.path().join("shims");
     install_fake_gh(&bin_dir);
-    let alt = dir.path().join("alt-wraps.json5");
+    let alt = sb.path().join("alt-wraps.json5");
     write_config(&alt, &echo_provider_config(&shim_dir));
     let out = run_x(
-        dir.path(),
+        &sb,
         &bin_dir,
         &["x", "--sq-yes", "--sq-config", alt.to_str().unwrap(), "gh"],
     );
@@ -452,8 +374,8 @@ fn x_sq_config_selects_the_config_file() {
 
 #[test]
 fn x_without_a_wrap_name_prints_usage() {
-    let (dir, bin_dir) = x_fixture();
-    let out = run_x(dir.path(), &bin_dir, &["x"]);
+    let (sb, bin_dir) = x_fixture();
+    let out = run_x(&sb, &bin_dir, &["x"]);
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("--sq-"), "got: {stderr}");
@@ -461,8 +383,8 @@ fn x_without_a_wrap_name_prints_usage() {
 
 #[test]
 fn x_sq_help_prints_help() {
-    let (dir, bin_dir) = x_fixture();
-    let out = run_x(dir.path(), &bin_dir, &["x", "--sq-help"]);
+    let (sb, bin_dir) = x_fixture();
+    let out = run_x(&sb, &bin_dir, &["x", "--sq-help"]);
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("--sq-raw"), "got: {stdout}");
@@ -471,11 +393,11 @@ fn x_sq_help_prints_help() {
 
 #[test]
 fn global_flags_before_x_point_at_the_sq_form() {
-    let (dir, bin_dir) = x_fixture();
+    let (sb, bin_dir) = x_fixture();
     // `secreq --yes x gh` reaches clap (argv[1] != "x"); the stub arm must
     // reject it with a pointer to the reserved-prefix form rather than
     // silently dropping flags or forwarding wrong args.
-    let out = run_x(dir.path(), &bin_dir, &["--yes", "x", "gh"]);
+    let out = run_x(&sb, &bin_dir, &["--yes", "x", "gh"]);
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("--sq-"), "got: {stderr}");
@@ -483,27 +405,20 @@ fn global_flags_before_x_point_at_the_sq_form() {
 
 #[test]
 fn unwrapped_binary_passes_through_unchanged() {
-    let (dir, config) = sandbox();
-    let bin_dir = dir.path().join("realbin");
-    let shim_dir = dir.path().join("shims");
+    let sb = Sandbox::new();
+    let bin_dir = sb.path().join("realbin");
+    let shim_dir = sb.path().join("shims");
     install_fake_gh(&bin_dir);
     // Config has shim_dir but NO wrap for `gh`.
     write_config(
-        &config,
+        &sb.config_path(),
         &format!(r#"{{ $shim_dir: "{}" }}"#, shim_dir.display()),
     );
     let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
 
-    let out = Command::new(bin())
-        .args(["x", "gh", "passthrough-args"])
-        .env("SECREQ_HOME", dir.path().join("secreq"))
-        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
-        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
-        .env("HOME", dir.path().join("home"))
+    let out = sb
+        .cmd(&["x", "gh", "passthrough-args"])
         .env("PATH", &path)
-        .env_remove("SECREQ_CONSENT_SOCK")
-        .env_remove("GITHUB_TOKEN")
-        .env("SECREQ_NO_DAEMON", "1")
         .output()
         .unwrap();
     assert!(
@@ -524,25 +439,16 @@ fn unwrapped_binary_passes_through_unchanged() {
 
 #[test]
 fn denies_without_terminal_or_yes() {
-    let (dir, config) = sandbox();
-    let bin_dir = dir.path().join("realbin");
-    let shim_dir = dir.path().join("shims");
+    let sb = Sandbox::new();
+    let bin_dir = sb.path().join("realbin");
+    let shim_dir = sb.path().join("shims");
     install_fake_gh(&bin_dir);
-    write_config(&config, &echo_provider_config(&shim_dir));
+    write_config(&sb.config_path(), &echo_provider_config(&shim_dir));
     let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
 
-    // No --yes; SECREQ_NO_DAEMON forces fail-closed without contacting the
-    // daemon (which would otherwise pop a GUI window).
-    let out = Command::new(bin())
-        .args(["x", "gh"])
-        .env("SECREQ_HOME", dir.path().join("secreq"))
-        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
-        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
-        .env("HOME", dir.path().join("home"))
-        .env("PATH", &path)
-        .env("SECREQ_NO_DAEMON", "1")
-        .output()
-        .unwrap();
+    // No --yes; the sandbox's SECREQ_NO_DAEMON default forces fail-closed
+    // without contacting the daemon (which would otherwise pop a GUI window).
+    let out = sb.cmd(&["x", "gh"]).env("PATH", &path).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     let stdout = String::from_utf8_lossy(&out.stdout);
     // Child must not have run.
@@ -554,21 +460,16 @@ fn bare_unknown_command_is_not_a_wrap() {
     // With the external-subcommand catch-all gone, a bare `secreq gh` is no
     // longer wrap-and-run — clap rejects it as an unrecognized subcommand.
     // Wrap execution now lives behind the explicit `secreq x gh` form.
-    let (dir, config) = sandbox();
-    let bin_dir = dir.path().join("realbin");
-    let shim_dir = dir.path().join("shims");
+    let sb = Sandbox::new();
+    let bin_dir = sb.path().join("realbin");
+    let shim_dir = sb.path().join("shims");
     install_fake_gh(&bin_dir);
-    write_config(&config, &echo_provider_config(&shim_dir));
+    write_config(&sb.config_path(), &echo_provider_config(&shim_dir));
     let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
 
-    let out = Command::new(bin())
-        .args(["gh", "auth", "status"])
-        .env("SECREQ_HOME", dir.path().join("secreq"))
-        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
-        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
-        .env("HOME", dir.path().join("home"))
+    let out = sb
+        .cmd(&["gh", "auth", "status"])
         .env("PATH", &path)
-        .env("SECREQ_NO_DAEMON", "1")
         .output()
         .unwrap();
     assert!(!out.status.success(), "bare `secreq gh` should not succeed");
@@ -584,11 +485,11 @@ fn bare_unknown_command_is_not_a_wrap() {
 
 #[test]
 fn bare_secreq_without_terminal_prints_usage_hint() {
-    // `run_secreq` drives the binary with piped stdio, so stdin/stdout are
+    // `Sandbox::run` drives the binary with piped stdio, so stdin/stdout are
     // never a TTY. Bare `secreq` must then skip the interactive picker and
     // keep the deterministic usage hint + exit 2 that shims and CI rely on.
-    let (dir, _config) = sandbox();
-    let out = run_secreq(dir.path(), &[]);
+    let sb = Sandbox::new();
+    let out = sb.run(&[]);
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -602,9 +503,9 @@ fn ui_alias_routes_identically_to_view() {
     // `secreq ui` is a clap alias of `secreq view`, so both must reach the
     // same viewer handler. With the daemon disabled the handler bails the
     // same way for both — identical exit code and stderr proves the routing.
-    let (dir, _config) = sandbox();
-    let ui = run_secreq(dir.path(), &["ui"]);
-    let view = run_secreq(dir.path(), &["view"]);
+    let sb = Sandbox::new();
+    let ui = sb.run(&["ui"]);
+    let view = sb.run(&["view"]);
     assert_eq!(
         ui.status.code(),
         view.status.code(),
@@ -631,23 +532,20 @@ fn wrap_can_reference_a_builtin_provider_without_a_providers_block() {
     // file but didn't `merge_builtin_providers`, so the interactive picker
     // saw an empty map. Non-interactive runs reach a different code path,
     // but we still want the loaded config to see built-ins.
-    let (dir, config) = sandbox();
-    let shim_dir = dir.path().join("shims");
+    let sb = Sandbox::new();
+    let shim_dir = sb.path().join("shims");
     fs::create_dir_all(&shim_dir).unwrap();
     write_config(
-        &config,
+        &sb.config_path(),
         &format!(r#"{{ $shim_dir: "{}" }}"#, shim_dir.display()),
     );
 
-    let out = run_secreq(
-        dir.path(),
-        &[
-            "wrap",
-            "--env",
-            "GITHUB_TOKEN=secret://op/Personal/GitHub/credential",
-            "gh",
-        ],
-    );
+    let out = sb.run(&[
+        "wrap",
+        "--env",
+        "GITHUB_TOKEN=secret://op/Personal/GitHub/credential",
+        "gh",
+    ]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -655,7 +553,7 @@ fn wrap_can_reference_a_builtin_provider_without_a_providers_block() {
     );
     // And `check` against the resulting config — which uses the same overlay
     // path — must agree the `op` provider is known.
-    let check = run_secreq(dir.path(), &["check"]);
+    let check = sb.run(&["check"]);
     assert!(check.status.success());
     let stdout = String::from_utf8_lossy(&check.stdout);
     assert!(stdout.contains("config OK"), "got: {stdout}");
@@ -663,25 +561,23 @@ fn wrap_can_reference_a_builtin_provider_without_a_providers_block() {
 
 #[test]
 fn wrap_records_config_and_drops_shim() {
-    let (dir, config) = sandbox();
-    let shim_dir = dir.path().join("shims");
+    let sb = Sandbox::new();
+    let config = sb.config_path();
+    let shim_dir = sb.path().join("shims");
     fs::create_dir_all(&shim_dir).unwrap();
     write_config(
         &config,
         &format!(r#"{{ $shim_dir: "{}" }}"#, shim_dir.display()),
     );
 
-    let out = run_secreq(
-        dir.path(),
-        &[
-            "wrap",
-            "--env",
-            "GITHUB_TOKEN=secret://op/Personal/GH/credential",
-            "--reason",
-            "GitHub",
-            "gh",
-        ],
-    );
+    let out = sb.run(&[
+        "wrap",
+        "--env",
+        "GITHUB_TOKEN=secret://op/Personal/GH/credential",
+        "--reason",
+        "GitHub",
+        "gh",
+    ]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -704,18 +600,16 @@ fn wrap_with_no_env_creates_a_gate_only_wrap() {
     // `secreq wrap op` with no `--env` and no terminal (the test harness
     // has no TTY) creates a gate-only wrap: consent is required, nothing
     // is injected. This is how you gate a tool like `op`.
-    let (dir, config) = sandbox();
-    let shim_dir = dir.path().join("shims");
+    let sb = Sandbox::new();
+    let config = sb.config_path();
+    let shim_dir = sb.path().join("shims");
     fs::create_dir_all(&shim_dir).unwrap();
     write_config(
         &config,
         &format!(r#"{{ $shim_dir: "{}" }}"#, shim_dir.display()),
     );
 
-    let out = run_secreq(
-        dir.path(),
-        &["wrap", "--reason", "1Password vault access", "op"],
-    );
+    let out = sb.run(&["wrap", "--reason", "1Password vault access", "op"]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -732,7 +626,7 @@ fn wrap_with_no_env_creates_a_gate_only_wrap() {
     assert!(!body.contains("secret://"), "got: {body}");
 
     // The config round-trips and `check` is happy with a gate-only wrap.
-    let check = run_secreq(dir.path(), &["check"]);
+    let check = sb.run(&["check"]);
     assert!(
         check.status.success(),
         "check stderr: {}",
@@ -750,9 +644,9 @@ fn wrap_with_no_env_creates_a_gate_only_wrap() {
 fn gate_only_wrap_denies_without_terminal_or_yes() {
     // Running a gated `op` with no consent path available (SECREQ_NO_DAEMON
     // + no --yes) must fail closed: exit 1, and `op` itself must not run.
-    let (dir, config) = sandbox();
-    let bin_dir = dir.path().join("realbin");
-    let shim_dir = dir.path().join("shims");
+    let sb = Sandbox::new();
+    let bin_dir = sb.path().join("realbin");
+    let shim_dir = sb.path().join("shims");
     fs::create_dir_all(&bin_dir).unwrap();
     // A fake `op` that announces itself if it ever runs.
     let op_path = bin_dir.join("op");
@@ -763,7 +657,7 @@ fn gate_only_wrap_denies_without_terminal_or_yes() {
     fs::set_permissions(&op_path, perms).unwrap();
 
     write_config(
-        &config,
+        &sb.config_path(),
         &format!(
             r#"{{ $shim_dir: "{}", op: {{ $reason: "1Password vault access" }} }}"#,
             shim_dir.display()
@@ -771,14 +665,9 @@ fn gate_only_wrap_denies_without_terminal_or_yes() {
     );
     let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
 
-    let out = Command::new(bin())
-        .args(["x", "op", "read", "op://Personal/AWS/credential"])
-        .env("SECREQ_HOME", dir.path().join("secreq"))
-        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
-        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
-        .env("HOME", dir.path().join("home"))
+    let out = sb
+        .cmd(&["x", "op", "read", "op://Personal/AWS/credential"])
         .env("PATH", &path)
-        .env("SECREQ_NO_DAEMON", "1")
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
@@ -794,9 +683,9 @@ fn resolving_env_bypasses_the_gate_for_a_wrapped_provider() {
     // the inner call: set SECREQ_RESOLVING and run the gated `op`. Even with
     // no consent path (SECREQ_NO_DAEMON, no --yes), it should run the real
     // `op` and exit 0.
-    let (dir, config) = sandbox();
-    let bin_dir = dir.path().join("realbin");
-    let shim_dir = dir.path().join("shims");
+    let sb = Sandbox::new();
+    let bin_dir = sb.path().join("realbin");
+    let shim_dir = sb.path().join("shims");
     fs::create_dir_all(&bin_dir).unwrap();
     let op_path = bin_dir.join("op");
     fs::write(&op_path, "#!/bin/sh\necho \"op-ran args=$*\"\n").unwrap();
@@ -806,7 +695,7 @@ fn resolving_env_bypasses_the_gate_for_a_wrapped_provider() {
     fs::set_permissions(&op_path, perms).unwrap();
 
     write_config(
-        &config,
+        &sb.config_path(),
         &format!(
             r#"{{ $shim_dir: "{}", op: {{ $reason: "1Password vault access" }} }}"#,
             shim_dir.display()
@@ -814,14 +703,9 @@ fn resolving_env_bypasses_the_gate_for_a_wrapped_provider() {
     );
     let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
 
-    let out = Command::new(bin())
-        .args(["x", "op", "read", "op://Personal/AWS/credential"])
-        .env("SECREQ_HOME", dir.path().join("secreq"))
-        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
-        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
-        .env("HOME", dir.path().join("home"))
+    let out = sb
+        .cmd(&["x", "op", "read", "op://Personal/AWS/credential"])
         .env("PATH", &path)
-        .env("SECREQ_NO_DAEMON", "1")
         // The marker secreq sets on a provider's retrieve subprocess.
         .env("SECREQ_RESOLVING", "1")
         .output()
@@ -840,17 +724,18 @@ fn resolving_env_bypasses_the_gate_for_a_wrapped_provider() {
 
 #[test]
 fn unwrap_removes_config_and_shim() {
-    let (dir, config) = sandbox();
-    let shim_dir = dir.path().join("shims");
+    let sb = Sandbox::new();
+    let config = sb.config_path();
+    let shim_dir = sb.path().join("shims");
     fs::create_dir_all(&shim_dir).unwrap();
     write_config(
         &config,
         &format!(r#"{{ $shim_dir: "{}" }}"#, shim_dir.display()),
     );
-    run_secreq(dir.path(), &["wrap", "--env", "X=secret://op/x", "gh"]);
+    sb.run(&["wrap", "--env", "X=secret://op/x", "gh"]);
     assert!(shim_dir.join("gh").is_file());
 
-    let out = run_secreq(dir.path(), &["unwrap", "gh"]);
+    let out = sb.run(&["unwrap", "gh"]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -866,11 +751,11 @@ fn unwrap_removes_config_and_shim() {
 
 #[test]
 fn wraps_list_shows_configured_wraps() {
-    let (dir, config) = sandbox();
-    let shim_dir = dir.path().join("shims");
+    let sb = Sandbox::new();
+    let shim_dir = sb.path().join("shims");
     fs::create_dir_all(&shim_dir).unwrap();
     write_config(
-        &config,
+        &sb.config_path(),
         &format!(
             r#"{{
                 $shim_dir: "{}",
@@ -880,7 +765,7 @@ fn wraps_list_shows_configured_wraps() {
             shim_dir.display()
         ),
     );
-    let out = run_secreq(dir.path(), &["wraps"]);
+    let out = sb.run(&["wraps"]);
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("gh — GitHub"));
@@ -896,13 +781,13 @@ fn doctor_flags_when_a_shim_is_shadowed_by_an_earlier_path_entry() {
     // Reproduces the homebrew-shadows-our-shim case: shim_dir is on PATH
     // but a higher-priority dir (`realbin`, in this stand-in) contains
     // another `gh` that resolves first.
-    let (dir, config) = sandbox();
-    let bin_dir = dir.path().join("realbin");
-    let shim_dir = dir.path().join("shims");
+    let sb = Sandbox::new();
+    let bin_dir = sb.path().join("realbin");
+    let shim_dir = sb.path().join("shims");
     install_fake_gh(&bin_dir);
     fs::create_dir_all(&shim_dir).unwrap();
     write_config(
-        &config,
+        &sb.config_path(),
         &format!(
             r#"{{
                 $shim_dir: "{}",
@@ -927,18 +812,7 @@ fn doctor_flags_when_a_shim_is_shadowed_by_an_earlier_path_entry() {
         shim_dir.display(),
         std::env::var("PATH").unwrap()
     );
-    let out = Command::new(bin())
-        .args(["doctor"])
-        .env("SECREQ_HOME", dir.path().join("secreq"))
-        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
-        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
-        .env("HOME", dir.path().join("home"))
-        .env("PATH", &path)
-        .env_remove("SECREQ_CONSENT_SOCK")
-        .env_remove("GITHUB_TOKEN")
-        .env("SECREQ_NO_DAEMON", "1")
-        .output()
-        .unwrap();
+    let out = sb.cmd(&["doctor"]).env("PATH", &path).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("shadowed"), "got: {stdout}");
@@ -950,11 +824,11 @@ fn doctor_flags_when_a_shim_is_shadowed_by_an_earlier_path_entry() {
 
 #[test]
 fn doctor_is_happy_when_the_shim_is_first_on_path() {
-    let (dir, config) = sandbox();
-    let shim_dir = dir.path().join("shims");
+    let sb = Sandbox::new();
+    let shim_dir = sb.path().join("shims");
     fs::create_dir_all(&shim_dir).unwrap();
     write_config(
-        &config,
+        &sb.config_path(),
         &format!(
             r#"{{
                 $shim_dir: "{}",
@@ -973,18 +847,7 @@ fn doctor_is_happy_when_the_shim_is_first_on_path() {
 
     // PATH order: shim_dir first.
     let path = format!("{}:{}", shim_dir.display(), std::env::var("PATH").unwrap());
-    let out = Command::new(bin())
-        .args(["doctor"])
-        .env("SECREQ_HOME", dir.path().join("secreq"))
-        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
-        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
-        .env("HOME", dir.path().join("home"))
-        .env("PATH", &path)
-        .env_remove("SECREQ_CONSENT_SOCK")
-        .env_remove("GITHUB_TOKEN")
-        .env("SECREQ_NO_DAEMON", "1")
-        .output()
-        .unwrap();
+    let out = sb.cmd(&["doctor"]).env("PATH", &path).output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("gh → "), "got: {stdout}");
     assert!(stdout.contains("(shim)"), "got: {stdout}");
@@ -992,12 +855,12 @@ fn doctor_is_happy_when_the_shim_is_first_on_path() {
 
 #[test]
 fn check_passes_on_a_well_formed_config() {
-    let (dir, config) = sandbox();
+    let sb = Sandbox::new();
     write_config(
-        &config,
+        &sb.config_path(),
         r#"{ gh: { env: { GITHUB_TOKEN: "secret://op/gh" } } }"#,
     );
-    let out = run_secreq(dir.path(), &["check"]);
+    let out = sb.run(&["check"]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -1008,12 +871,12 @@ fn check_passes_on_a_well_formed_config() {
 
 #[test]
 fn check_flags_unknown_provider_in_a_wrap() {
-    let (dir, config) = sandbox();
+    let sb = Sandbox::new();
     write_config(
-        &config,
+        &sb.config_path(),
         r#"{ gh: { env: { X: "secret://made-up-provider/loc" } } }"#,
     );
-    let out = run_secreq(dir.path(), &["check"]);
+    let out = sb.run(&["check"]);
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stdout).contains("unknown provider scheme"));
 }
@@ -1022,21 +885,14 @@ fn check_flags_unknown_provider_in_a_wrap() {
 
 #[test]
 fn init_writes_config_with_shim_dir() {
-    let (dir, config) = sandbox();
-    let shim_dir = dir.path().join("local/bin");
+    let sb = Sandbox::new();
+    let config = sb.config_path();
+    let shim_dir = sb.path().join("local/bin");
     // SHELL=zsh + a fake HOME inside the sandbox would let us test the
-    // PATH-update path; here we go through `Unknown` (no SHELL) which
-    // means the auto-update is skipped (caveat printed instead).
-    let out = Command::new(bin())
-        .args(["init", "--shim-dir", shim_dir.to_str().unwrap()])
-        // Pre-answer prompts: accept default shim dir.
-        .env("SECREQ_HOME", dir.path().join("secreq"))
-        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
-        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
-        .env("HOME", dir.path().join("home"))
-        .env_remove("SHELL")
-        .env_remove("SECREQ_CONSENT_SOCK")
-        .env_remove("GITHUB_TOKEN")
+    // PATH-update path; here we go through `Unknown` (the sandbox removes
+    // SHELL) which means the auto-update is skipped (caveat printed instead).
+    let out = sb
+        .cmd(&["init", "--shim-dir", shim_dir.to_str().unwrap()])
         // cliclack reads from the controlling terminal; closing stdin makes
         // its `interact` call error out, which the init command surfaces.
         .stdin(std::process::Stdio::null())
@@ -1061,26 +917,14 @@ fn init_writes_config_with_shim_dir() {
 
 // ── ssh setup ─────────────────────────────────────────────────────────────
 
-/// Run `secreq` with a sandboxed `$HOME` (and `$XDG_RUNTIME_DIR`) so
-/// `ssh setup` writes into the tempdir, never the developer's real home.
-/// `shell` sets `$SHELL` (pass `""` to leave it unset, going through the
+/// Run `secreq ssh setup` in the sandbox, so it writes into the sandboxed
+/// `$HOME`, never the developer's real home. `shell` sets `$SHELL` (pass `""`
+/// to leave it unset — `Sandbox::cmd` removes it — going through the
 /// `Unknown` shell path).
-fn run_ssh_setup(dir: &Path, home: &Path, shell: &str, args: &[&str]) -> std::process::Output {
-    let mut cmd = Command::new(bin());
-    cmd.args(args)
-        .env("HOME", home)
-        .env("SECREQ_HOME", dir.join("secreq"))
-        .env("XDG_CONFIG_HOME", dir.join("legacy-config"))
-        .env("XDG_STATE_HOME", dir.join("legacy-state"))
-        .env("HOME", dir.join("home"))
-        .env("XDG_RUNTIME_DIR", dir.join("run"))
-        .env_remove("SECREQ_CONSENT_SOCK")
-        .env_remove("GITHUB_TOKEN")
-        .env("SECREQ_NO_DAEMON", "1")
-        .stdin(std::process::Stdio::null());
-    if shell.is_empty() {
-        cmd.env_remove("SHELL");
-    } else {
+fn run_ssh_setup(sb: &Sandbox, shell: &str, args: &[&str]) -> std::process::Output {
+    let mut cmd = sb.cmd(args);
+    cmd.stdin(std::process::Stdio::null());
+    if !shell.is_empty() {
         cmd.env("SHELL", shell);
     }
     cmd.output().unwrap()
@@ -1089,14 +933,12 @@ fn run_ssh_setup(dir: &Path, home: &Path, shell: &str, args: &[&str]) -> std::pr
 #[test]
 fn ssh_setup_ssh_config_writes_identityagent_block_0600() {
     use std::os::unix::fs::PermissionsExt;
-    let (dir, _config) = sandbox();
-    let home = dir.path().join("home");
-    fs::create_dir_all(&home).unwrap();
+    let sb = Sandbox::new();
+    let home = sb.path().join("home");
 
     // `--yes` skips the confirm prompt so the command runs without a TTY.
     let out = run_ssh_setup(
-        dir.path(),
-        &home,
+        &sb,
         "",
         &["ssh", "setup", "--method", "ssh-config", "--yes"],
     );
@@ -1123,14 +965,12 @@ fn ssh_setup_ssh_config_writes_identityagent_block_0600() {
 
 #[test]
 fn ssh_setup_undo_removes_the_ssh_config_block() {
-    let (dir, _config) = sandbox();
-    let home = dir.path().join("home");
-    fs::create_dir_all(&home).unwrap();
+    let sb = Sandbox::new();
+    let home = sb.path().join("home");
 
     // First write the block.
     let out = run_ssh_setup(
-        dir.path(),
-        &home,
+        &sb,
         "",
         &["ssh", "setup", "--method", "ssh-config", "--yes"],
     );
@@ -1142,8 +982,7 @@ fn ssh_setup_undo_removes_the_ssh_config_block() {
 
     // Then undo it.
     let out = run_ssh_setup(
-        dir.path(),
-        &home,
+        &sb,
         "",
         &["ssh", "setup", "--method", "ssh-config", "--undo"],
     );
@@ -1162,14 +1001,12 @@ fn ssh_setup_undo_removes_the_ssh_config_block() {
 
 #[test]
 fn ssh_setup_shell_rc_writes_ssh_auth_sock_block() {
-    let (dir, _config) = sandbox();
-    let home = dir.path().join("home");
-    fs::create_dir_all(&home).unwrap();
+    let sb = Sandbox::new();
+    let home = sb.path().join("home");
 
     // SHELL=zsh → the block lands in ~/.zshrc.
     let out = run_ssh_setup(
-        dir.path(),
-        &home,
+        &sb,
         "/bin/zsh",
         &["ssh", "setup", "--method", "shell-rc", "--yes"],
     );
@@ -1197,13 +1034,11 @@ fn ssh_setup_scripted_does_only_client_wiring() {
     // `--yes --method ssh-config` is the scripted path: it must write ONLY the
     // client-wiring block, never prompting for (or creating) an identity or
     // the login service.
-    let (dir, _config) = sandbox();
-    let home = dir.path().join("home");
-    fs::create_dir_all(&home).unwrap();
+    let sb = Sandbox::new();
+    let home = sb.path().join("home");
 
     let out = run_ssh_setup(
-        dir.path(),
-        &home,
+        &sb,
         "",
         &["ssh", "setup", "--method", "ssh-config", "--yes"],
     );
@@ -1243,7 +1078,7 @@ fn ssh_setup_scripted_does_only_client_wiring() {
 
     // No ssh identity was written: the config either doesn't exist or has no
     // `ssh` block.
-    let config_file = dir.path().join("secreq/wraps.json5");
+    let config_file = sb.config_path();
     if config_file.exists() {
         let body = fs::read_to_string(&config_file).unwrap();
         assert!(
@@ -1262,24 +1097,22 @@ const TEST_ED25519_PUB: &str =
 
 #[test]
 fn ssh_add_writes_identity_with_explicit_flags() {
-    let (dir, config) = sandbox();
-    let pub_path = dir.path().join("id_ed25519.pub");
+    let sb = Sandbox::new();
+    let config = sb.config_path();
+    let pub_path = sb.path().join("id_ed25519.pub");
     fs::write(&pub_path, format!("{TEST_ED25519_PUB}\n")).unwrap();
 
-    let out = run_secreq(
-        dir.path(),
-        &[
-            "ssh",
-            "add",
-            "github",
-            "--public-key",
-            pub_path.to_str().unwrap(),
-            "--private-key",
-            "secret://op/Private/GitHub/private key",
-            "--reason",
-            "git",
-        ],
-    );
+    let out = sb.run(&[
+        "ssh",
+        "add",
+        "github",
+        "--public-key",
+        pub_path.to_str().unwrap(),
+        "--private-key",
+        "secret://op/Private/GitHub/private key",
+        "--reason",
+        "git",
+    ]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -1300,7 +1133,7 @@ fn ssh_add_writes_identity_with_explicit_flags() {
     assert!(body.contains(r#""git""#), "reason missing: {body}");
 
     // And `secreq check` is happy with the resulting config (it round-trips).
-    let check = run_secreq(dir.path(), &["check"]);
+    let check = sb.run(&["check"]);
     assert!(
         check.status.success(),
         "check stderr: {}",
@@ -1325,23 +1158,21 @@ fn ssh_add_writes_identity_with_explicit_flags() {
 
 #[test]
 fn ssh_add_rejects_duplicate_without_force() {
-    let (dir, config) = sandbox();
+    let sb = Sandbox::new();
+    let config = sb.config_path();
 
     let add = |reason: &str| {
-        run_secreq(
-            dir.path(),
-            &[
-                "ssh",
-                "add",
-                "github",
-                "--public-key",
-                TEST_ED25519_PUB,
-                "--private-key",
-                "secret://op/Private/GitHub/private key",
-                "--reason",
-                reason,
-            ],
-        )
+        sb.run(&[
+            "ssh",
+            "add",
+            "github",
+            "--public-key",
+            TEST_ED25519_PUB,
+            "--private-key",
+            "secret://op/Private/GitHub/private key",
+            "--reason",
+            reason,
+        ])
     };
 
     // First add succeeds (literal public key).
@@ -1362,21 +1193,18 @@ fn ssh_add_rejects_duplicate_without_force() {
     );
 
     // --force overwrites (reason changes to the new value).
-    let forced = run_secreq(
-        dir.path(),
-        &[
-            "ssh",
-            "add",
-            "github",
-            "--public-key",
-            TEST_ED25519_PUB,
-            "--private-key",
-            "secret://op/Private/GitHub/private key",
-            "--reason",
-            "overwritten",
-            "--force",
-        ],
-    );
+    let forced = sb.run(&[
+        "ssh",
+        "add",
+        "github",
+        "--public-key",
+        TEST_ED25519_PUB,
+        "--private-key",
+        "secret://op/Private/GitHub/private key",
+        "--reason",
+        "overwritten",
+        "--force",
+    ]);
     assert!(
         forced.status.success(),
         "stderr: {}",
@@ -1392,19 +1220,16 @@ fn ssh_add_rejects_duplicate_without_force() {
 
 #[test]
 fn ssh_add_rejects_invalid_public_key() {
-    let (dir, _config) = sandbox();
-    let out = run_secreq(
-        dir.path(),
-        &[
-            "ssh",
-            "add",
-            "github",
-            "--public-key",
-            "not a key",
-            "--private-key",
-            "secret://op/Private/GitHub/private key",
-        ],
-    );
+    let sb = Sandbox::new();
+    let out = sb.run(&[
+        "ssh",
+        "add",
+        "github",
+        "--public-key",
+        "not a key",
+        "--private-key",
+        "secret://op/Private/GitHub/private key",
+    ]);
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -1417,8 +1242,8 @@ fn ssh_add_rejects_invalid_public_key() {
 fn ssh_help_lists_subcommands() {
     // `secreq ssh --help` should advertise the nested subcommands so the flat
     // names didn't silently survive the migration.
-    let (dir, _config) = sandbox();
-    let out = run_secreq(dir.path(), &["ssh", "--help"]);
+    let sb = Sandbox::new();
+    let out = sb.run(&["ssh", "--help"]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -1435,17 +1260,20 @@ fn ssh_help_lists_subcommands() {
 
 #[test]
 fn daemon_log_path_prints_root_log_path_without_spawning() {
-    let (dir, _config) = sandbox();
+    let sb = Sandbox::new();
+    // Stamp the migration level first: `daemon` is a service-gated command
+    // and refuses a fresh, unstamped root (services verify, never apply).
+    sb.stamp_migrations();
     // `daemon log-path` is pure: it prints the path and never starts a
     // daemon (so it's safe even with the daemon disabled).
-    let out = run_secreq(dir.path(), &["daemon", "log-path"]);
+    let out = sb.run(&["daemon", "log-path"]);
     assert!(
         out.status.success(),
         "log-path should exit 0: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     let printed = String::from_utf8_lossy(&out.stdout);
-    let expected = dir.path().join("secreq/daemon.log");
+    let expected = sb.root().join("daemon.log");
     assert_eq!(
         printed.trim(),
         expected.to_str().unwrap(),
@@ -1457,10 +1285,10 @@ fn daemon_log_path_prints_root_log_path_without_spawning() {
 
 #[test]
 fn read_with_no_refs_is_a_usage_error() {
-    let (dir, _config) = sandbox();
+    let sb = Sandbox::new();
     // clap enforces `required = true` on the refs, so this exits 2 with a
     // usage message — before any daemon contact.
-    let out = run_secreq(dir.path(), &["read"]);
+    let out = sb.run(&["read"]);
     assert_eq!(
         out.status.code(),
         Some(2),
@@ -1470,22 +1298,15 @@ fn read_with_no_refs_is_a_usage_error() {
 
 #[test]
 fn read_refuses_re_entrant_call_during_resolution() {
-    let (dir, config) = sandbox();
+    let sb = Sandbox::new();
     write_config(
-        &config,
+        &sb.config_path(),
         r#"{ providers: { op: { retrieve: ["printf", "%s", "{locator}"] } } }"#,
     );
     // Simulate being spawned by the daemon mid-resolution: SECREQ_RESOLVING is
     // set. `read` must refuse rather than deadlock on a second daemon round.
-    let out = Command::new(bin())
-        .args(["read", "op/Work/key"])
-        .env("SECREQ_HOME", dir.path().join("secreq"))
-        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
-        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
-        .env("HOME", dir.path().join("home"))
-        .env_remove("SECREQ_CONSENT_SOCK")
-        .env_remove("GITHUB_TOKEN")
-        .env("SECREQ_NO_DAEMON", "1")
+    let out = sb
+        .cmd(&["read", "op/Work/key"])
         .env("SECREQ_RESOLVING", "1")
         .output()
         .unwrap();
@@ -1496,14 +1317,14 @@ fn read_refuses_re_entrant_call_during_resolution() {
 
 #[test]
 fn read_rejects_a_malformed_reference_before_daemon_contact() {
-    let (dir, config) = sandbox();
+    let sb = Sandbox::new();
     // A provider that would echo the locator — proves we never reach it.
     write_config(
-        &config,
+        &sb.config_path(),
         r#"{ providers: { op: { retrieve: ["printf", "%s", "{locator}"] } } }"#,
     );
     // `noslash` has no `/`, so it can't be a `provider/locator`.
-    let out = run_secreq(dir.path(), &["read", "noslash"]);
+    let out = sb.run(&["read", "noslash"]);
     assert_eq!(out.status.code(), Some(1), "malformed ref should exit 1");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("not a valid reference"), "stderr: {stderr}");
@@ -1511,15 +1332,15 @@ fn read_rejects_a_malformed_reference_before_daemon_contact() {
 
 #[test]
 fn read_is_denied_when_the_daemon_is_disabled() {
-    let (dir, config) = sandbox();
+    let sb = Sandbox::new();
     write_config(
-        &config,
+        &sb.config_path(),
         r#"{ providers: { op: { retrieve: ["printf", "%s", "{locator}"] } } }"#,
     );
-    // `run_secreq` sets SECREQ_NO_DAEMON=1, so consent fails closed: a well
+    // `Sandbox::cmd` sets SECREQ_NO_DAEMON=1, so consent fails closed: a well
     // formed ref parses and reaches the consent boundary, which denies. This
     // proves `read` has no client-side bypass — there is no `--yes` to add.
-    let out = run_secreq(dir.path(), &["read", "op/Work/key"]);
+    let out = sb.run(&["read", "op/Work/key"]);
     assert_eq!(
         out.status.code(),
         Some(1),
@@ -1537,7 +1358,8 @@ fn read_is_denied_when_the_daemon_is_disabled() {
 // ── migrations ────────────────────────────────────────────────────────────
 
 /// Seed the sandbox's *legacy* config location, so the next `secreq` run
-/// performs migration 0001 for real.
+/// performs migration 0001 for real. The `legacy-config` layout matches the
+/// sandbox's `$XDG_CONFIG_HOME` pin.
 fn seed_legacy_config(dir: &Path, body: &str) -> PathBuf {
     let legacy = dir.join("legacy-config/secreq/wraps.json5");
     fs::create_dir_all(legacy.parent().unwrap()).unwrap();
@@ -1547,11 +1369,11 @@ fn seed_legacy_config(dir: &Path, body: &str) -> PathBuf {
 
 #[test]
 fn first_run_migrates_legacy_config_and_leaves_a_working_symlink() {
-    let dir = tempfile::tempdir().unwrap();
-    let legacy = seed_legacy_config(dir.path(), r#"{ gh: { $reason: "x", env: {} } }"#);
+    let sb = Sandbox::new();
+    let legacy = seed_legacy_config(sb.path(), r#"{ gh: { $reason: "x", env: {} } }"#);
 
     // Any command triggers the gate; `wraps` just lists.
-    let out = run_secreq(dir.path(), &["wraps"]);
+    let out = sb.run(&["wraps"]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -1559,7 +1381,7 @@ fn first_run_migrates_legacy_config_and_leaves_a_working_symlink() {
     );
 
     // Config moved to the new root...
-    let moved = dir.path().join("secreq/wraps.json5");
+    let moved = sb.config_path();
     assert_eq!(
         fs::read_to_string(&moved).unwrap(),
         r#"{ gh: { $reason: "x", env: {} } }"#
@@ -1575,11 +1397,11 @@ fn first_run_migrates_legacy_config_and_leaves_a_working_symlink() {
 
 #[test]
 fn migration_is_idempotent_across_runs() {
-    let dir = tempfile::tempdir().unwrap();
-    seed_legacy_config(dir.path(), r#"{ gh: { $reason: "x", env: {} } }"#);
+    let sb = Sandbox::new();
+    seed_legacy_config(sb.path(), r#"{ gh: { $reason: "x", env: {} } }"#);
 
     for _ in 0..3 {
-        let out = run_secreq(dir.path(), &["wraps"]);
+        let out = sb.run(&["wraps"]);
         assert!(
             out.status.success(),
             "stderr: {}",
@@ -1587,26 +1409,26 @@ fn migration_is_idempotent_across_runs() {
         );
     }
     assert_eq!(
-        fs::read_to_string(dir.path().join("secreq/wraps.json5")).unwrap(),
+        fs::read_to_string(sb.config_path()).unwrap(),
         r#"{ gh: { $reason: "x", env: {} } }"#
     );
 }
 
 #[test]
 fn migrate_restore_reverts_to_the_snapshot_and_reports_what_it_discarded() {
-    let dir = tempfile::tempdir().unwrap();
-    let legacy = seed_legacy_config(dir.path(), r#"{ gh: { $reason: "original", env: {} } }"#);
-    run_secreq(dir.path(), &["wraps"]);
+    let sb = Sandbox::new();
+    let legacy = seed_legacy_config(sb.path(), r#"{ gh: { $reason: "original", env: {} } }"#);
+    sb.run(&["wraps"]);
 
     // Diverge from the snapshot, as a user would by adding a wrap.
-    let moved = dir.path().join("secreq/wraps.json5");
+    let moved = sb.config_path();
     fs::write(
         &moved,
         r#"{ terraform: { $reason: "added later", env: {} } }"#,
     )
     .unwrap();
 
-    let out = run_secreq(dir.path(), &["--yes", "migrate", "restore", "0"]);
+    let out = sb.run(&["--yes", "migrate", "restore", "0"]);
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -1634,19 +1456,19 @@ fn migrate_restore_reverts_to_the_snapshot_and_reports_what_it_discarded() {
 
 #[test]
 fn migrate_restore_saves_the_current_config_before_overwriting_it() {
-    let dir = tempfile::tempdir().unwrap();
-    seed_legacy_config(dir.path(), r#"{ gh: { $reason: "original", env: {} } }"#);
-    run_secreq(dir.path(), &["wraps"]);
+    let sb = Sandbox::new();
+    seed_legacy_config(sb.path(), r#"{ gh: { $reason: "original", env: {} } }"#);
+    sb.run(&["wraps"]);
     fs::write(
-        dir.path().join("secreq/wraps.json5"),
+        sb.config_path(),
         r#"{ terraform: { $reason: "precious", env: {} } }"#,
     )
     .unwrap();
 
-    run_secreq(dir.path(), &["--yes", "migrate", "restore", "0"]);
+    sb.run(&["--yes", "migrate", "restore", "0"]);
 
     // A mistaken restore must itself be recoverable.
-    let saved: Vec<_> = fs::read_dir(dir.path().join("secreq/migration-snapshots"))
+    let saved: Vec<_> = fs::read_dir(sb.root().join("migration-snapshots"))
         .unwrap()
         .flatten()
         .filter(|e| e.file_name().to_string_lossy().starts_with("current-"))
@@ -1663,25 +1485,25 @@ fn migrate_restore_is_reachable_even_when_the_gate_refuses_to_run() {
     // The deadlock this guards: the downgrade error tells the user to run
     // `secreq migrate restore`, but the gate is what emits that error. If
     // `migrate` went through the gate, the remedy would be unreachable.
-    let dir = tempfile::tempdir().unwrap();
-    seed_legacy_config(dir.path(), r#"{ gh: { $reason: "original", env: {} } }"#);
-    run_secreq(dir.path(), &["wraps"]);
+    let sb = Sandbox::new();
+    seed_legacy_config(sb.path(), r#"{ gh: { $reason: "original", env: {} } }"#);
+    sb.run(&["wraps"]);
 
     // Simulate a config migrated by a much newer secreq.
     fs::write(
-        dir.path().join("secreq/.migration-state"),
+        sb.root().join(".migration-state"),
         r#"{ "migration_level": 99, "migrated_by": "9.9.9 (deadbeef +1)" }"#,
     )
     .unwrap();
 
     // A normal command is refused...
-    let blocked = run_secreq(dir.path(), &["wraps"]);
+    let blocked = sb.run(&["wraps"]);
     assert!(!blocked.status.success(), "gate should refuse a downgrade");
     let stderr = String::from_utf8_lossy(&blocked.stderr);
     assert!(stderr.contains("migrate restore"), "no remedy: {stderr}");
 
     // ...but the remedy it names still runs.
-    let out = run_secreq(dir.path(), &["--yes", "migrate", "restore", "0"]);
+    let out = sb.run(&["--yes", "migrate", "restore", "0"]);
     assert!(
         out.status.success(),
         "restore must bypass the gate; stderr: {}",
@@ -1689,7 +1511,7 @@ fn migrate_restore_is_reachable_even_when_the_gate_refuses_to_run() {
     );
 
     // And the user is unblocked afterwards.
-    let after = run_secreq(dir.path(), &["wraps"]);
+    let after = sb.run(&["wraps"]);
     assert!(
         after.status.success(),
         "should work after restore; stderr: {}",
@@ -1699,8 +1521,8 @@ fn migrate_restore_is_reachable_even_when_the_gate_refuses_to_run() {
 
 #[test]
 fn migrate_restore_names_available_levels_when_the_snapshot_is_missing() {
-    let dir = tempfile::tempdir().unwrap();
-    let out = run_secreq(dir.path(), &["--yes", "migrate", "restore", "7"]);
+    let sb = Sandbox::new();
+    let out = sb.run(&["--yes", "migrate", "restore", "7"]);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("no snapshot"), "unhelpful: {stderr}");
@@ -1710,19 +1532,19 @@ fn migrate_restore_names_available_levels_when_the_snapshot_is_missing() {
 /// other sockets, and prints the resolved path on stdout so a caller (brain,
 /// which must `ssh -R` it into a guest) reads it back rather than guessing.
 ///
-/// `$XDG_RUNTIME_DIR` is pinned as well as the sandbox's usual layers —
-/// `socket_dir()` prefers it, so without it this test would bind beside the
-/// developer's live daemon sockets.
+/// The sandbox pins `$XDG_RUNTIME_DIR` — `socket_dir()` prefers it, so
+/// without the pin this test would bind beside the developer's live daemon
+/// sockets.
 #[test]
 fn agent_open_defaults_its_socket_into_the_socket_dir_and_prints_it() {
     use std::io::BufRead;
 
-    let dir = tempfile::tempdir().unwrap();
-    let runtime_dir = dir.path().join("runtime");
-    fs::create_dir_all(&runtime_dir).unwrap();
+    let sb = Sandbox::new();
+    // Stamp the migration level first: `agent` is a service-gated command
+    // and refuses a fresh, unstamped root (services verify, never apply).
+    sb.stamp_migrations();
 
-    let mut cmd = Command::new(bin());
-    cmd.args([
+    let mut cmd = sb.cmd(&[
         "agent",
         "open",
         "--scope",
@@ -1730,11 +1552,7 @@ fn agent_open_defaults_its_socket_into_the_socket_dir_and_prints_it() {
         "--allow",
         "secret://fake/thing",
     ]);
-    sandbox_env(&mut cmd, dir.path())
-        .env("XDG_RUNTIME_DIR", &runtime_dir)
-        .env("SECREQ_NO_DAEMON", "1")
-        .env_remove("SECREQ_CONSENT_SOCK")
-        .stdout(std::process::Stdio::piped())
+    cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
 
     // `agent open` serves until killed — the socket's lifetime *is* the
@@ -1747,7 +1565,7 @@ fn agent_open_defaults_its_socket_into_the_socket_dir_and_prints_it() {
         .expect("read the resolved socket path");
     let printed = PathBuf::from(line.trim());
 
-    let expected = runtime_dir.join("secreq/scope-test-vm.sock");
+    let expected = sb.runtime_dir().join("secreq/scope-test-vm.sock");
     assert_eq!(
         printed, expected,
         "the printed path must be the scope's socket in the socket dir"
@@ -1768,13 +1586,13 @@ fn agent_open_defaults_its_socket_into_the_socket_dir_and_prints_it() {
 fn agent_open_honours_an_explicit_sock_override() {
     use std::io::BufRead;
 
-    let dir = tempfile::tempdir().unwrap();
-    let runtime_dir = dir.path().join("runtime");
-    fs::create_dir_all(&runtime_dir).unwrap();
-    let chosen = dir.path().join("chosen.sock");
+    let sb = Sandbox::new();
+    let chosen = sb.path().join("chosen.sock");
+    // Stamp the migration level first: `agent` is a service-gated command
+    // and refuses a fresh, unstamped root (services verify, never apply).
+    sb.stamp_migrations();
 
-    let mut cmd = Command::new(bin());
-    cmd.args([
+    let mut cmd = sb.cmd(&[
         "agent",
         "open",
         "--scope",
@@ -1782,13 +1600,9 @@ fn agent_open_honours_an_explicit_sock_override() {
         "--allow",
         "secret://fake/thing",
         "--sock",
-    ])
-    .arg(&chosen);
-    sandbox_env(&mut cmd, dir.path())
-        .env("XDG_RUNTIME_DIR", &runtime_dir)
-        .env("SECREQ_NO_DAEMON", "1")
-        .env_remove("SECREQ_CONSENT_SOCK")
-        .stdout(std::process::Stdio::piped())
+    ]);
+    cmd.arg(&chosen);
+    cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
 
     let mut child = cmd.spawn().expect("spawn agent open");
@@ -1804,7 +1618,7 @@ fn agent_open_honours_an_explicit_sock_override() {
     );
     assert!(chosen.exists(), "--sock must be where it actually bound");
     assert!(
-        !runtime_dir.join("secreq/scope-test-vm.sock").exists(),
+        !sb.runtime_dir().join("secreq/scope-test-vm.sock").exists(),
         "an explicit --sock must not also bind the default path"
     );
 

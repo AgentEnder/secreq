@@ -2,10 +2,11 @@
 //! binary, against a real scoped agent socket.
 //!
 //! No VM and no daemon. The test process plays the host: it binds a socket in
-//! a tempdir and serves it with `scoped_agent::serve_on` and a synthetic
-//! [`Gate`] (the same instrument `tests/scoped_agent.rs` uses), then runs the
-//! built binary with `$SECREQ_SOCK` pointed at it. What's exercised is the
-//! production path a guest takes: env → dial → framed protocol → stdout.
+//! the test's sandbox and serves it with `scoped_agent::serve_on` and a
+//! synthetic [`Gate`] (the same instrument `tests/scoped_agent.rs` uses), then
+//! runs the built binary with `$SECREQ_SOCK` pointed at it. What's exercised
+//! is the production path a guest takes: env → dial → framed protocol →
+//! stdout.
 //!
 //! **These tests are mostly about stdout.** `secreq resolve` exists to be
 //! substituted into a shell — `export GH_TOKEN="$(secreq resolve …)"` — so
@@ -14,6 +15,13 @@
 //! token, and a denial that printed to stdout would export the word "denied"
 //! as a credential. Every assertion below that looks pedantic about a stream
 //! is guarding that.
+//!
+//! Isolation comes from [`common::Sandbox`]: the host half of a test (the
+//! in-process `serve_on`, and the audit rows it writes) runs under
+//! [`common::Sandbox::enter`], and the spawned binary is built by
+//! [`common::Sandbox::cmd`], which applies the same complete pin set.
+
+mod common;
 
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
@@ -40,71 +48,6 @@ const OUT_OF_SCOPE_REF: &str = "secret://op/Prod/aws/root_key";
 /// test that says so out loud.
 const DENIED_EXIT: i32 = 3;
 
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_secreq")
-}
-
-/// Every env var that can steer secreq at a real file. Pinning a subset is
-/// worse than useless: it looks isolated and isn't. See
-/// `dev-docs/plans/2026-07-16-secreq-root-and-migrations.md` — an earlier
-/// draft assumed `$SECREQ_HOME` alone sufficed, and acting on it moved a
-/// developer's real config into a tempdir that was deleted moments later.
-///
-/// Kept in step with `tests/scoped_agent.rs`'s copy, and with `run_resolve`
-/// below, which pins the same set on the child.
-const ISOLATED_VARS: &[&str] = &[
-    // The root: config, and the audit log the host half writes.
-    "SECREQ_HOME",
-    // The migration's frozen legacy probe, which `$SECREQ_HOME` does not
-    // redirect — this is the var whose omission ate a real config.
-    "XDG_CONFIG_HOME",
-    "XDG_STATE_HOME",
-    // Backstop: every lookup above falls back to `dirs::home_dir()`.
-    "HOME",
-    // Socket dir, for anything resolving `paths::socket_dir()`.
-    "XDG_RUNTIME_DIR",
-];
-
-/// Run `f` with every path secreq can resolve pinned inside one fresh
-/// tempdir.
-///
-/// The **host** half of these tests runs in this process, so its audit rows
-/// land wherever this process's env says — i.e. in the developer's real
-/// `~/.secreq/audit.log` unless we move it, since integration tests link the
-/// lib without `cfg(test)` and so get no `paths::test_fallback_root`. (The
-/// `secreq resolve` child writes no rows: auditing is the host's job. It gets
-/// its own pinned dir anyway, in `run_resolve`.)
-///
-/// The lock serializes callers, since the environment is process-global and
-/// two of these at once would clobber each other's target — the same
-/// reasoning as `tests/scoped_agent.rs`'s copy of this helper.
-fn with_temp_audit_log<R>(f: impl FnOnce() -> R) -> R {
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = tempfile::tempdir().expect("tempdir");
-
-    let saved: Vec<(&str, Option<std::ffi::OsString>)> = ISOLATED_VARS
-        .iter()
-        .map(|name| {
-            let prev = std::env::var_os(name);
-            // A subdir per var: distinct locations, so a path escaping one
-            // pin can't be silently caught by another.
-            std::env::set_var(name, dir.path().join(name.to_ascii_lowercase()));
-            (*name, prev)
-        })
-        .collect();
-
-    let out = f();
-
-    for (name, prev) in saved {
-        match prev {
-            Some(v) => std::env::set_var(name, v),
-            None => std::env::remove_var(name),
-        }
-    }
-    out
-}
-
 fn reference(s: &str) -> Reference {
     Reference::parse(s).expect("valid reference")
 }
@@ -124,18 +67,16 @@ impl Gate for FakeGate {
     }
 }
 
-/// A scoped agent listening on a tempdir socket, plus a tempdir for the
-/// binary's state. The `TempDir`s are held so the paths outlive the test; the
-/// serving thread exits with the process.
+/// A scoped agent listening on a socket inside the sandbox's runtime dir.
+/// The sandbox owns the path's lifetime; the serving thread exits with the
+/// process.
 struct Host {
-    _dir: tempfile::TempDir,
     socket: PathBuf,
 }
 
 impl Host {
-    fn serving(decision: Decision) -> Host {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let socket = dir.path().join("scoped.sock");
+    fn serving(sb: &common::Sandbox, decision: Decision) -> Host {
+        let socket = sb.runtime_dir().join("scoped.sock");
         let listener = UnixListener::bind(&socket).expect("bind scoped agent socket");
         let scope = Scope::new(
             "brain-nx-t5",
@@ -151,41 +92,31 @@ impl Host {
                 gate,
             )
         });
-        Host { _dir: dir, socket }
+        Host { socket }
     }
 
     /// Run `secreq resolve …` as a guest would: `$SECREQ_SOCK` set, and
     /// nothing else configured.
-    fn run(&self, args: &[&str]) -> Output {
-        run_resolve(Some(&self.socket), args)
+    fn run(&self, sb: &common::Sandbox, args: &[&str]) -> Output {
+        run_resolve(sb, Some(&self.socket), args)
     }
 }
 
 /// Run the real binary with `$SECREQ_SOCK` set to `socket` (or explicitly
-/// unset), with every state path pinned into a throwaway dir.
+/// unset), fully sandboxed via [`common::Sandbox::cmd`] — the complete pin
+/// set, `SECREQ_NO_DAEMON=1` (nothing on this path should ever dial the local
+/// daemon; if a regression made it try, we want a failure rather than a
+/// window on the developer's screen), and the live socket vars removed.
 ///
-/// `SECREQ_NO_DAEMON` is set for the same reason the other CLI tests set it:
-/// nothing on this path should ever dial the local daemon, and if a
-/// regression made it try, we want a failure rather than a window on the
-/// developer's screen.
-fn run_resolve(socket: Option<&Path>, args: &[&str]) -> Output {
-    let state = tempfile::tempdir().expect("tempdir");
-    let mut command = Command::new(bin());
-    command.arg("resolve").args(args);
-    // Same layered pin as `with_temp_audit_log`, on the child. `$SECREQ_HOME`
-    // alone would leave the migration that runs at the top of `cli::run`
-    // probing the developer's real `~/.config/secreq` and moving it into
-    // `state`, which is deleted when this function returns.
-    for name in ISOLATED_VARS {
-        command.env(name, state.path().join(name.to_ascii_lowercase()));
+/// The socket is applied *after* `cmd`'s defaults, so it wins over the
+/// sandbox's removal of `SECREQ_SOCK`; `None` simply keeps that removal.
+fn run_resolve(sb: &common::Sandbox, socket: Option<&Path>, args: &[&str]) -> Output {
+    let mut full_args = vec!["resolve"];
+    full_args.extend_from_slice(args);
+    let mut command = sb.cmd(&full_args);
+    if let Some(path) = socket {
+        command.env("SECREQ_SOCK", path);
     }
-    command
-        .env("SECREQ_NO_DAEMON", "1")
-        .env_remove("SECREQ_CONSENT_SOCK");
-    match socket {
-        Some(path) => command.env("SECREQ_SOCK", path),
-        None => command.env_remove("SECREQ_SOCK"),
-    };
     command.output().expect("run secreq resolve")
 }
 
@@ -216,23 +147,23 @@ fn assert_no_panic(output: &Output) {
 /// **The load-bearing test.** stdout carries the value and *only* the value.
 #[test]
 fn a_resolve_prints_the_value_on_stdout_and_nothing_else() {
-    with_temp_audit_log(|| {
-        let host = Host::serving(Decision::Approve);
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
+    let host = Host::serving(&sb, Decision::Approve);
 
-        let output = host.run(&[ALLOWED_REF]);
+    let output = host.run(&sb, &[ALLOWED_REF]);
 
-        assert_eq!(code(&output), 0, "stderr: {}", stderr(&output));
-        assert_eq!(
-            stdout(&output),
-            format!("{SECRET_VALUE}\n"),
-            "stdout must be exactly the value plus the trailing newline `$(…)` strips"
-        );
-        assert_eq!(
-            stderr(&output),
-            "",
-            "a successful resolve has nothing to say"
-        );
-    });
+    assert_eq!(code(&output), 0, "stderr: {}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        format!("{SECRET_VALUE}\n"),
+        "stdout must be exactly the value plus the trailing newline `$(…)` strips"
+    );
+    assert_eq!(
+        stderr(&output),
+        "",
+        "a successful resolve has nothing to say"
+    );
 }
 
 /// The shell contract itself: what `$(…)` actually binds is the value, with
@@ -241,70 +172,66 @@ fn a_resolve_prints_the_value_on_stdout_and_nothing_else() {
 /// reason for the stdout rule.
 #[test]
 fn the_value_substitutes_cleanly_into_a_shell_variable() {
-    with_temp_audit_log(|| {
-        let host = Host::serving(Decision::Approve);
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
+    let host = Host::serving(&sb, Decision::Approve);
 
-        let state = tempfile::tempdir().expect("tempdir");
-        let mut command = Command::new("sh");
-        command.arg("-c").arg(format!(
-            r#"GH_TOKEN="$({} resolve {ALLOWED_REF})"; printf '[%s]' "$GH_TOKEN""#,
-            bin(),
-        ));
-        // Pinned explicitly rather than left to inherit `with_temp_audit_log`'s
-        // pins: the `secreq` under this shell is a real binary running the real
-        // `cli::run`, migration and all, and "it happens to inherit an isolated
-        // env" is precisely the assumption that ate a developer's config once.
-        for name in ISOLATED_VARS {
-            command.env(name, state.path().join(name.to_ascii_lowercase()));
-        }
-        let output = command
-            .env("SECREQ_SOCK", &host.socket)
-            .env("SECREQ_NO_DAEMON", "1")
-            .output()
-            .expect("run the shell");
+    let mut command = Command::new("sh");
+    command.arg("-c").arg(format!(
+        r#"GH_TOKEN="$({} resolve {ALLOWED_REF})"; printf '[%s]' "$GH_TOKEN""#,
+        common::bin(),
+    ));
+    // The `secreq` under this shell is a real binary running the real
+    // `cli::run`, migration and all. Its isolation is the environment the
+    // shell inherits — which `sb.enter()` above has pinned to the *complete*
+    // sandbox set (and holds locked for the duration), so the inheritance is
+    // the full pin, not a lucky subset. Only the socket is layered on top.
+    let output = command
+        .env("SECREQ_SOCK", &host.socket)
+        .output()
+        .expect("run the shell");
 
-        assert_eq!(
-            stdout(&output),
-            format!("[{SECRET_VALUE}]"),
-            "the substituted variable must be the value exactly"
-        );
-    });
+    assert_eq!(
+        stdout(&output),
+        format!("[{SECRET_VALUE}]"),
+        "the substituted variable must be the value exactly"
+    );
 }
 
 /// The bare shorthand resolves too, matching `read` and `agent open --allow`.
 #[test]
 fn the_bare_provider_locator_shorthand_resolves() {
-    with_temp_audit_log(|| {
-        let host = Host::serving(Decision::Approve);
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
+    let host = Host::serving(&sb, Decision::Approve);
 
-        let output = host.run(&["op/Dev/gh/token"]);
+    let output = host.run(&sb, &["op/Dev/gh/token"]);
 
-        assert_eq!(code(&output), 0, "stderr: {}", stderr(&output));
-        assert_eq!(stdout(&output), format!("{SECRET_VALUE}\n"));
-    });
+    assert_eq!(code(&output), 0, "stderr: {}", stderr(&output));
+    assert_eq!(stdout(&output), format!("{SECRET_VALUE}\n"));
 }
 
 /// `--list` answers the scope's allowed names, one per line, and never a
 /// value.
 #[test]
 fn list_prints_the_allowed_ref_names_one_per_line() {
-    with_temp_audit_log(|| {
-        let host = Host::serving(Decision::Approve);
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
+    let host = Host::serving(&sb, Decision::Approve);
 
-        let output = host.run(&["--list"]);
+    let output = host.run(&sb, &["--list"]);
 
-        assert_eq!(code(&output), 0, "stderr: {}", stderr(&output));
-        assert_eq!(
-            stdout(&output),
-            format!("{ALLOWED_REF}\n{OTHER_ALLOWED_REF}\n"),
-            "listing must be exactly the declared allowlist, line per ref"
-        );
-        assert!(
-            !stdout(&output).contains(SECRET_VALUE),
-            "listing must never carry material"
-        );
-        assert_eq!(stderr(&output), "");
-    });
+    assert_eq!(code(&output), 0, "stderr: {}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        format!("{ALLOWED_REF}\n{OTHER_ALLOWED_REF}\n"),
+        "listing must be exactly the declared allowlist, line per ref"
+    );
+    assert!(
+        !stdout(&output).contains(SECRET_VALUE),
+        "listing must never carry material"
+    );
+    assert_eq!(stderr(&output), "");
 }
 
 /// `$SECREQ_SOCK` unset is the most likely mistake (running it on the host,
@@ -312,7 +239,9 @@ fn list_prints_the_allowed_ref_names_one_per_line() {
 /// nothing on stdout, and not panic.
 #[test]
 fn an_unset_secreq_sock_is_a_clear_error_and_not_a_panic() {
-    let output = run_resolve(None, &[ALLOWED_REF]);
+    let sb = common::Sandbox::new();
+
+    let output = run_resolve(&sb, None, &[ALLOWED_REF]);
 
     assert_no_panic(&output);
     assert_ne!(code(&output), 0, "an unset socket cannot succeed");
@@ -337,9 +266,13 @@ fn an_unset_secreq_sock_is_a_clear_error_and_not_a_panic() {
 /// and the path you see isn't the host's.
 #[test]
 fn a_dead_socket_is_a_clear_error_and_not_a_panic() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let sb = common::Sandbox::new();
 
-    let output = run_resolve(Some(&dir.path().join("not-a-socket.sock")), &[ALLOWED_REF]);
+    let output = run_resolve(
+        &sb,
+        Some(&sb.runtime_dir().join("not-a-socket.sock")),
+        &[ALLOWED_REF],
+    );
 
     assert_no_panic(&output);
     assert_ne!(code(&output), 0);
@@ -355,11 +288,11 @@ fn a_dead_socket_is_a_clear_error_and_not_a_panic() {
 /// is the same story as no file at all — and must not hang or panic.
 #[test]
 fn a_stale_socket_file_with_no_listener_errors_clearly() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("stale.sock");
+    let sb = common::Sandbox::new();
+    let path = sb.runtime_dir().join("stale.sock");
     drop(UnixListener::bind(&path).expect("bind"));
 
-    let output = run_resolve(Some(&path), &[ALLOWED_REF]);
+    let output = run_resolve(&sb, Some(&path), &[ALLOWED_REF]);
 
     assert_no_panic(&output);
     assert_ne!(code(&output), 0);
@@ -375,28 +308,28 @@ fn a_stale_socket_file_with_no_listener_errors_clearly() {
 /// variable containing "denied" fails mysteriously somewhere else.
 #[test]
 fn a_denied_ref_exits_nonzero_with_the_reason_on_stderr_and_nothing_on_stdout() {
-    with_temp_audit_log(|| {
-        let host = Host::serving(Decision::Deny);
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
+    let host = Host::serving(&sb, Decision::Deny);
 
-        let output = host.run(&[ALLOWED_REF]);
+    let output = host.run(&sb, &[ALLOWED_REF]);
 
-        assert_no_panic(&output);
-        assert_eq!(
-            code(&output),
-            DENIED_EXIT,
-            "a denial is a policy answer with its own code, not a generic error"
-        );
-        assert_eq!(stdout(&output), "", "a denial must release nothing");
-        let stderr = stderr(&output);
-        assert!(
-            stderr.contains("denied"),
-            "the reason must reach stderr: {stderr}"
-        );
-        assert!(
-            !stderr.contains(SECRET_VALUE),
-            "no value may leak: {stderr}"
-        );
-    });
+    assert_no_panic(&output);
+    assert_eq!(
+        code(&output),
+        DENIED_EXIT,
+        "a denial is a policy answer with its own code, not a generic error"
+    );
+    assert_eq!(stdout(&output), "", "a denial must release nothing");
+    let stderr = stderr(&output);
+    assert!(
+        stderr.contains("denied"),
+        "the reason must reach stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains(SECRET_VALUE),
+        "no value may leak: {stderr}"
+    );
 }
 
 /// An out-of-scope ref surfaces #41's silent denial intelligibly: the guest
@@ -404,37 +337,39 @@ fn a_denied_ref_exits_nonzero_with_the_reason_on_stderr_and_nothing_on_stdout() 
 /// a prompt to tell it.
 #[test]
 fn an_out_of_scope_ref_surfaces_the_hosts_denial() {
-    with_temp_audit_log(|| {
-        // The gate would approve anything it was asked about, so a denial
-        // here can only have come from the allowlist, upstream of any prompt.
-        let host = Host::serving(Decision::Approve);
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
+    // The gate would approve anything it was asked about, so a denial
+    // here can only have come from the allowlist, upstream of any prompt.
+    let host = Host::serving(&sb, Decision::Approve);
 
-        let output = host.run(&[OUT_OF_SCOPE_REF]);
+    let output = host.run(&sb, &[OUT_OF_SCOPE_REF]);
 
-        assert_no_panic(&output);
-        assert_eq!(code(&output), DENIED_EXIT);
-        assert_eq!(stdout(&output), "");
-        let stderr = stderr(&output);
-        assert!(
-            stderr.contains("outside this socket's declared scope"),
-            "the host's reason must reach the user intelligibly: {stderr}"
-        );
-        assert!(
-            stderr.contains(OUT_OF_SCOPE_REF),
-            "and must say which ref was refused: {stderr}"
-        );
-        assert!(
-            !stderr.contains(ALLOWED_REF),
-            "but must not enumerate what else the scope holds: {stderr}"
-        );
-    });
+    assert_no_panic(&output);
+    assert_eq!(code(&output), DENIED_EXIT);
+    assert_eq!(stdout(&output), "");
+    let stderr = stderr(&output);
+    assert!(
+        stderr.contains("outside this socket's declared scope"),
+        "the host's reason must reach the user intelligibly: {stderr}"
+    );
+    assert!(
+        stderr.contains(OUT_OF_SCOPE_REF),
+        "and must say which ref was refused: {stderr}"
+    );
+    assert!(
+        !stderr.contains(ALLOWED_REF),
+        "but must not enumerate what else the scope holds: {stderr}"
+    );
 }
 
 /// A malformed ref fails locally, before a socket is even dialled — a typo
 /// should read as a typo, not as a broken host.
 #[test]
 fn a_malformed_reference_is_rejected_locally_with_the_shape_it_should_have() {
-    let output = run_resolve(None, &["definitely-not-a-ref"]);
+    let sb = common::Sandbox::new();
+
+    let output = run_resolve(&sb, None, &["definitely-not-a-ref"]);
 
     assert_no_panic(&output);
     assert_ne!(code(&output), 0);
@@ -450,7 +385,9 @@ fn a_malformed_reference_is_rejected_locally_with_the_shape_it_should_have() {
 /// Neither a ref nor `--list` is a usage error, not a crash.
 #[test]
 fn no_arguments_is_a_usage_error() {
-    let output = run_resolve(None, &[]);
+    let sb = common::Sandbox::new();
+
+    let output = run_resolve(&sb, None, &[]);
 
     assert_no_panic(&output);
     assert_ne!(code(&output), 0);
@@ -461,7 +398,9 @@ fn no_arguments_is_a_usage_error() {
 /// preferring one.
 #[test]
 fn a_ref_and_list_together_are_refused() {
-    let output = run_resolve(None, &[ALLOWED_REF, "--list"]);
+    let sb = common::Sandbox::new();
+
+    let output = run_resolve(&sb, None, &[ALLOWED_REF, "--list"]);
 
     assert_no_panic(&output);
     assert_ne!(code(&output), 0);
@@ -494,32 +433,31 @@ fn the_client_sends_its_own_process_chain_as_a_claim() {
         }
     }
 
-    with_temp_audit_log(|| {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let socket = dir.path().join("scoped.sock");
-        let listener = UnixListener::bind(&socket).expect("bind");
-        let gate = Arc::new(CapturingGate(Mutex::new(Vec::new())));
-        let serve_gate: Arc<dyn Gate> = gate.clone();
-        let scope = Scope::new("brain-nx-t5", vec![reference(ALLOWED_REF)]).expect("valid scope");
-        std::thread::spawn(move || {
-            serve_on(
-                listener,
-                Arc::new(scope),
-                Arc::new(ScopeApprovals::new()),
-                serve_gate,
-            )
-        });
-
-        let output = run_resolve(Some(&socket), &[ALLOWED_REF]);
-        assert_eq!(code(&output), 0, "stderr: {}", stderr(&output));
-
-        let chains = gate.0.lock().expect("chains mutex").clone();
-        assert_eq!(chains.len(), 1, "the resolve must have raised one prompt");
-        if let Some(chain) = &chains[0] {
-            assert!(
-                !chain.contains("secreq"),
-                "our own frames are not the caller: {chain}"
-            );
-        }
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
+    let socket = sb.runtime_dir().join("scoped.sock");
+    let listener = UnixListener::bind(&socket).expect("bind");
+    let gate = Arc::new(CapturingGate(Mutex::new(Vec::new())));
+    let serve_gate: Arc<dyn Gate> = gate.clone();
+    let scope = Scope::new("brain-nx-t5", vec![reference(ALLOWED_REF)]).expect("valid scope");
+    std::thread::spawn(move || {
+        serve_on(
+            listener,
+            Arc::new(scope),
+            Arc::new(ScopeApprovals::new()),
+            serve_gate,
+        )
     });
+
+    let output = run_resolve(&sb, Some(&socket), &[ALLOWED_REF]);
+    assert_eq!(code(&output), 0, "stderr: {}", stderr(&output));
+
+    let chains = gate.0.lock().expect("chains mutex").clone();
+    assert_eq!(chains.len(), 1, "the resolve must have raised one prompt");
+    if let Some(chain) = &chains[0] {
+        assert!(
+            !chain.contains("secreq"),
+            "our own frames are not the caller: {chain}"
+        );
+    }
 }

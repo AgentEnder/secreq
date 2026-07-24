@@ -23,8 +23,11 @@
 //! - **Manager** fixtures drive the real
 //!   [`secreq::daemon::manager_ui::render_manager_panel`] with rules
 //!   passed directly and audit history read from a synthetic
-//!   `audit.log` in a tempdir (via `$XDG_STATE_HOME`, the normal
-//!   `AuditCache` path), at the manager's production viewport size.
+//!   `audit.log` in a [`common::Sandbox`] (via `$SECREQ_HOME`, the
+//!   normal `AuditCache` path), at the manager's production viewport
+//!   size.
+
+mod common;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -373,33 +376,34 @@ fn audit_auto_fire(secs_ago: u64, rule_id: &str, decision: &str) -> AuditEntry {
     }
 }
 
-/// Point `$SECREQ_HOME` at a fresh tempdir and write `audit_entries` as its
+/// Sandbox this process and write `audit_entries` as the sandbox's
 /// `audit.log`, so `AuditCache::refresh_if_stale` reads our synthetic history
-/// through the normal path. Returns the tempdir guard — keep it alive across
-/// the render.
+/// through the normal path. Returns `(env guard, sandbox)` — keep both alive
+/// across the render: env reads happen while rendering, and the tempdir must
+/// outlive them. Tuple drop order restores the environment first, then
+/// deletes the tempdir.
 ///
-/// The root is `<tmp>/secreq`, not `<tmp>`: `paths::audit_log_path()` is
-/// `<root>/audit.log` directly, with no `secreq` component of its own (that
-/// was the old `$XDG_STATE_HOME/secreq/…` layout). Rooting at `<tmp>` while
-/// writing to `<tmp>/secreq/audit.log` would leave the fixture reading an
-/// empty history and rendering a blank audit tab.
+/// The audit log lands at `<sandbox root>/audit.log` (i.e.
+/// `$SECREQ_HOME/audit.log`): `paths::audit_log_path()` is `<root>/audit.log`
+/// directly, with no `secreq` component of its own (that was the old
+/// `$XDG_STATE_HOME/secreq/…` layout). Writing anywhere else would leave the
+/// fixture reading an empty history and rendering a blank audit tab.
 ///
-/// SAFETY of the env mutation: the fixtures run sequentially
-/// (`--test-threads=1` per the regen instructions); each fixture sets
-/// the var, renders, and the next overwrites it.
-fn install_audit_log(audit_entries: &[AuditEntry]) -> tempfile::TempDir {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let secreq_root = tmp.path().join("secreq");
-    std::fs::create_dir_all(&secreq_root).expect("mkdir secreq root");
-    let audit_path = secreq_root.join("audit.log");
+/// Env mutation: [`common::Sandbox::enter`] pins the *complete* isolation
+/// set (`SECREQ_HOME`, the XDG vars, `HOME`, …) under a global lock and
+/// restores prior values on drop. That lock is an addition to — not a
+/// replacement for — the `--test-threads=1` serialization the regen
+/// instructions require: the wgpu fixtures still must run one at a time.
+fn install_audit_log(audit_entries: &[AuditEntry]) -> (common::EnvGuard, common::Sandbox) {
+    let sandbox = common::Sandbox::new();
     let mut buf = String::new();
     for entry in audit_entries {
         buf.push_str(&serde_json::to_string(entry).expect("serialize entry"));
         buf.push('\n');
     }
-    std::fs::write(&audit_path, buf).expect("write audit.log");
-    std::env::set_var("SECREQ_HOME", &secreq_root);
-    tmp
+    std::fs::write(sandbox.root().join("audit.log"), buf).expect("write audit.log");
+    let guard = sandbox.enter();
+    (guard, sandbox)
 }
 
 fn save_png(name: &str, img: &image::RgbaImage) {
@@ -448,7 +452,9 @@ fn render_prompt_fixture_full(
     theme_pin: ThemePin,
     setup: impl FnOnce(&SharedState) -> Vec<mpsc::Receiver<secreq::daemon::state::WaiterReply>>,
 ) {
-    let tmp = install_audit_log(&audit_entries);
+    // Held until after `harness.render()` — env reads happen during
+    // rendering, so the guard's lifetime must cover the full render.
+    let sandbox = install_audit_log(&audit_entries);
 
     let state: SharedState = Arc::new(Mutex::new(State::new()));
     state.lock().unwrap().show_window();
@@ -480,7 +486,7 @@ fn render_prompt_fixture_full(
     harness.run();
     let img = harness.render().expect("render wgpu");
     save_png(name, &img);
-    drop(tmp);
+    drop(sandbox);
 }
 
 // ── Manager harness ───────────────────────────────────────────────────────
@@ -508,7 +514,9 @@ struct ManagerExtras<'a> {
 
 /// Drive the real `render_manager_panel` for one frame and write a PNG.
 fn render_manager_fixture(name: &str, audit_entries: Vec<AuditEntry>, extras: ManagerExtras<'_>) {
-    let tmp = install_audit_log(&audit_entries);
+    // Held until after `harness.render()` — env reads happen during
+    // rendering, so the guard's lifetime must cover the full render.
+    let sandbox = install_audit_log(&audit_entries);
 
     let ManagerExtras {
         rules,
@@ -538,7 +546,7 @@ fn render_manager_fixture(name: &str, audit_entries: Vec<AuditEntry>, extras: Ma
     harness.run();
     let img = harness.render().expect("render wgpu");
     save_png(name, &img);
-    drop(tmp);
+    drop(sandbox);
 }
 
 // ── Prompt fixtures ───────────────────────────────────────────────────────

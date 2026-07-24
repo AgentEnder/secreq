@@ -15,6 +15,8 @@
 //! `ssh_agent::serve_on(listener, ctx)` directly rather than spawning the
 //! whole daemon.
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -32,24 +34,15 @@ use secreq::wraps::SshIdentity;
 use ssh_encoding::{Decode, Encode};
 use ssh_key::{LineEnding, PrivateKey, PublicKey};
 
-/// Pin every secreq path into a per-process tempdir.
-///
-/// These tests drive `ssh_agent::serve_on` **in-process**, and it logs
-/// through `daemon::log`, which resolves its sink from `$SECREQ_HOME`. With
-/// nothing pinned that resolves to the developer's real `~/.secreq`, so a
-/// plain `cargo test` appends this suite's `SIGN_REQUEST` chatter to their
-/// actual daemon log. (The lib's own unit tests get an automatic fallback in
-/// `paths::secreq_root`, but integration tests link the lib without
-/// `cfg(test)` and must pin it themselves.)
-///
-/// Idempotent and race-free: every caller writes the same path, and the
-/// `OnceLock` keeps one tempdir alive for the whole test binary.
-fn isolate_paths() {
-    use std::sync::OnceLock;
-    static DIR: OnceLock<tempfile::TempDir> = OnceLock::new();
-    let dir = DIR.get_or_init(|| tempfile::tempdir().expect("isolation tempdir"));
-    std::env::set_var("SECREQ_HOME", dir.path());
-}
+// These tests drive `ssh_agent::serve_on` **in-process**, and it logs
+// through `daemon::log`, which resolves its sink from `$SECREQ_HOME`. Each
+// test therefore pins this process's environment with
+// `common::Sandbox::enter` — the guard applies the full isolation set under
+// a global lock and restores it on drop, so a plain `cargo test` can never
+// append this suite's `SIGN_REQUEST` chatter to the developer's real
+// `~/.secreq` daemon log. (The lib's own unit tests get an automatic
+// fallback in `paths::secreq_root`, but integration tests link the lib
+// without `cfg(test)` and must pin it themselves.)
 
 /// A real OpenSSH ed25519 public key (generated once for this test). The
 /// private half is irrelevant: listing never resolves a private key.
@@ -85,7 +78,8 @@ fn encode_sign_request(key_blob: &[u8], data: &[u8], flags: u32) -> Vec<u8> {
 
 #[test]
 fn lists_configured_identities_without_resolving() {
-    isolate_paths();
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
     // One identity whose private_key reference is deliberately bogus: if
     // listing tried to resolve it, the provider call would be observable.
     // It succeeds regardless, which proves listing never resolves.
@@ -231,7 +225,8 @@ fn signing_context_with_seeded_approval(
 
 #[test]
 fn signs_for_seeded_approval_and_signature_verifies() {
-    isolate_paths();
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
     let dir = tempfile::tempdir().expect("tempdir");
     let (ctx, public_key, blob, _identity) = signing_context_with_seeded_approval(dir.path());
 
@@ -274,6 +269,8 @@ fn signs_for_seeded_approval_and_signature_verifies() {
 
 #[test]
 fn unknown_key_blob_answers_failure() {
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
     let dir = tempfile::tempdir().expect("tempdir");
     let (ctx, _public_key, _blob, _identity) = signing_context_with_seeded_approval(dir.path());
 
@@ -307,6 +304,8 @@ fn unknown_key_blob_answers_failure() {
 /// a correct cache hit never reaches it.
 #[test]
 fn ssh_selftest_run_lists_and_verifies_on_cache_hit() {
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
     let dir = tempfile::tempdir().expect("tempdir");
     let (ctx, _public_key, _blob, identity) = signing_context_with_seeded_approval(dir.path());
 
@@ -332,6 +331,8 @@ fn ssh_selftest_run_lists_and_verifies_on_cache_hit() {
 /// unknown key, but the SIGN failure is the load-bearing assertion.
 #[test]
 fn ssh_selftest_run_errors_when_agent_does_not_hold_the_key() {
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
     let dir = tempfile::tempdir().expect("tempdir");
     let (ctx, _public_key, _blob, _identity) = signing_context_with_seeded_approval(dir.path());
 

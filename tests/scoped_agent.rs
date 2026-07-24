@@ -27,6 +27,8 @@ use secreq::scoped_agent::proto::{read_message, write_message, Request, Response
 use secreq::scoped_agent::{serve_on, Clock, Gate, GuestChain, Scope, ScopeApprovals};
 use secreq::secret::SecretValue;
 
+mod common;
+
 /// The value the fake gate hands back on approve. Deliberately distinctive
 /// so the "never in the audit log" assertions can search for it verbatim.
 const SECRET_VALUE: &str = "ghp_liveTokenValue_DEADBEEF_do_not_log_me";
@@ -196,100 +198,39 @@ impl Harness {
     }
 }
 
-/// Every env var that can steer secreq at a real file, and what pinning each
-/// one protects. Pinning a subset is worse than useless: it looks isolated
-/// and isn't.
-///
-/// See `dev-docs/plans/2026-07-16-secreq-root-and-migrations.md` — an earlier
-/// draft assumed `$SECREQ_HOME` alone was enough, and acting on it moved a
-/// developer's real config into a tempdir that was deleted moments later.
-const ISOLATED_VARS: &[&str] = &[
-    // The root: config, and the audit log this file asserts on.
-    "SECREQ_HOME",
-    // The migration's frozen legacy probe, which `$SECREQ_HOME` does not
-    // redirect — this is the var whose omission ate a real config.
-    "XDG_CONFIG_HOME",
-    "XDG_STATE_HOME",
-    // Backstop: every lookup above falls back to `dirs::home_dir()`, so a
-    // forgotten pin lands here rather than in the real home.
-    "HOME",
-    // Socket dir, for anything that resolves `paths::socket_dir()` — the
-    // harness binds its own tempdir socket today, but a future test calling
-    // `agent_open` would otherwise bind beside the developer's live daemon.
-    "XDG_RUNTIME_DIR",
-];
-
-/// Run `f` with every path secreq can resolve pinned inside one fresh
-/// tempdir, so audit appends land there instead of the developer's real
-/// `~/.secreq`, and `read_history` inside `f` reads them back.
-///
-/// Integration tests link the lib **without** `cfg(test)`, so
-/// `paths::test_fallback_root` does not cover them — this helper is the only
-/// thing standing between these tests and the real files.
-///
-/// A process-wide lock serializes callers: the environment is process-global,
-/// so two of these running concurrently in this test binary would clobber
-/// each other's target dir. (The same reasoning as `audit::with_temp_log`,
-/// which is `cfg(test)`-internal to the crate and so isn't reachable here.)
-fn with_temp_audit_log<R>(f: impl FnOnce() -> R) -> R {
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = tempfile::tempdir().expect("tempdir");
-
-    let saved: Vec<(&str, Option<std::ffi::OsString>)> = ISOLATED_VARS
-        .iter()
-        .map(|name| {
-            let prev = std::env::var_os(name);
-            // A subdir per var: distinct locations, so a path escaping one
-            // pin can't be silently caught by another.
-            std::env::set_var(name, dir.path().join(name.to_ascii_lowercase()));
-            (*name, prev)
-        })
-        .collect();
-
-    let out = f();
-
-    for (name, prev) in saved {
-        match prev {
-            Some(v) => std::env::set_var(name, v),
-            None => std::env::remove_var(name),
-        }
-    }
-    out
-}
-
 /// An allowed ref resolves: the gate is consulted and the value crosses.
 #[test]
 fn allowed_ref_resolves_over_the_socket() {
-    with_temp_audit_log(|| {
-        let harness = Harness::start();
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
 
-        let response = harness.round_trip(&Request::resolve(ALLOWED_REF));
+    let harness = Harness::start();
 
-        assert_eq!(
-            response,
-            Response::Value {
-                value: SECRET_VALUE.to_owned()
-            },
-            "an allowed ref must resolve to its value"
-        );
-        assert_eq!(
-            harness.gate.prompts(),
-            vec![ALLOWED_REF],
-            "an allowed ref must reach the gate (i.e. must be gated by consent)"
-        );
-        assert_eq!(
-            harness.gate.resolves(),
-            vec![ALLOWED_REF],
-            "and must be resolved fresh, not served from anything"
-        );
+    let response = harness.round_trip(&Request::resolve(ALLOWED_REF));
 
-        let history = audit::read_history(None).expect("read audit history");
-        assert_eq!(history.len(), 1, "the release must be audited");
-        assert_eq!(history[0].wrap, "agent:brain-nx-t5");
-        assert_eq!(history[0].secrets, vec![ALLOWED_REF]);
-        assert_eq!(history[0].decision, "approve");
-    });
+    assert_eq!(
+        response,
+        Response::Value {
+            value: SECRET_VALUE.to_owned()
+        },
+        "an allowed ref must resolve to its value"
+    );
+    assert_eq!(
+        harness.gate.prompts(),
+        vec![ALLOWED_REF],
+        "an allowed ref must reach the gate (i.e. must be gated by consent)"
+    );
+    assert_eq!(
+        harness.gate.resolves(),
+        vec![ALLOWED_REF],
+        "and must be resolved fresh, not served from anything"
+    );
+
+    let history = audit::read_history(None).expect("read audit history");
+    assert_eq!(history.len(), 1, "the release must be audited");
+    assert_eq!(history[0].wrap, "agent:brain-nx-t5");
+    assert_eq!(history[0].secrets, vec![ALLOWED_REF]);
+    assert_eq!(history[0].decision, "approve");
 }
 
 /// **The load-bearing test.** A ref outside the declared scope is denied,
@@ -297,118 +238,122 @@ fn allowed_ref_resolves_over_the_socket() {
 /// audited.
 #[test]
 fn out_of_scope_ref_is_denied_with_no_prompt_and_an_audit_row() {
-    with_temp_audit_log(|| {
-        let harness = Harness::start();
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
 
-        let response = harness.round_trip(&Request::resolve(OUT_OF_SCOPE_REF));
+    let harness = Harness::start();
 
-        match response {
-            Response::Denied { .. } => {}
-            other => panic!("out-of-scope ref must be denied, got {other:?}"),
-        }
+    let response = harness.round_trip(&Request::resolve(OUT_OF_SCOPE_REF));
 
-        // NO PROMPT: the gate is the only route to the consent machinery,
-        // and it was never called. This is what stops a compromised guest
-        // from enumerating the vault one prompt at a time, and what stops
-        // the user being trained to click through.
-        assert!(
-            harness.gate.prompts().is_empty(),
-            "an out-of-scope ref must never reach the gate — no prompt may be raised"
-        );
+    match response {
+        Response::Denied { .. } => {}
+        other => panic!("out-of-scope ref must be denied, got {other:?}"),
+    }
 
-        // ...but it IS audited, so a probing guest is visible.
-        let history = audit::read_history(None).expect("read audit history");
-        assert_eq!(history.len(), 1, "the denial must be audited");
-        assert_eq!(history[0].wrap, "agent:brain-nx-t5");
-        assert_eq!(history[0].secrets, vec![OUT_OF_SCOPE_REF]);
-        assert_eq!(
-            history[0].decision, "deny+out-of-scope",
-            "the row must record that the user was never asked, not a plain deny"
-        );
-        assert!(
-            history[0].callers.is_empty(),
-            "a guest has no host caller chain; the row must not invent one"
-        );
-    });
+    // NO PROMPT: the gate is the only route to the consent machinery,
+    // and it was never called. This is what stops a compromised guest
+    // from enumerating the vault one prompt at a time, and what stops
+    // the user being trained to click through.
+    assert!(
+        harness.gate.prompts().is_empty(),
+        "an out-of-scope ref must never reach the gate — no prompt may be raised"
+    );
+
+    // ...but it IS audited, so a probing guest is visible.
+    let history = audit::read_history(None).expect("read audit history");
+    assert_eq!(history.len(), 1, "the denial must be audited");
+    assert_eq!(history[0].wrap, "agent:brain-nx-t5");
+    assert_eq!(history[0].secrets, vec![OUT_OF_SCOPE_REF]);
+    assert_eq!(
+        history[0].decision, "deny+out-of-scope",
+        "the row must record that the user was never asked, not a plain deny"
+    );
+    assert!(
+        history[0].callers.is_empty(),
+        "a guest has no host caller chain; the row must not invent one"
+    );
 }
 
 /// `list` returns the allowed names only, never prompts, and never leaks a
 /// value.
 #[test]
 fn list_returns_allowed_names_only_and_never_prompts() {
-    with_temp_audit_log(|| {
-        let harness = Harness::start();
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
 
-        let response = harness.round_trip(&Request::List);
+    let harness = Harness::start();
 
-        assert_eq!(
-            response,
-            Response::Refs {
-                refs: vec![ALLOWED_REF.to_owned(), OTHER_ALLOWED_REF.to_owned()],
-            },
-            "list must answer exactly the declared allowlist"
-        );
-        assert!(
-            harness.gate.prompts().is_empty(),
-            "listing is free — it must never prompt"
-        );
-        assert!(
-            audit::read_history(None)
-                .expect("read audit history")
-                .is_empty(),
-            "list releases nothing, so it writes no audit row"
-        );
-    });
+    let response = harness.round_trip(&Request::List);
+
+    assert_eq!(
+        response,
+        Response::Refs {
+            refs: vec![ALLOWED_REF.to_owned(), OTHER_ALLOWED_REF.to_owned()],
+        },
+        "list must answer exactly the declared allowlist"
+    );
+    assert!(
+        harness.gate.prompts().is_empty(),
+        "listing is free — it must never prompt"
+    );
+    assert!(
+        audit::read_history(None)
+            .expect("read audit history")
+            .is_empty(),
+        "list releases nothing, so it writes no audit row"
+    );
 }
 
 /// An unknown verb errors — and the error says nothing that would help a
 /// guest enumerate anything.
 #[test]
 fn unknown_verb_errors() {
-    with_temp_audit_log(|| {
-        let harness = Harness::start();
-        let mut stream = harness.connect();
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
 
-        // Hand-rolled frame: an unknown verb can't be built from the
-        // `Request` enum, which is the point — the protocol is closed.
-        let payload = br#"{"op":"enumerate_everything"}"#;
-        let mut frame = (payload.len() as u32).to_be_bytes().to_vec();
-        frame.extend_from_slice(payload);
-        stream.write_all(&frame).expect("write unknown verb frame");
-        stream.flush().expect("flush");
+    let harness = Harness::start();
+    let mut stream = harness.connect();
 
-        let response = read_message::<Response, _>(&mut stream)
-            .expect("read response")
-            .expect("a response frame");
+    // Hand-rolled frame: an unknown verb can't be built from the
+    // `Request` enum, which is the point — the protocol is closed.
+    let payload = br#"{"op":"enumerate_everything"}"#;
+    let mut frame = (payload.len() as u32).to_be_bytes().to_vec();
+    frame.extend_from_slice(payload);
+    stream.write_all(&frame).expect("write unknown verb frame");
+    stream.flush().expect("flush");
 
-        match &response {
-            Response::Error { message } => {
-                assert!(
-                    !message.contains("secret://"),
-                    "an error must not name any ref: {message}"
-                );
-            }
-            other => panic!("an unknown verb must error, got {other:?}"),
+    let response = read_message::<Response, _>(&mut stream)
+        .expect("read response")
+        .expect("a response frame");
+
+    match &response {
+        Response::Error { message } => {
+            assert!(
+                !message.contains("secret://"),
+                "an error must not name any ref: {message}"
+            );
         }
-        assert!(
-            harness.gate.prompts().is_empty(),
-            "an unknown verb must never reach the gate"
-        );
-    });
+        other => panic!("an unknown verb must error, got {other:?}"),
+    }
+    assert!(
+        harness.gate.prompts().is_empty(),
+        "an unknown verb must never reach the gate"
+    );
 }
 
 /// A malformed ref is an error, not a denial — nothing was refused because
 /// nothing coherent was asked.
 #[test]
 fn malformed_reference_errors_without_gating() {
-    with_temp_audit_log(|| {
-        let harness = Harness::start();
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
 
-        let response = harness.round_trip(&Request::resolve("definitely-not-a-ref"));
+    let harness = Harness::start();
 
-        assert!(matches!(response, Response::Error { .. }));
-        assert!(harness.gate.prompts().is_empty());
-    });
+    let response = harness.round_trip(&Request::resolve("definitely-not-a-ref"));
+
+    assert!(matches!(response, Response::Error { .. }));
+    assert!(harness.gate.prompts().is_empty());
 }
 
 /// One connection carries several requests: a guest lists, then resolves,
@@ -416,27 +361,28 @@ fn malformed_reference_errors_without_gating() {
 /// pipelined messages.
 #[test]
 fn one_connection_serves_list_then_resolve() {
-    with_temp_audit_log(|| {
-        let harness = Harness::start();
-        let mut stream = harness.connect();
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
 
-        write_message(&mut stream, &Request::List).expect("write list");
-        let listed = read_message::<Response, _>(&mut stream)
-            .expect("read list response")
-            .expect("a response");
-        assert!(matches!(listed, Response::Refs { .. }));
+    let harness = Harness::start();
+    let mut stream = harness.connect();
 
-        write_message(&mut stream, &Request::resolve(ALLOWED_REF)).expect("write resolve");
-        let resolved = read_message::<Response, _>(&mut stream)
-            .expect("read resolve response")
-            .expect("a response");
-        assert_eq!(
-            resolved,
-            Response::Value {
-                value: SECRET_VALUE.to_owned()
-            }
-        );
-    });
+    write_message(&mut stream, &Request::List).expect("write list");
+    let listed = read_message::<Response, _>(&mut stream)
+        .expect("read list response")
+        .expect("a response");
+    assert!(matches!(listed, Response::Refs { .. }));
+
+    write_message(&mut stream, &Request::resolve(ALLOWED_REF)).expect("write resolve");
+    let resolved = read_message::<Response, _>(&mut stream)
+        .expect("read resolve response")
+        .expect("a response");
+    assert_eq!(
+        resolved,
+        Response::Value {
+            value: SECRET_VALUE.to_owned()
+        }
+    );
 }
 
 /// **The secret value must never appear in the audit log** — not on the
@@ -445,30 +391,31 @@ fn one_connection_serves_list_then_resolve() {
 /// (or a future field) still trips this.
 #[test]
 fn the_secret_value_never_appears_in_the_audit_log() {
-    with_temp_audit_log(|| {
-        let harness = Harness::start();
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
 
-        // Exercise every path that writes a row: an approve and a denial.
-        harness.round_trip(&Request::resolve(ALLOWED_REF));
-        harness.round_trip(&Request::resolve(OUT_OF_SCOPE_REF));
-        harness.round_trip(&Request::List);
+    let harness = Harness::start();
 
-        let path = secreq::paths::audit_log_path().expect("audit log path");
-        let raw = std::fs::read_to_string(&path).expect("read raw audit log");
+    // Exercise every path that writes a row: an approve and a denial.
+    harness.round_trip(&Request::resolve(ALLOWED_REF));
+    harness.round_trip(&Request::resolve(OUT_OF_SCOPE_REF));
+    harness.round_trip(&Request::List);
 
-        assert!(
-            !raw.contains(SECRET_VALUE),
-            "the secret value leaked into the audit log:\n{raw}"
-        );
-        // Sanity: the rows we expect really are there, so the assertion
-        // above isn't passing vacuously against an empty file.
-        assert!(
-            raw.contains("agent:brain-nx-t5"),
-            "expected the scope's rows in the log:\n{raw}"
-        );
-        assert!(raw.contains(ALLOWED_REF), "expected the approve row");
-        assert!(raw.contains("deny+out-of-scope"), "expected the deny row");
-    });
+    let path = secreq::paths::audit_log_path().expect("audit log path");
+    let raw = std::fs::read_to_string(&path).expect("read raw audit log");
+
+    assert!(
+        !raw.contains(SECRET_VALUE),
+        "the secret value leaked into the audit log:\n{raw}"
+    );
+    // Sanity: the rows we expect really are there, so the assertion
+    // above isn't passing vacuously against an empty file.
+    assert!(
+        raw.contains("agent:brain-nx-t5"),
+        "expected the scope's rows in the log:\n{raw}"
+    );
+    assert!(raw.contains(ALLOWED_REF), "expected the approve row");
+    assert!(raw.contains("deny+out-of-scope"), "expected the deny row");
 }
 
 // ── Scope anchoring: TTL-cached decisions ────────────────────────────────
@@ -482,61 +429,63 @@ fn the_secret_value_never_appears_in_the_audit_log() {
 /// the user had been asked twice.
 #[test]
 fn a_second_request_within_the_ttl_is_served_without_a_prompt() {
-    with_temp_audit_log(|| {
-        let harness = Harness::with_gate(RecordingGate::deciding(Decision::ApproveAgentSession));
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
 
-        let first = harness.round_trip(&Request::resolve(ALLOWED_REF));
-        let second = harness.round_trip(&Request::resolve(ALLOWED_REF));
+    let harness = Harness::with_gate(RecordingGate::deciding(Decision::ApproveAgentSession));
 
-        for response in [&first, &second] {
-            assert_eq!(
-                response,
-                &Response::Value {
-                    value: SECRET_VALUE.to_owned()
-                },
-                "both requests must release the secret"
-            );
-        }
-        assert_eq!(
-            harness.gate.prompts(),
-            vec![ALLOWED_REF],
-            "the second request must ride the scope's grant — exactly one prompt"
-        );
-        assert_eq!(
-            harness.gate.resolves(),
-            vec![ALLOWED_REF, ALLOWED_REF],
-            "the decision caches; the MATERIAL must be resolved fresh every time"
-        );
+    let first = harness.round_trip(&Request::resolve(ALLOWED_REF));
+    let second = harness.round_trip(&Request::resolve(ALLOWED_REF));
 
-        // Both releases are audited, and the cached one says so — a reader
-        // must be able to tell "the user said yes" from "the user wasn't
-        // asked".
-        let history = audit::read_history(None).expect("read audit history");
-        assert_eq!(history.len(), 2, "every release is audited, cached or not");
-        assert_eq!(history[0].decision, "approve+agent-session");
+    for response in [&first, &second] {
         assert_eq!(
-            history[1].decision, "approve+cached",
-            "a silent release must record that the user was never asked"
+            response,
+            &Response::Value {
+                value: SECRET_VALUE.to_owned()
+            },
+            "both requests must release the secret"
         );
-    });
+    }
+    assert_eq!(
+        harness.gate.prompts(),
+        vec![ALLOWED_REF],
+        "the second request must ride the scope's grant — exactly one prompt"
+    );
+    assert_eq!(
+        harness.gate.resolves(),
+        vec![ALLOWED_REF, ALLOWED_REF],
+        "the decision caches; the MATERIAL must be resolved fresh every time"
+    );
+
+    // Both releases are audited, and the cached one says so — a reader
+    // must be able to tell "the user said yes" from "the user wasn't
+    // asked".
+    let history = audit::read_history(None).expect("read audit history");
+    assert_eq!(history.len(), 2, "every release is audited, cached or not");
+    assert_eq!(history[0].decision, "approve+agent-session");
+    assert_eq!(
+        history[1].decision, "approve+cached",
+        "a silent release must record that the user was never asked"
+    );
 }
 
 /// A plain `Approve` is "this request only": it anchors nothing, so the next
 /// request prompts again. Only the explicit TTL action grants a session.
 #[test]
 fn a_plain_approve_anchors_nothing_and_the_next_request_prompts_again() {
-    with_temp_audit_log(|| {
-        let harness = Harness::with_gate(RecordingGate::deciding(Decision::Approve));
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
 
-        harness.round_trip(&Request::resolve(ALLOWED_REF));
-        harness.round_trip(&Request::resolve(ALLOWED_REF));
+    let harness = Harness::with_gate(RecordingGate::deciding(Decision::Approve));
 
-        assert_eq!(
-            harness.gate.prompts(),
-            vec![ALLOWED_REF, ALLOWED_REF],
-            "`Approve` means once; only `ApproveAgentSession` may skip a later prompt"
-        );
-    });
+    harness.round_trip(&Request::resolve(ALLOWED_REF));
+    harness.round_trip(&Request::resolve(ALLOWED_REF));
+
+    assert_eq!(
+        harness.gate.prompts(),
+        vec![ALLOWED_REF, ALLOWED_REF],
+        "`Approve` means once; only `ApproveAgentSession` may skip a later prompt"
+    );
 }
 
 /// The grant is per-`(scope, ref)`. Approving `GH_TOKEN` for a sandbox must
@@ -544,18 +493,19 @@ fn a_plain_approve_anchors_nothing_and_the_next_request_prompts_again() {
 /// and consented to that one.
 #[test]
 fn a_grant_for_one_ref_does_not_cover_another_in_the_same_scope() {
-    with_temp_audit_log(|| {
-        let harness = Harness::with_gate(RecordingGate::deciding(Decision::ApproveAgentSession));
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
 
-        harness.round_trip(&Request::resolve(ALLOWED_REF));
-        harness.round_trip(&Request::resolve(OTHER_ALLOWED_REF));
+    let harness = Harness::with_gate(RecordingGate::deciding(Decision::ApproveAgentSession));
 
-        assert_eq!(
-            harness.gate.prompts(),
-            vec![ALLOWED_REF, OTHER_ALLOWED_REF],
-            "a second, different ref must raise its own prompt"
-        );
-    });
+    harness.round_trip(&Request::resolve(ALLOWED_REF));
+    harness.round_trip(&Request::resolve(OTHER_ALLOWED_REF));
+
+    assert_eq!(
+        harness.gate.prompts(),
+        vec![ALLOWED_REF, OTHER_ALLOWED_REF],
+        "a second, different ref must raise its own prompt"
+    );
 }
 
 /// **Expiry.** Once the TTL lapses, the same scope asking for the same ref
@@ -563,28 +513,29 @@ fn a_grant_for_one_ref_does_not_cover_another_in_the_same_scope() {
 /// that is exactly why the timer exists.
 #[test]
 fn a_request_after_the_ttl_expires_prompts_again() {
-    with_temp_audit_log(|| {
-        let harness = Harness::with_gate(RecordingGate::deciding(Decision::ApproveAgentSession));
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
 
-        harness.round_trip(&Request::resolve(ALLOWED_REF));
-        // One second short of expiry: still silent.
-        harness.clock.advance(TEST_TTL_SECS - 1);
-        harness.round_trip(&Request::resolve(ALLOWED_REF));
-        assert_eq!(
-            harness.gate.prompts(),
-            vec![ALLOWED_REF],
-            "a grant must cover the full TTL"
-        );
+    let harness = Harness::with_gate(RecordingGate::deciding(Decision::ApproveAgentSession));
 
-        // ...and one second later, it's dead.
-        harness.clock.advance(1);
-        harness.round_trip(&Request::resolve(ALLOWED_REF));
-        assert_eq!(
-            harness.gate.prompts(),
-            vec![ALLOWED_REF, ALLOWED_REF],
-            "an expired grant must re-prompt even though the scope is unchanged"
-        );
-    });
+    harness.round_trip(&Request::resolve(ALLOWED_REF));
+    // One second short of expiry: still silent.
+    harness.clock.advance(TEST_TTL_SECS - 1);
+    harness.round_trip(&Request::resolve(ALLOWED_REF));
+    assert_eq!(
+        harness.gate.prompts(),
+        vec![ALLOWED_REF],
+        "a grant must cover the full TTL"
+    );
+
+    // ...and one second later, it's dead.
+    harness.clock.advance(1);
+    harness.round_trip(&Request::resolve(ALLOWED_REF));
+    assert_eq!(
+        harness.gate.prompts(),
+        vec![ALLOWED_REF, ALLOWED_REF],
+        "an expired grant must re-prompt even though the scope is unchanged"
+    );
 }
 
 /// **A denial is never cached as an approval.** The obvious catastrophe if
@@ -592,36 +543,37 @@ fn a_request_after_the_ttl_expires_prompts_again() {
 /// back as a hit would turn "no" into a silent "yes" for five minutes.
 #[test]
 fn a_denial_is_not_cached_and_never_becomes_a_silent_approval() {
-    with_temp_audit_log(|| {
-        let harness = Harness::with_gate(RecordingGate::deciding(Decision::Deny));
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
 
-        let first = harness.round_trip(&Request::resolve(ALLOWED_REF));
-        let second = harness.round_trip(&Request::resolve(ALLOWED_REF));
+    let harness = Harness::with_gate(RecordingGate::deciding(Decision::Deny));
 
-        for response in [&first, &second] {
-            assert!(
-                matches!(response, Response::Denied { .. }),
-                "a denied ref must stay denied, got {response:?}"
-            );
-        }
-        // Re-prompted rather than served from a cached "no" — and, more to
-        // the point, never served from a cached "yes".
-        assert_eq!(
-            harness.gate.prompts(),
-            vec![ALLOWED_REF, ALLOWED_REF],
-            "a denial must not populate the cache in either direction"
-        );
+    let first = harness.round_trip(&Request::resolve(ALLOWED_REF));
+    let second = harness.round_trip(&Request::resolve(ALLOWED_REF));
+
+    for response in [&first, &second] {
         assert!(
-            harness.gate.resolves().is_empty(),
-            "a denied ref must never be resolved at all"
+            matches!(response, Response::Denied { .. }),
+            "a denied ref must stay denied, got {response:?}"
         );
+    }
+    // Re-prompted rather than served from a cached "no" — and, more to
+    // the point, never served from a cached "yes".
+    assert_eq!(
+        harness.gate.prompts(),
+        vec![ALLOWED_REF, ALLOWED_REF],
+        "a denial must not populate the cache in either direction"
+    );
+    assert!(
+        harness.gate.resolves().is_empty(),
+        "a denied ref must never be resolved at all"
+    );
 
-        let history = audit::read_history(None).expect("read audit history");
-        assert_eq!(history.len(), 2);
-        for row in &history {
-            assert_eq!(row.decision, "deny");
-        }
-    });
+    let history = audit::read_history(None).expect("read audit history");
+    assert_eq!(history.len(), 2);
+    for row in &history {
+        assert_eq!(row.decision, "deny");
+    }
 }
 
 // ── The guest-reported chain: display-only ───────────────────────────────
@@ -642,47 +594,48 @@ fn a_denial_is_not_cached_and_never_becomes_a_silent_approval() {
 /// rests on the scope, which the host declared and the guest cannot touch.
 #[test]
 fn a_different_guest_chain_hits_the_same_cache_entry_and_does_not_reprompt() {
-    with_temp_audit_log(|| {
-        let harness = Harness::with_gate(RecordingGate::deciding(Decision::ApproveAgentSession));
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
 
-        // The user sees this chain and approves the scope for 5 minutes.
-        harness.round_trip(&Request::resolve_claiming(
-            ALLOWED_REF,
-            vec!["node".to_owned(), "pnpm".to_owned(), "build".to_owned()],
-        ));
+    let harness = Harness::with_gate(RecordingGate::deciding(Decision::ApproveAgentSession));
 
-        // A totally different claim, same scope, same ref, well within TTL.
-        let second = harness.round_trip(&Request::resolve_claiming(
-            ALLOWED_REF,
-            vec!["curl".to_owned(), "exfiltrate.sh".to_owned()],
-        ));
+    // The user sees this chain and approves the scope for 5 minutes.
+    harness.round_trip(&Request::resolve_claiming(
+        ALLOWED_REF,
+        vec!["node".to_owned(), "pnpm".to_owned(), "build".to_owned()],
+    ));
 
-        assert_eq!(
-            second,
-            Response::Value {
-                value: SECRET_VALUE.to_owned()
-            }
-        );
-        assert_eq!(
-            harness.gate.prompts(),
-            vec![ALLOWED_REF],
-            "a differing guest chain must NOT create a new cache entry or re-prompt — \
-             proof the chain is not part of the key"
-        );
-        assert_eq!(
-            harness.gate.resolves(),
-            vec![ALLOWED_REF, ALLOWED_REF],
-            "both releases resolve fresh"
-        );
+    // A totally different claim, same scope, same ref, well within TTL.
+    let second = harness.round_trip(&Request::resolve_claiming(
+        ALLOWED_REF,
+        vec!["curl".to_owned(), "exfiltrate.sh".to_owned()],
+    ));
 
-        // The chain reached the prompt exactly once — on the request that
-        // actually raised one. It is display, so it has nothing to say on a
-        // request nobody was shown.
-        assert_eq!(
-            harness.gate.seen_chains(),
-            vec![Some("node → pnpm → build".to_owned())]
-        );
-    });
+    assert_eq!(
+        second,
+        Response::Value {
+            value: SECRET_VALUE.to_owned()
+        }
+    );
+    assert_eq!(
+        harness.gate.prompts(),
+        vec![ALLOWED_REF],
+        "a differing guest chain must NOT create a new cache entry or re-prompt — \
+         proof the chain is not part of the key"
+    );
+    assert_eq!(
+        harness.gate.resolves(),
+        vec![ALLOWED_REF, ALLOWED_REF],
+        "both releases resolve fresh"
+    );
+
+    // The chain reached the prompt exactly once — on the request that
+    // actually raised one. It is display, so it has nothing to say on a
+    // request nobody was shown.
+    assert_eq!(
+        harness.gate.seen_chains(),
+        vec![Some("node → pnpm → build".to_owned())]
+    );
 }
 
 /// The converse: a guest that claims *nothing* rides a grant earned while
@@ -691,21 +644,22 @@ fn a_different_guest_chain_hits_the_same_cache_entry_and_does_not_reprompt() {
 /// key at all.
 #[test]
 fn dropping_the_guest_chain_entirely_still_hits_the_same_cache_entry() {
-    with_temp_audit_log(|| {
-        let harness = Harness::with_gate(RecordingGate::deciding(Decision::ApproveAgentSession));
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
 
-        harness.round_trip(&Request::resolve_claiming(
-            ALLOWED_REF,
-            vec!["node".to_owned(), "pnpm".to_owned()],
-        ));
-        harness.round_trip(&Request::resolve(ALLOWED_REF));
+    let harness = Harness::with_gate(RecordingGate::deciding(Decision::ApproveAgentSession));
 
-        assert_eq!(
-            harness.gate.prompts(),
-            vec![ALLOWED_REF],
-            "claiming nothing must not miss a cache entry earned while claiming something"
-        );
-    });
+    harness.round_trip(&Request::resolve_claiming(
+        ALLOWED_REF,
+        vec!["node".to_owned(), "pnpm".to_owned()],
+    ));
+    harness.round_trip(&Request::resolve(ALLOWED_REF));
+
+    assert_eq!(
+        harness.gate.prompts(),
+        vec![ALLOWED_REF],
+        "claiming nothing must not miss a cache entry earned while claiming something"
+    );
 }
 
 /// The chain **does** reach the prompt — display is what it's for. A test
@@ -713,24 +667,25 @@ fn dropping_the_guest_chain_entirely_still_hits_the_same_cache_entry() {
 /// happy if we dropped it on the floor.
 #[test]
 fn the_guest_chain_reaches_the_prompt_rendered_for_display() {
-    with_temp_audit_log(|| {
-        let harness = Harness::start();
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
 
-        harness.round_trip(&Request::resolve_claiming(
-            ALLOWED_REF,
-            vec![
-                "node".to_owned(),
-                "pnpm".to_owned(),
-                "postinstall".to_owned(),
-            ],
-        ));
+    let harness = Harness::start();
 
-        assert_eq!(
-            harness.gate.seen_chains(),
-            vec![Some("node → pnpm → postinstall".to_owned())],
-            "the prompt must be given the guest's claim to show the user"
-        );
-    });
+    harness.round_trip(&Request::resolve_claiming(
+        ALLOWED_REF,
+        vec![
+            "node".to_owned(),
+            "pnpm".to_owned(),
+            "postinstall".to_owned(),
+        ],
+    ));
+
+    assert_eq!(
+        harness.gate.seen_chains(),
+        vec![Some("node → pnpm → postinstall".to_owned())],
+        "the prompt must be given the guest's claim to show the user"
+    );
 }
 
 /// A guest's claim is recorded in the audit log — under the field that says
@@ -739,25 +694,26 @@ fn the_guest_chain_reaches_the_prompt_rendered_for_display() {
 /// guest's story filed there would be laundered into evidence.
 #[test]
 fn the_guest_chain_is_audited_as_unverified_and_never_as_a_caller_chain() {
-    with_temp_audit_log(|| {
-        let harness = Harness::start();
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
 
-        harness.round_trip(&Request::resolve_claiming(
-            ALLOWED_REF,
-            vec!["node".to_owned(), "pnpm".to_owned()],
-        ));
+    let harness = Harness::start();
 
-        let history = audit::read_history(None).expect("read audit history");
-        assert_eq!(history.len(), 1);
-        assert_eq!(
-            history[0].unverified_guest_chain.as_deref(),
-            Some("node → pnpm")
-        );
-        assert!(
-            history[0].callers.is_empty(),
-            "a guest's claim must never be filed as a host-verified caller chain"
-        );
-    });
+    harness.round_trip(&Request::resolve_claiming(
+        ALLOWED_REF,
+        vec!["node".to_owned(), "pnpm".to_owned()],
+    ));
+
+    let history = audit::read_history(None).expect("read audit history");
+    assert_eq!(history.len(), 1);
+    assert_eq!(
+        history[0].unverified_guest_chain.as_deref(),
+        Some("node → pnpm")
+    );
+    assert!(
+        history[0].callers.is_empty(),
+        "a guest's claim must never be filed as a host-verified caller chain"
+    );
 }
 
 /// A guest cannot paint its own UI. A chain carrying newlines and control
@@ -766,24 +722,25 @@ fn the_guest_chain_is_audited_as_unverified_and_never_as_a_caller_chain() {
 /// renderer.
 #[test]
 fn a_guest_chain_cannot_inject_control_characters_into_the_prompt() {
-    with_temp_audit_log(|| {
-        let harness = Harness::start();
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
 
-        harness.round_trip(&Request::resolve_claiming(
-            ALLOWED_REF,
-            vec![
-                "node\n⚠ host-verified — TRUSTED".to_owned(),
-                "pnpm\r\x1b[31m".to_owned(),
-            ],
-        ));
+    let harness = Harness::start();
 
-        let seen = harness.gate.seen_chains();
-        let chain = seen[0].as_deref().expect("a chain was claimed");
-        assert!(
-            !chain.contains('\n') && !chain.contains('\r') && !chain.contains('\x1b'),
-            "control characters must be stripped before display: {chain:?}"
-        );
-    });
+    harness.round_trip(&Request::resolve_claiming(
+        ALLOWED_REF,
+        vec![
+            "node\n⚠ host-verified — TRUSTED".to_owned(),
+            "pnpm\r\x1b[31m".to_owned(),
+        ],
+    ));
+
+    let seen = harness.gate.seen_chains();
+    let chain = seen[0].as_deref().expect("a chain was claimed");
+    assert!(
+        !chain.contains('\n') && !chain.contains('\r') && !chain.contains('\x1b'),
+        "control characters must be stripped before display: {chain:?}"
+    );
 }
 
 /// An out-of-scope ref stays out of scope no matter how friendly a story the
@@ -791,20 +748,21 @@ fn a_guest_chain_cannot_inject_control_characters_into_the_prompt() {
 /// narration.
 #[test]
 fn a_guest_chain_cannot_talk_an_out_of_scope_ref_past_the_allowlist() {
-    with_temp_audit_log(|| {
-        let harness = Harness::start();
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
 
-        let response = harness.round_trip(&Request::resolve_claiming(
-            OUT_OF_SCOPE_REF,
-            vec!["totally-legit-deploy-tool".to_owned()],
-        ));
+    let harness = Harness::start();
 
-        assert!(matches!(response, Response::Denied { .. }));
-        assert!(
-            harness.gate.prompts().is_empty(),
-            "no claim may buy an out-of-scope ref a prompt"
-        );
-    });
+    let response = harness.round_trip(&Request::resolve_claiming(
+        OUT_OF_SCOPE_REF,
+        vec!["totally-legit-deploy-tool".to_owned()],
+    ));
+
+    assert!(matches!(response, Response::Denied { .. }));
+    assert!(
+        harness.gate.prompts().is_empty(),
+        "no claim may buy an out-of-scope ref a prompt"
+    );
 }
 
 /// The refs a scope was never opened with are invisible: neither `list` nor
@@ -812,17 +770,18 @@ fn a_guest_chain_cannot_talk_an_out_of_scope_ref_past_the_allowlist() {
 /// the host holds.
 #[test]
 fn a_denial_never_names_another_ref() {
-    with_temp_audit_log(|| {
-        let harness = Harness::start();
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
 
-        let response = harness.round_trip(&Request::resolve(OUT_OF_SCOPE_REF));
+    let harness = Harness::start();
 
-        let Response::Denied { message } = response else {
-            panic!("expected a denial");
-        };
-        assert!(
-            !message.contains(ALLOWED_REF) && !message.contains(OTHER_ALLOWED_REF),
-            "a denial must not enumerate the scope's other refs: {message}"
-        );
-    });
+    let response = harness.round_trip(&Request::resolve(OUT_OF_SCOPE_REF));
+
+    let Response::Denied { message } = response else {
+        panic!("expected a denial");
+    };
+    assert!(
+        !message.contains(ALLOWED_REF) && !message.contains(OTHER_ALLOWED_REF),
+        "a denial must not enumerate the scope's other refs: {message}"
+    );
 }

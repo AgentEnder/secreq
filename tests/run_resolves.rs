@@ -16,13 +16,11 @@
 //! `exec::run` masks resolved secrets in the child's output — reading the file
 //! lets us assert the child genuinely received the *unmasked* resolved value.
 
-use std::fs;
-use std::path::Path;
-use std::process::Command;
+mod common;
 
-fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_secreq")
-}
+use std::fs;
+
+use common::Sandbox;
 
 /// A config whose `fake` provider's retrieve prints `resolved-<locator>`.
 /// `{locator}` is substituted by `provider::retrieve`; we pass it as a
@@ -36,23 +34,18 @@ fn fake_provider_config() -> &'static str {
     }"#
 }
 
-fn write_config(config_path: &Path, body: &str) {
-    fs::create_dir_all(config_path.parent().unwrap()).unwrap();
-    fs::write(config_path, body).unwrap();
-}
-
 #[test]
 fn run_resolves_ambient_secret_ref_for_the_child() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("secreq/wraps.json5");
-    write_config(&config, fake_provider_config());
-    let outfile = dir.path().join("captured");
+    let sb = Sandbox::new();
+    sb.write_config(fake_provider_config());
+    let config = sb.config_path();
+    let outfile = sb.path().join("captured");
 
     // SECRET=secret://fake/thing in the child env; `run --yes` scans it,
     // resolves `fake`/`thing` → `resolved-thing`, then execs the command with
     // SECRET substituted. The child writes the value it actually saw to a file.
-    let out = Command::new(bin())
-        .args([
+    let out = sb
+        .cmd(&[
             "--yes",
             "--config",
             config.to_str().unwrap(),
@@ -63,12 +56,6 @@ fn run_resolves_ambient_secret_ref_for_the_child() {
             &format!("printf '%s' \"$SECRET\" > {}", outfile.display()),
         ])
         .env("SECRET", "secret://fake/thing")
-        .env("SECREQ_HOME", dir.path().join("secreq"))
-        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
-        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
-        .env("HOME", dir.path().join("home"))
-        .env_remove("SECREQ_CONSENT_SOCK")
-        .env("SECREQ_NO_DAEMON", "1")
         .output()
         .unwrap();
 
@@ -90,13 +77,13 @@ fn run_resolves_ambient_secret_ref_for_the_child() {
 fn run_passes_plain_env_vars_through_to_the_child() {
     // A non-reference env var must reach the child unchanged alongside any
     // resolved refs — `run` only rewrites `secret://` values.
-    let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("secreq/wraps.json5");
-    write_config(&config, fake_provider_config());
-    let outfile = dir.path().join("captured");
+    let sb = Sandbox::new();
+    sb.write_config(fake_provider_config());
+    let config = sb.config_path();
+    let outfile = sb.path().join("captured");
 
-    let out = Command::new(bin())
-        .args([
+    let out = sb
+        .cmd(&[
             "--yes",
             "--config",
             config.to_str().unwrap(),
@@ -111,12 +98,6 @@ fn run_passes_plain_env_vars_through_to_the_child() {
         ])
         .env("SECRET", "secret://fake/thing")
         .env("PLAIN", "just-a-literal")
-        .env("SECREQ_HOME", dir.path().join("secreq"))
-        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
-        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
-        .env("HOME", dir.path().join("home"))
-        .env_remove("SECREQ_CONSENT_SOCK")
-        .env("SECREQ_NO_DAEMON", "1")
         .output()
         .unwrap();
 
@@ -139,15 +120,15 @@ fn run_resolves_ref_from_an_env_file() {
     // `--env-file` references resolve the same way ambient ones do. The file
     // holds a `secret://` ref (not plaintext); `run` layers it under the
     // inherited env, scans it, and substitutes the resolved value.
-    let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("secreq/wraps.json5");
-    write_config(&config, fake_provider_config());
-    let env_file = dir.path().join("the.env");
+    let sb = Sandbox::new();
+    sb.write_config(fake_provider_config());
+    let config = sb.config_path();
+    let env_file = sb.path().join("the.env");
     fs::write(&env_file, "FROM_FILE=secret://fake/file-secret\n").unwrap();
-    let outfile = dir.path().join("captured");
+    let outfile = sb.path().join("captured");
 
-    let out = Command::new(bin())
-        .args([
+    let out = sb
+        .cmd(&[
             "--yes",
             "--config",
             config.to_str().unwrap(),
@@ -159,12 +140,6 @@ fn run_resolves_ref_from_an_env_file() {
             "-c",
             &format!("printf '%s' \"$FROM_FILE\" > {}", outfile.display()),
         ])
-        .env("SECREQ_HOME", dir.path().join("secreq"))
-        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
-        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
-        .env("HOME", dir.path().join("home"))
-        .env_remove("SECREQ_CONSENT_SOCK")
-        .env("SECREQ_NO_DAEMON", "1")
         .output()
         .unwrap();
 
@@ -189,19 +164,19 @@ fn run_uses_dotenvy_parsing_for_export_and_quotes() {
     // are honored. A line splitter would have produced a key of
     // `export FROM_FILE` and a quoted value, breaking resolution — so this
     // proves the real parser is in the path.
-    let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("secreq/wraps.json5");
-    write_config(&config, fake_provider_config());
-    let env_file = dir.path().join("the.env");
+    let sb = Sandbox::new();
+    sb.write_config(fake_provider_config());
+    let config = sb.config_path();
+    let env_file = sb.path().join("the.env");
     fs::write(
         &env_file,
         "# a comment\nexport FROM_FILE=\"secret://fake/file-secret\"\n",
     )
     .unwrap();
-    let outfile = dir.path().join("captured");
+    let outfile = sb.path().join("captured");
 
-    let out = Command::new(bin())
-        .args([
+    let out = sb
+        .cmd(&[
             "--yes",
             "--config",
             config.to_str().unwrap(),
@@ -213,12 +188,6 @@ fn run_uses_dotenvy_parsing_for_export_and_quotes() {
             "-c",
             &format!("printf '%s' \"$FROM_FILE\" > {}", outfile.display()),
         ])
-        .env("SECREQ_HOME", dir.path().join("secreq"))
-        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
-        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
-        .env("HOME", dir.path().join("home"))
-        .env_remove("SECREQ_CONSENT_SOCK")
-        .env("SECREQ_NO_DAEMON", "1")
         .output()
         .unwrap();
 
@@ -243,14 +212,14 @@ fn run_stamps_and_propagates_the_session_marker() {
     // session id. That marker is how a nested run detects nesting. Drives
     // `outer run -> inner run -> sh` and captures what the innermost child
     // sees. No refs, so no daemon/GUI is touched.
-    let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("secreq/wraps.json5");
-    write_config(&config, fake_provider_config());
-    let outfile = dir.path().join("captured");
-    let bin = bin();
+    let sb = Sandbox::new();
+    sb.write_config(fake_provider_config());
+    let config = sb.config_path();
+    let outfile = sb.path().join("captured");
+    let bin = common::bin();
 
-    let out = Command::new(bin)
-        .args([
+    let out = sb
+        .cmd(&[
             "--config",
             config.to_str().unwrap(),
             "run",
@@ -269,12 +238,6 @@ fn run_stamps_and_propagates_the_session_marker() {
         ])
         // Start clean: the test's own env must not pre-seed the marker.
         .env_remove("SECREQ_RUN_SESSION")
-        .env("SECREQ_HOME", dir.path().join("secreq"))
-        .env("XDG_CONFIG_HOME", dir.path().join("legacy-config"))
-        .env("XDG_STATE_HOME", dir.path().join("legacy-state"))
-        .env("HOME", dir.path().join("home"))
-        .env_remove("SECREQ_CONSENT_SOCK")
-        .env("SECREQ_NO_DAEMON", "1")
         .output()
         .unwrap();
 
