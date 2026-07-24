@@ -19,6 +19,10 @@ cargo install --path .
 # or: cargo build --release  →  target/release/secreq
 ```
 
+`secreq` is a Unix tool: **macOS and Linux are first-class, Windows is
+not supported.** Check [`docs/platform-support.md`](./docs/platform-support.md)
+before you invest in setup.
+
 ## Use
 
 ```sh
@@ -100,6 +104,7 @@ End-user docs live in [`docs/`](./docs/):
 | [`docs/ssh-agent.md`](./docs/ssh-agent.md) | The provenance-aware SSH agent: config, setup, the key-custody tradeoff |
 | [`docs/consent-window.md`](./docs/consent-window.md) | The daemon UI: pending tree, audit log, audit JSONL format |
 | [`docs/wasm-rules.md`](./docs/wasm-rules.md) | Programmable auto-rules: author, test, compile, and register a sandboxed wasm rule |
+| [`docs/platform-support.md`](./docs/platform-support.md) | Platform support matrix: macOS/Linux first-class, \*BSD best-effort, Windows unsupported |
 | [`docs/wraps.schema.json`](./docs/wraps.schema.json) | JSON Schema (point your editor at it) |
 
 Contributor docs (module map, internals, AI-agent primer, historical

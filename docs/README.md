@@ -19,6 +19,7 @@ consent ceremony** — the wedge nobody else covers.
 | **Getting secrets into a VM sandbox without copying them** | [secret-agent.md](./secret-agent.md) — `agent open` on the host, `secreq resolve` + `SECREQ_SOCK` in the guest. |
 | **Writing a programmable auto-rule** | [wasm-rules.md](./wasm-rules.md) — author a rule as code, test it, compile it to a sandboxed wasm module, register it with `rules add-wasm`. |
 | **Understanding what the daemon window shows** | [consent-window.md](./consent-window.md) — pending tree, audit log, viewer mode. |
+| **Checking whether your machine is supported** | [platform-support.md](./platform-support.md) — the OS/arch matrix (macOS + Linux first-class, Windows unsupported) and per-OS prerequisites. |
 
 ## Documentation map
 
@@ -48,6 +49,11 @@ consent ceremony** — the wedge nobody else covers.
   sandbox trust model, the `secreq-rule` authoring SDK, unit-testing
   and compiling a rule, `rules add-wasm` registration, sha256 pinning
   and refusal states.
+- **[platform-support.md](./platform-support.md)** — the platform
+  support matrix: which OSes and architectures `secreq` builds and runs
+  on (macOS + Linux first-class, \*BSD best-effort, Windows
+  unsupported), the login-service and display-server prerequisites per
+  OS, and how to run headless.
 - **[wraps.schema.json](./wraps.schema.json)** — JSON Schema for
   `wraps.json5`. Generated; don't edit by hand.
 
