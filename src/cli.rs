@@ -13,12 +13,25 @@ use clap::{Parser, Subcommand, ValueEnum};
 use crate::commands::{self, SshAddArgs, WrapArgs, WrapRunOpts};
 use crate::ssh_setup;
 
+/// Long `--version` output: the crate semver plus the compile-time
+/// [`crate::BUILD_ID`], so a released binary self-reports exactly which
+/// commit it was cut from (`secreq --version`). `-V` still prints the bare
+/// semver. This is the load-bearing "stamp the build id into the artifact"
+/// contract the release workflow verifies against the tagged commit.
+const LONG_VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (build ",
+    env!("SECREQ_BUILD_ID"),
+    ")"
+);
+
 /// `op run`, but for every secret store you own — per-binary CLI wrapping
 /// with provenance-aware consent.
 #[derive(Parser)]
 #[command(
     name = "secreq",
     version,
+    long_version = LONG_VERSION,
     about,
     long_about = None,
 )]
@@ -831,5 +844,40 @@ pub fn run() -> i32 {
             eprintln!("secreq: error: {err:#}");
             1
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// The long `--version` string must carry both the crate semver and the
+    /// compile-time build id. Released binaries are verified against this in
+    /// the release workflow, so a regression here would silently ship
+    /// unattributable artifacts.
+    #[test]
+    fn long_version_stamps_the_build_id() {
+        let long = Cli::command().render_long_version();
+        assert!(
+            long.contains(env!("CARGO_PKG_VERSION")),
+            "long --version must include the crate semver, got: {long}"
+        );
+        assert!(
+            long.contains(crate::BUILD_ID),
+            "long --version must include the build id, got: {long}"
+        );
+    }
+
+    /// `-V` (short) stays the bare semver — scripts that parse it must not
+    /// suddenly see the build-id suffix.
+    #[test]
+    fn short_version_is_the_bare_semver() {
+        let short = Cli::command().render_version();
+        assert!(short.contains(env!("CARGO_PKG_VERSION")));
+        assert!(
+            !short.contains(crate::BUILD_ID),
+            "short -V must stay the bare semver, got: {short}"
+        );
     }
 }
