@@ -1455,7 +1455,24 @@ impl State {
             .iter()
             .map(|c| (c.name.as_str(), c.command.as_str()))
             .collect();
-        let requested: Vec<&str> = ask.secrets.iter().map(|s| s.name.as_str()).collect();
+        // An SSH sign resolves nothing, so `sign_ask` builds no
+        // `SecretAsk` — but the ask still asks for *something*: the use
+        // of a key. Naming that subject `ssh:<key_id>` (the same
+        // spelling as the wrap and the audit row) gives the
+        // trained-secrets guard something to scope on. Without it the
+        // guard's `.all()` runs over an empty list, is vacuously true,
+        // and every rule is consulted for every sign regardless of what
+        // it was trained on.
+        //
+        // Derived here rather than in `sign_ask` deliberately:
+        // `Ask::secrets` drives provider resolution, so a synthetic
+        // entry there would send the daemon looking for a secret that
+        // does not exist.
+        let ssh_subject = ask.ssh.as_ref().map(|s| format!("ssh:{}", s.key_id));
+        let requested: Vec<&str> = match &ssh_subject {
+            Some(subject) => vec![subject.as_str()],
+            None => ask.secrets.iter().map(|s| s.name.as_str()).collect(),
+        };
         let ctx = EvalCtx {
             wrap: &ask.dedupe_key.wrap,
             joined_argv: &joined_argv,
@@ -3626,6 +3643,71 @@ mod tests {
             .expect("rule should fire");
         assert_eq!(hit.rule_id, "01");
         assert_eq!(hit.decide, RuleDecision::Approve);
+    }
+
+    /// An SSH sign ask, shaped like `ssh_agent::sign_ask`: a constant
+    /// argv, no cwd, and — deliberately — no `SecretAsk`, because a sign
+    /// resolves nothing.
+    fn ssh_sign_ask(key_id: &str) -> Ask {
+        Ask {
+            command: vec![format!("ssh-sign {key_id}")],
+            cwd: String::new(),
+            callers: vec![],
+            secrets: vec![],
+            providers: HashMap::new(),
+            dedupe_key: DedupeKey {
+                wrap: format!("ssh:{key_id}"),
+                ppid: 0,
+                parent_start_time: 0,
+            },
+            ssh: Some(super::super::proto::SshAskInfo {
+                key_id: key_id.to_owned(),
+                fingerprint: "SHA256:AAAAtest".to_owned(),
+                reason: None,
+            }),
+            agent: None,
+            allow_remember: false,
+            nested_run: false,
+        }
+    }
+
+    #[test]
+    fn a_rule_trained_on_env_secrets_is_not_consulted_for_an_ssh_sign() {
+        // The bypass this guards: a sign carries no `SecretAsk`, so if
+        // the ctx inherits that empty list verbatim the trained-secrets
+        // `.all()` is vacuously true and *every* rule gets handed
+        // key-signing asks it was never scoped to. The ask has to
+        // declare `ssh:<key_id>` as its subject for the guard to have
+        // anything to exclude on.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        // mk_rule trains on GITHUB_TOKEN and matches every ssh:github ask.
+        let rule = mk_rule("01", "ssh:github", RuleDecision::Approve, None);
+        crate::rules::save_rules(&path, &[rule]).expect("save");
+        let state = State::with_rules_path(path);
+        assert!(
+            state
+                .evaluate_rules_for_ask(&ssh_sign_ask("github"))
+                .is_none(),
+            "a rule trained on GITHUB_TOKEN must not be consulted for an ssh:github sign",
+        );
+    }
+
+    #[test]
+    fn a_rule_trained_on_the_ssh_subject_still_fires_for_that_sign() {
+        // Complement to the test above — it passes both before and after
+        // the subject is derived, and exists so the fix cannot be "block
+        // every ssh ask" and still look correct.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        let mut rule = mk_rule("01", "ssh:github", RuleDecision::Approve, None);
+        rule.trained_secrets = ["ssh:github".to_owned()].into_iter().collect();
+        crate::rules::save_rules(&path, &[rule]).expect("save");
+        let state = State::with_rules_path(path);
+        let hit = state
+            .evaluate_rules_for_ask(&ssh_sign_ask("github"))
+            .expect("a rule scoped to ssh:github should fire for that sign");
+        assert_eq!(hit.rule_id, "01");
     }
 
     /// A wasm rule pointing at the checked-in `approve_if` fixture
