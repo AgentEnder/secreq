@@ -1528,6 +1528,59 @@ fn migrate_restore_names_available_levels_when_the_snapshot_is_missing() {
     assert!(stderr.contains("no snapshot"), "unhelpful: {stderr}");
 }
 
+/// `secreq x` bypasses clap, but it must NOT bypass the migration gate: on a
+/// shim-only machine (hooks, wraps) `x` is the only foreground command that
+/// ever runs, and services (the daemon) refuse to apply migrations. If `x`
+/// doesn't heal a pending level, nothing does — every daemon spawn dies
+/// before binding its socket.
+#[test]
+fn x_applies_pending_migrations_so_the_daemon_can_start() {
+    let sb = Sandbox::new();
+    let bin_dir = sb.path().join("realbin");
+    let shim_dir = sb.path().join("shims");
+    install_fake_gh(&bin_dir);
+    write_config(&sb.config_path(), &echo_provider_config(&shim_dir));
+
+    // A root stuck mid-history (e.g. after `migrate restore 1`).
+    fs::write(
+        sb.root().join(".migration-state"),
+        r#"{ "migration_level": 1 }"#,
+    )
+    .unwrap();
+
+    // Prove the seed bites: a service-gated command refuses to run.
+    // (`daemon log-path` exits 0 whenever the gate lets it through, unlike
+    // `daemon status`, whose exit code reports whether a daemon is running.)
+    let blocked = sb.run(&["daemon", "log-path"]);
+    assert!(
+        !blocked.status.success(),
+        "seed should leave service roles refusing; stdout: {}",
+        String::from_utf8_lossy(&blocked.stdout)
+    );
+
+    // `x` is a deliberate foreground command: it must apply the pending
+    // migration(s) before running the wrap. (Sandbox default: no daemon.)
+    let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
+    let out = sb
+        .cmd(&["x", "--sq-yes", "gh", "version"])
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "x should run; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The gate stamped the level, so service roles start again.
+    let after = sb.run(&["daemon", "log-path"]);
+    assert!(
+        after.status.success(),
+        "service gate should pass after x healed the level; stderr: {}",
+        String::from_utf8_lossy(&after.stderr)
+    );
+}
+
 /// `agent open` with no `--sock` binds into `paths::socket_dir()` beside the
 /// other sockets, and prints the resolved path on stdout so a caller (brain,
 /// which must `ssh -R` it into a guest) reads it back rather than guessing.

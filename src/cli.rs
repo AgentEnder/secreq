@@ -597,6 +597,16 @@ fn run_x() -> i32 {
             0
         }
         Ok(XParse::Run(inv)) => {
+            // The migration gate for the clap-free path. `x` is a deliberate
+            // foreground command — on a shim-only machine it is the only one
+            // that ever runs, and service roles refuse to apply migrations —
+            // so it must apply pending ones exactly like the clap-parsed
+            // commands in `run` below. After parsing on purpose: `--sq-help`
+            // and usage errors never touch disk.
+            if let Err(e) = crate::migrate::run_pending() {
+                eprintln!("secreq: {e:#}");
+                return 1;
+            }
             match commands::wrap_run(&inv.wrap, &inv.args, inv.opts, inv.config.as_deref()) {
                 Ok(code) => code,
                 Err(err) => {
