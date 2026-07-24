@@ -258,8 +258,8 @@ export function parseRuleCtx(text: string): RuleCtx {
     else if (key == "joined_argv") ctx.joinedArgv = p.parseString();
     else if (key == "callers") ctx.callers = p.parseCallers();
     else if (key == "cwd") ctx.cwd = p.parseString();
-    else if (key == "requested_secret_names")
-      ctx.requestedSecretNames = p.parseStringArray();
+    else if (key == "secrets")
+      ctx.secrets = p.parseStringArray();
     else p.skipValue();
     p.skipWs();
     const c = p.peek();

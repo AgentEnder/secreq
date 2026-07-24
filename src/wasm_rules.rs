@@ -50,7 +50,7 @@
 //!
 //! Ctx JSON mirrors [`EvalCtx`] with snake_case fields:
 //! `{"wrap": "...", "joined_argv": "...", "callers": [{"name": "...",
-//! "command": "..."}], "cwd": "...", "requested_secret_names": ["..."]}`.
+//! "command": "..."}], "cwd": "...", "secrets": ["..."]}`.
 //!
 //! Decision JSON is the serde encoding of [`Decision`]:
 //! `"approve"` | `"pass"` | `{"deny": "reason string"}`.
@@ -116,7 +116,7 @@ struct CtxJson<'a> {
     joined_argv: &'a str,
     callers: Vec<CallerJson<'a>>,
     cwd: &'a str,
-    requested_secret_names: &'a [&'a str],
+    secrets: &'a [&'a str],
 }
 
 #[derive(Serialize)]
@@ -207,7 +207,7 @@ impl RuleModule {
                 .map(|&(name, command)| CallerJson { name, command })
                 .collect(),
             cwd: ctx.cwd,
-            requested_secret_names: ctx.requested_secret_names,
+            secrets: ctx.secrets,
         })
         .context("serialize rule ctx to JSON")?;
         let ctx_len = i32::try_from(ctx_json.len()).context("rule ctx JSON too large")?;
@@ -375,7 +375,7 @@ mod tests {
             joined_argv,
             callers,
             cwd,
-            requested_secret_names: secrets,
+            secrets,
         }
     }
 

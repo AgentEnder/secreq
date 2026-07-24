@@ -578,7 +578,7 @@ pub struct EvalCtx<'a> {
     pub cwd: &'a str,
     /// Names of the secrets requested. Checked against the rule's
     /// `trained_secrets` guard.
-    pub requested_secret_names: &'a [&'a str],
+    pub secrets: &'a [&'a str],
 }
 
 /// One rule's hit, returned by [`evaluate`].
@@ -749,7 +749,7 @@ pub fn evaluate(rules: &[Rule], modules: &RuleModules, ctx: &EvalCtx) -> Evaluat
 fn trained_secrets_allow(rule: &Rule, ctx: &EvalCtx) -> bool {
     rule.trained_secrets.is_empty()
         || ctx
-            .requested_secret_names
+            .secrets
             .iter()
             .all(|n| rule.trained_secrets.contains(*n))
 }
@@ -891,7 +891,7 @@ mod tests {
             joined_argv,
             callers,
             cwd,
-            requested_secret_names: secrets,
+            secrets,
         }
     }
 

@@ -24,7 +24,7 @@ export function decide(ctx: RuleCtx): Decision {
 
 `RuleCtx` mirrors the daemon's evaluation context (`EvalCtx` in
 `src/rules.rs`): `wrap`, `joinedArgv`, `callers` (`{name, command}[]`,
-nearest-first), `cwd`, and `requestedSecretNames`.
+nearest-first), `cwd`, and `secrets`.
 
 ## Compiling
 

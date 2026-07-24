@@ -226,7 +226,7 @@ fn redundant_with_existing_rules(s: &Suggestion, rules: &[Rule]) -> bool {
         joined_argv: &joined_argv,
         callers: &callers,
         cwd: &cwd,
-        requested_secret_names: &secrets,
+        secrets: &secrets,
     };
     // No compiled wasm modules here: the suggestion engine runs in the
     // consent-window child, which has the ruleset but not the daemon's

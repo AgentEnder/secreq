@@ -1461,7 +1461,7 @@ impl State {
             joined_argv: &joined_argv,
             callers: &callers,
             cwd: &ask.cwd,
-            requested_secret_names: &requested,
+            secrets: &requested,
         };
         let evaluation = rules::evaluate(&self.rules, &self.rule_modules, &ctx);
         for failure in &evaluation.wasm_failures {

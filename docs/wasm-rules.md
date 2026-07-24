@@ -45,9 +45,9 @@ convention:
   rejected at registration time, with an error naming the offending
   import. The only thing a rule can do is read the ctx it is handed
   and return a decision.
-- **The ctx carries secret *names*, never values.** A rule sees which
-  env vars an ask would release (`requestedSecretNames`); no secret
-  value ever enters the sandbox.
+- **The ctx carries secret *names*, never values.** A rule sees what an
+  ask would release (`secrets`) — env-var names, or `ssh:<key_id>` for a
+  key signing; no secret value ever enters the sandbox.
 - **Deny wins.** If any enabled rule — declarative or wasm — denies,
   the ask is denied, no matter what any approve says. A wasm rule that
   returns approve or deny is treated as maximally specific among
@@ -56,7 +56,9 @@ convention:
 - **The trained-secrets guard runs before your code.** Every rule
   carries the set of secret names it was registered for. An ask
   requesting any name outside that set skips the rule entirely — the
-  module never even sees the ask, let alone decides it.
+  module never even sees the ask, let alone decides it. An SSH sign
+  declares `ssh:<key_id>`, so a rule that gates key signings is scoped
+  with `--secret ssh:github` like any other name.
 - **Errors fail to the prompt, never to an approve.** A module that
   traps, aborts, runs out of fuel (there's a fixed instruction
   budget, so an infinite loop can't hang the daemon), exceeds the
@@ -89,7 +91,7 @@ evaluation context:
 | `joinedArgv` | `string` | Joined argv of the wrapped command (e.g. `gh api --get /repos/x`). |
 | `callers` | `Caller[]` | Caller chain, **nearest-first**. Each entry has `name` (short process name, e.g. `zsh`, `Cursor`) and `command` (full joined command line). |
 | `cwd` | `string` | Working directory of the requesting process. |
-| `requestedSecretNames` | `string[]` | Names of the env vars the ask would release. Names only — never values. |
+| `secrets` | `string[]` | What the ask would release, by name — env-var names for a wrap run, or the single identity `ssh:<key_id>` for an SSH sign. Names only, never values. |
 
 The decision is built with three constructors:
 
@@ -100,7 +102,7 @@ The decision is built with three constructors:
   client prints it to stderr, the consent window shows a toast).
 
 On the wire this is JSON with snake_case field names
-(`joined_argv`, `requested_secret_names`, …) and decisions encoded as
+(`joined_argv`, `secrets`, …) and decisions encoded as
 `"approve"`, `"pass"`, or `{"deny": "reason"}` — but the SDK's build
 tool generates all of that glue; you only write `decide`. The exact
 ABI is documented in `sdk/secreq-rule/README.md` and
@@ -176,7 +178,7 @@ function ctx(wrap: string, joinedArgv: string, cwd: string): RuleCtx {
   c.joinedArgv = joinedArgv;
   c.cwd = cwd;
   c.callers = [];
-  c.requestedSecretNames = ["NPM_TOKEN"];
+  c.secrets = ["NPM_TOKEN"];
   return c;
 }
 

@@ -20,6 +20,11 @@ export class RuleCtx {
   callers: Caller[] = [];
   /** Working directory of the requesting process. */
   cwd: string = "";
-  /** Names of the secrets (env vars) the ask would release. */
-  requestedSecretNames: string[] = [];
+  /**
+   * What the ask would release, by name. Env-var names for a wrap run
+   * (`GITHUB_TOKEN`); for an SSH sign, the single identity `ssh:<key_id>`
+   * — a sign resolves no secrets, but it still asks for the use of a key,
+   * and naming that subject is what lets a rule be scoped to it.
+   */
+  secrets: string[] = [];
 }

@@ -22,7 +22,7 @@ function ctx(wrap: string, joinedArgv: string, cwd: string): RuleCtx {
   c.joinedArgv = joinedArgv;
   c.cwd = cwd;
   c.callers = [caller("zsh", "-zsh")];
-  c.requestedSecretNames = ["NPM_TOKEN"];
+  c.secrets = ["NPM_TOKEN"];
   return c;
 }
 

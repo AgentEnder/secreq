@@ -19,6 +19,6 @@ export function decide(ctx: RuleCtx): Decision {
       "|callers=" +
       callers +
       "|secrets=" +
-      ctx.requestedSecretNames.join(",")
+      ctx.secrets.join(",")
   );
 }
