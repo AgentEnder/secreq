@@ -141,6 +141,7 @@ End-user docs live in [`docs/`](./docs/):
 | [`docs/providers.md`](./docs/providers.md) | Provider model + built-ins |
 | [`docs/ssh-agent.md`](./docs/ssh-agent.md) | The provenance-aware SSH agent: config, setup, the key-custody tradeoff |
 | [`docs/consent-window.md`](./docs/consent-window.md) | The daemon UI: pending tree, audit log, audit JSONL format |
+| [`docs/troubleshooting.md`](./docs/troubleshooting.md) | FAQ + fixes: no consent window, dev-build home traps, PATH shadowing, locked providers, where the logs live |
 | [`docs/wasm-rules.md`](./docs/wasm-rules.md) | Programmable auto-rules: author, test, compile, and register a sandboxed wasm rule |
 | [`docs/platform-support.md`](./docs/platform-support.md) | Platform support matrix: macOS/Linux first-class, \*BSD best-effort, Windows unsupported |
 | [`docs/wraps.schema.json`](./docs/wraps.schema.json) | JSON Schema (point your editor at it) |

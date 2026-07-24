@@ -21,6 +21,7 @@ consent ceremony** — the wedge nobody else covers.
 | **Writing a programmable auto-rule** | [wasm-rules.md](./wasm-rules.md) — author a rule as code, test it, compile it to a sandboxed wasm module, register it with `rules add-wasm`. |
 | **Understanding what the daemon window shows** | [consent-window.md](./consent-window.md) — pending tree, audit log, viewer mode. |
 | **Checking whether your machine is supported** | [platform-support.md](./platform-support.md) — the OS/arch matrix (macOS + Linux first-class, Windows unsupported) and per-OS prerequisites. |
+| **Stuck — something isn't working** | [troubleshooting.md](./troubleshooting.md) — no consent window, dev-build home traps, PATH shadowing, locked providers, where the logs live. |
 
 ## Documentation map
 
@@ -58,6 +59,12 @@ consent ceremony** — the wedge nobody else covers.
   on (macOS + Linux first-class, \*BSD best-effort, Windows
   unsupported), the login-service and display-server prerequisites per
   OS, and how to run headless.
+- **[troubleshooting.md](./troubleshooting.md)** — FAQ and fixes for the
+  common first-week snags: the consent window never appearing (no
+  display / stale daemon), dev builds corrupting your real `~/.secreq`
+  via migrations, shim/PATH shadowing (the zsh + Homebrew ordering
+  gotcha), a missing or locked provider CLI, and where the logs and
+  audit log live for self-diagnosis.
 - **[wraps.schema.json](./wraps.schema.json)** — JSON Schema for
   `wraps.json5`. Generated; don't edit by hand.
 

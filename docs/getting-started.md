@@ -170,6 +170,13 @@ and `git push` prompts you with the caller chain before signing. See
 [`ssh-agent.md`](./ssh-agent.md) — including the key-custody tradeoff vs.
 1Password's sealed agent.
 
+## Hit a snag?
+
+- [`troubleshooting.md`](./troubleshooting.md) — the first-week traps and
+  their fixes: the consent window never appears, a dev build corrupting
+  your real `~/.secreq`, PATH shadowing, a locked provider, and where the
+  logs and audit live.
+
 ## What to read next
 
 - [`cli.md`](./cli.md) — every subcommand and flag in detail.
