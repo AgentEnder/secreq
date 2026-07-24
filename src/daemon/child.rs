@@ -238,6 +238,33 @@ pub struct AutoDenyToastState {
 /// triaging.
 pub const AUTO_DENY_TOAST_LIFETIME: Duration = Duration::from_secs(5);
 
+/// Decide which auto-deny toast (if any) the prompt should render this
+/// frame, clearing the stored state as a side effect.
+///
+/// The toast is dropped the moment an ask is on screen: an auto-denied
+/// request never enters the queue, so any pending ask is unrelated to
+/// the toast, and letting the red "auto-denied" badge sit atop a fresh
+/// approval prompt makes that approval look like it was denied. Expired
+/// toasts (past [`AUTO_DENY_TOAST_LIFETIME`]) also age out. Runs on the
+/// UI thread; the reader thread is the only writer of `Some`, so
+/// clearing to `None` here can't race a set.
+fn toast_to_render(
+    toast: &mut Option<AutoDenyToastState>,
+    queue_has_ask: bool,
+    now: Instant,
+) -> Option<super::ui::AutoDenyToastView> {
+    if let Some(state) = toast.as_ref() {
+        let expired = now.saturating_duration_since(state.received_at) >= AUTO_DENY_TOAST_LIFETIME;
+        if queue_has_ask || expired {
+            *toast = None;
+        }
+    }
+    toast.as_ref().map(|s| super::ui::AutoDenyToastView {
+        rule_name: s.rule_name.clone(),
+        deny_message: s.deny_message.clone(),
+    })
+}
+
 fn spawn_reader(
     stream: UnixStream,
     snapshot: Arc<Mutex<WireSnapshot>>,
@@ -444,20 +471,14 @@ impl eframe::App for ChildApp {
                         .collect(),
                 };
 
-                // Age out an expired toast before passing it to the
-                // renderer. Single-writer model from the reader thread;
-                // we can clear here without racing.
+                // Pick the toast to render, ageing out an expired one and
+                // dropping it entirely once an ask is on screen (so a fresh
+                // approval prompt never inherits a prior auto-deny badge).
+                // Single-writer model from the reader thread; we can clear
+                // here without racing.
                 let toast_view = {
                     let mut guard = self.auto_deny_toast.lock().expect("toast mutex");
-                    if let Some(state) = guard.as_ref() {
-                        if state.received_at.elapsed() >= AUTO_DENY_TOAST_LIFETIME {
-                            *guard = None;
-                        }
-                    }
-                    guard.as_ref().map(|s| super::ui::AutoDenyToastView {
-                        rule_name: s.rule_name.clone(),
-                        deny_message: s.deny_message.clone(),
-                    })
+                    toast_to_render(&mut guard, !snapshot.entries.is_empty(), Instant::now())
                 };
 
                 // Render and collect actions.
@@ -564,3 +585,55 @@ fn macos_disable_app_nap() {
 
 #[cfg(not(target_os = "macos"))]
 fn macos_disable_app_nap() {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn toast(age: Duration) -> Option<AutoDenyToastState> {
+        Some(AutoDenyToastState {
+            rule_name: "deny-prod".to_owned(),
+            deny_message: Some("blocked".to_owned()),
+            received_at: Instant::now()
+                .checked_sub(age)
+                .expect("subtract age from now"),
+        })
+    }
+
+    #[test]
+    fn fresh_toast_shows_with_empty_queue() {
+        let mut t = toast(Duration::from_secs(1));
+        let view = toast_to_render(&mut t, false, Instant::now());
+        assert!(view.is_some(), "fresh toast should render in the empty state");
+        assert!(t.is_some(), "toast should be retained while it renders");
+    }
+
+    #[test]
+    fn toast_is_dropped_once_an_ask_is_on_screen() {
+        let mut t = toast(Duration::from_secs(1));
+        let view = toast_to_render(&mut t, true, Instant::now());
+        assert!(
+            view.is_none(),
+            "a pending approval must not inherit the auto-deny badge"
+        );
+        assert!(
+            t.is_none(),
+            "the toast state should be cleared, not just hidden, so it can't reappear"
+        );
+    }
+
+    #[test]
+    fn expired_toast_ages_out() {
+        let mut t = toast(AUTO_DENY_TOAST_LIFETIME + Duration::from_secs(1));
+        let view = toast_to_render(&mut t, false, Instant::now());
+        assert!(view.is_none(), "an expired toast should not render");
+        assert!(t.is_none(), "an expired toast should be cleared");
+    }
+
+    #[test]
+    fn absent_toast_stays_absent() {
+        let mut t = None;
+        assert!(toast_to_render(&mut t, false, Instant::now()).is_none());
+        assert!(toast_to_render(&mut t, true, Instant::now()).is_none());
+    }
+}
