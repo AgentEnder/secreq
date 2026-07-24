@@ -156,3 +156,17 @@ cargo clippy --all-targets -- -D warnings                        # zero warnings
 cargo fmt                                                        # format
 cargo run --example gen-schema > docs/wraps.schema.json          # regen JSON schema
 ```
+
+## Contributing & security
+
+- **[CONTRIBUTING.md](./CONTRIBUTING.md)** — dev loop, where things
+  live, how to author wraps and rules, how to submit a change.
+- **[SECURITY.md](./SECURITY.md)** — how to report a vulnerability
+  **privately**. `secreq` is a secrets tool; please disclose responsibly
+  and never file a security issue publicly.
+- **[CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)** — the community
+  standards everyone participating is expected to uphold.
+
+Bug reports and feature requests go through the
+[issue templates](./.github/ISSUE_TEMPLATE/); pull requests through the
+[PR template](./.github/PULL_REQUEST_TEMPLATE.md).

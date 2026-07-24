@@ -63,6 +63,12 @@ consent ceremony** — the wedge nobody else covers.
 
 ## Contributing
 
-If you're hacking on `secreq` itself, contributor-facing docs are in
-[`../dev-docs/`](../dev-docs/) — module map, internals, AI-agent
-orientation primer.
+If you're hacking on `secreq` itself, start with
+[`../CONTRIBUTING.md`](../CONTRIBUTING.md) — the dev loop, how to author
+wraps and rules, and how to submit a change. Deeper contributor-facing
+docs are in [`../dev-docs/`](../dev-docs/) — module map, internals,
+AI-agent orientation primer.
+
+Participation is governed by our
+[Code of Conduct](../CODE_OF_CONDUCT.md). Found a security issue? Please
+disclose it **privately** — see [`../SECURITY.md`](../SECURITY.md).
