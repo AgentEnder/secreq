@@ -1,0 +1,77 @@
+name: CI
+
+# Quality gates for a distributable build: formatting, lints (warnings are
+# errors), the test suite, and the schema-drift guard (tests/schema_drift.rs,
+# run as part of `cargo test`). macOS and Linux are the two first-class
+# targets, so the build/lint/test job runs on both.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# One in-flight run per ref; a new push cancels the previous run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable toolchain (rustfmt)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  test:
+    name: build / clippy / test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      # eframe/wgpu/winit pull in the wayland + xkbcommon stack; the wayland
+      # crates link the system library at build time. x11 and xkbcommon are
+      # dlopen'd at runtime, but the packages are installed anyway so the
+      # (#[ignore]-gated) UI screenshot tests can link if ever run. No-op on
+      # macOS, which uses native frameworks.
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev
+
+      - name: Install stable toolchain (clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+
+      - name: Clippy (warnings are errors)
+        run: cargo clippy --all-targets -- -D warnings
+
+      # `cargo test` runs the unit, integration, and doc tests, including the
+      # schema-drift guard in tests/schema_drift.rs. The wgpu-backed UI
+      # screenshot tests are #[ignore]-gated (they need a GPU) and are not run
+      # here — the clippy --all-targets step above still compiles them.
+      - name: Test
+        run: cargo test
