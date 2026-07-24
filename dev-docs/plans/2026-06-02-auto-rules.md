@@ -150,8 +150,8 @@ fn trained_secrets_guard(trained: &BTreeSet<String>, requested: &[SecretAsk]) ->
 
 ## 6. Storage & file format
 
-Path: `$XDG_CONFIG_HOME/secreq/auto-rules.json5` (defaults to
-`~/.config/secreq/auto-rules.json5`).
+Path: `~/.secreq/auto-rules.json5` (or `$SECREQ_HOME/auto-rules.json5`
+when `$SECREQ_HOME` is set).
 
 ```json5
 {

@@ -178,7 +178,7 @@
       "type": "object"
     }
   },
-  "description": "Per-binary wrap configuration for `secreq` (`$XDG_CONFIG_HOME/secreq/wraps.json5`). Top-level keys are binary names; reserved keys are `providers` and any `$`-prefixed metadata. See docs/wraps.md.",
+  "description": "Per-binary wrap configuration for `secreq` (`~/.secreq/wraps.json5`, or `$SECREQ_HOME/wraps.json5`). Top-level keys are binary names; reserved keys are `providers` and any `$`-prefixed metadata. See docs/wraps.md.",
   "patternProperties": {
     "^[A-Za-z_][A-Za-z0-9_.+-]*$": {
       "$ref": "#/definitions/Wrap"

@@ -78,7 +78,7 @@ secreq wrap gh \
 
 This:
 
-- Adds an entry to `~/.config/secreq/wraps.json5`.
+- Adds an entry to `~/.secreq/wraps.json5`.
 - Drops a 5-line POSIX shim at `<shim_dir>/gh` whose body is
   `exec secreq x gh "$@"`.
 

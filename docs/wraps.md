@@ -1,7 +1,7 @@
 # Authoring `wraps.json5`
 
-The config lives at `$XDG_CONFIG_HOME/secreq/wraps.json5` (or
-`~/.config/secreq/wraps.json5`). For schema-driven validation in your
+The config lives at `~/.secreq/wraps.json5` (or `$SECREQ_HOME/wraps.json5`
+when `$SECREQ_HOME` is set). For schema-driven validation in your
 editor, point it at [`./wraps.schema.json`](./wraps.schema.json):
 
 ```json5

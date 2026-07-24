@@ -23,7 +23,7 @@ use crate::ssh_setup;
     long_about = None,
 )]
 struct Cli {
-    /// Use a specific config file instead of `$XDG_CONFIG_HOME/secreq/wraps.json5`.
+    /// Use a specific config file instead of `~/.secreq/wraps.json5`.
     /// For `x` use `--sq-config`.
     #[arg(long, global = true, value_name = "PATH")]
     config: Option<PathBuf>,
@@ -483,7 +483,7 @@ options secreq keeps for itself use the reserved `--sq-` prefix and are
 recognized before or after the wrap name:
 
       --sq-config <PATH>  Use a specific config file instead of
-                          `$XDG_CONFIG_HOME/secreq/wraps.json5`
+                          `~/.secreq/wraps.json5`
       --sq-raw            Skip output masking. The binary still runs with
                           secrets in its env; only redaction is disabled
       --sq-yes            Auto-approve without prompting

@@ -148,7 +148,7 @@
       "type": "object"
     }
   },
-  "description": "Persisted auto-approve / auto-deny rules for `secreq` (`$XDG_CONFIG_HOME/secreq/auto-rules.json5`). Owned by the consent daemon; clients normally don't edit the file directly.",
+  "description": "Persisted auto-approve / auto-deny rules for `secreq` (`~/.secreq/auto-rules.json5`, or `$SECREQ_HOME/auto-rules.json5`). Owned by the consent daemon; clients normally don't edit the file directly.",
   "properties": {
     "$schema": {
       "description": "URL or path of this JSON Schema. Ignored by `secreq`.",
