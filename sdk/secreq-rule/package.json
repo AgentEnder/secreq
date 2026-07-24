@@ -1,13 +1,34 @@
 {
   "name": "secreq-rule",
   "version": "0.1.0",
-  "private": true,
   "description": "AssemblyScript helper for authoring secreq programmable auto-rules: RuleCtx / Decision types plus the linear-memory ABI glue and a build wrapper around asc.",
   "license": "MIT",
+  "keywords": [
+    "secreq",
+    "assemblyscript",
+    "webassembly",
+    "wasm",
+    "auto-rules",
+    "consent",
+    "security",
+    "policy"
+  ],
   "types": "assembly/index.ts",
   "ascMain": "assembly/index.ts",
   "bin": {
     "secreq-rule-build": "bin/build.js"
+  },
+  "files": [
+    "assembly/",
+    "bin/",
+    "index.ts",
+    "asconfig.json"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "devDependencies": {
     "assemblyscript": "^0.28.2"

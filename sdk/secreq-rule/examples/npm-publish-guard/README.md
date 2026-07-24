@@ -29,6 +29,10 @@ npm test           # as-pect: 9 specs, approve/pass/deny
 npm run build      # secreq-rule-build → rule.wasm
 ```
 
+This in-repo copy pulls the SDK from `file:../..` so it always builds
+against the checked-out source. In your own package, depend on the
+published SDK instead — `npm install --save-dev secreq-rule`.
+
 Then register the module (the daemon vets it, copies it into
 `~/.secreq/rules/`, and pins it by sha256):
 
