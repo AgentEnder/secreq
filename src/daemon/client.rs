@@ -565,7 +565,8 @@ fn connect_or_spawn(socket: &Path) -> Result<UnixStream> {
             }
             // Keep the child handle so we can detect early-exit (e.g. egui
             // failing to init headless) and bail without the full timeout.
-            let mut child = spawn_daemon().context("auto-spawn secreq daemon")?;
+            let death_note = socket.with_file_name("daemon-spawn.err");
+            let mut child = spawn_daemon(&death_note).context("auto-spawn secreq daemon")?;
             let mut backoff = Duration::from_millis(20);
             while Instant::now() < deadline {
                 sleep(backoff);
@@ -574,10 +575,22 @@ fn connect_or_spawn(socket: &Path) -> Result<UnixStream> {
                     return Ok(stream);
                 }
                 if let Ok(Some(status)) = child.try_wait() {
-                    bail!(
-                        "consent daemon exited before binding its socket (status {status}); \
-                         is a display available? try setting --yes to bypass"
-                    );
+                    // Surface the daemon's own stderr when it left one — in a
+                    // hook/headless context this error is all the user sees.
+                    let note = std::fs::read_to_string(&death_note)
+                        .ok()
+                        .map(|s| s.trim().to_owned())
+                        .filter(|s| !s.is_empty());
+                    match note {
+                        Some(note) => bail!(
+                            "consent daemon exited before binding its socket \
+                             (status {status}):\n{note}"
+                        ),
+                        None => bail!(
+                            "consent daemon exited before binding its socket (status {status}); \
+                             is a display available? try setting --yes to bypass"
+                        ),
+                    }
                 }
                 backoff = (backoff * 2).min(Duration::from_millis(250));
             }
@@ -707,16 +720,24 @@ fn restart_stale_daemon(socket: &Path, stale_id: &str) -> Result<()> {
 /// background daemon and tail its log," so spawning that form would
 /// recursively launch tailers instead of an actual daemon. `--fg`
 /// pins the real foreground daemon (which we detach via null stdio).
-fn spawn_daemon() -> Result<Child> {
+fn spawn_daemon(death_note: &Path) -> Result<Child> {
     let exe = std::env::current_exe().context("current_exe for daemon spawn")?;
+    // stderr goes to a file beside the socket, not a pipe: if the daemon dies
+    // before binding, its dying words are the only diagnostic (the migration
+    // gate, a bind failure), and a pipe nobody drains could block a long-lived
+    // daemon once the buffer fills. Best-effort — a daemon we can't observe
+    // beats no daemon.
+    let stderr = std::fs::File::create(death_note)
+        .map(std::process::Stdio::from)
+        .unwrap_or_else(|_| std::process::Stdio::null());
     Command::new(exe)
         .arg("daemon")
         .arg("--fg")
-        // Detach stdio so the daemon doesn't write to the client's tty
+        // Detach stdin/stdout so the daemon doesn't write to the client's tty
         // (a wrapped TUI is touchy about that).
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stderr(stderr)
         .spawn()
         .context("spawn daemon process")
 }

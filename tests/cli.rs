@@ -1581,6 +1581,52 @@ fn x_applies_pending_migrations_so_the_daemon_can_start() {
     );
 }
 
+/// When the auto-spawned daemon dies before binding its socket, the client's
+/// error must carry the daemon's actual stderr — not just the canned
+/// "is a display available?" guess. In a hook/headless context that death
+/// note is the only clue the user gets.
+#[test]
+fn x_reports_the_daemons_stderr_when_it_dies_before_binding() {
+    let sb = Sandbox::new();
+    // A SECREQ_HOME deep enough that `<root>/run/consent.sock` exceeds the
+    // unix-socket path limit (SUN_LEN: 104 bytes on macOS, 108 on Linux).
+    // The client's optimistic connect fails (no daemon), the spawn itself
+    // succeeds, and the child dies at bind — a pre-bind death with no
+    // dependence on migration state.
+    let root = sb.path().join("x".repeat(120)).join("secreq");
+    fs::create_dir_all(&root).unwrap();
+    let bin_dir = sb.path().join("realbin");
+    let shim_dir = sb.path().join("shims");
+    install_fake_gh(&bin_dir);
+    write_config(&root.join("wraps.json5"), &echo_provider_config(&shim_dir));
+
+    let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
+    // No --sq-yes: resolving the wrap's secret needs consent, which needs
+    // the daemon. `cmd_with_daemon`: the spawn path is the test subject.
+    // Deliberate overrides after the sandbox defaults (later env calls win):
+    // SECREQ_HOME moves to the long root, and XDG_RUNTIME_DIR is unpinned so
+    // `socket_dir()` falls back to `<root>/run` — the sandbox's short runtime
+    // dir would otherwise let the bind succeed.
+    let out = sb
+        .cmd_with_daemon(&["x", "gh", "version"])
+        .env("SECREQ_HOME", &root)
+        .env("PATH", &path)
+        .env_remove("XDG_RUNTIME_DIR")
+        .env_remove("SECREQ_NO_DAEMON")
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "consent has no daemon; x must fail");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("exited before binding"),
+        "expected the early-exit error; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("bind daemon socket"),
+        "the daemon's own stderr (its bind failure) must be surfaced; stderr: {stderr}"
+    );
+}
+
 /// `agent open` with no `--sock` binds into `paths::socket_dir()` beside the
 /// other sockets, and prints the resolved path on stdout so a caller (brain,
 /// which must `ssh -R` it into a guest) reads it back rather than guessing.
