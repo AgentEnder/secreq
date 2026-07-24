@@ -2887,7 +2887,10 @@ fn config_to_json_value(config: &WrapsConfig) -> Result<serde_json::Value> {
     // wrap-add / ssh-add must not silently drop a user's `$wait_indicator`
     // or `$editor` (which the rule editor writes on an editor pick).
     if let Some(on) = config.wait_indicator {
-        root.insert(wraps::WAIT_INDICATOR_KEY.to_owned(), serde_json::Value::Bool(on));
+        root.insert(
+            wraps::WAIT_INDICATOR_KEY.to_owned(),
+            serde_json::Value::Bool(on),
+        );
     }
     if let Some(editor) = &config.editor {
         root.insert(
@@ -3526,9 +3529,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("wraps.json5");
 
-        let mut config = WrapsConfig::default();
-        config.editor = Some("zed".to_owned());
-        config.wait_indicator = Some(false);
+        let config = WrapsConfig {
+            editor: Some("zed".to_owned()),
+            wait_indicator: Some(false),
+            ..Default::default()
+        };
         write_config(&path, &config).unwrap();
 
         let reloaded = WrapsConfig::load(&path).unwrap();

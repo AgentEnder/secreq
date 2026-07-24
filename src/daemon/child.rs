@@ -604,7 +604,10 @@ mod tests {
     fn fresh_toast_shows_with_empty_queue() {
         let mut t = toast(Duration::from_secs(1));
         let view = toast_to_render(&mut t, false, Instant::now());
-        assert!(view.is_some(), "fresh toast should render in the empty state");
+        assert!(
+            view.is_some(),
+            "fresh toast should render in the empty state"
+        );
         assert!(t.is_some(), "toast should be retained while it renders");
     }
 

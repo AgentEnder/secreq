@@ -30,7 +30,11 @@ fn release_targets() -> Vec<String> {
         .collect();
     targets.sort();
     targets.dedup();
-    assert_eq!(targets.len(), 4, "expected 4 release targets, got {targets:?}");
+    assert_eq!(
+        targets.len(),
+        4,
+        "expected 4 release targets, got {targets:?}"
+    );
     targets
 }
 
@@ -108,7 +112,10 @@ fn homebrew_formula_shas_are_wellformed() {
             seen += 1;
         }
     }
-    assert_eq!(seen, 4, "expected 4 sha256 digests in the formula, got {seen}");
+    assert_eq!(
+        seen, 4,
+        "expected 4 sha256 digests in the formula, got {seen}"
+    );
 }
 
 /// Extract the quoted-string array assigned to `key` in Cargo.toml (the
@@ -140,13 +147,19 @@ fn crate_metadata_is_crates_io_publishable() {
         keywords.len()
     );
     for kw in &keywords {
-        assert!(!kw.is_empty() && kw.len() <= 20, "bad keyword length: {kw:?}");
+        assert!(
+            !kw.is_empty() && kw.len() <= 20,
+            "bad keyword length: {kw:?}"
+        );
         let starts_alnum = kw.starts_with(|c: char| c.is_ascii_alphanumeric());
         assert!(starts_alnum, "keyword must start alphanumeric: {kw:?}");
     }
 
     let categories = cargo_string_array("categories");
-    assert!(!categories.is_empty(), "declare at least one crates.io category");
+    assert!(
+        !categories.is_empty(),
+        "declare at least one crates.io category"
+    );
 
     for field in ["readme", "repository", "homepage", "license", "description"] {
         let decl = format!("{field} = ");
@@ -161,5 +174,8 @@ fn crate_metadata_is_crates_io_publishable() {
 fn release_toml_enables_crates_io_publish() {
     let release = read("release.toml");
     let enabled = release.lines().any(|l| l.trim() == "publish = true");
-    assert!(enabled, "release.toml must set `publish = true` for crates.io");
+    assert!(
+        enabled,
+        "release.toml must set `publish = true` for crates.io"
+    );
 }
