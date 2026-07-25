@@ -116,6 +116,13 @@ you approve once, and each command receives only its own secrets.
 | `secreq view` / `secreq ui` | Open the daemon's window in viewer mode (audit log, pinned). |
 | `secreq` (bare, in a terminal) | Interactive action picker over the common verbs. Non-TTY invocations print a usage hint instead. |
 
+On the `x` (wrap-and-run) path, secreq reserves the **`--sq-` prefix**
+for its own options — e.g. `--sq-yes` (skip consent), `--sq-raw`
+(disable masking). Argv is otherwise hand-parsed pass-through:
+anything that isn't `--sq-…` — `--help`, `-y`, any flag — forwards
+untouched to the wrapped binary, so `gh --help` through the shim shows
+gh's help, not secreq's.
+
 Built-in providers: `op` (with `retrieve_batch` — one biometric per
 multi-secret invocation), `keychain` (macOS), `lastpass`, `pass` (Unix).
 

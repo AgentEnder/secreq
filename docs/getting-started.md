@@ -62,6 +62,10 @@ cargo install secreq
 cargo install --path .   # build this checkout instead
 ```
 
+> ⚠ A dev/`cargo` build run against your real home can corrupt
+> `~/.secreq` — see
+> [docs/troubleshooting.md#dev-builds-can-corrupt-your-real-secreq](./troubleshooting.md#dev-builds-can-corrupt-your-real-secreq).
+
 See [install.md](./install.md) for every channel and how to verify a download.
 Confirm:
 
