@@ -1,0 +1,36 @@
+<!--
+  The Gate Monogram — the secreq mark. Two brackets (the gate), one accent
+  dot (the secret); it passes through only with consent. No tile and no
+  border on purpose: the brackets ride the surrounding foreground so the
+  mark reads as chrome, not as an app-store icon.
+
+  This file is the master. Everything else is derived from it and must
+  keep the geometry below:
+
+    - packages/secreq/src/daemon/ui.rs::paint_app_icon  (the desktop app,
+      painted from primitives because the mark has to take the theme's
+      foreground and accent at runtime)
+    - docs-site/public/favicon.svg                      (small-size
+      variant: heavier stroke, larger dot, cropped viewBox)
+    - the header mark in docs-site/pages/+Layout.tsx
+
+  Caps and joins: butt caps with mitered joins. The corners come out
+  square from the join, and the open bracket arms stop exactly at x=23 /
+  x=41 — stroke-linecap="square" would overhang them by half a stroke,
+  which the app does not do.
+
+  Colour: the brackets take `currentColor` so a consumer can hand the
+  mark its own foreground; the dot is always the accent.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="secreq">
+  <title>secreq</title>
+
+  <!-- The gate. -->
+  <g fill="none" stroke="currentColor" stroke-width="7" stroke-linejoin="miter">
+    <path d="M23 10 H13 V54 H23" />
+    <path d="M41 10 H51 V54 H41" />
+  </g>
+
+  <!-- The secret. -->
+  <circle cx="32" cy="32" r="7" fill="#3584e4" />
+</svg>

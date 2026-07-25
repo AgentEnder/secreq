@@ -154,127 +154,83 @@ export function PagefindSearch() {
       {/* Input */}
       <div className="relative">
         <svg
-          className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
-          style={{ width: '0.75rem', height: '0.75rem', color: '#4a6878' }}
+          className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none w-3.5 h-3.5 text-text-3"
           fill="none"
           stroke="currentColor"
+          strokeWidth={2}
           viewBox="0 0 24 24"
+          aria-hidden="true"
         >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
         </svg>
         <input
           ref={inputRef}
-          type="text"
+          type="search"
           value={query}
           onChange={(e) => handleSearch(e.target.value)}
           onFocus={() => query && setIsOpen(true)}
           onKeyDown={handleKeyDown}
-          placeholder="Search docs..."
-          style={{
-            width: '11rem',
-            paddingLeft: '2rem',
-            paddingRight: '3rem',
-            paddingTop: '0.3rem',
-            paddingBottom: '0.3rem',
-            fontSize: '0.75rem',
-            fontFamily: "'Space Grotesk', sans-serif",
-            background: '#0b1018',
-            border: '1px solid #192838',
-            color: '#b0c4d4',
-            outline: 'none',
-            transition: 'border-color 0.15s',
-          }}
-          onFocusCapture={(e) => { (e.target as HTMLElement).style.borderColor = '#2a5070'; }}
-          onBlurCapture={(e) => { (e.target as HTMLElement).style.borderColor = '#192838'; }}
+          placeholder="Search the docs"
+          aria-label="Search the docs"
+          className="search-input"
         />
-        <kbd
-          style={{
-            position: 'absolute',
-            right: '0.5rem',
-            top: '50%',
-            transform: 'translateY(-50%)',
-            fontSize: '0.55rem',
-            fontFamily: "'JetBrains Mono', monospace",
-            color: '#4a6878',
-            background: '#101820',
-            border: '1px solid #243848',
-            padding: '1px 4px',
-            pointerEvents: 'none',
-          }}
-        >
+        <kbd className="key absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none hidden lg:block">
           ⌘K
         </kbd>
       </div>
 
-      {/* Dropdown */}
       {isOpen && (
-        <div
-          style={{
-            position: 'absolute',
-            top: 'calc(100% + 6px)',
-            right: 0,
-            zIndex: 50,
-            width: '22rem',
-            maxHeight: '24rem',
-            overflowY: 'auto',
-            background: '#0d1520',
-            border: '1px solid #2a5070',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
-          }}
-        >
+        <div className="search-results">
           {pagefindError ? (
-            <div style={{ padding: '1rem', textAlign: 'center' }}>
-              <div style={{ color: '#d4920a', fontSize: '0.8rem', marginBottom: '0.25rem' }}>Search unavailable</div>
-              <div style={{ color: '#4a6878', fontSize: '0.72rem' }}>
-                Run <code style={{ color: '#ecb030' }}>pnpm build</code> to enable search.
-              </div>
-            </div>
+            <p className="p-4 text-center text-sm text-text-2">
+              Search needs a production build. Run <code>pnpm build</code> to generate the index.
+            </p>
           ) : isLoading ? (
-            <div style={{ padding: '1.5rem', textAlign: 'center', color: '#4a6878', fontSize: '0.8rem' }}>
-              Searching…
-            </div>
+            <p className="p-6 text-center text-sm text-text-3">Searching…</p>
           ) : results.length > 0 ? (
             <>
-              <div style={{ padding: '0.35rem 0.75rem', fontSize: '0.55rem', fontWeight: 700, letterSpacing: '0.15em', textTransform: 'uppercase', color: '#4a6878', borderBottom: '1px solid #192838' }}>
+              <p className="t-eyebrow px-3 py-2 border-b border-hairline">
                 {results.length} result{results.length !== 1 ? 's' : ''}
-              </div>
+              </p>
               <div ref={resultsRef}>
                 {results.map((result, i) => (
                   <button
                     key={result.id}
-                    onClick={() => { window.location.href = result.url; setIsOpen(false); }}
-                    onMouseEnter={() => setSelectedIndex(i)}
-                    style={{
-                      display: 'block',
-                      width: '100%',
-                      textAlign: 'left',
-                      padding: '0.6rem 0.75rem',
-                      borderBottom: '1px solid #192838',
-                      background: i === selectedIndex ? 'rgba(212,146,10,0.08)' : 'transparent',
-                      cursor: 'pointer',
-                      transition: 'background 0.1s',
+                    type="button"
+                    onClick={() => {
+                      window.location.href = result.url;
+                      setIsOpen(false);
                     }}
+                    onMouseEnter={() => setSelectedIndex(i)}
+                    className="search-hit"
+                    data-selected={i === selectedIndex}
                   >
-                    <div style={{ fontSize: '0.82rem', fontWeight: 500, color: i === selectedIndex ? '#d8eaf5' : '#b0c4d4', marginBottom: '0.2rem' }}>
+                    <span className="block text-sm font-semibold text-text mb-0.5">
                       {result.title}
-                    </div>
-                    <div
-                      style={{ fontSize: '0.72rem', color: '#4a6878', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+                    </span>
+                    <span
+                      className="search-excerpt"
                       dangerouslySetInnerHTML={{ __html: result.excerpt }}
                     />
                   </button>
                 ))}
               </div>
-              <div style={{ padding: '0.35rem 0.75rem', fontSize: '0.55rem', color: '#4a6878', borderTop: '1px solid #192838', display: 'flex', gap: '0.75rem', fontFamily: "'JetBrains Mono', monospace" }}>
-                <span><kbd style={{ padding: '1px 3px', background: '#101820', border: '1px solid #243848' }}>↑↓</kbd> nav</span>
-                <span><kbd style={{ padding: '1px 3px', background: '#101820', border: '1px solid #243848' }}>↵</kbd> open</span>
-                <span><kbd style={{ padding: '1px 3px', background: '#101820', border: '1px solid #243848' }}>esc</kbd> close</span>
-              </div>
+              <p className="flex gap-4 px-3 py-2 border-t border-hairline t-meta">
+                <span>
+                  <kbd className="key">↑↓</kbd> move
+                </span>
+                <span>
+                  <kbd className="key">↵</kbd> open
+                </span>
+                <span>
+                  <kbd className="key">esc</kbd> close
+                </span>
+              </p>
             </>
           ) : query ? (
-            <div style={{ padding: '1.5rem', textAlign: 'center', color: '#4a6878', fontSize: '0.8rem' }}>
-              No results for &ldquo;{query}&rdquo;
-            </div>
+            <p className="p-6 text-center text-sm text-text-3">
+              Nothing matches &ldquo;{query}&rdquo;.
+            </p>
           ) : null}
         </div>
       )}

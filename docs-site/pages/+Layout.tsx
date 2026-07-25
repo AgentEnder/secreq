@@ -1,10 +1,20 @@
 import React, { useEffect, useState } from 'react';
 import { usePageContext } from 'vike-react/usePageContext';
 import { Link } from '../components/Link';
+import { Ambient } from '../components/Ambient';
+import { OsPicker } from '../components/OsPicker';
 import { PagefindSearch } from '../components/PagefindSearch';
+import { ThemeToggle } from '../components/ThemeToggle';
+import { ShotLightbox } from '../components/ui';
 import type { NavigationItem } from '../server/utils/docs';
 
 const GITHUB_URL = 'https://github.com/AgentEnder/secreq';
+
+const NAV = [
+  { label: 'Docs', href: '/docs' },
+  { label: 'API', href: '/api' },
+  { label: 'Schemas', href: '/schemas' },
+];
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const pageContext = usePageContext();
@@ -12,69 +22,109 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const navigation: NavigationItem[] =
     ((pageContext as unknown as Record<string, unknown>).navigation as NavigationItem[]) ?? [];
 
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-
-  const isLandingPage = pathname === '/' || pathname === '';
-  const showSidebar = !isLandingPage && navigation.length > 0;
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
-    setMobileMenuOpen(false);
+    setMenuOpen(false);
   }, [pathname]);
 
-  return (
-    <div className="min-h-screen bg-switch-bg bg-grid-pattern text-switch-text" style={{ paddingBottom: '44px' }}>
-      {/* Header */}
-      <header
-        className="sticky top-0 z-40 border-b border-switch-border"
-        style={{ background: '#0d1520', height: '54px' }}
-        data-pagefind-ignore
-      >
-        <div className="flex items-center h-full px-6 gap-5">
-          <div className="hidden md:flex items-center gap-5 pr-5 border-r border-switch-border shrink-0">
-            <div className="telem-cell">
-              <span className="telem-key">STATUS</span>
-              <span className="telem-val green flex items-center gap-1">
-                <span className="status-dot green" />
-                NOMINAL
-              </span>
-            </div>
-            <div className="telem-cell">
-              <span className="telem-key">PLATFORM</span>
-              <span className="telem-val" style={{ color: '#50a0e0' }}>
-                UNIX
-              </span>
-            </div>
-          </div>
+  const isLanding = pathname === '/' || pathname === '';
+  const showRail = !isLanding && navigation.length > 0;
 
-          {/* Logo */}
-          <Link href="/" className="flex items-center gap-2 no-underline shrink-0" style={{ marginRight: 'auto' }}>
-            <span
-              className="text-white font-bold"
-              style={{ background: '#d4920a', fontSize: '0.55rem', letterSpacing: '0.1em', padding: '2px 6px', color: '#06090e' }}
-            >
-              SQ
-            </span>
-            <span
-              className="text-switch-text-bright"
-              style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: '1.4rem', letterSpacing: '0.1em' }}
-            >
-              sec<span style={{ color: '#d4920a' }}>req</span>
-            </span>
+  return (
+    // No background here on purpose: `html` already paints the page colour,
+    // and a background on this wrapper would cover the `z-index: -1` ambient
+    // layer, which sits between the two.
+    <div className="min-h-screen text-text-2 relative">
+      <Ambient />
+
+      <header className="shell-header" data-pagefind-ignore>
+        <div className="flex items-center h-full gap-2 px-4 sm:px-6">
+          <Link href="/" className="brand">
+            {/*
+              The Gate Monogram, the same mark the app paints in its window
+              headers. Geometry is the master at dev-docs/brand/logo.svg
+              verbatim; the viewBox is cropped to the ink so the mark fills
+              its 22px box. The trailing circle is the hover ping — a
+              second dot that scales out from under the first.
+            */}
+            <svg className="brand-mark" viewBox="6 6 52 52" aria-hidden="true">
+              <circle className="brand-ping" cx="32" cy="32" r="7" />
+              <g className="brand-gate" fill="none" strokeWidth="7" strokeLinejoin="miter">
+                <path d="M23 10 H13 V54 H23" />
+                <path d="M41 10 H51 V54 H41" />
+              </g>
+              <circle className="brand-secret" cx="32" cy="32" r="7" />
+            </svg>
+            secreq
           </Link>
 
-          {/* Nav links */}
-          <nav className="hidden md:flex items-stretch h-full">
-            {[{ label: 'Docs', href: '/docs' }, { label: 'API', href: '/api' }, { label: 'Schemas', href: '/schemas' }].map((link) => (
+          <nav className="hidden md:flex items-stretch h-full ml-6">
+            {NAV.map((link) => (
               <Link
                 key={link.href}
                 href={link.href}
-                active={pathname.startsWith(link.href)}
-                className="flex items-center px-4 text-sm font-medium transition-colors border-l border-switch-border hover:text-switch-text-bright"
-                style={{
-                  color: pathname.startsWith(link.href) ? '#d8eaf5' : '#4a6878',
-                  letterSpacing: '0.04em',
-                  height: '54px',
-                }}
+                className="nav-link no-underline"
+                data-active={pathname.startsWith(link.href)}
+              >
+                {link.label}
+              </Link>
+            ))}
+          </nav>
+
+          <div className="ml-auto flex items-center gap-1.5">
+            <div className="hidden sm:block w-44 lg:w-56">
+              <PagefindSearch />
+            </div>
+
+            <a
+              href={GITHUB_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="icon-btn"
+              aria-label="secreq on GitHub"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                <path d="M8 0a8 8 0 0 0-2.5 15.6c.4.07.55-.17.55-.38v-1.35C3.84 14.3 3.4 13 3.4 13c-.36-.9-.87-1.15-.87-1.15-.71-.48.05-.47.05-.47.79.05 1.2.81 1.2.81.7 1.2 1.83.85 2.28.65.07-.5.27-.85.5-1.05-1.74-.2-3.56-.87-3.56-3.87 0-.85.3-1.55.8-2.1-.08-.2-.35-1 .08-2.07 0 0 .65-.21 2.14.8a7.4 7.4 0 0 1 3.9 0c1.49-1.01 2.14-.8 2.14-.8.43 1.07.16 1.87.08 2.07.5.55.8 1.25.8 2.1 0 3.01-1.83 3.67-3.57 3.86.28.24.53.72.53 1.45v2.15c0 .21.14.46.55.38A8 8 0 0 0 8 0z" />
+              </svg>
+            </a>
+
+            <OsPicker />
+            <ThemeToggle />
+
+            <button
+              type="button"
+              className="icon-btn md:hidden"
+              onClick={() => setMenuOpen(!menuOpen)}
+              aria-expanded={menuOpen}
+              aria-label={menuOpen ? 'Close the menu' : 'Open the menu'}
+            >
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                aria-hidden="true"
+              >
+                {menuOpen ? <path d="M6 18 18 6M6 6l12 12" /> : <path d="M4 7h16M4 12h16M4 17h16" />}
+              </svg>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {menuOpen && (
+        <div className="fixed inset-0 top-14 z-30 md:hidden bg-bg overflow-y-auto" data-pagefind-ignore>
+          <nav className="border-b border-hairline py-2">
+            {NAV.map((link) => (
+              <Link
+                key={link.href}
+                href={link.href}
+                className="rail-link no-underline"
+                data-active={pathname.startsWith(link.href)}
               >
                 {link.label}
               </Link>
@@ -83,259 +133,67 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               href={GITHUB_URL}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center px-4 text-sm font-medium transition-colors border-l border-r border-switch-border hover:text-switch-text-bright"
-              style={{ color: '#4a6878', letterSpacing: '0.04em', height: '54px' }}
+              className="rail-link no-underline"
             >
               GitHub
             </a>
           </nav>
-
-          <div className="hidden md:block" style={{ marginLeft: '0.5rem' }}>
+          <div className="sm:hidden px-4 py-3 border-b border-hairline">
             <PagefindSearch />
           </div>
-
-          {/* Mobile menu toggle */}
-          <button
-            className="md:hidden p-1.5 text-switch-text-dim hover:text-switch-text transition-colors"
-            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            aria-label="Toggle menu"
-          >
-            {mobileMenuOpen ? (
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            ) : (
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-              </svg>
-            )}
-          </button>
-        </div>
-      </header>
-
-      {/* Mobile nav overlay */}
-      {mobileMenuOpen && (
-        <div className="fixed inset-0 z-30 bg-black/60 md:hidden" onClick={() => setMobileMenuOpen(false)}>
-          <div
-            className="absolute top-[54px] left-0 right-0 border-b border-switch-border animate-fade-in"
-            style={{ background: '#0d1520' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <nav className="px-5 py-3 border-b border-switch-border space-y-1">
-              <Link
-                href="/docs"
-                active={pathname.startsWith('/docs')}
-                className="block py-2 px-3 text-sm font-medium text-switch-text-dim hover:text-switch-text hover:bg-switch-bg-raised transition-all"
-              >
-                Docs
-              </Link>
-              <Link
-                href="/api"
-                active={pathname.startsWith('/api')}
-                className="block py-2 px-3 text-sm font-medium text-switch-text-dim hover:text-switch-text hover:bg-switch-bg-raised transition-all"
-              >
-                API
-              </Link>
-              <Link
-                href="/schemas"
-                active={pathname.startsWith('/schemas')}
-                className="block py-2 px-3 text-sm font-medium text-switch-text-dim hover:text-switch-text hover:bg-switch-bg-raised transition-all"
-              >
-                Schemas
-              </Link>
-              <a
-                href={GITHUB_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block py-2 px-3 text-sm font-medium text-switch-text-dim hover:text-switch-text hover:bg-switch-bg-raised transition-all"
-              >
-                GitHub
-              </a>
-            </nav>
-            {navigation.length > 0 && (
-              <div className="px-5 py-4">
-                <SidebarContent navigation={navigation} pathname={pathname} />
-              </div>
-            )}
-          </div>
+          {navigation.length > 0 && <Rail navigation={navigation} pathname={pathname} />}
         </div>
       )}
 
-      {/* Body */}
-      {showSidebar ? (
+      {showRail ? (
         <div className="doc-layout">
-          <aside
-            className="hidden md:block border-r border-switch-border overflow-y-auto bg-switch-bg-raised/50"
-            style={{ position: 'sticky', top: '54px', height: 'calc(100vh - 54px - 44px)' }}
+          <div
+            className="rail-wrap hidden md:block border-r border-hairline overflow-y-auto sticky"
+            style={{ top: '56px', height: 'calc(100vh - 56px)' }}
             data-pagefind-ignore
           >
-            <SidebarContent navigation={navigation} pathname={pathname} />
-          </aside>
-
-          <main className="min-w-0 px-5 py-6 md:px-10 md:py-10">{children}</main>
+            <Rail navigation={navigation} pathname={pathname} />
+          </div>
+          <main className="min-w-0 px-5 py-9 md:px-10 md:py-12">{children}</main>
         </div>
       ) : (
         <main>{children}</main>
       )}
 
-      <BottomNav pathname={pathname} />
+      {/* One viewer for the whole app. It portals to <body> and answers
+          `secreq:shot-open` from any screenshot on the page, including the
+          ones markdown injects as raw HTML. */}
+      <ShotLightbox />
     </div>
   );
 }
 
-function BottomNav({ pathname }: { pathname: string }) {
-  const isLanding = pathname === '/' || pathname === '';
-  const isDocs = pathname.startsWith('/docs');
-
+function Rail({ navigation, pathname }: { navigation: NavigationItem[]; pathname: string }) {
   return (
-    <nav className="nav-bar-bottom" data-pagefind-ignore>
-      <div className="nav-bar-section">
-        <span className="nav-bar-label">Pages</span>
-        <Link href="/" className={`nav-page-link${isLanding ? ' active' : ''}`}>
-          Home
-        </Link>
-        <Link href="/docs" className={`nav-page-link${isDocs ? ' active' : ''}`}>
-          Docs
-        </Link>
-        <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer" className="nav-page-link hidden sm:inline">
-          GitHub
-        </a>
-      </div>
-
-      <div className="nav-bar-section">
-        <div className="telem-cell">
-          <span className="telem-key">Project</span>
-          <span className="telem-val" style={{ color: '#50a0e0' }}>
-            secreq
-          </span>
-        </div>
-      </div>
-    </nav>
-  );
-}
-
-function SidebarContent({ navigation, pathname }: { navigation: NavigationItem[]; pathname: string }) {
-  return (
-    <nav style={{ padding: '1.5rem 0' }}>
+    <nav className="rail">
       {navigation.map((item) => (
-        <SidebarItem key={item.title} item={item} pathname={pathname} />
+        <div key={item.title} className="rail-group">
+          {item.children ? (
+            <>
+              <span className="rail-group-label">{item.title}</span>
+              {item.children.map((child) => (
+                <RailLink key={child.path ?? child.title} item={child} pathname={pathname} />
+              ))}
+            </>
+          ) : (
+            <RailLink item={item} pathname={pathname} />
+          )}
+        </div>
       ))}
     </nav>
   );
 }
 
-function SidebarItem({ item, pathname }: { item: NavigationItem; pathname: string }) {
-  const hasChildren = item.children && item.children.length > 0;
-  const isActive = item.path ? pathname === item.path : false;
-  const hasActiveChild = item.children?.some(
-    (child) => child.path && (pathname === child.path || pathname.startsWith(child.path + '/'))
-  );
-
-  const [open, setOpen] = useState(isActive || !!hasActiveChild);
-
-  if (!hasChildren) {
-    return (
-      <Link
-        href={item.path ?? '#'}
-        active={isActive}
-        className="flex items-center gap-2.5 text-sm font-medium transition-all"
-        style={{
-          padding: '0.35rem 1.25rem',
-          color: isActive ? '#d4920a' : '#4a6878',
-          background: isActive ? 'rgba(212,146,10,0.12)' : 'transparent',
-          borderLeft: isActive ? '2px solid #d4920a' : '2px solid transparent',
-          paddingLeft: isActive ? 'calc(1.25rem - 2px)' : '1.25rem',
-          textDecoration: 'none',
-        }}
-      >
-        {item.title}
-      </Link>
-    );
-  }
-
-  const groupActive = isActive || !!hasActiveChild;
-
+function RailLink({ item, pathname }: { item: NavigationItem; pathname: string }) {
+  const active = item.path ? pathname === item.path || pathname.startsWith(item.path + '/') : false;
   return (
-    <div>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '0.35rem 1rem 0.35rem 1.25rem',
-          background: groupActive ? 'rgba(46,128,192,0.06)' : 'rgba(255,255,255,0.02)',
-          borderLeft: groupActive ? '2px solid #2e80c0' : '2px solid #192838',
-          cursor: 'pointer',
-        }}
-        onClick={() => setOpen(!open)}
-        role="button"
-        aria-expanded={open}
-      >
-        <span
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.4rem',
-            fontSize: '0.55rem',
-            fontWeight: 700,
-            letterSpacing: '0.2em',
-            textTransform: 'uppercase',
-            color: groupActive ? '#50a0e0' : '#4a6878',
-          }}
-        >
-          <span className="status-dot blue" />
-          {item.path ? (
-            <a href={item.path} style={{ color: 'inherit', textDecoration: 'none' }} onClick={(e) => e.stopPropagation()}>
-              {item.title}
-            </a>
-          ) : (
-            item.title
-          )}
-        </span>
-        <svg
-          style={{
-            width: '0.6rem',
-            height: '0.6rem',
-            flexShrink: 0,
-            color: '#4a6878',
-            transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
-            transition: 'transform 0.2s',
-          }}
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-        </svg>
-      </div>
-
-      {open && (
-        <div className="animate-fade-in" style={{ borderLeft: '1px solid #192838', marginLeft: '1.25rem', paddingBottom: '0.25rem' }}>
-          {item.children!.map((child) => {
-            const childActive = child.path
-              ? pathname === child.path || pathname.startsWith(child.path + '/')
-              : false;
-            return (
-              <Link
-                key={child.path ?? child.title}
-                href={child.path ?? '#'}
-                active={childActive}
-                className="flex items-center text-sm font-medium transition-all"
-                style={{
-                  padding: '0.3rem 1rem',
-                  color: childActive ? '#d4920a' : '#4a6878',
-                  background: childActive ? 'rgba(212,146,10,0.10)' : 'transparent',
-                  borderLeft: childActive ? '2px solid #d4920a' : '2px solid transparent',
-                  paddingLeft: childActive ? 'calc(1rem - 2px)' : '1rem',
-                  textDecoration: 'none',
-                }}
-              >
-                {child.title}
-              </Link>
-            );
-          })}
-        </div>
-      )}
-    </div>
+    <Link href={item.path ?? '#'} className="rail-link no-underline" data-active={active}>
+      {item.title}
+    </Link>
   );
 }

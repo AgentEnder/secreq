@@ -3,22 +3,18 @@ import { applyBaseUrl } from '../utils/base-url';
 
 interface LinkProps extends AnchorHTMLAttributes<HTMLAnchorElement> {
   children: ReactNode;
-  active?: boolean;
 }
 
-export function Link({
-  children,
-  active,
-  href,
-  className = '',
-  ...props
-}: LinkProps) {
+/**
+ * An internal link with the site's base URL applied.
+ *
+ * Styling is deliberately not its business — it used to inject its own
+ * colour and hover classes, which meant every caller had to fight them back
+ * off. Callers now say what a link looks like where they use it.
+ */
+export function Link({ children, href, ...props }: LinkProps) {
   return (
-    <a
-      href={href ? applyBaseUrl(href) : href}
-      className={`transition-all duration-200 ${active ? 'text-switch-accent font-medium' : 'text-switch-text-dim hover:text-switch-text'} ${className.includes('no-underline') ? '' : 'hover:text-switch-accent'} ${className}`}
-      {...props}
-    >
+    <a href={href ? applyBaseUrl(href) : href} {...props}>
       {children}
     </a>
   );
