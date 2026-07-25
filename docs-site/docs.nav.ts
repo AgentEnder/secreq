@@ -57,3 +57,16 @@ export const DOCS_NAV: NavSection[] = [
 
 /** Every doc slug the site renders, in manifest order. */
 export const DOC_SLUGS: string[] = DOCS_NAV.flatMap((s) => s.docs.map((d) => d.slug));
+
+/**
+ * Anchor id for a section heading on the docs index.
+ *
+ * Shared with the breadcrumb, whose middle crumb links to `/docs#<anchor>` —
+ * they have to agree or the section crumb scrolls nowhere.
+ */
+export function sectionAnchor(section: string): string {
+  return section
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+}

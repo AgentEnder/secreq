@@ -6,59 +6,42 @@ import { ApiExportPage } from '../../../components/api/ApiExportPage';
 export default function SymbolDetailPage() {
   const { apiExport: exp } = useApiExport();
 
-  // Attach copy buttons to every rendered signature/example <pre>, matching
-  // the behavior of the prose doc pages.
+  // Signatures and examples get the same copy button the prose pages give
+  // their code blocks.
   useEffect(() => {
     document.querySelectorAll<HTMLPreElement>('.prose-content pre').forEach((pre) => {
       if (pre.querySelector('.copy-btn')) return;
-      const btn = document.createElement('button');
-      btn.className = 'copy-btn';
-      btn.textContent = 'Copy';
-      btn.addEventListener('click', async () => {
-        const code = pre.querySelector('code');
-        const text = (code ?? pre).innerText;
-        await navigator.clipboard.writeText(text);
-        btn.textContent = 'Copied!';
+
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'copy-btn';
+      button.textContent = 'Copy';
+      button.addEventListener('click', async () => {
+        await navigator.clipboard.writeText((pre.querySelector('code') ?? pre).innerText);
+        button.textContent = 'Copied';
+        button.dataset.copied = 'true';
         setTimeout(() => {
-          btn.textContent = 'Copy';
-        }, 1500);
+          button.textContent = 'Copy';
+          delete button.dataset.copied;
+        }, 1600);
       });
-      pre.appendChild(btn);
+      pre.appendChild(button);
     });
   }, [exp?.slug]);
 
   if (!exp) {
     return (
-      <div className="text-center py-24 animate-fade-in">
-        <h1
-          className="text-switch-text-bright mb-2"
-          style={{
-            fontFamily: "'Bebas Neue', sans-serif",
-            fontSize: '2rem',
-            letterSpacing: '0.08em',
-          }}
-        >
-          Symbol Not Found
-        </h1>
-        <p className="text-switch-text-dim mb-6 text-sm">
-          The requested API symbol could not be found.
+      <div className="py-24 text-center">
+        <h1 className="t-title mb-3">No such symbol</h1>
+        <p className="text-sm text-text-3 mb-6">
+          That API symbol does not exist. It may have been renamed or removed.
         </p>
-        <Link
-          href="/api"
-          className="inline-flex items-center gap-2 text-switch-accent hover:text-switch-accent-bright transition-colors text-sm uppercase tracking-wider"
-          style={{ letterSpacing: '0.06em' }}
-        >
-          Back to API reference
+        <Link href="/api" className="btn btn-quiet no-underline">
+          Browse the API reference
         </Link>
       </div>
     );
   }
 
-  return (
-    <div className="flex gap-10 animate-fade-in">
-      <article className="flex-1 min-w-0" data-pagefind-body>
-        <ApiExportPage apiExport={exp} />
-      </article>
-    </div>
-  );
+  return <ApiExportPage apiExport={exp} />;
 }

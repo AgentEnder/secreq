@@ -1,4 +1,5 @@
 import type { LinkedApiExport } from 'vike-plugin-typedoc';
+import { Breadcrumb } from '../Breadcrumb';
 import { Link } from '../Link';
 
 export interface ApiExportPageProps {
@@ -13,179 +14,158 @@ function TypeText({ html, text }: { html?: string; text: string }) {
   return <>{text}</>;
 }
 
-function SectionHeading({ children }: { children: React.ReactNode }) {
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <h2
-      className="text-switch-accent-bright mb-3 text-xs font-semibold uppercase"
-      style={{ letterSpacing: '0.16em' }}
-    >
+    <section className="mb-9">
+      <div className="flex items-center gap-4 mb-4">
+        <h2 className="t-eyebrow shrink-0">{title}</h2>
+        <span className="flex-1 h-px bg-hairline" />
+      </div>
       {children}
-    </h2>
+    </section>
+  );
+}
+
+function MemberTable({
+  rows,
+}: {
+  rows: {
+    key: string;
+    name: React.ReactNode;
+    type: React.ReactNode;
+    description?: string;
+  }[];
+}) {
+  return (
+    <div className="table-scroll">
+      <table className="w-full text-sm">
+        <thead>
+          <tr>
+            <th className="api-th">Name</th>
+            <th className="api-th">Type</th>
+            <th className="api-th">Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.key}>
+              <td className="api-td font-mono text-text">{row.name}</td>
+              <td className="api-td">
+                <code className="text-xs text-accent">{row.type}</code>
+              </td>
+              <td className="api-td text-text-3">{row.description || '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
 export function ApiExportPage({ apiExport }: ApiExportPageProps) {
   return (
-    <div>
-      {/* Breadcrumb */}
-      <nav
-        data-pagefind-ignore
-        className="inline-flex items-center gap-2 text-[11px] text-switch-text-dim mb-8 px-3 py-1.5 border border-switch-border bg-switch-bg-surface uppercase tracking-wider"
-        style={{ letterSpacing: '0.06em' }}
-      >
-        <span className="status-dot blue" />
-        <Link href="/docs" className="hover:text-switch-accent transition-colors">
-          Docs
-        </Link>
-        <svg className="w-3 h-3 text-switch-border-light" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-        </svg>
-        <Link href="/api" className="hover:text-switch-accent transition-colors">
-          API
-        </Link>
-        <svg className="w-3 h-3 text-switch-border-light" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-        </svg>
-        <span className="text-switch-text font-medium">{apiExport.name}</span>
-      </nav>
-
-      {/* Header */}
-      <div className="flex items-center gap-3 mb-2">
-        <h1
-          className="text-switch-text-bright font-mono"
-          style={{ fontSize: 'clamp(1.6rem, 4vw, 2.2rem)' }}
-        >
-          {apiExport.name}
-        </h1>
-        <span
-          className="inline-block px-2 py-0.5 border border-switch-border text-[10px] uppercase text-switch-accent-bright"
-          style={{ letterSpacing: '0.14em' }}
-        >
-          {apiExport.kind}
-        </span>
-      </div>
-
-      <div
-        className="h-px mb-8"
-        style={{
-          background:
-            'linear-gradient(to right, #d4920a 0%, rgba(212,146,10,0.15) 40%, transparent 100%)',
-        }}
+    <div style={{ viewTransitionName: 'doc-article' }}>
+      <Breadcrumb
+        className="mb-7"
+        trail={[
+          { label: 'Docs', href: '/docs' },
+          { label: 'API', href: '/api' },
+          { label: apiExport.name },
+        ]}
       />
 
+      <div className="flex items-baseline flex-wrap gap-3 mb-8">
+        <h1 className="t-title font-mono">{apiExport.name}</h1>
+        <span className="t-eyebrow">{apiExport.kind}</span>
+      </div>
+
       {apiExport.comment?.deprecated && (
-        <div className="mb-6 border border-switch-signal-red/40 bg-switch-signal-red/10 px-3 py-2 text-sm text-switch-text">
-          <strong className="text-switch-signal-red">Deprecated:</strong>{' '}
-          {apiExport.comment.deprecated}
-        </div>
+        <p className="mb-7 well border-l-2 border-l-deny px-4 py-3 text-sm text-text-2">
+          <strong className="text-deny">Deprecated.</strong> {apiExport.comment.deprecated}
+        </p>
       )}
 
-      {/* Signature */}
       {apiExport.signature && (
-        <div className="mb-8">
-          <SectionHeading>Signature</SectionHeading>
+        <Section title="Signature">
           {apiExport.signatureCodeHtml ? (
             <div
               className="prose-content"
               dangerouslySetInnerHTML={{ __html: apiExport.signatureCodeHtml }}
             />
           ) : (
-            <pre className="border border-switch-border bg-switch-bg-surface px-4 py-3 overflow-x-auto">
-              <code className="text-sm text-switch-text-bright font-mono">
-                {apiExport.signature}
-              </code>
+            <pre className="well px-4 py-3 overflow-x-auto">
+              <code className="text-sm text-text">{apiExport.signature}</code>
             </pre>
           )}
-        </div>
+        </Section>
       )}
 
-      {/* Description */}
       {(apiExport.descriptionHtml || apiExport.description) && (
-        <div className="mb-8">
+        <div className="mb-9">
           {apiExport.descriptionHtml ? (
             <div
               className="prose-content"
               dangerouslySetInnerHTML={{ __html: apiExport.descriptionHtml }}
             />
           ) : (
-            <p className="text-switch-text leading-relaxed">{apiExport.description}</p>
+            <p className="text-text-2 leading-relaxed">{apiExport.description}</p>
           )}
         </div>
       )}
 
-      {/* Parameters */}
       {apiExport.parameters && apiExport.parameters.length > 0 && (
-        <div className="mb-8">
-          <SectionHeading>Parameters</SectionHeading>
-          <div className="table-scroll">
-            <table className="w-full text-sm border border-switch-border">
-              <thead>
-                <tr className="border-b border-switch-border">
-                  <th className="text-left px-4 py-2.5 text-switch-accent-bright text-[11px] uppercase" style={{ letterSpacing: '0.1em' }}>Name</th>
-                  <th className="text-left px-4 py-2.5 text-switch-accent-bright text-[11px] uppercase" style={{ letterSpacing: '0.1em' }}>Type</th>
-                  <th className="text-left px-4 py-2.5 text-switch-accent-bright text-[11px] uppercase" style={{ letterSpacing: '0.1em' }}>Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                {apiExport.parameters.map((param) => (
-                  <tr key={param.name} className="border-t border-switch-border">
-                    <td className="px-4 py-2.5 font-mono text-switch-text-bright text-[0.8125rem]">
-                      {param.name}
-                      {param.optional && <span className="text-switch-text-dim">?</span>}
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <code className="font-mono text-switch-secondary-bright text-xs">
-                        <TypeText html={param.typeHtml} text={param.type} />
-                      </code>
-                    </td>
-                    <td className="px-4 py-2.5 text-switch-text-dim text-[0.8125rem]">
-                      {param.description || '—'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <Section title="Parameters">
+          <MemberTable
+            rows={apiExport.parameters.map((param) => ({
+              key: param.name,
+              name: (
+                <>
+                  {param.name}
+                  {param.optional && <span className="text-text-3">?</span>}
+                </>
+              ),
+              type: <TypeText html={param.typeHtml} text={param.type} />,
+              description: param.description,
+            }))}
+          />
+        </Section>
       )}
 
-      {/* Returns */}
       {apiExport.returnType && (
-        <div className="mb-8">
-          <SectionHeading>Returns</SectionHeading>
+        <Section title="Returns">
           {apiExport.returnTypeCodeHtml ? (
             <div
               className="prose-content"
               dangerouslySetInnerHTML={{ __html: apiExport.returnTypeCodeHtml }}
             />
           ) : (
-            <p className="font-mono text-switch-secondary-bright text-sm">
+            <p className="font-mono text-accent text-sm">
               <TypeText html={apiExport.returnTypeHtml} text={apiExport.returnType} />
             </p>
           )}
-        </div>
+        </Section>
       )}
 
-      {/* Type parameters */}
       {apiExport.typeParameters && apiExport.typeParameters.length > 0 && (
-        <div className="mb-8">
-          <SectionHeading>Type parameters</SectionHeading>
-          <ul className="space-y-2">
+        <Section title="Type parameters">
+          <ul className="grid gap-2">
             {apiExport.typeParameters.map((tp) => (
               <li key={tp.name} className="text-sm">
-                <code className="font-mono text-switch-text-bright">{tp.name}</code>
+                <code className="text-text">{tp.name}</code>
                 {tp.constraint && (
-                  <span className="text-switch-text-dim">
-                    {' '}extends{' '}
-                    <code className="font-mono text-switch-secondary-bright">
+                  <span className="text-text-3">
+                    {' '}
+                    extends{' '}
+                    <code className="text-accent">
                       <TypeText html={tp.constraintHtml} text={tp.constraint} />
                     </code>
                   </span>
                 )}
                 {tp.default && (
-                  <span className="text-switch-text-dim">
-                    {' '}={' '}
-                    <code className="font-mono text-switch-secondary-bright">
+                  <span className="text-text-3">
+                    {' '}
+                    ={' '}
+                    <code className="text-accent">
                       <TypeText html={tp.defaultHtml} text={tp.default} />
                     </code>
                   </span>
@@ -193,123 +173,78 @@ export function ApiExportPage({ apiExport }: ApiExportPageProps) {
               </li>
             ))}
           </ul>
-        </div>
+        </Section>
       )}
 
-      {/* Properties */}
       {apiExport.properties && apiExport.properties.length > 0 && (
-        <div className="mb-8">
-          <SectionHeading>Properties</SectionHeading>
-          <div className="table-scroll">
-            <table className="w-full text-sm border border-switch-border">
-              <thead>
-                <tr className="border-b border-switch-border">
-                  <th className="text-left px-4 py-2.5 text-switch-accent-bright text-[11px] uppercase" style={{ letterSpacing: '0.1em' }}>Name</th>
-                  <th className="text-left px-4 py-2.5 text-switch-accent-bright text-[11px] uppercase" style={{ letterSpacing: '0.1em' }}>Type</th>
-                  <th className="text-left px-4 py-2.5 text-switch-accent-bright text-[11px] uppercase" style={{ letterSpacing: '0.1em' }}>Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                {apiExport.properties.map((prop) => (
-                  <tr key={prop.name} className="border-t border-switch-border">
-                    <td className="px-4 py-2.5 font-mono text-switch-text-bright text-[0.8125rem]">
-                      {prop.readonly && <span className="text-switch-text-dim">readonly </span>}
-                      {prop.name}
-                      {prop.optional && <span className="text-switch-text-dim">?</span>}
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <code className="font-mono text-switch-secondary-bright text-xs">
-                        <TypeText html={prop.typeHtml} text={prop.type} />
-                      </code>
-                    </td>
-                    <td className="px-4 py-2.5 text-switch-text-dim text-[0.8125rem]">
-                      {prop.description || '—'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <Section title="Properties">
+          <MemberTable
+            rows={apiExport.properties.map((prop) => ({
+              key: prop.name,
+              name: (
+                <>
+                  {prop.readonly && <span className="text-text-3">readonly </span>}
+                  {prop.name}
+                  {prop.optional && <span className="text-text-3">?</span>}
+                </>
+              ),
+              type: <TypeText html={prop.typeHtml} text={prop.type} />,
+              description: prop.description,
+            }))}
+          />
+        </Section>
       )}
 
-      {/* Methods */}
       {apiExport.methods && apiExport.methods.length > 0 && (
-        <div className="mb-8">
-          <SectionHeading>Methods</SectionHeading>
-          <div className="space-y-4">
+        <Section title="Methods">
+          <ul className="grid gap-3">
             {apiExport.methods.map((method) => (
-              <div key={method.name} className="border border-switch-border p-4">
-                <code className="text-sm font-mono text-switch-text-bright block mb-2">
+              <li key={method.name} className="well p-4">
+                <code className="text-sm text-text block mb-2">
                   <TypeText html={method.signatureHtml} text={method.signature} />
                 </code>
                 {method.description && (
-                  <p className="text-sm text-switch-text-dim">{method.description}</p>
+                  <p className="text-sm text-text-3">{method.description}</p>
                 )}
-              </div>
+              </li>
             ))}
-          </div>
-        </div>
+          </ul>
+        </Section>
       )}
 
-      {/* Examples */}
       {apiExport.examplesHtml && apiExport.examplesHtml.length > 0 ? (
-        <div className="mb-8">
-          <SectionHeading>Examples</SectionHeading>
+        <Section title="Examples">
           {apiExport.examplesHtml.map((html, i) => (
-            <div
-              key={i}
-              className="prose-content mb-3"
-              dangerouslySetInnerHTML={{ __html: html }}
-            />
+            <div key={i} className="prose-content mb-3" dangerouslySetInnerHTML={{ __html: html }} />
           ))}
-        </div>
+        </Section>
       ) : apiExport.comment?.examples && apiExport.comment.examples.length > 0 ? (
-        <div className="mb-8">
-          <SectionHeading>Examples</SectionHeading>
+        <Section title="Examples">
           {apiExport.comment.examples.map((example, i) => (
-            <pre
-              key={i}
-              className="border border-switch-border bg-switch-bg-surface px-4 py-3 mb-3 overflow-x-auto"
-            >
-              <code className="text-sm text-switch-text-bright font-mono">{example}</code>
+            <pre key={i} className="well px-4 py-3 mb-3 overflow-x-auto">
+              <code className="text-sm text-text">{example}</code>
             </pre>
           ))}
-        </div>
+        </Section>
       ) : null}
 
-      {/* Remarks */}
       {apiExport.remarksHtml ? (
-        <div className="mb-8">
-          <SectionHeading>Remarks</SectionHeading>
-          <div className="prose-content" dangerouslySetInnerHTML={{ __html: apiExport.remarksHtml }} />
-        </div>
+        <Section title="Remarks">
+          <div
+            className="prose-content"
+            dangerouslySetInnerHTML={{ __html: apiExport.remarksHtml }}
+          />
+        </Section>
       ) : apiExport.comment?.remarks ? (
-        <div className="mb-8">
-          <SectionHeading>Remarks</SectionHeading>
-          <p className="text-switch-text leading-relaxed">{apiExport.comment.remarks}</p>
-        </div>
+        <Section title="Remarks">
+          <p className="text-text-2 leading-relaxed">{apiExport.comment.remarks}</p>
+        </Section>
       ) : null}
 
-      {/* Bottom nav */}
-      <div
-        data-pagefind-ignore
-        className="mt-16 pt-8 border-t border-switch-border flex items-center justify-between"
-      >
-        <Link
-          href="/api"
-          className="inline-flex items-center gap-2 text-sm text-switch-text-dim hover:text-switch-accent transition-colors uppercase tracking-wider"
-          style={{ letterSpacing: '0.06em' }}
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 17l-5-5m0 0l5-5m-5 5h12" />
-          </svg>
-          API reference
+      <div data-pagefind-ignore className="mt-16 pt-7 border-t border-hairline">
+        <Link href="/api" className="text-sm text-text-3 no-underline hover:text-text">
+          ← API reference
         </Link>
-        <div className="telem-cell text-right">
-          <span className="telem-key">Symbol</span>
-          <span className="telem-val blue">{apiExport.kind}</span>
-        </div>
       </div>
     </div>
   );
