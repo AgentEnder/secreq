@@ -1,0 +1,15 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": ["../packages/secreq-rule/assembly/index.ts"],
+  "entryPointStrategy": "resolve",
+  "tsconfig": "./typedoc.tsconfig.json",
+  "json": ".typedoc/secreq-rule.json",
+  "basePath": "..",
+  "skipErrorChecking": true,
+  "excludePrivate": true,
+  "excludeProtected": true,
+  "excludeInternal": true,
+  "excludeExternals": true,
+  "readme": "none",
+  "logLevel": "Warn"
+}

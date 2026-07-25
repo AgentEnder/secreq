@@ -64,7 +64,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
           {/* Nav links */}
           <nav className="hidden md:flex items-stretch h-full">
-            {[{ label: 'Docs', href: '/docs' }, { label: 'Schemas', href: '/schemas' }].map((link) => (
+            {[{ label: 'Docs', href: '/docs' }, { label: 'API', href: '/api' }, { label: 'Schemas', href: '/schemas' }].map((link) => (
               <Link
                 key={link.href}
                 href={link.href}
@@ -128,6 +128,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 className="block py-2 px-3 text-sm font-medium text-switch-text-dim hover:text-switch-text hover:bg-switch-bg-raised transition-all"
               >
                 Docs
+              </Link>
+              <Link
+                href="/api"
+                active={pathname.startsWith('/api')}
+                className="block py-2 px-3 text-sm font-medium text-switch-text-dim hover:text-switch-text hover:bg-switch-bg-raised transition-all"
+              >
+                API
               </Link>
               <Link
                 href="/schemas"
