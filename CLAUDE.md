@@ -20,7 +20,11 @@ new visual primitive — you MUST:
    fixture to incidentally exercise it. One fixture per visual state
    (empty / list / form / toast).
 2. **Regenerate every screenshot.** Existing fixtures may also be
-   affected (default size change, color tweaks, etc.).
+   affected (default size change, color tweaks, etc.). Every documented
+   fixture renders across the **chrome matrix** — three OS flavors by
+   two appearances — so one fixture produces six PNGs, named
+   `<id>-<os>-<appearance>.png`. Don't add a fixture whose only
+   distinction is its `OsFlavor`; the matrix already covers it.
 3. **Inspect the resulting PNGs.** Verify the regen rendered what you
    intended — open at least one new fixture and one existing fixture
    to confirm the change landed and didn't regress anything else.
@@ -61,6 +65,24 @@ over reaching into private state** — the harness is the canonical
 user of those entry points, but they should read as legitimate
 production APIs.
 
+### A fixture's caption is published documentation
+
+`Shot::new("id").caption("…")` on a fixture is not a test comment — it
+is the figcaption that ships on secreq.dev wherever that screenshot
+appears. The harness writes it into
+`dev-docs/ui-screenshots/manifest.json`, and the docs site renders it
+verbatim (`<code>` and `<b>` are the only markup honoured). Write it
+for someone *using* secreq; the README table below is the
+contributor-facing description of the same image.
+
+A fixture with nothing to say to a reader takes a bare id
+(`"99-resize-03".into()`) and ships without a caption; one that
+exercises the UI rather than documenting it also takes
+`Shot::exercise_only()` to opt out of the matrix. The docs site keeps
+no screenshot list of its own — it reads the manifest — so **never**
+add a parallel list of screenshots, dimensions or captions under
+`docs-site/`.
+
 ### Don't forget the README table
 
 `dev-docs/ui-screenshots/README.md` documents what each file in the
@@ -80,7 +102,7 @@ row is two lines of authorship cost; it's never wrong to write.
   `tests/schema_drift.rs` fails CI if either is stale.
 - The design plan for the remote secret agent (serving `secret://`
   refs to a guest VM over a scoped socket) lives at
-  `dev-docs/plans/2026-07-16-remote-secret-agent.md`. Its provenance
+  `brain: areas/secreq/design/2026-07-16-remote-secret-agent.md`. Its provenance
   section is load-bearing: the scoped-agent path must **never** call
   `daemon/peercred.rs` or `provenance.rs`, because a guest has no host
   pid and a forwarded socket's peer is the tunnel (sshd), not the
