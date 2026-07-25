@@ -93,6 +93,11 @@ export async function scanAndRenderDocs(docsDir: string): Promise<DocPage[]> {
 /**
  * Build the grouped sidebar navigation from the manifest, appending a synthetic
  * "Schemas" entry that links to the schema-viewer page.
+ *
+ * The TypeDoc-generated `secreq-rule` SDK reference lives at `/api` (rendered by
+ * `vike-plugin-typedoc`, not a markdown doc). It is surfaced as an "SDK API
+ * reference" link inside the "Advanced" section, right beside "Programmable
+ * rules" — the wasm-rules doc that sends authors to it.
  */
 export function buildNavigation(docs: DocPage[]): NavigationItem[] {
   const bySlug = new Map(docs.map((d) => [d.slug, d]));
@@ -106,6 +111,15 @@ export function buildNavigation(docs: DocPage[]): NavigationItem[] {
         path: `/docs/${d.slug}`,
       })),
   }));
+
+  const apiLink: NavigationItem = { title: 'SDK API reference', path: '/api' };
+  const advanced = nav.find((item) => item.title === 'Advanced');
+  if (advanced?.children) {
+    const wasmIdx = advanced.children.findIndex((c) => c.path === '/docs/wasm-rules');
+    advanced.children.splice(wasmIdx >= 0 ? wasmIdx + 1 : advanced.children.length, 0, apiLink);
+  } else {
+    nav.push({ title: 'Advanced', children: [apiLink] });
+  }
 
   nav.push({ title: 'Schemas', path: '/schemas' });
 

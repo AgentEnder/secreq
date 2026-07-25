@@ -1,0 +1,14 @@
+{
+  "//": "TypeDoc-only tsconfig for the secreq-rule AssemblyScript SDK. The SDK's own assembly/tsconfig.json extends `assemblyscript/std/assembly.json`, which is NOT installed here (secreq-rule is a standalone npm island, not a pnpm-workspace member). The public authoring surface (assembly/index.ts -> ctx.ts, decision.ts) uses only plain-TS constructs (string, arrays, classes, enums) — no i32/StaticArray/linear-memory types — so a vanilla TS config parses it. The AS-specific ABI glue (abi.ts, json.ts) is not part of the entry graph. `--skipErrorChecking` (set in typedoc.json) covers any residual AS-ism.",
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": false,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": [],
+    "lib": ["ESNext"]
+  },
+  "include": ["../packages/secreq-rule/assembly/index.ts"]
+}

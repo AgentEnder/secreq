@@ -2,3 +2,4 @@ node_modules
 dist
 .vike
 /public/schemas
+/.typedoc
