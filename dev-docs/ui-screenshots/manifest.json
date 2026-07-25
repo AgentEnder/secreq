@@ -1,0 +1,734 @@
+{
+  "01-empty-all-clear": {
+    "caption": "Nothing is waiting on you. The manager stays one click away in the footer.",
+    "renders": {
+      "gnome": {
+        "dark": "01-empty-all-clear-gnome-dark.png",
+        "light": "01-empty-all-clear-gnome-light.png"
+      },
+      "macos": {
+        "dark": "01-empty-all-clear-macos-dark.png",
+        "light": "01-empty-all-clear-macos-light.png"
+      },
+      "windows": {
+        "dark": "01-empty-all-clear-windows-dark.png",
+        "light": "01-empty-all-clear-windows-light.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "01b-empty-all-clear-viewer": {
+    "caption": "<code>secreq view</code> opens straight to the audit log. With no history yet, it says so.",
+    "renders": {
+      "gnome": {
+        "dark": "01b-empty-all-clear-viewer-gnome-dark.png",
+        "light": "01b-empty-all-clear-viewer-gnome-light.png"
+      },
+      "macos": {
+        "dark": "01b-empty-all-clear-viewer-macos-dark.png",
+        "light": "01b-empty-all-clear-viewer-macos-light.png"
+      },
+      "windows": {
+        "dark": "01b-empty-all-clear-viewer-windows-dark.png",
+        "light": "01b-empty-all-clear-viewer-windows-light.png"
+      }
+    },
+    "window": "manager"
+  },
+  "02-single-pending": {
+    "caption": "The whole idea in one window. <b>Before</b> <code>gh</code> receives <code>GITHUB_TOKEN</code>, you see which secret is being released, which process asked for it, the directory it asked from, and how you answered last time.",
+    "renders": {
+      "gnome": {
+        "dark": "02-single-pending-gnome-dark.png",
+        "light": "02-single-pending-gnome-light.png"
+      },
+      "macos": {
+        "dark": "02-single-pending-macos-dark.png",
+        "light": "02-single-pending-macos-light.png"
+      },
+      "windows": {
+        "dark": "02-single-pending-windows-dark.png",
+        "light": "02-single-pending-windows-light.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "03-nested-tree": {
+    "caption": "A deeper ancestry. Every process between your shell and the asking binary is listed with its argv and pid, so a request from a build script never looks like one you typed.",
+    "renders": {
+      "gnome": {
+        "dark": "03-nested-tree-gnome-dark.png",
+        "light": "03-nested-tree-gnome-light.png"
+      },
+      "macos": {
+        "dark": "03-nested-tree-macos-dark.png",
+        "light": "03-nested-tree-macos-light.png"
+      },
+      "windows": {
+        "dark": "03-nested-tree-windows-dark.png",
+        "light": "03-nested-tree-windows-light.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "04-multi-root": {
+    "caption": "Two unrelated commands asked at once. You answer the oldest first; the rest wait behind <b>1 more waiting</b> rather than stacking windows.",
+    "renders": {
+      "gnome": {
+        "dark": "04-multi-root-gnome-dark.png",
+        "light": "04-multi-root-gnome-light.png"
+      },
+      "macos": {
+        "dark": "04-multi-root-macos-dark.png",
+        "light": "04-multi-root-macos-light.png"
+      },
+      "windows": {
+        "dark": "04-multi-root-windows-dark.png",
+        "light": "04-multi-root-windows-light.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "05-folded-run": {
+    "caption": "A binary that re-executes itself would otherwise stack four identical rows. The chain folds to one entry per distinct process.",
+    "renders": {
+      "gnome": {
+        "dark": "05-folded-run-gnome-dark.png",
+        "light": "05-folded-run-gnome-light.png"
+      },
+      "macos": {
+        "dark": "05-folded-run-macos-dark.png",
+        "light": "05-folded-run-macos-light.png"
+      },
+      "windows": {
+        "dark": "05-folded-run-windows-dark.png",
+        "light": "05-folded-run-windows-light.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "06-pending-denied-last": {
+    "caption": "The HISTORY row carries your last decision for this wrap and caller. A previous deny is tinted, so a repeat request from something you already turned down is hard to approve by reflex.",
+    "renders": {
+      "gnome": {
+        "dark": "06-pending-denied-last-gnome-dark.png",
+        "light": "06-pending-denied-last-gnome-light.png"
+      },
+      "macos": {
+        "dark": "06-pending-denied-last-macos-dark.png",
+        "light": "06-pending-denied-last-macos-light.png"
+      },
+      "windows": {
+        "dark": "06-pending-denied-last-windows-dark.png",
+        "light": "06-pending-denied-last-windows-light.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "07-audit-tab": {
+    "caption": "Every decision is written down: what asked, what it wanted, where from, and how it went. Your answers and rule auto-fires land in the same list.",
+    "renders": {
+      "gnome": {
+        "dark": "07-audit-tab-gnome-dark.png",
+        "light": "07-audit-tab-gnome-light.png"
+      },
+      "macos": {
+        "dark": "07-audit-tab-macos-dark.png",
+        "light": "07-audit-tab-macos-light.png"
+      },
+      "windows": {
+        "dark": "07-audit-tab-windows-dark.png",
+        "light": "07-audit-tab-windows-light.png"
+      }
+    },
+    "window": "manager"
+  },
+  "08-rules-tab-empty": {
+    "caption": "No rules yet — every request comes to you until you save one.",
+    "renders": {
+      "gnome": {
+        "dark": "08-rules-tab-empty-gnome-dark.png",
+        "light": "08-rules-tab-empty-gnome-light.png"
+      },
+      "macos": {
+        "dark": "08-rules-tab-empty-macos-dark.png",
+        "light": "08-rules-tab-empty-macos-light.png"
+      },
+      "windows": {
+        "dark": "08-rules-tab-empty-windows-dark.png",
+        "light": "08-rules-tab-empty-windows-light.png"
+      }
+    },
+    "window": "manager"
+  },
+  "09-rules-tab-list": {
+    "caption": "Saved rules answer for you. Each row shows what it matches, whether it approves or denies, how often it has fired, and which secrets it was trained on.",
+    "renders": {
+      "gnome": {
+        "dark": "09-rules-tab-list-gnome-dark.png",
+        "light": "09-rules-tab-list-gnome-light.png"
+      },
+      "macos": {
+        "dark": "09-rules-tab-list-macos-dark.png",
+        "light": "09-rules-tab-list-macos-light.png"
+      },
+      "windows": {
+        "dark": "09-rules-tab-list-windows-dark.png",
+        "light": "09-rules-tab-list-windows-light.png"
+      }
+    },
+    "window": "manager"
+  },
+  "10-rules-form-new": {
+    "caption": "A blank rule. Match on the wrap, the argv and the ancestor process, then choose whether a match approves or denies.",
+    "renders": {
+      "gnome": {
+        "dark": "10-rules-form-new-gnome-dark.png",
+        "light": "10-rules-form-new-gnome-light.png"
+      },
+      "macos": {
+        "dark": "10-rules-form-new-macos-dark.png",
+        "light": "10-rules-form-new-macos-light.png"
+      },
+      "windows": {
+        "dark": "10-rules-form-new-windows-dark.png",
+        "light": "10-rules-form-new-windows-light.png"
+      }
+    },
+    "window": "manager"
+  },
+  "11-rules-form-edit-deny": {
+    "caption": "A deny rule carries a message. That text is what you see in the banner when the rule fires, so write it as a reminder to your future self.",
+    "renders": {
+      "gnome": {
+        "dark": "11-rules-form-edit-deny-gnome-dark.png",
+        "light": "11-rules-form-edit-deny-gnome-light.png"
+      },
+      "macos": {
+        "dark": "11-rules-form-edit-deny-macos-dark.png",
+        "light": "11-rules-form-edit-deny-macos-light.png"
+      },
+      "windows": {
+        "dark": "11-rules-form-edit-deny-windows-dark.png",
+        "light": "11-rules-form-edit-deny-windows-light.png"
+      }
+    },
+    "window": "manager"
+  },
+  "12-auto-deny-toast": {
+    "caption": "A rule denied a request without asking. The banner names the rule that fired and the message it was configured with.",
+    "renders": {
+      "gnome": {
+        "dark": "12-auto-deny-toast-gnome-dark.png",
+        "light": "12-auto-deny-toast-gnome-light.png"
+      },
+      "macos": {
+        "dark": "12-auto-deny-toast-macos-dark.png",
+        "light": "12-auto-deny-toast-macos-light.png"
+      },
+      "windows": {
+        "dark": "12-auto-deny-toast-windows-dark.png",
+        "light": "12-auto-deny-toast-windows-light.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "13-rules-tab-suggestions": {
+    "caption": "secreq watches what you keep approving and offers the rule you were about to write, along with the cluster of decisions it drew from.",
+    "renders": {
+      "gnome": {
+        "dark": "13-rules-tab-suggestions-gnome-dark.png",
+        "light": "13-rules-tab-suggestions-gnome-light.png"
+      },
+      "macos": {
+        "dark": "13-rules-tab-suggestions-macos-dark.png",
+        "light": "13-rules-tab-suggestions-macos-light.png"
+      },
+      "windows": {
+        "dark": "13-rules-tab-suggestions-windows-dark.png",
+        "light": "13-rules-tab-suggestions-windows-light.png"
+      }
+    },
+    "window": "manager"
+  },
+  "14-audit-tab-with-pending": {
+    "caption": "You can read the log while a request is still queued — the prompt window holds the decision, so browsing history never blocks it.",
+    "renders": {
+      "gnome": {
+        "dark": "14-audit-tab-with-pending-gnome-dark.png",
+        "light": "14-audit-tab-with-pending-gnome-light.png"
+      },
+      "macos": {
+        "dark": "14-audit-tab-with-pending-macos-dark.png",
+        "light": "14-audit-tab-with-pending-macos-light.png"
+      },
+      "windows": {
+        "dark": "14-audit-tab-with-pending-windows-dark.png",
+        "light": "14-audit-tab-with-pending-windows-light.png"
+      }
+    },
+    "window": "manager"
+  },
+  "15-audit-tab-search-filtering": {
+    "caption": "Search narrows the log across every field at once, and reports how much of it you are looking at.",
+    "renders": {
+      "gnome": {
+        "dark": "15-audit-tab-search-filtering-gnome-dark.png",
+        "light": "15-audit-tab-search-filtering-gnome-light.png"
+      },
+      "macos": {
+        "dark": "15-audit-tab-search-filtering-macos-dark.png",
+        "light": "15-audit-tab-search-filtering-macos-light.png"
+      },
+      "windows": {
+        "dark": "15-audit-tab-search-filtering-windows-dark.png",
+        "light": "15-audit-tab-search-filtering-windows-light.png"
+      }
+    },
+    "window": "manager"
+  },
+  "16-audit-tab-search-no-matches": {
+    "renders": {
+      "gnome": {
+        "dark": "16-audit-tab-search-no-matches-gnome-dark.png",
+        "light": "16-audit-tab-search-no-matches-gnome-light.png"
+      },
+      "macos": {
+        "dark": "16-audit-tab-search-no-matches-macos-dark.png",
+        "light": "16-audit-tab-search-no-matches-macos-light.png"
+      },
+      "windows": {
+        "dark": "16-audit-tab-search-no-matches-windows-dark.png",
+        "light": "16-audit-tab-search-no-matches-windows-light.png"
+      }
+    },
+    "window": "manager"
+  },
+  "17-audit-tab-search-multi-term": {
+    "caption": "Each term can match a different field, so <code>gh auth</code> finds the row where both are true.",
+    "renders": {
+      "gnome": {
+        "dark": "17-audit-tab-search-multi-term-gnome-dark.png",
+        "light": "17-audit-tab-search-multi-term-gnome-light.png"
+      },
+      "macos": {
+        "dark": "17-audit-tab-search-multi-term-macos-dark.png",
+        "light": "17-audit-tab-search-multi-term-macos-light.png"
+      },
+      "windows": {
+        "dark": "17-audit-tab-search-multi-term-windows-dark.png",
+        "light": "17-audit-tab-search-multi-term-windows-light.png"
+      }
+    },
+    "window": "manager"
+  },
+  "18-rules-tab-suggestions-by-recency": {
+    "renders": {
+      "gnome": {
+        "dark": "18-rules-tab-suggestions-by-recency-gnome-dark.png",
+        "light": "18-rules-tab-suggestions-by-recency-gnome-light.png"
+      },
+      "macos": {
+        "dark": "18-rules-tab-suggestions-by-recency-macos-dark.png",
+        "light": "18-rules-tab-suggestions-by-recency-macos-light.png"
+      },
+      "windows": {
+        "dark": "18-rules-tab-suggestions-by-recency-windows-dark.png",
+        "light": "18-rules-tab-suggestions-by-recency-windows-light.png"
+      }
+    },
+    "window": "manager"
+  },
+  "19-rules-tab-by-recency": {
+    "renders": {
+      "gnome": {
+        "dark": "19-rules-tab-by-recency-gnome-dark.png",
+        "light": "19-rules-tab-by-recency-gnome-light.png"
+      },
+      "macos": {
+        "dark": "19-rules-tab-by-recency-macos-dark.png",
+        "light": "19-rules-tab-by-recency-macos-light.png"
+      },
+      "windows": {
+        "dark": "19-rules-tab-by-recency-windows-dark.png",
+        "light": "19-rules-tab-by-recency-windows-light.png"
+      }
+    },
+    "window": "manager"
+  },
+  "20-rules-tab-rules-and-suggestions": {
+    "caption": "Saved rules first, then suggestions — what you decided, above what you keep deciding.",
+    "renders": {
+      "gnome": {
+        "dark": "20-rules-tab-rules-and-suggestions-gnome-dark.png",
+        "light": "20-rules-tab-rules-and-suggestions-gnome-light.png"
+      },
+      "macos": {
+        "dark": "20-rules-tab-rules-and-suggestions-macos-dark.png",
+        "light": "20-rules-tab-rules-and-suggestions-macos-light.png"
+      },
+      "windows": {
+        "dark": "20-rules-tab-rules-and-suggestions-windows-dark.png",
+        "light": "20-rules-tab-rules-and-suggestions-windows-light.png"
+      }
+    },
+    "window": "manager"
+  },
+  "21-gate-only-pending": {
+    "caption": "A wrap can inject nothing and still ask. Gate-only wraps put a consent step in front of a command without holding any secret for it.",
+    "renders": {
+      "gnome": {
+        "dark": "21-gate-only-pending-gnome-dark.png",
+        "light": "21-gate-only-pending-gnome-light.png"
+      },
+      "macos": {
+        "dark": "21-gate-only-pending-macos-dark.png",
+        "light": "21-gate-only-pending-macos-light.png"
+      },
+      "windows": {
+        "dark": "21-gate-only-pending-windows-dark.png",
+        "light": "21-gate-only-pending-windows-light.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "22-pending-arrival-highlight": {
+    "renders": {
+      "gnome": {
+        "dark": "22-pending-arrival-highlight-gnome-dark.png",
+        "light": "22-pending-arrival-highlight-gnome-light.png"
+      },
+      "macos": {
+        "dark": "22-pending-arrival-highlight-macos-dark.png",
+        "light": "22-pending-arrival-highlight-macos-light.png"
+      },
+      "windows": {
+        "dark": "22-pending-arrival-highlight-windows-dark.png",
+        "light": "22-pending-arrival-highlight-windows-light.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "23-pending-resolving": {
+    "caption": "After you approve, the prompt goes read-only and reports <b>Resolving…</b>. That is your provider being called, and why a biometric prompt may appear next.",
+    "renders": {
+      "gnome": {
+        "dark": "23-pending-resolving-gnome-dark.png",
+        "light": "23-pending-resolving-gnome-light.png"
+      },
+      "macos": {
+        "dark": "23-pending-resolving-macos-dark.png",
+        "light": "23-pending-resolving-macos-light.png"
+      },
+      "windows": {
+        "dark": "23-pending-resolving-windows-dark.png",
+        "light": "23-pending-resolving-windows-light.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "24-ssh-sign-pending": {
+    "caption": "Point <code>SSH_AUTH_SOCK</code> at secreq and every signature is gated. You see the key fingerprint and the reason before <code>git push</code> signs, plus quiet grants covering a 30-minute session.",
+    "renders": {
+      "gnome": {
+        "dark": "24-ssh-sign-pending-gnome-dark.png",
+        "light": "24-ssh-sign-pending-gnome-light.png"
+      },
+      "macos": {
+        "dark": "24-ssh-sign-pending-macos-dark.png",
+        "light": "24-ssh-sign-pending-macos-light.png"
+      },
+      "windows": {
+        "dark": "24-ssh-sign-pending-windows-dark.png",
+        "light": "24-ssh-sign-pending-windows-light.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "25-badge-one-pending": {
+    "caption": "One request waiting, shown as a badge when the prompt is not in front of you.",
+    "renders": {
+      "gnome": {
+        "dark": "25-badge-one-pending-gnome-dark.png",
+        "light": "25-badge-one-pending-gnome-light.png"
+      },
+      "macos": {
+        "dark": "25-badge-one-pending-macos-dark.png",
+        "light": "25-badge-one-pending-macos-light.png"
+      },
+      "windows": {
+        "dark": "25-badge-one-pending-windows-dark.png",
+        "light": "25-badge-one-pending-windows-light.png"
+      }
+    },
+    "window": "badge"
+  },
+  "26-badge-three-pending": {
+    "caption": "Three waiting. The count is the whole message.",
+    "renders": {
+      "gnome": {
+        "dark": "26-badge-three-pending-gnome-dark.png",
+        "light": "26-badge-three-pending-gnome-light.png"
+      },
+      "macos": {
+        "dark": "26-badge-three-pending-macos-dark.png",
+        "light": "26-badge-three-pending-macos-light.png"
+      },
+      "windows": {
+        "dark": "26-badge-three-pending-windows-dark.png",
+        "light": "26-badge-three-pending-windows-light.png"
+      }
+    },
+    "window": "badge"
+  },
+  "27-audit-tab-abandoned": {
+    "caption": "A command that exited before you answered is logged as <b>abandoned</b>. The faint verdict reads as a non-event — it is not a denial, and nothing was released.",
+    "renders": {
+      "gnome": {
+        "dark": "27-audit-tab-abandoned-gnome-dark.png",
+        "light": "27-audit-tab-abandoned-gnome-light.png"
+      },
+      "macos": {
+        "dark": "27-audit-tab-abandoned-macos-dark.png",
+        "light": "27-audit-tab-abandoned-macos-light.png"
+      },
+      "windows": {
+        "dark": "27-audit-tab-abandoned-windows-dark.png",
+        "light": "27-audit-tab-abandoned-windows-light.png"
+      }
+    },
+    "window": "manager"
+  },
+  "28-prompt-many-secrets": {
+    "caption": "A <code>secreq run</code> carrying 42 variables leads with the count and groups the secrets by locator prefix. The body scrolls; the decision buttons never leave the window.",
+    "renders": {
+      "gnome": {
+        "dark": "28-prompt-many-secrets-gnome-dark.png",
+        "light": "28-prompt-many-secrets-gnome-light.png"
+      },
+      "macos": {
+        "dark": "28-prompt-many-secrets-macos-dark.png",
+        "light": "28-prompt-many-secrets-macos-light.png"
+      },
+      "windows": {
+        "dark": "28-prompt-many-secrets-windows-dark.png",
+        "light": "28-prompt-many-secrets-windows-light.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "34-agent-scope-pending": {
+    "caption": "A request from a guest VM. The headline is the <b>sandbox</b>, because a guest has no host process tree — the scope you declared is the principal, and there is deliberately no caller chain to read.",
+    "renders": {
+      "gnome": {
+        "dark": "34-agent-scope-pending-gnome-dark.png",
+        "light": "34-agent-scope-pending-gnome-light.png"
+      },
+      "macos": {
+        "dark": "34-agent-scope-pending-macos-dark.png",
+        "light": "34-agent-scope-pending-macos-light.png"
+      },
+      "windows": {
+        "dark": "34-agent-scope-pending-windows-dark.png",
+        "light": "34-agent-scope-pending-windows-light.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "35-audit-tab-agent-out-of-scope": {
+    "caption": "A guest asked for a secret outside its declared scope. The agent refused without prompting you, and the attempt is on the record.",
+    "renders": {
+      "gnome": {
+        "dark": "35-audit-tab-agent-out-of-scope-gnome-dark.png",
+        "light": "35-audit-tab-agent-out-of-scope-gnome-light.png"
+      },
+      "macos": {
+        "dark": "35-audit-tab-agent-out-of-scope-macos-dark.png",
+        "light": "35-audit-tab-agent-out-of-scope-macos-light.png"
+      },
+      "windows": {
+        "dark": "35-audit-tab-agent-out-of-scope-windows-dark.png",
+        "light": "35-audit-tab-agent-out-of-scope-windows-light.png"
+      }
+    },
+    "window": "manager"
+  },
+  "36-agent-guest-chain-pending": {
+    "caption": "The same request when the guest volunteers a caller chain. It renders dimmed under <b>GUEST SAYS</b> and marked <b>not verifiable</b> — recorded as a claim, never used to make the decision.",
+    "renders": {
+      "gnome": {
+        "dark": "36-agent-guest-chain-pending-gnome-dark.png",
+        "light": "36-agent-guest-chain-pending-gnome-light.png"
+      },
+      "macos": {
+        "dark": "36-agent-guest-chain-pending-macos-dark.png",
+        "light": "36-agent-guest-chain-pending-macos-light.png"
+      },
+      "windows": {
+        "dark": "36-agent-guest-chain-pending-windows-dark.png",
+        "light": "36-agent-guest-chain-pending-windows-light.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "37-rules-scaffold-open-in-editor": {
+    "caption": "When a rule needs more than pattern matching, secreq scaffolds a programmable one and hands it to your editor.",
+    "renders": {
+      "gnome": {
+        "dark": "37-rules-scaffold-open-in-editor-gnome-dark.png",
+        "light": "37-rules-scaffold-open-in-editor-gnome-light.png"
+      },
+      "macos": {
+        "dark": "37-rules-scaffold-open-in-editor-macos-dark.png",
+        "light": "37-rules-scaffold-open-in-editor-macos-light.png"
+      },
+      "windows": {
+        "dark": "37-rules-scaffold-open-in-editor-windows-dark.png",
+        "light": "37-rules-scaffold-open-in-editor-windows-light.png"
+      }
+    },
+    "window": "manager"
+  },
+  "38-rules-scaffold-editor-picker": {
+    "caption": "Pick from the editors secreq detected. Your choice becomes the default for next time.",
+    "renders": {
+      "gnome": {
+        "dark": "38-rules-scaffold-editor-picker-gnome-dark.png",
+        "light": "38-rules-scaffold-editor-picker-gnome-light.png"
+      },
+      "macos": {
+        "dark": "38-rules-scaffold-editor-picker-macos-dark.png",
+        "light": "38-rules-scaffold-editor-picker-macos-light.png"
+      },
+      "windows": {
+        "dark": "38-rules-scaffold-editor-picker-windows-dark.png",
+        "light": "38-rules-scaffold-editor-picker-windows-light.png"
+      }
+    },
+    "window": "manager"
+  },
+  "99-resize-00-500x470": {
+    "renders": {
+      "macos": {
+        "dark": "99-resize-00-500x470-macos-dark.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "99-resize-01-360x320": {
+    "renders": {
+      "macos": {
+        "dark": "99-resize-01-360x320-macos-dark.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "99-resize-02-220x240": {
+    "renders": {
+      "macos": {
+        "dark": "99-resize-02-220x240-macos-dark.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "99-resize-03-120x160": {
+    "renders": {
+      "macos": {
+        "dark": "99-resize-03-120x160-macos-dark.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "99-resize-04-60x100": {
+    "renders": {
+      "macos": {
+        "dark": "99-resize-04-60x100-macos-dark.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "99-resize-05-30x80": {
+    "renders": {
+      "macos": {
+        "dark": "99-resize-05-30x80-macos-dark.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "99-resize-06-800x600": {
+    "renders": {
+      "macos": {
+        "dark": "99-resize-06-800x600-macos-dark.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "99-resize-07-1200x800": {
+    "renders": {
+      "macos": {
+        "dark": "99-resize-07-1200x800-macos-dark.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "99-resize-08-1600x1000": {
+    "renders": {
+      "macos": {
+        "dark": "99-resize-08-1600x1000-macos-dark.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "99-resize-09-2400x1400": {
+    "renders": {
+      "macos": {
+        "dark": "99-resize-09-2400x1400-macos-dark.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "99-resize-10-3840x2160": {
+    "renders": {
+      "macos": {
+        "dark": "99-resize-10-3840x2160-macos-dark.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "run-consent": {
+    "caption": "A <code>secreq run</code> request: a free-form command with secrets resolved from the ambient environment. There is no wrap to remember an answer against, so this one asks every time.",
+    "renders": {
+      "gnome": {
+        "dark": "run-consent-gnome-dark.png",
+        "light": "run-consent-gnome-light.png"
+      },
+      "macos": {
+        "dark": "run-consent-macos-dark.png",
+        "light": "run-consent-macos-light.png"
+      },
+      "windows": {
+        "dark": "run-consent-windows-dark.png",
+        "light": "run-consent-windows-light.png"
+      }
+    },
+    "window": "prompt"
+  },
+  "run-session-card": {
+    "caption": "Three sibling requests from one run, merged into a single decision. Hover a secret to see which command wanted it.",
+    "renders": {
+      "gnome": {
+        "dark": "run-session-card-gnome-dark.png",
+        "light": "run-session-card-gnome-light.png"
+      },
+      "macos": {
+        "dark": "run-session-card-macos-dark.png",
+        "light": "run-session-card-macos-light.png"
+      },
+      "windows": {
+        "dark": "run-session-card-windows-dark.png",
+        "light": "run-session-card-windows-light.png"
+      }
+    },
+    "window": "prompt"
+  }
+}

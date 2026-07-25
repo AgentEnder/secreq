@@ -49,9 +49,9 @@ use secreq::recommendations::SuggestionSort;
 use secreq::rule_scaffold::Editor;
 use secreq::rules::{Pattern, Rule, RuleDecision, RuleMatch};
 
-/// Where the regenerated PNGs land. Relative to the workspace root,
+/// Where the regenerated PNGs land. Relative to the package root,
 /// which is `cargo test`'s CWD.
-const OUT_DIR: &str = "dev-docs/ui-screenshots";
+const OUT_DIR: &str = "../../dev-docs/ui-screenshots";
 
 /// Logical prompt-window size — matches the production viewport
 /// (`prompt_ui::PROMPT_DEFAULT_SIZE`, used by `daemon/child.rs`).
@@ -117,7 +117,7 @@ fn submit(
     };
     let ask = Ask {
         command: command.into_iter().map(String::from).collect(),
-        cwd: "/Users/example/project".to_owned(),
+        cwd: "~/repos/acme".to_owned(),
         callers,
         secrets,
         providers: HashMap::new(),
@@ -149,7 +149,7 @@ fn submit_run(
     };
     let ask = Ask {
         command: command.into_iter().map(String::from).collect(),
-        cwd: "/Users/example/project".to_owned(),
+        cwd: "~/repos/acme".to_owned(),
         callers,
         secrets,
         providers: HashMap::new(),
@@ -184,9 +184,10 @@ fn submit_ssh(
     };
     let ask = Ask {
         command: vec![format!("ssh-sign {key_id}")],
-        // SSH signs have no requesting cwd — the peer is a socket
-        // connection, not a wrapped exec — so leave it empty.
-        cwd: String::new(),
+        // The SSH path has no client to self-report a cwd, so the daemon
+        // reads it off the socket peer (`provenance::cwd_for_pid`); for a
+        // `git push` that is the repository being pushed.
+        cwd: "~/repos/acme".to_owned(),
         callers,
         secrets: vec![],
         providers: HashMap::new(),
@@ -270,7 +271,7 @@ fn pending(
     };
     let ask = Ask {
         command: command.into_iter().map(String::from).collect(),
-        cwd: "/Users/example/project".to_owned(),
+        cwd: "~/repos/acme".to_owned(),
         callers,
         secrets,
         providers: HashMap::new(),
@@ -292,7 +293,7 @@ fn audit_line(
 ) -> AuditEntry {
     AuditEntry {
         ts_unix: now_unix().saturating_sub(secs_ago),
-        cwd: "/Users/example/project".to_owned(),
+        cwd: "~/repos/acme".to_owned(),
         wrap: wrap.to_owned(),
         args: vec![],
         callers: vec![secreq::audit::AuditCaller {
@@ -335,7 +336,7 @@ fn audit_line_traced(
 ) -> AuditEntry {
     AuditEntry {
         ts_unix: now_unix().saturating_sub(secs_ago),
-        cwd: "/Users/example/project".to_owned(),
+        cwd: "~/repos/acme".to_owned(),
         wrap: wrap.to_owned(),
         args: args.iter().map(|s| (*s).to_owned()).collect(),
         callers: chain
@@ -361,7 +362,7 @@ fn audit_line_traced(
 fn audit_auto_fire(secs_ago: u64, rule_id: &str, decision: &str) -> AuditEntry {
     AuditEntry {
         ts_unix: now_unix().saturating_sub(secs_ago),
-        cwd: "/Users/example/project".to_owned(),
+        cwd: "~/repos/acme".to_owned(),
         wrap: "gh".to_owned(),
         args: vec!["api".to_owned()],
         callers: vec![secreq::audit::AuditCaller {
@@ -407,12 +408,213 @@ fn install_audit_log(audit_entries: &[AuditEntry]) -> (common::EnvGuard, common:
     (guard, sandbox)
 }
 
-fn save_png(name: &str, img: &image::RgbaImage) {
+/// One fixture's identity and everything the docs site needs to publish
+/// it, declared at the fixture that renders it.
+///
+/// The docs site consumes `manifest.json` and adds nothing of its own, so
+/// this is the only place a screenshot is described. A fixture with
+/// nothing to say to a reader is spelled `"id".into()` and simply ships
+/// without a caption — the resize sweep, for instance, exists to catch
+/// panics and is not documentation.
+struct Shot {
+    /// PNG basename stem, without the chrome suffix or extension.
+    id: String,
+    /// What a reader should take from the image, in the voice of the
+    /// docs rather than the test suite. `<code>` and `<b>` are the only
+    /// markup the site renders.
+    caption: Option<&'static str>,
+    /// Whether this fixture renders across the full chrome matrix.
+    ///
+    /// True for anything the docs publish. False for a fixture that
+    /// *exercises* the UI rather than documenting it — see
+    /// [`Shot::exercise_only`].
+    matrix: bool,
+}
+
+impl Shot {
+    fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            caption: None,
+            matrix: true,
+        }
+    }
+
+    fn caption(mut self, caption: &'static str) -> Self {
+        self.caption = Some(caption);
+        self
+    }
+
+    /// Render this fixture once (macOS dark) instead of across the
+    /// chrome matrix.
+    ///
+    /// For fixtures that exist to catch a regression rather than to
+    /// illustrate anything: the resize sweep drives eleven viewport
+    /// sizes looking for layout panics, and rendering each of those six
+    /// ways would produce sixty-six PNGs nobody will ever open.
+    fn exercise_only(mut self) -> Self {
+        self.matrix = false;
+        self
+    }
+}
+
+impl From<&str> for Shot {
+    fn from(id: &str) -> Self {
+        Shot::new(id)
+    }
+}
+
+impl From<String> for Shot {
+    fn from(id: String) -> Self {
+        Shot::new(id)
+    }
+}
+
+/// Which secreq window a fixture drives. Recorded in the manifest so
+/// consumers can label a PNG without pattern-matching on its filename.
+#[derive(Clone, Copy)]
+enum ShotKind {
+    Prompt,
+    Manager,
+    Badge,
+}
+
+impl ShotKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            ShotKind::Prompt => "prompt",
+            ShotKind::Manager => "manager",
+            ShotKind::Badge => "badge",
+        }
+    }
+}
+
+fn os_flavor_str(flavor: OsFlavor) -> &'static str {
+    match flavor {
+        OsFlavor::MacOs => "macos",
+        OsFlavor::Windows => "windows",
+        OsFlavor::Gnome => "gnome",
+    }
+}
+
+/// Every documented fixture renders across the full chrome matrix:
+/// three OS flavors by two appearances, six PNGs per fixture.
+///
+/// secreq's windows are natively themed and follow the host — its
+/// chrome is a macOS sheet, a Windows ContentDialog or a GNOME
+/// AdwMessageDialog depending on where it runs, in whichever appearance
+/// the OS is set to. None of that is a setting the user picks, so no
+/// combination is the "real" one and none is a variant of another.
+///
+/// Rendering the whole matrix unconditionally is what lets the docs show
+/// a reader their own desktop: no fixture has to declare a counterpart,
+/// nothing goes stale by regenerating one corner of the grid, and a
+/// screenshot can never depict chrome the reader has never seen.
+const FLAVORS: [OsFlavor; 3] = [OsFlavor::MacOs, OsFlavor::Windows, OsFlavor::Gnome];
+const APPEARANCES: [(&str, bool); 2] = [("dark", true), ("light", false)];
+
+/// The single cell rendered for a fixture that opts out of the matrix.
+const BASELINE: (OsFlavor, bool) = (OsFlavor::MacOs, true);
+
+/// PNG basename for one cell of the matrix.
+///
+/// Every render is suffixed, including the baseline — a bare `id.png`
+/// would quietly privilege one chrome as the canonical look, which is
+/// exactly the assumption this sweep exists to remove.
+fn render_file_stem(id: &str, flavor: OsFlavor, dark: bool) -> String {
+    let appearance = if dark { "dark" } else { "light" };
+    format!("{id}-{}-{appearance}", os_flavor_str(flavor))
+}
+
+/// The `(flavor, dark)` cells a fixture renders.
+fn cells_for(shot: &Shot) -> Vec<(OsFlavor, bool)> {
+    if !shot.matrix {
+        return vec![BASELINE];
+    }
+    FLAVORS
+        .iter()
+        .flat_map(|&flavor| APPEARANCES.iter().map(move |&(_, dark)| (flavor, dark)))
+        .collect()
+}
+
+/// Serialises manifest read-modify-write across the harness's test
+/// threads. `cargo test` runs a target's tests as threads in one
+/// process, so a plain mutex is enough.
+static MANIFEST_LOCK: Mutex<()> = Mutex::new(());
+
+/// Merge one fixture's entry into `dev-docs/ui-screenshots/manifest.json`.
+///
+/// Merging rather than rewriting matters: a filtered run
+/// (`--ignored fixture_name`) regenerates a handful of PNGs, and must
+/// not blank out the entries for every fixture that did not run.
+///
+/// Pixel dimensions are deliberately absent — they are readable from the
+/// PNG header, and a number stored in two places is a number that
+/// eventually disagrees with itself.
+fn record_in_manifest(shot: &Shot, kind: ShotKind) {
+    let _guard = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let path = Path::new(OUT_DIR).join("manifest.json");
+    let mut manifest: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default();
+
+    // `renders` is nested os -> appearance -> filename, mirroring the two
+    // axes a reader's desktop actually varies along.
+    let mut renders = serde_json::Map::new();
+    for (flavor, dark) in cells_for(shot) {
+        let appearance = if dark { "dark" } else { "light" };
+        let file = format!("{}.png", render_file_stem(&shot.id, flavor, dark));
+        renders
+            .entry(os_flavor_str(flavor))
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+            .as_object_mut()
+            .expect("renders[os] is an object")
+            .insert(appearance.into(), file.into());
+    }
+
+    let mut entry = serde_json::Map::new();
+    entry.insert("window".into(), kind.as_str().into());
+    entry.insert("renders".into(), renders.into());
+    if let Some(caption) = shot.caption {
+        entry.insert("caption".into(), caption.into());
+    }
+    manifest.insert(shot.id.clone(), entry.into());
+
+    // `serde_json::Map` is a BTreeMap by default, so keys serialise
+    // sorted and the file diffs cleanly between runs.
+    let body = serde_json::to_string_pretty(&manifest).expect("serialize manifest");
+    std::fs::write(&path, format!("{body}\n")).expect("write manifest.json");
+}
+
+fn save_png(shot: &Shot, flavor: OsFlavor, dark: bool, img: &image::RgbaImage) {
     let out_dir = Path::new(OUT_DIR);
     std::fs::create_dir_all(out_dir).expect("mkdir out");
-    let out = out_dir.join(format!("{name}.png"));
+    let out = out_dir.join(format!("{}.png", render_file_stem(&shot.id, flavor, dark)));
     img.save(&out).expect("save png");
     eprintln!("wrote {} ({}x{})", out.display(), img.width(), img.height());
+}
+
+/// Hand the renderer the whole window, the way production does.
+///
+/// `egui_kittest` wraps every `build_ui*` closure in a central-panel
+/// frame with a hardcoded 8px **outer** margin, so `ui.max_rect()`
+/// arrives inset on all four sides. Production has no such frame:
+/// eframe calls `App::ui` with the root `Ui` straight out of
+/// `Context::run_ui`, whose `max_rect` is the entire window. Without
+/// this the fixtures document a window 16px narrower and shorter than
+/// the real one, and anything that bleeds to an edge off `max_rect` —
+/// the Windows footer band, the pending badge — stops short of it.
+///
+/// Only the layout rect is inset; the clip rect is already the full
+/// window, so widening `max_rect` is the whole fix. The fixtures host
+/// no side or top panels, so the content rect is the same rect
+/// `Context::run_ui` hands the root `Ui` in production.
+fn full_window_ui<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let full = ui.ctx().content_rect();
+    ui.scope_builder(egui::UiBuilder::new().max_rect(full), add_contents)
+        .inner
 }
 
 // ── Prompt harness ────────────────────────────────────────────────────────
@@ -422,21 +624,18 @@ fn save_png(name: &str, img: &image::RgbaImage) {
 /// `submit_ask` / `begin_pending` paths; `toast` renders the transient
 /// auto-deny banner.
 fn render_prompt_fixture(
-    name: &str,
+    shot: impl Into<Shot>,
     audit_entries: Vec<AuditEntry>,
     setup: impl FnOnce(&SharedState) -> Vec<mpsc::Receiver<secreq::daemon::state::WaiterReply>>,
 ) {
-    render_prompt_fixture_full(name, PROMPT_SIZE, audit_entries, None, MACOS_DARK, setup);
+    render_prompt_fixture_full(shot, PROMPT_SIZE, audit_entries, None, setup);
 }
 
-/// `(flavor, dark)` pin for a fixture. Fixtures always pin both so the
-/// PNGs are deterministic regardless of the host OS and the harness's
-/// fallback theme.
-type ThemePin = (OsFlavor, bool);
-const MACOS_DARK: ThemePin = (OsFlavor::MacOs, true);
-
-fn apply_theme_pin(ctx: &egui::Context, pin: ThemePin) {
-    let (flavor, dark) = pin;
+/// Pin the OS chrome and one appearance. Fixtures pin the flavor so the
+/// PNGs are deterministic regardless of the host OS; the appearance is
+/// swept by the caller rather than chosen, because production has no
+/// appearance setting to choose with.
+fn apply_theme_pin(ctx: &egui::Context, flavor: OsFlavor, dark: bool) {
     OsFlavor::install_override(ctx, flavor);
     ctx.set_theme(if dark {
         egui::ThemePreference::Dark
@@ -446,15 +645,15 @@ fn apply_theme_pin(ctx: &egui::Context, pin: ThemePin) {
 }
 
 fn render_prompt_fixture_full(
-    name: &str,
+    shot: impl Into<Shot>,
     size: Vec2,
     audit_entries: Vec<AuditEntry>,
     toast: Option<AutoDenyToastView>,
-    theme_pin: ThemePin,
     setup: impl FnOnce(&SharedState) -> Vec<mpsc::Receiver<secreq::daemon::state::WaiterReply>>,
 ) {
-    // Held until after `harness.render()` — env reads happen during
-    // rendering, so the guard's lifetime must cover the full render.
+    let shot = shot.into();
+    // Held until after the last `harness.render()` — env reads happen
+    // during rendering, so the guard's lifetime must cover every pass.
     let sandbox = install_audit_log(&audit_entries);
 
     let state: SharedState = Arc::new(Mutex::new(State::new()));
@@ -463,37 +662,55 @@ fn render_prompt_fixture_full(
 
     // Snapshot the state outside the closure (the renderer takes the
     // plain `QueueSnapshot`, the same shape the prompt child rebuilds
-    // from the daemon's wire snapshot).
+    // from the daemon's wire snapshot). Cloned per pass so both
+    // appearances render from identical input.
     let snapshot = state.lock().unwrap().snapshot();
-    let toast_ref = toast.clone();
-    let mut harness = Harness::builder()
-        .with_size(size)
-        .with_pixels_per_point(PIXELS_PER_POINT)
-        .wgpu()
-        .build_ui_state(
-            move |ui, ws: &mut PromptWindowState| {
-                let ctx = ui.ctx().clone();
-                apply_theme_pin(&ctx, theme_pin);
-                secreq::daemon::ui::install_style(&ctx);
-                // The screenshot harness ignores action output — no
-                // user is clicking, and we don't need to dispatch
-                // anywhere.
-                let mut actions: Vec<secreq::daemon::ui::PendingAction> = Vec::new();
-                let _out =
-                    render_prompt_panel(&ctx, ui, &snapshot, toast_ref.as_ref(), ws, &mut actions);
-            },
-            PromptWindowState::new(),
-        );
-    harness.run();
-    let img = harness.render().expect("render wgpu");
-    save_png(name, &img);
+
+    for (flavor, dark) in cells_for(&shot) {
+        let snapshot = snapshot.clone();
+        let toast_ref = toast.clone();
+        let mut harness = Harness::builder()
+            .with_size(size)
+            .with_pixels_per_point(PIXELS_PER_POINT)
+            .wgpu()
+            .build_ui_state(
+                move |ui, ws: &mut PromptWindowState| {
+                    let ctx = ui.ctx().clone();
+                    apply_theme_pin(&ctx, flavor, dark);
+                    secreq::daemon::ui::install_style(&ctx);
+                    // The screenshot harness ignores action output — no
+                    // user is clicking, and we don't need to dispatch
+                    // anywhere.
+                    let mut actions: Vec<secreq::daemon::ui::PendingAction> = Vec::new();
+                    full_window_ui(ui, |ui| {
+                        render_prompt_panel(
+                            &ctx,
+                            ui,
+                            &snapshot,
+                            toast_ref.as_ref(),
+                            ws,
+                            &mut actions,
+                        );
+                    });
+                },
+                PromptWindowState::new(),
+            );
+        harness.run();
+        let img = harness.render().expect("render wgpu");
+        save_png(&shot, flavor, dark, &img);
+    }
+
+    record_in_manifest(&shot, ShotKind::Prompt);
     drop(sandbox);
 }
 
 // ── Manager harness ───────────────────────────────────────────────────────
 
 /// Type alias for the per-fixture `ManagerWindowState` setup hook.
-type ManagerStateSetup<'a> = Box<dyn FnOnce(&mut ManagerWindowState) + 'a>;
+///
+/// `Fn`, not `FnOnce`: each appearance renders from its own fresh
+/// `ManagerWindowState`, so the hook runs once per pass.
+type ManagerStateSetup<'a> = Box<dyn Fn(&mut ManagerWindowState) + 'a>;
 
 /// Extra fixture inputs for the manager window. Each field has a
 /// sensible default so most fixtures only set what they need.
@@ -508,45 +725,61 @@ struct ManagerExtras<'a> {
     /// to focus a specific view, open a rule form, or pre-fill the
     /// audit search. Defaults to no-op.
     window_state: Option<ManagerStateSetup<'a>>,
-    /// `(flavor, dark)` pin; `None` means macOS dark, the canonical
-    /// fixture appearance.
-    theme_pin: Option<ThemePin>,
 }
 
 /// Drive the real `render_manager_panel` for one frame and write a PNG.
-fn render_manager_fixture(name: &str, audit_entries: Vec<AuditEntry>, extras: ManagerExtras<'_>) {
-    // Held until after `harness.render()` — env reads happen during
-    // rendering, so the guard's lifetime must cover the full render.
+fn render_manager_fixture(
+    shot: impl Into<Shot>,
+    audit_entries: Vec<AuditEntry>,
+    extras: ManagerExtras<'_>,
+) {
+    let shot = shot.into();
+    // Held until after the last `harness.render()` — env reads happen
+    // during rendering, so the guard's lifetime must cover every pass.
     let sandbox = install_audit_log(&audit_entries);
 
     let ManagerExtras {
         rules,
         viewer_mode,
         window_state,
-        theme_pin,
     } = extras;
-    let theme_pin = theme_pin.unwrap_or(MACOS_DARK);
-    let mut initial_state = ManagerWindowState::new();
-    if let Some(f) = window_state {
-        f(&mut initial_state);
+
+    for (flavor, dark) in cells_for(&shot) {
+        let mut initial_state = ManagerWindowState::new();
+        if let Some(f) = &window_state {
+            f(&mut initial_state);
+        }
+        let rules = rules.clone();
+        let mut harness = Harness::builder()
+            .with_size(MANAGER_SIZE)
+            .with_pixels_per_point(PIXELS_PER_POINT)
+            .wgpu()
+            .build_ui_state(
+                move |ui, ws: &mut ManagerWindowState| {
+                    let ctx = ui.ctx().clone();
+                    apply_theme_pin(&ctx, flavor, dark);
+                    secreq::daemon::ui::install_style(&ctx);
+                    let mut rule_actions: Vec<RuleAction> = Vec::new();
+                    full_window_ui(ui, |ui| {
+                        render_manager_panel(
+                            &ctx,
+                            ui,
+                            &rules,
+                            &[],
+                            viewer_mode,
+                            ws,
+                            &mut rule_actions,
+                        );
+                    });
+                },
+                initial_state,
+            );
+        harness.run();
+        let img = harness.render().expect("render wgpu");
+        save_png(&shot, flavor, dark, &img);
     }
-    let mut harness = Harness::builder()
-        .with_size(MANAGER_SIZE)
-        .with_pixels_per_point(PIXELS_PER_POINT)
-        .wgpu()
-        .build_ui_state(
-            move |ui, ws: &mut ManagerWindowState| {
-                let ctx = ui.ctx().clone();
-                apply_theme_pin(&ctx, theme_pin);
-                secreq::daemon::ui::install_style(&ctx);
-                let mut rule_actions: Vec<RuleAction> = Vec::new();
-                render_manager_panel(&ctx, ui, &rules, &[], viewer_mode, ws, &mut rule_actions);
-            },
-            initial_state,
-        );
-    harness.run();
-    let img = harness.render().expect("render wgpu");
-    save_png(name, &img);
+
+    record_in_manifest(&shot, ShotKind::Manager);
     drop(sandbox);
 }
 
@@ -555,7 +788,12 @@ fn render_manager_fixture(name: &str, audit_entries: Vec<AuditEntry>, extras: Ma
 #[test]
 #[ignore = "screenshot harness — run with --ignored to regenerate"]
 fn empty_state() {
-    render_prompt_fixture("01-empty-all-clear", vec![], |_state| Vec::new());
+    render_prompt_fixture(
+        Shot::new("01-empty-all-clear")
+            .caption("Nothing is waiting on you. The manager stays one click away in the footer."),
+        vec![],
+        |_state| Vec::new(),
+    );
 }
 
 #[test]
@@ -566,7 +804,10 @@ fn empty_state_viewer() {
     // This fixture documents the viewer's empty state — the prompt no
     // longer has a viewer variant.
     render_manager_fixture(
-        "01b-empty-all-clear-viewer",
+        Shot::new("01b-empty-all-clear-viewer").caption(
+            "<code>secreq view</code> opens straight to the audit log. With no history \
+             yet, it says so.",
+        ),
         vec![],
         ManagerExtras {
             viewer_mode: true,
@@ -578,19 +819,28 @@ fn empty_state_viewer() {
 #[test]
 #[ignore = "screenshot harness"]
 fn single_pending() {
-    render_prompt_fixture("02-single-pending", vec![], |state| {
-        vec![submit(
-            state,
-            "gh",
-            vec!["gh", "auth", "login"],
-            vec![caller(7926, "zsh", 1_700_000_000)],
-            vec![secret(
-                "GITHUB_TOKEN",
-                "op",
-                "op://Personal/GitHub/credential",
-            )],
-        )]
-    });
+    render_prompt_fixture(
+        Shot::new("02-single-pending").caption(
+            "The whole idea in one window. <b>Before</b> <code>gh</code> receives \
+             <code>GITHUB_TOKEN</code>, you see which secret is being released, which \
+             process asked for it, the directory it asked from, and how you answered \
+             last time.",
+        ),
+        vec![],
+        |state| {
+            vec![submit(
+                state,
+                "gh",
+                vec!["gh", "auth", "login"],
+                vec![caller(7926, "zsh", 1_700_000_000)],
+                vec![secret(
+                    "GITHUB_TOKEN",
+                    "op",
+                    "op://Personal/GitHub/credential",
+                )],
+            )]
+        },
+    );
 }
 
 #[test]
@@ -601,17 +851,25 @@ fn run_consent_card() {
     // prompt headlines the free-form command the user typed
     // (`./deploy.sh --prod`). The two secrets exercise the prompt's
     // mixed-provider secret list.
-    render_prompt_fixture("run-consent", vec![], |state| {
-        vec![submit_run(
-            state,
-            vec!["./deploy.sh", "--prod"],
-            vec![caller(7926, "zsh", 1_700_000_000)],
-            vec![
-                secret("DATABASE_URL", "op", "Work/PG/url"),
-                secret("STRIPE_KEY", "keychain", "stripe-key"),
-            ],
-        )]
-    });
+    render_prompt_fixture(
+        Shot::new("run-consent").caption(
+            "A <code>secreq run</code> request: a free-form command with secrets \
+             resolved from the ambient environment. There is no wrap to remember an \
+             answer against, so this one asks every time.",
+        ),
+        vec![],
+        |state| {
+            vec![submit_run(
+                state,
+                vec!["./deploy.sh", "--prod"],
+                vec![caller(7926, "zsh", 1_700_000_000)],
+                vec![
+                    secret("DATABASE_URL", "op", "Work/PG/url"),
+                    secret("STRIPE_KEY", "keychain", "stripe-key"),
+                ],
+            )]
+        },
+    );
 }
 
 #[test]
@@ -624,29 +882,36 @@ fn run_session_card() {
     // entry remembers the command that asked for it (hover provenance).
     // Because coalescing happens inside `submit_ask`, we simply submit
     // the three asks and let the real merge path build the ask.
-    render_prompt_fixture("run-session-card", vec![], |state| {
-        let sibling_caller = || caller(6042, "deploy.sh", 1_700_000_000);
-        vec![
-            submit_run(
-                state,
-                vec!["./migrate"],
-                vec![sibling_caller()],
-                vec![secret("DATABASE_URL", "op", "Work/PG/url")],
-            ),
-            submit_run(
-                state,
-                vec!["./worker"],
-                vec![sibling_caller()],
-                vec![secret("STRIPE_KEY", "keychain", "stripe-live")],
-            ),
-            submit_run(
-                state,
-                vec!["./worker"],
-                vec![sibling_caller()],
-                vec![secret("REDIS_URL", "op", "Work/Redis/url")],
-            ),
-        ]
-    });
+    render_prompt_fixture(
+        Shot::new("run-session-card").caption(
+            "Three sibling requests from one run, merged into a single decision. Hover \
+             a secret to see which command wanted it.",
+        ),
+        vec![],
+        |state| {
+            let sibling_caller = || caller(6042, "deploy.sh", 1_700_000_000);
+            vec![
+                submit_run(
+                    state,
+                    vec!["./migrate"],
+                    vec![sibling_caller()],
+                    vec![secret("DATABASE_URL", "op", "Work/PG/url")],
+                ),
+                submit_run(
+                    state,
+                    vec!["./worker"],
+                    vec![sibling_caller()],
+                    vec![secret("STRIPE_KEY", "keychain", "stripe-live")],
+                ),
+                submit_run(
+                    state,
+                    vec!["./worker"],
+                    vec![sibling_caller()],
+                    vec![secret("REDIS_URL", "op", "Work/Redis/url")],
+                ),
+            ]
+        },
+    );
 }
 
 #[test]
@@ -656,15 +921,22 @@ fn gate_only_pending() {
     // exists purely to require consent before the command runs. The
     // prompt shows the command + caller chain; the SECRETS well row is
     // simply absent.
-    render_prompt_fixture("21-gate-only-pending", vec![], |state| {
-        vec![submit(
-            state,
-            "op",
-            vec!["op", "read", "op://Personal/AWS/credential"],
-            vec![caller(7926, "zsh", 1_700_000_000)],
-            vec![],
-        )]
-    });
+    render_prompt_fixture(
+        Shot::new("21-gate-only-pending").caption(
+            "A wrap can inject nothing and still ask. Gate-only wraps put a consent \
+             step in front of a command without holding any secret for it.",
+        ),
+        vec![],
+        |state| {
+            vec![submit(
+                state,
+                "op",
+                vec!["op", "read", "op://Personal/AWS/credential"],
+                vec![caller(7926, "zsh", 1_700_000_000)],
+                vec![],
+            )]
+        },
+    );
 }
 
 #[test]
@@ -674,23 +946,31 @@ fn pending_resolving() {
     // cached: the provider is being invoked — a biometric prompt may be
     // up — so the prompt renders read-only as "Resolving…". This is the
     // surface that gives that biometric prompt its provenance.
-    render_prompt_fixture("23-pending-resolving", vec![], |state| {
-        pending(
-            state,
-            "gh",
-            vec!["gh", "pr", "view", "42"],
-            vec![
-                caller(7926, "zsh", 1_700_000_000),
-                caller(2831, "Cursor.app", 1_650_000_000),
-            ],
-            vec![secret(
-                "GITHUB_TOKEN",
-                "op",
-                "op://Personal/GitHub/credential",
-            )],
-        );
-        Vec::new()
-    });
+    render_prompt_fixture(
+        Shot::new("23-pending-resolving").caption(
+            "After you approve, the prompt goes read-only and reports \
+             <b>Resolving…</b>. That is your provider being called, and why a \
+             biometric prompt may appear next.",
+        ),
+        vec![],
+        |state| {
+            pending(
+                state,
+                "gh",
+                vec!["gh", "pr", "view", "42"],
+                vec![
+                    caller(7926, "zsh", 1_700_000_000),
+                    caller(2831, "Cursor.app", 1_650_000_000),
+                ],
+                vec![secret(
+                    "GITHUB_TOKEN",
+                    "op",
+                    "op://Personal/GitHub/credential",
+                )],
+            );
+            Vec::new()
+        },
+    );
 }
 
 #[test]
@@ -701,18 +981,26 @@ fn ssh_sign_pending() {
     // it raised the prompt. The header reads "git wants to sign with
     // github", the well carries the SHA256 fingerprint, and the session
     // grant row offers the 30-minute TTL choices.
-    render_prompt_fixture("24-ssh-sign-pending", vec![], |state| {
-        vec![submit_ssh(
-            state,
-            "github",
-            "SHA256:Nh0Me49Zh9fDw/VYUfq43IJmI1T+XrjiYONPND8GzaM",
-            Some("git pushes to github.com"),
-            vec![
-                caller(8120, "git", 1_700_002_000),
-                caller(7926, "zsh", 1_700_000_000),
-            ],
-        )]
-    });
+    render_prompt_fixture(
+        Shot::new("24-ssh-sign-pending").caption(
+            "Point <code>SSH_AUTH_SOCK</code> at secreq and every signature is gated. \
+             You see the key fingerprint and the reason before <code>git push</code> \
+             signs, plus quiet grants covering a 30-minute session.",
+        ),
+        vec![],
+        |state| {
+            vec![submit_ssh(
+                state,
+                "github",
+                "SHA256:Nh0Me49Zh9fDw/VYUfq43IJmI1T+XrjiYONPND8GzaM",
+                Some("git pushes to github.com"),
+                vec![
+                    caller(8120, "git", 1_700_002_000),
+                    caller(7926, "zsh", 1_700_000_000),
+                ],
+            )]
+        },
+    );
 }
 
 #[test]
@@ -729,14 +1017,22 @@ fn agent_scope_pending() {
     // This guest claimed nothing, so there is no GUEST SAYS row either
     // (contrast `36-agent-guest-chain-pending`). The "Scope: Approve for 5
     // min" action is the TTL grant that anchors an approval to the sandbox.
-    render_prompt_fixture("34-agent-scope-pending", vec![], |state| {
-        vec![submit_agent(
-            state,
-            "brain-nx-t5",
-            "secret://op/Dev/gh/token",
-            None,
-        )]
-    });
+    render_prompt_fixture(
+        Shot::new("34-agent-scope-pending").caption(
+            "A request from a guest VM. The headline is the <b>sandbox</b>, because a \
+             guest has no host process tree — the scope you declared is the principal, \
+             and there is deliberately no caller chain to read.",
+        ),
+        vec![],
+        |state| {
+            vec![submit_agent(
+                state,
+                "brain-nx-t5",
+                "secret://op/Dev/gh/token",
+                None,
+            )]
+        },
+    );
 }
 
 #[test]
@@ -753,15 +1049,23 @@ fn agent_guest_chain_pending() {
     // never touches the decision or the approval cache; it is here for a
     // human to weigh and for the audit log to record as a claim. See the
     // "Decision: the sandbox is the principal" section of
-    // `dev-docs/plans/2026-07-16-remote-secret-agent.md`.
-    render_prompt_fixture("36-agent-guest-chain-pending", vec![], |state| {
-        vec![submit_agent(
-            state,
-            "brain-nx-t5",
-            "secret://op/Dev/gh/token",
-            Some("node → pnpm → postinstall"),
-        )]
-    });
+    // `brain: areas/secreq/design/2026-07-16-remote-secret-agent.md`.
+    render_prompt_fixture(
+        Shot::new("36-agent-guest-chain-pending").caption(
+            "The same request when the guest volunteers a caller chain. It renders \
+             dimmed under <b>GUEST SAYS</b> and marked <b>not verifiable</b> — \
+             recorded as a claim, never used to make the decision.",
+        ),
+        vec![],
+        |state| {
+            vec![submit_agent(
+                state,
+                "brain-nx-t5",
+                "secret://op/Dev/gh/token",
+                Some("node → pnpm → postinstall"),
+            )]
+        },
+    );
 }
 
 #[test]
@@ -770,41 +1074,49 @@ fn nested_tree() {
     // Two child shells under one Superset.app root. The prompt shows
     // the oldest ask big (Focus Stack) with the full caller chain in
     // its ASKED BY well row; the second ask shows as "1 more waiting".
-    render_prompt_fixture("03-nested-tree", vec![], |state| {
-        vec![
-            submit(
-                state,
-                "gh",
-                vec!["gh", "repo", "list"],
-                vec![
-                    caller(7926, "zsh", 1_700_000_000),
-                    caller(2831, "Superset.app", 1_650_000_000),
-                ],
-                vec![secret(
-                    "GITHUB_TOKEN",
-                    "op",
-                    "op://Personal/GitHub/credential",
-                )],
-            ),
-            submit(
-                state,
-                "aws",
-                vec!["aws", "s3", "ls"],
-                vec![
-                    caller(7927, "zsh", 1_700_000_100),
-                    caller(2831, "Superset.app", 1_650_000_000),
-                ],
-                vec![
-                    secret("AWS_ACCESS_KEY_ID", "op", "op://Work/AWS/access_key_id"),
-                    secret(
-                        "AWS_SECRET_ACCESS_KEY",
+    render_prompt_fixture(
+        Shot::new("03-nested-tree").caption(
+            "A deeper ancestry. Every process between your shell and the asking binary \
+             is listed with its argv and pid, so a request from a build script never \
+             looks like one you typed.",
+        ),
+        vec![],
+        |state| {
+            vec![
+                submit(
+                    state,
+                    "gh",
+                    vec!["gh", "repo", "list"],
+                    vec![
+                        caller(7926, "zsh", 1_700_000_000),
+                        caller(2831, "Superset.app", 1_650_000_000),
+                    ],
+                    vec![secret(
+                        "GITHUB_TOKEN",
                         "op",
-                        "op://Work/AWS/secret_access_key",
-                    ),
-                ],
-            ),
-        ]
-    });
+                        "op://Personal/GitHub/credential",
+                    )],
+                ),
+                submit(
+                    state,
+                    "aws",
+                    vec!["aws", "s3", "ls"],
+                    vec![
+                        caller(7927, "zsh", 1_700_000_100),
+                        caller(2831, "Superset.app", 1_650_000_000),
+                    ],
+                    vec![
+                        secret("AWS_ACCESS_KEY_ID", "op", "op://Work/AWS/access_key_id"),
+                        secret(
+                            "AWS_SECRET_ACCESS_KEY",
+                            "op",
+                            "op://Work/AWS/secret_access_key",
+                        ),
+                    ],
+                ),
+            ]
+        },
+    );
 }
 
 #[test]
@@ -812,31 +1124,38 @@ fn nested_tree() {
 fn multi_root() {
     // Two unrelated callers. The prompt renders the older ask; the
     // unrelated second one is the "1 more waiting" line in the footer.
-    render_prompt_fixture("04-multi-root", vec![], |state| {
-        vec![
-            submit(
-                state,
-                "gh",
-                vec!["gh", "pr", "create"],
-                vec![caller(7926, "zsh", 1_700_000_000)],
-                vec![secret(
-                    "GITHUB_TOKEN",
-                    "op",
-                    "op://Personal/GitHub/credential",
-                )],
-            ),
-            submit(
-                state,
-                "aws",
-                vec!["aws", "lambda", "deploy"],
-                vec![
-                    caller(8400, "node", 1_700_001_000),
-                    caller(8001, "npm", 1_700_000_500),
-                ],
-                vec![secret("AWS_SESSION_TOKEN", "keychain", "AWS-session-token")],
-            ),
-        ]
-    });
+    render_prompt_fixture(
+        Shot::new("04-multi-root").caption(
+            "Two unrelated commands asked at once. You answer the oldest first; the \
+             rest wait behind <b>1 more waiting</b> rather than stacking windows.",
+        ),
+        vec![],
+        |state| {
+            vec![
+                submit(
+                    state,
+                    "gh",
+                    vec!["gh", "pr", "create"],
+                    vec![caller(7926, "zsh", 1_700_000_000)],
+                    vec![secret(
+                        "GITHUB_TOKEN",
+                        "op",
+                        "op://Personal/GitHub/credential",
+                    )],
+                ),
+                submit(
+                    state,
+                    "aws",
+                    vec!["aws", "lambda", "deploy"],
+                    vec![
+                        caller(8400, "node", 1_700_001_000),
+                        caller(8001, "npm", 1_700_000_500),
+                    ],
+                    vec![secret("AWS_SESSION_TOKEN", "keychain", "AWS-session-token")],
+                ),
+            ]
+        },
+    );
 }
 
 #[test]
@@ -844,25 +1163,32 @@ fn multi_root() {
 fn folded_run() {
     // Four-deep gh→gh→gh→gh chain — the prompt's ASKED BY tree shows
     // the whole ancestry with the asking leaf in accent.
-    render_prompt_fixture("05-folded-run", vec![], |state| {
-        vec![submit(
-            state,
-            "gh",
-            vec!["gh", "api", "/repos"],
-            vec![
-                caller(9000, "gh", 1_700_010_000),
-                caller(8999, "gh", 1_700_009_900),
-                caller(8998, "gh", 1_700_009_800),
-                caller(8997, "gh", 1_700_009_700),
-                caller(7926, "zsh", 1_700_000_000),
-            ],
-            vec![secret(
-                "GITHUB_TOKEN",
-                "op",
-                "op://Personal/GitHub/credential",
-            )],
-        )]
-    });
+    render_prompt_fixture(
+        Shot::new("05-folded-run").caption(
+            "A binary that re-executes itself would otherwise stack four identical \
+             rows. The chain folds to one entry per distinct process.",
+        ),
+        vec![],
+        |state| {
+            vec![submit(
+                state,
+                "gh",
+                vec!["gh", "api", "/repos"],
+                vec![
+                    caller(9000, "gh", 1_700_010_000),
+                    caller(8999, "gh", 1_700_009_900),
+                    caller(8998, "gh", 1_700_009_800),
+                    caller(8997, "gh", 1_700_009_700),
+                    caller(7926, "zsh", 1_700_000_000),
+                ],
+                vec![secret(
+                    "GITHUB_TOKEN",
+                    "op",
+                    "op://Personal/GitHub/credential",
+                )],
+            )]
+        },
+    );
 }
 
 #[test]
@@ -882,19 +1208,27 @@ fn pending_with_deny_history() {
             "approve+remember",
         ),
     ];
-    render_prompt_fixture("06-pending-denied-last", audit, |state| {
-        vec![submit(
-            state,
-            "gh",
-            vec!["gh", "auth", "refresh"],
-            vec![caller(7926, "zsh", 1_700_000_000)],
-            vec![secret(
-                "GITHUB_TOKEN",
-                "op",
-                "op://Personal/GitHub/credential",
-            )],
-        )]
-    });
+    render_prompt_fixture(
+        Shot::new("06-pending-denied-last").caption(
+            "The HISTORY row carries your last decision for this wrap and caller. A \
+             previous deny is tinted, so a repeat request from something you already \
+             turned down is hard to approve by reflex.",
+        ),
+        audit,
+        |state| {
+            vec![submit(
+                state,
+                "gh",
+                vec!["gh", "auth", "refresh"],
+                vec![caller(7926, "zsh", 1_700_000_000)],
+                vec![secret(
+                    "GITHUB_TOKEN",
+                    "op",
+                    "op://Personal/GitHub/credential",
+                )],
+            )]
+        },
+    );
 }
 
 #[test]
@@ -912,11 +1246,13 @@ fn auto_deny_toast_on_pending() {
         deny_message: Some("Destructive gh operations are policy-denied.".to_owned()),
     };
     render_prompt_fixture_full(
-        "12-auto-deny-toast",
+        Shot::new("12-auto-deny-toast").caption(
+            "A rule denied a request without asking. The banner names the rule that \
+             fired and the message it was configured with.",
+        ),
         PROMPT_SIZE,
         vec![],
         Some(toast),
-        MACOS_DARK,
         |state| {
             vec![submit(
                 state,
@@ -1026,7 +1362,10 @@ fn audit_tab_populated() {
         ),
     ];
     render_manager_fixture(
-        "07-audit-tab",
+        Shot::new("07-audit-tab").caption(
+            "Every decision is written down: what asked, what it wanted, where from, \
+             and how it went. Your answers and rule auto-fires land in the same list.",
+        ),
         audit,
         ManagerExtras {
             viewer_mode: true,
@@ -1103,7 +1442,10 @@ fn audit_tab_with_pending() {
         ),
     ];
     render_manager_fixture(
-        "14-audit-tab-with-pending",
+        Shot::new("14-audit-tab-with-pending").caption(
+            "You can read the log while a request is still queued — the prompt window \
+             holds the decision, so browsing history never blocks it.",
+        ),
         audit,
         ManagerExtras {
             window_state: Some(Box::new(|ws| ws.focus_audit_view())),
@@ -1176,7 +1518,10 @@ fn audit_tab_search_filtering() {
     // search box) that filters down to a subset. Exercises the "N of M"
     // count line and the filtered rendering.
     render_manager_fixture(
-        "15-audit-tab-search-filtering",
+        Shot::new("15-audit-tab-search-filtering").caption(
+            "Search narrows the log across every field at once, and reports how much \
+             of it you are looking at.",
+        ),
         search_fixture_audit(),
         ManagerExtras {
             window_state: Some(Box::new(|ws| {
@@ -1225,7 +1570,11 @@ fn audit_tab_abandoned_row() {
         ),
     ];
     render_manager_fixture(
-        "27-audit-tab-abandoned",
+        Shot::new("27-audit-tab-abandoned").caption(
+            "A command that exited before you answered is logged as <b>abandoned</b>. \
+             The faint verdict reads as a non-event — it is not a denial, and nothing \
+             was released.",
+        ),
         audit,
         ManagerExtras {
             window_state: Some(Box::new(|ws| ws.focus_audit_view())),
@@ -1268,7 +1617,10 @@ fn audit_tab_agent_out_of_scope_row() {
         ),
     ];
     render_manager_fixture(
-        "35-audit-tab-agent-out-of-scope",
+        Shot::new("35-audit-tab-agent-out-of-scope").caption(
+            "A guest asked for a secret outside its declared scope. The agent refused \
+             without prompting you, and the attempt is on the record.",
+        ),
         audit,
         ManagerExtras {
             window_state: Some(Box::new(|ws| ws.focus_audit_view())),
@@ -1305,7 +1657,10 @@ fn audit_tab_search_multi_term() {
     // holds the literal "gh auth". Regression guard for the reported
     // bug where "gh auth" wrongly filtered out `gh auth token`.
     render_manager_fixture(
-        "17-audit-tab-search-multi-term",
+        Shot::new("17-audit-tab-search-multi-term").caption(
+            "Each term can match a different field, so <code>gh auth</code> finds the \
+             row where both are true.",
+        ),
         search_fixture_audit(),
         ManagerExtras {
             window_state: Some(Box::new(|ws| {
@@ -1350,7 +1705,8 @@ fn rules_tab_empty() {
     // Land on the Rules view with no rules configured — the empty
     // state should be inviting, not blank.
     render_manager_fixture(
-        "08-rules-tab-empty",
+        Shot::new("08-rules-tab-empty")
+            .caption("No rules yet — every request comes to you until you save one."),
         vec![],
         ManagerExtras {
             window_state: Some(Box::new(|ws| ws.focus_rules_view())),
@@ -1404,7 +1760,11 @@ fn rules_tab_list_populated() {
         ));
     }
     render_manager_fixture(
-        "09-rules-tab-list",
+        Shot::new("09-rules-tab-list").caption(
+            "Saved rules answer for you. Each row shows what it matches, whether it \
+             approves or denies, how often it has fired, and which secrets it was \
+             trained on.",
+        ),
         audit,
         ManagerExtras {
             rules,
@@ -1466,7 +1826,10 @@ fn rules_form_new() {
     // "+ New rule". Exercises the decide toggle, text inputs,
     // deny-message hidden (only shown when decide == Deny).
     render_manager_fixture(
-        "10-rules-form-new",
+        Shot::new("10-rules-form-new").caption(
+            "A blank rule. Match on the wrap, the argv and the ancestor process, then \
+             choose whether a match approves or denies.",
+        ),
         vec![],
         ManagerExtras {
             window_state: Some(Box::new(|ws| ws.open_new_rule_form())),
@@ -1488,7 +1851,10 @@ fn rules_form_edit_deny() {
         Some("gh repo delete *"),
     );
     render_manager_fixture(
-        "11-rules-form-edit-deny",
+        Shot::new("11-rules-form-edit-deny").caption(
+            "A deny rule carries a message. That text is what you see in the banner \
+             when the rule fires, so write it as a reminder to your future self.",
+        ),
         vec![],
         ManagerExtras {
             window_state: Some(Box::new(move |ws| ws.open_edit_rule_form(&rule))),
@@ -1516,7 +1882,10 @@ fn rules_scaffold_open_in_editor() {
     // split-button is showing, defaulting to the persisted preference
     // (Cursor). Seeded editors keep the button deterministic.
     render_manager_fixture(
-        "37-rules-scaffold-open-in-editor",
+        Shot::new("37-rules-scaffold-open-in-editor").caption(
+            "When a rule needs more than pattern matching, secreq scaffolds a \
+             programmable one and hands it to your editor.",
+        ),
         vec![],
         ManagerExtras {
             window_state: Some(Box::new(|ws| {
@@ -1538,7 +1907,10 @@ fn rules_scaffold_editor_picker() {
     // currently-selected editor (Cursor) carries a check; picking a
     // different one makes it the new default.
     render_manager_fixture(
-        "38-rules-scaffold-editor-picker",
+        Shot::new("38-rules-scaffold-editor-picker").caption(
+            "Pick from the editors secreq detected. Your choice becomes the default \
+             for next time.",
+        ),
         vec![],
         ManagerExtras {
             window_state: Some(Box::new(|ws| {
@@ -1616,7 +1988,10 @@ fn rules_tab_suggestions() {
         ));
     }
     render_manager_fixture(
-        "13-rules-tab-suggestions",
+        Shot::new("13-rules-tab-suggestions").caption(
+            "secreq watches what you keep approving and offers the rule you were about \
+             to write, along with the cluster of decisions it drew from.",
+        ),
         audit,
         ManagerExtras {
             window_state: Some(Box::new(|ws| ws.focus_rules_view())),
@@ -1722,7 +2097,10 @@ fn rules_tab_rules_and_suggestions() {
         ));
     }
     render_manager_fixture(
-        "20-rules-tab-rules-and-suggestions",
+        Shot::new("20-rules-tab-rules-and-suggestions").caption(
+            "Saved rules first, then suggestions — what you decided, above what you \
+             keep deciding.",
+        ),
         audit,
         ManagerExtras {
             rules,
@@ -1738,21 +2116,31 @@ fn rules_tab_rules_and_suggestions() {
 /// window (`secreq pending-badge`), not the prompt panel — so it gets a
 /// dedicated, much simpler harness path: no daemon state, no audit log.
 /// Just `render_badge` at the production badge size.
-fn render_badge_fixture(name: &str, count: usize) {
+fn render_badge_fixture(shot: impl Into<Shot>, count: usize) {
+    let shot = shot.into();
     // Matches `daemon/badge.rs::BADGE_SIZE`.
     let size = Vec2::new(184.0, 44.0);
-    let mut harness = Harness::builder()
-        .with_size(size)
-        .with_pixels_per_point(PIXELS_PER_POINT)
-        .wgpu()
-        .build_ui(move |ui| {
-            let ctx = ui.ctx().clone();
-            secreq::daemon::ui::install_style(&ctx);
-            secreq::daemon::ui::render_badge(ui, count);
-        });
-    harness.run();
-    let img = harness.render().expect("render wgpu");
-    save_png(name, &img);
+
+    for (flavor, dark) in cells_for(&shot) {
+        let mut harness = Harness::builder()
+            .with_size(size)
+            .with_pixels_per_point(PIXELS_PER_POINT)
+            .wgpu()
+            .build_ui(move |ui| {
+                let ctx = ui.ctx().clone();
+                // Pinned like every other fixture: the badge used to
+                // inherit the harness's fallback theme, which left its
+                // PNGs dependent on the host they were generated on.
+                apply_theme_pin(&ctx, flavor, dark);
+                secreq::daemon::ui::install_style(&ctx);
+                full_window_ui(ui, |ui| secreq::daemon::ui::render_badge(ui, count));
+            });
+        harness.run();
+        let img = harness.render().expect("render wgpu");
+        save_png(&shot, flavor, dark, &img);
+    }
+
+    record_in_manifest(&shot, ShotKind::Badge);
 }
 
 #[test]
@@ -1760,7 +2148,12 @@ fn render_badge_fixture(name: &str, count: usize) {
 fn badge_one_pending() {
     // Singular case — exercises the "1 pending" (not "1 pendings")
     // branch in `render_badge`.
-    render_badge_fixture("25-badge-one-pending", 1);
+    render_badge_fixture(
+        Shot::new("25-badge-one-pending").caption(
+            "One request waiting, shown as a badge when the prompt is not in front of you.",
+        ),
+        1,
+    );
 }
 
 #[test]
@@ -1768,7 +2161,11 @@ fn badge_one_pending() {
 fn badge_three_pending() {
     // The common multi-request case: "3 pending" floating over other
     // apps, indicator dot + count, the whole pill a click target.
-    render_badge_fixture("26-badge-three-pending", 3);
+    render_badge_fixture(
+        Shot::new("26-badge-three-pending")
+            .caption("Three waiting. The count is the whole message."),
+        3,
+    );
 }
 
 /// Stress test: render the prompt at progressively smaller viewport
@@ -1794,23 +2191,29 @@ fn resize_stress() {
     ];
     for (i, size) in sizes.iter().enumerate() {
         let name = format!("99-resize-{:02}-{}x{}", i, size.x as u32, size.y as u32);
-        render_prompt_fixture_full(&name, *size, vec![], None, MACOS_DARK, |state| {
-            vec![submit(
-                state,
-                "gh",
-                vec!["gh", "auth", "login"],
-                vec![caller(7926, "zsh", 1_700_000_000)],
-                vec![secret(
-                    "GITHUB_TOKEN",
-                    "op",
-                    "op://Personal/GitHub/credential",
-                )],
-            )]
-        });
+        render_prompt_fixture_full(
+            Shot::new(name).exercise_only(),
+            *size,
+            vec![],
+            None,
+            |state| {
+                vec![submit(
+                    state,
+                    "gh",
+                    vec!["gh", "auth", "login"],
+                    vec![caller(7926, "zsh", 1_700_000_000)],
+                    vec![secret(
+                        "GITHUB_TOKEN",
+                        "op",
+                        "op://Personal/GitHub/credential",
+                    )],
+                )]
+            },
+        );
     }
 }
 
-// ── New-surface fixtures: many-secrets, appearance, OS flavors ────────────
+// ── New-surface fixtures ─────────────────────────────────────────────────
 
 /// The `secreq run` 40-plus-vars case: secrets collapse into
 /// locator-prefix groups inside a scroll-capped grid, the count is the
@@ -1861,168 +2264,38 @@ fn prompt_many_secrets() {
         "DOCKER_HUB_TOKEN",
     ];
     const ENV: &[&str] = &["NODE_ENV", "LOG_LEVEL", "PORT", "CI"];
-    render_prompt_fixture("28-prompt-many-secrets", vec![], |state| {
-        let mut secrets = Vec::new();
-        for name in WORK {
-            secrets.push(secret(name, "op", &format!("op://Work/Acme/{name}")));
-        }
-        for name in PERSONAL {
-            secrets.push(secret(name, "op", &format!("op://Personal/{name}")));
-        }
-        for name in ENV {
-            secrets.push(secret(name, "env", name));
-        }
-        vec![submit_run(
-            state,
-            vec!["secreq", "run", "--", "npm", "run", "dev"],
-            vec![caller(7926, "zsh", 1_700_000_000)],
-            secrets,
-        )]
-    });
-}
-
-/// The same single-pending prompt as fixture 02, following a light OS
-/// appearance — appearance is not a setting; the window tracks the OS.
-#[test]
-#[ignore = "screenshot harness"]
-fn prompt_macos_light() {
-    render_prompt_fixture_full(
-        "29-prompt-macos-light",
-        PROMPT_SIZE,
+    render_prompt_fixture(
+        Shot::new("28-prompt-many-secrets").caption(
+            "A <code>secreq run</code> carrying 42 variables leads with the count and \
+             groups the secrets by locator prefix. The body scrolls; the decision \
+             buttons never leave the window.",
+        ),
         vec![],
-        None,
-        (OsFlavor::MacOs, false),
         |state| {
-            vec![submit(
+            let mut secrets = Vec::new();
+            for name in WORK {
+                secrets.push(secret(name, "op", &format!("op://Work/Acme/{name}")));
+            }
+            for name in PERSONAL {
+                secrets.push(secret(name, "op", &format!("op://Personal/{name}")));
+            }
+            for name in ENV {
+                secrets.push(secret(name, "env", name));
+            }
+            vec![submit_run(
                 state,
-                "gh",
-                vec!["gh", "auth", "login"],
+                vec!["secreq", "run", "--", "npm", "run", "dev"],
                 vec![caller(7926, "zsh", 1_700_000_000)],
-                vec![secret(
-                    "GITHUB_TOKEN",
-                    "op",
-                    "op://Personal/GitHub/credential",
-                )],
+                secrets,
             )]
         },
     );
 }
 
-/// The Windows 11 ContentDialog idiom: equal-width footer strip,
-/// affirmative first. Rendered via the fixture flavor override; on a
-/// real Windows build this is the default treatment.
-#[test]
-#[ignore = "screenshot harness"]
-fn prompt_windows_dark() {
-    render_prompt_fixture_full(
-        "30-prompt-windows-dark",
-        PROMPT_SIZE,
-        vec![],
-        None,
-        (OsFlavor::Windows, true),
-        |state| {
-            vec![submit(
-                state,
-                "gh",
-                vec!["gh", "auth", "login"],
-                vec![caller(7926, "pwsh.exe", 1_700_000_000)],
-                vec![secret(
-                    "GITHUB_TOKEN",
-                    "op",
-                    "op://Personal/GitHub/credential",
-                )],
-            )]
-        },
-    );
-}
-
-/// The GNOME AdwMessageDialog idiom: full-width response row with
-/// hairline separators, Approve as the suggested action.
-#[test]
-#[ignore = "screenshot harness"]
-fn prompt_linux_dark() {
-    render_prompt_fixture_full(
-        "31-prompt-linux-dark",
-        PROMPT_SIZE,
-        vec![],
-        None,
-        (OsFlavor::Gnome, true),
-        |state| {
-            vec![submit(
-                state,
-                "gh",
-                vec!["gh", "auth", "login"],
-                vec![caller(7926, "bash", 1_700_000_000)],
-                vec![secret(
-                    "GITHUB_TOKEN",
-                    "op",
-                    "op://Personal/GitHub/credential",
-                )],
-            )]
-        },
-    );
-}
-
-/// Manager audit view in the Windows treatment: SelectorBar tabs with
-/// the accent underline over hairline-separated rows.
-#[test]
-#[ignore = "screenshot harness"]
-fn manager_audit_windows_dark() {
-    let audit = vec![
-        audit_line_traced(
-            60,
-            "gh",
-            &["api", "/repos/acme/web/issues"],
-            &[(52310, "pwsh.exe", "pwsh.exe -NoLogo")],
-            &["GITHUB_TOKEN"],
-            "approve",
-        ),
-        audit_line_traced(
-            60 * 9,
-            "aws",
-            &["s3", "ls", "s3://acme-logs"],
-            &[(52312, "pwsh.exe", "pwsh.exe -NoLogo")],
-            &["AWS_ACCESS_KEY_ID"],
-            "deny",
-        ),
-    ];
-    render_manager_fixture(
-        "32-manager-audit-windows-dark",
-        audit,
-        ManagerExtras {
-            viewer_mode: true,
-            theme_pin: Some((OsFlavor::Windows, true)),
-            ..ManagerExtras::default()
-        },
-    );
-}
-
-/// Manager rules view in the GNOME light treatment: boxed lists on the
-/// Adwaita palette under the headerbar view switcher.
-#[test]
-#[ignore = "screenshot harness"]
-fn manager_rules_gnome_light() {
-    let rules = vec![
-        sample_rule(
-            "01aaa",
-            "Cursor reads via gh",
-            RuleDecision::Approve,
-            Some("gh api --get /repos/*/pulls*"),
-        ),
-        sample_rule(
-            "01bbb",
-            "Block gh destructive ops",
-            RuleDecision::Deny,
-            Some("gh repo delete *"),
-        ),
-    ];
-    render_manager_fixture(
-        "33-manager-rules-gnome-light",
-        vec![],
-        ManagerExtras {
-            rules,
-            theme_pin: Some((OsFlavor::Gnome, false)),
-            ..ManagerExtras::default()
-        },
-    );
-}
+// The per-flavor fixtures that used to live here — `30-prompt-windows`,
+// `31-prompt-linux`, `32-manager-audit-windows`, `33-manager-rules-gnome`
+// — are gone. They existed to show that the chrome follows the host OS,
+// which every fixture now demonstrates for itself: the matrix renders
+// each of them under all three flavors. A fixture whose only distinction
+// was its `OsFlavor` is now a duplicate of one cell of another fixture's
+// grid.

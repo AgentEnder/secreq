@@ -15,10 +15,67 @@ harness mirrors that split:
   chrome.
 - **Badge** fixtures drive `render_badge` in its own minimal harness.
 
-Every fixture pins `(OsFlavor, appearance)` — macOS dark unless the
-fixture exists to show another flavor — so PNGs are deterministic
-regardless of the host OS. In production, appearance is never a
-setting: the windows follow the OS theme (`ThemePreference::System`).
+**Chrome is not pinned; it is swept.** Every documented fixture renders
+**six times** — three OS flavors (`macos`, `windows`, `gnome`) by two
+appearances (`dark`, `light`):
+
+```
+02-single-pending-macos-dark.png     02-single-pending-macos-light.png
+02-single-pending-windows-dark.png   02-single-pending-windows-light.png
+02-single-pending-gnome-dark.png     02-single-pending-gnome-light.png
+```
+
+secreq's windows are natively themed and follow the host, and neither
+axis is a setting the user picks (`ThemePreference::System`). So no
+combination is the "real" one and none is a variant of another — every
+render is suffixed, including macOS dark, because a bare `<id>.png`
+would quietly privilege one chrome as canonical.
+
+Sweeping unconditionally is what lets the docs show a reader their own
+desktop: no fixture declares a counterpart, no corner of the grid goes
+stale while another is regenerated, and a screenshot can never depict
+chrome the reader has never seen.
+
+A fixture that *exercises* the UI rather than documenting it opts out
+with `Shot::exercise_only()` and renders once (macOS dark). The resize
+sweep is the only user: it drives eleven viewport sizes looking for
+layout panics, and six-way rendering would produce sixty-six PNGs
+nobody will open.
+
+## `manifest.json`
+
+Alongside the PNGs, the harness writes `manifest.json` — one entry per
+fixture recording its window kind, the filename of every cell of its
+grid, and the caption authored on the fixture:
+
+```json
+"02-single-pending": {
+  "window": "prompt",
+  "caption": "The whole idea in one window. <b>Before</b> …",
+  "renders": {
+    "macos":   { "dark": "…-macos-dark.png",   "light": "…-macos-light.png" },
+    "windows": { "dark": "…-windows-dark.png", "light": "…-windows-light.png" },
+    "gnome":   { "dark": "…-gnome-dark.png",   "light": "…-gnome-light.png" }
+  }
+}
+```
+
+This is what the docs site consumes. It holds no screenshot list of its
+own: `docs-site/vite.config.ts` joins this manifest to dimensions read
+from the PNG headers, and `::shot{id=…}` in a guide publishes the
+result. So a fixture that is renamed, re-flavoured or re-captioned
+needs no corresponding edit in the site — but a fixture whose caption
+you change **is** changing published documentation, so write captions
+for someone using secreq, not for someone changing it. This table is
+the contributor-facing counterpart, and the two intentionally read
+differently.
+
+Entries are merged, not rewritten, so a filtered run
+(`--ignored single_pending`) updates only the fixtures it rendered. The
+flip side is that the manifest never prunes: delete a fixture and its
+entry lingers until someone removes it by hand. That is harmless — the
+docs site drops any entry whose files are missing — but worth knowing
+when the entry count and the fixture count disagree.
 
 ## Regenerate
 
@@ -30,64 +87,62 @@ The tests are `#[ignore]`-gated so a normal `cargo test` run doesn't
 spin up wgpu. `--test-threads=1` keeps the `$XDG_STATE_HOME` mutation
 serialised across fixtures.
 
+The tables below name each fixture by its **id**, not by a filename —
+one row stands for all six renders of that fixture.
+
 ## What's here
 
 ### Prompt window
 
-| File | Fixture | What it exercises |
+| Fixture id | Test fn | What it exercises |
 |---|---|---|
-| `01-empty-all-clear.png` | `empty_state` | Prompt with no asks: centred app icon + "No pending requests."; the manager link stays reachable in the footer. |
-| `02-single-pending.png` | `single_pending` | One wrap, one secret: the canonical prompt — header summary, evidence well (SECRET / ASKED BY / IN / HISTORY), macOS footer pair with mnemonic underlines. |
-| `03-nested-tree.png` | `nested_tree` | An ask with a deeper ancestry: the ASKED BY tree shows each ancestor with its argv and pid, the asking leaf in accent. |
-| `04-multi-root.png` | `multi_root` | Two queued asks from independent roots: the prompt focuses the oldest; the other appears only as "1 more waiting". |
-| `05-folded-run.png` | `folded_run` | A `gh→gh→gh→gh` self-exec chain: the coalesced ask's chain renders once per distinct process. |
-| `06-pending-denied-last.png` | `pending_with_deny_history` | HISTORY row when the last audit decision for this wrap+caller was a deny — the line renders in the danger tint. |
-| `12-auto-deny-toast.png` | `auto_deny_toast_on_pending` | The transient auto-deny banner above the prompt content (rule name + configured deny message). |
-| `21-gate-only-pending.png` | `gate_only_pending` | A gate-only wrap (no secrets to inject): the well's secret row gives way to the gate-only marker. |
-| `22-pending-arrival-highlight.png` | `pending_arrival_highlight` | Two asks queued: the focused ask plus the "1 more waiting" queue line (the old tab-badge pulse retired with the tab bar). |
-| `23-pending-resolving.png` | `pending_resolving` | An authorized ask whose secret is still resolving: read-only prompt, "Resolving…" in place of the button pair — provenance for a provider biometric prompt. |
-| `24-ssh-sign-pending.png` | `ssh_sign_pending` | An SSH sign ask: SIGN WITH fingerprint row, `$reason`, caller chain, quiet session-grant buttons (30 min / all keys), Deny/Approve pair. |
-| `34-agent-scope-pending.png` | `agent_scope_pending` | A guest VM's ask over a scoped agent socket: the header leads with the **sandbox**, because the host-declared scope *is* the principal. The well shows SECRET / SCOPE / HISTORY — and what's absent is the point: no ASKED BY tree and no IN row, because a guest has no host process tree or cwd, and a chain-shaped widget here would imply provenance we cannot verify. This guest claimed nothing, so there is no GUEST SAYS row (contrast fixture 36). The quiet "Scope: Approve for 5 min" action is the TTL grant that anchors an approval to the sandbox; the footer's Approve stays "this request only". See `src/scoped_agent/mod.rs`. |
-| `36-agent-guest-chain-pending.png` | `agent_guest_chain_pending` | The same scoped-agent ask, but the guest volunteered a caller chain. Exists to show the **marker**: GUEST SAYS renders the claim dimmed, with a red "⚠ guest-reported — NOT verifiable" directly beneath it. Read the well top-to-bottom and it tells the truth in order — SECRET and SCOPE are host-declared facts, then, below and explicitly disclaimed, what the guest says about itself. The chain reaches the decision nowhere and the approval cache never (`consent::AgentGrant` has no field for it); it is here for a human to weigh and for the audit log to record as a claim. |
-| `28-prompt-many-secrets.png` | `prompt_many_secrets` | The `secreq run` 42-vars case: count as headline, secrets grouped by locator prefix (largest group first) in a scroll-capped grid; body scrolls, footer stays pinned. |
-| `29-prompt-macos-light.png` | `prompt_macos_light` | Fixture 02's ask following a light OS appearance. |
-| `30-prompt-windows-dark.png` | `prompt_windows_dark` | The Windows 11 ContentDialog idiom: footer strip with an equal-width button pair, affirmative first, WinUI accent. |
-| `31-prompt-linux-dark.png` | `prompt_linux_dark` | The GNOME AdwMessageDialog idiom: full-width response row split by hairlines, Approve as the suggested action. |
-| `run-consent.png` | `run_consent_card` | A `secreq run` ask: free-form command, ambient-sourced secrets, `allow_remember = false`. |
-| `run-session-card.png` | `run_session_card` | A coalesced run session: three sibling asks merged, union secret list with `requested by` provenance on hover, one decision covers the session. |
-| `99-resize-*.png` | `resize_sweep` | The prompt at a ladder of window sizes (30×80 → 3840×2160) — layout degrades without panicking or clipping the footer. |
+| `01-empty-all-clear` | `empty_state` | Prompt with no asks: centred app icon + "No pending requests."; the manager link stays reachable in the footer. |
+| `02-single-pending` | `single_pending` | One wrap, one secret: the canonical prompt — header summary, evidence well (SECRET / ASKED BY / IN / HISTORY), macOS footer pair with mnemonic underlines. |
+| `03-nested-tree` | `nested_tree` | An ask with a deeper ancestry: the ASKED BY tree shows each ancestor with its argv and pid, the asking leaf in accent. |
+| `04-multi-root` | `multi_root` | Two queued asks from independent roots: the prompt focuses the oldest; the other appears only as "1 more waiting". |
+| `05-folded-run` | `folded_run` | A `gh→gh→gh→gh` self-exec chain: the coalesced ask's chain renders once per distinct process. |
+| `06-pending-denied-last` | `pending_with_deny_history` | HISTORY row when the last audit decision for this wrap+caller was a deny — the line renders in the danger tint. |
+| `12-auto-deny-toast` | `auto_deny_toast_on_pending` | The transient auto-deny banner above the prompt content (rule name + configured deny message). |
+| `21-gate-only-pending` | `gate_only_pending` | A gate-only wrap (no secrets to inject): the well's secret row gives way to the gate-only marker. |
+| `22-pending-arrival-highlight` | `pending_arrival_highlight` | Two asks queued: the focused ask plus the "1 more waiting" queue line (the old tab-badge pulse retired with the tab bar). |
+| `23-pending-resolving` | `pending_resolving` | An authorized ask whose secret is still resolving: read-only prompt, "Resolving…" in place of the button pair — provenance for a provider biometric prompt. |
+| `24-ssh-sign-pending` | `ssh_sign_pending` | An SSH sign ask: SIGN WITH fingerprint row, `$reason`, caller chain, quiet session-grant buttons (30 min / all keys), Deny/Approve pair. |
+| `34-agent-scope-pending` | `agent_scope_pending` | A guest VM's ask over a scoped agent socket: the header leads with the **sandbox**, because the host-declared scope *is* the principal. The well shows SECRET / SCOPE / HISTORY — and what's absent is the point: no ASKED BY tree and no IN row, because a guest has no host process tree or cwd, and a chain-shaped widget here would imply provenance we cannot verify. This guest claimed nothing, so there is no GUEST SAYS row (contrast fixture 36). The quiet "Scope: Approve for 5 min" action is the TTL grant that anchors an approval to the sandbox; the footer's Approve stays "this request only". See `src/scoped_agent/mod.rs`. |
+| `36-agent-guest-chain-pending` | `agent_guest_chain_pending` | The same scoped-agent ask, but the guest volunteered a caller chain. Exists to show the **marker**: GUEST SAYS renders the claim dimmed, with a red "⚠ guest-reported — NOT verifiable" directly beneath it. Read the well top-to-bottom and it tells the truth in order — SECRET and SCOPE are host-declared facts, then, below and explicitly disclaimed, what the guest says about itself. The chain reaches the decision nowhere and the approval cache never (`consent::AgentGrant` has no field for it); it is here for a human to weigh and for the audit log to record as a claim. |
+| `28-prompt-many-secrets` | `prompt_many_secrets` | The `secreq run` 42-vars case: count as headline, secrets grouped by locator prefix (largest group first) in a scroll-capped grid; body scrolls, footer stays pinned. |
+| `run-consent` | `run_consent_card` | A `secreq run` ask: free-form command, ambient-sourced secrets, `allow_remember = false`. |
+| `run-session-card` | `run_session_card` | A coalesced run session: three sibling asks merged, union secret list with `requested by` provenance on hover, one decision covers the session. |
+| `99-resize-*` | `resize_sweep` | The prompt at a ladder of window sizes (30×80 → 3840×2160) — layout degrades without panicking or clipping the footer. |
 
 ### Manager window
 
-| File | Fixture | What it exercises |
+| Fixture id | Test fn | What it exercises |
 |---|---|---|
-| `01b-empty-all-clear-viewer.png` | `empty_state_viewer` | `secreq view` with no history: the manager opens on the Audit view (viewer-mode rising edge) and shows its empty state. |
-| `07-audit-tab.png` | `audit_tab_populated` | Audit view populated with a mix of decisions: hairline-separated rows, dot+text verdicts, per-OS header with the search field. |
-| `08-rules-tab-empty.png` | `rules_tab_empty` | Rules view with no rules → "No rules yet" empty state. |
-| `09-rules-tab-list.png` | `rules_tab_list_populated` | Rules list: enabled approve, enabled deny with deny-message, disabled rule; usage footnotes and the Most used / Recent sort toggle. |
-| `10-rules-form-new.png` | `rules_form_new` | Blank rule form opened via "+ New rule". |
-| `11-rules-form-edit-deny.png` | `rules_form_edit_deny` | Edit form pre-filled from a deny rule — deny-message text area + trained-secrets chip. |
-| `37-rules-scaffold-open-in-editor.png` | `rules_scaffold_open_in_editor` | The "Write a programmatic rule" card in its post-scaffold state: pitch + the GitHub-style "Open in editor" split-button, defaulting to the persisted editor preference (Cursor). |
-| `38-rules-scaffold-editor-picker.png` | `rules_scaffold_editor_picker` | The split-button's dropdown expanded — the detected-editor picker, with the current default (Cursor) checked; picking another makes it the new default (persisted to `$editor`). |
-| `13-rules-tab-suggestions.png` | `rules_tab_suggestions` | Suggestion cards from the recommendation engine (cluster counts + recency lines). |
-| `14-audit-tab-with-pending.png` | `audit_tab_with_pending` | Audit view while an ask is still queued — browsing history in the manager while the prompt window holds the decision. |
-| `15-audit-tab-search-filtering.png` | `audit_tab_search_filtering` | Header search populated (`gh`): filtered rows + "N of M" count. |
-| `16-audit-tab-search-no-matches.png` | `audit_tab_search_no_matches` | A query matching nothing → centred "No matching entries" state. |
-| `17-audit-tab-search-multi-term.png` | `audit_tab_search_multi_term` | Two-term query (`gh auth`) narrowing to one row — each term may hit a different field. |
-| `18-rules-tab-suggestions-by-recency.png` | `rules_tab_suggestions_by_recency` | Suggestions sorted by Recent where count and recency disagree. |
-| `19-rules-tab-by-recency.png` | `rules_tab_by_recency` | Rules sorted by Recent where count and recency disagree. |
-| `20-rules-tab-rules-and-suggestions.png` | `rules_tab_rules_and_suggestions` | Both sections at once: saved rules first, suggestions beneath. |
-| `27-audit-tab-abandoned.png` | `audit_tab_abandoned_row` | Audit view showing an `abandoned` row (`gh pr checkout 9420`) — a wrap that exited before the user decided, so the daemon reaped the ask and logged it itself. The faint dot+text "abandoned" verdict reads as a non-event, distinct from the danger-tinted "denied" on the neighbouring `aws` row and a real approve. |
-| `35-audit-tab-agent-out-of-scope.png` | `audit_tab_agent_out_of_scope_row` | Audit view showing a scoped agent's rows (`agent:brain-nx-t5`). The `deny+out-of-scope` row carries the "out of scope" tag: the guest asked for a ref its socket was never opened with, so it was refused **without a prompt** — distinct from the plain danger-tinted `deny` on the neighbouring `aws` row, where a ref *was* offered and the user refused it. A run of these rows is what a probing sandbox looks like. The agent rows deliberately carry no caller chain and no cwd. |
-| `32-manager-audit-windows-dark.png` | `manager_audit_windows_dark` | The Windows treatment: SelectorBar tabs with the accent underline over the audit rows. |
-| `33-manager-rules-gnome-light.png` | `manager_rules_gnome_light` | The GNOME light treatment: headerbar view switcher over Adwaita-style boxed rule lists. |
+| `01b-empty-all-clear-viewer` | `empty_state_viewer` | `secreq view` with no history: the manager opens on the Audit view (viewer-mode rising edge) and shows its empty state. |
+| `07-audit-tab` | `audit_tab_populated` | Audit view populated with a mix of decisions: hairline-separated rows, dot+text verdicts, per-OS header with the search field. |
+| `08-rules-tab-empty` | `rules_tab_empty` | Rules view with no rules → "No rules yet" empty state. |
+| `09-rules-tab-list` | `rules_tab_list_populated` | Rules list: enabled approve, enabled deny with deny-message, disabled rule; usage footnotes and the Most used / Recent sort toggle. |
+| `10-rules-form-new` | `rules_form_new` | Blank rule form opened via "+ New rule". |
+| `11-rules-form-edit-deny` | `rules_form_edit_deny` | Edit form pre-filled from a deny rule — deny-message text area + trained-secrets chip. |
+| `37-rules-scaffold-open-in-editor` | `rules_scaffold_open_in_editor` | The "Write a programmatic rule" card in its post-scaffold state: pitch + the GitHub-style "Open in editor" split-button, defaulting to the persisted editor preference (Cursor). |
+| `38-rules-scaffold-editor-picker` | `rules_scaffold_editor_picker` | The split-button's dropdown expanded — the detected-editor picker, with the current default (Cursor) checked; picking another makes it the new default (persisted to `$editor`). |
+| `13-rules-tab-suggestions` | `rules_tab_suggestions` | Suggestion cards from the recommendation engine (cluster counts + recency lines). |
+| `14-audit-tab-with-pending` | `audit_tab_with_pending` | Audit view while an ask is still queued — browsing history in the manager while the prompt window holds the decision. |
+| `15-audit-tab-search-filtering` | `audit_tab_search_filtering` | Header search populated (`gh`): filtered rows + "N of M" count. |
+| `16-audit-tab-search-no-matches` | `audit_tab_search_no_matches` | A query matching nothing → centred "No matching entries" state. |
+| `17-audit-tab-search-multi-term` | `audit_tab_search_multi_term` | Two-term query (`gh auth`) narrowing to one row — each term may hit a different field. |
+| `18-rules-tab-suggestions-by-recency` | `rules_tab_suggestions_by_recency` | Suggestions sorted by Recent where count and recency disagree. |
+| `19-rules-tab-by-recency` | `rules_tab_by_recency` | Rules sorted by Recent where count and recency disagree. |
+| `20-rules-tab-rules-and-suggestions` | `rules_tab_rules_and_suggestions` | Both sections at once: saved rules first, suggestions beneath. |
+| `27-audit-tab-abandoned` | `audit_tab_abandoned_row` | Audit view showing an `abandoned` row (`gh pr checkout 9420`) — a wrap that exited before the user decided, so the daemon reaped the ask and logged it itself. The faint dot+text "abandoned" verdict reads as a non-event, distinct from the danger-tinted "denied" on the neighbouring `aws` row and a real approve. |
+| `35-audit-tab-agent-out-of-scope` | `audit_tab_agent_out_of_scope_row` | Audit view showing a scoped agent's rows (`agent:brain-nx-t5`). The `deny+out-of-scope` row carries the "out of scope" tag: the guest asked for a ref its socket was never opened with, so it was refused **without a prompt** — distinct from the plain danger-tinted `deny` on the neighbouring `aws` row, where a ref *was* offered and the user refused it. A run of these rows is what a probing sandbox looks like. The agent rows deliberately carry no caller chain and no cwd. |
 
 ### Badge
 
-| File | Fixture | What it exercises |
+| Fixture id | Test fn | What it exercises |
 |---|---|---|
-| `25-badge-one-pending.png` | `badge_one_pending` | The always-on-top pending badge, singular branch ("1 pending"). |
-| `26-badge-three-pending.png` | `badge_three_pending` | The badge with a multi-request count; the pill is one click target that raises the prompt. |
+| `25-badge-one-pending` | `badge_one_pending` | The always-on-top pending badge, singular branch ("1 pending"). |
+| `26-badge-three-pending` | `badge_three_pending` | The badge with a multi-request count; the pill is one click target that raises the prompt. |
 
 ## How a fixture is shaped
 
@@ -116,9 +171,9 @@ drafts in `dev-docs/design-drafts/consent-ui/`.
 
 - **The mark is the Gate Monogram.** Two brackets (the gate) in the
   theme foreground, one accent dot (the secret) — drawn from painter
-  primitives in `paint_app_icon`, master SVG in
-  `dev-docs/design-drafts/consent-ui/shared/assets/logo.svg`. No tile,
-  no border: it reads as window chrome, not an app-store icon.
+  primitives in `paint_app_icon`, master SVG in `dev-docs/brand/logo.svg`
+  (which the docs site's favicon and header mark also derive from). No
+  tile, no border: it reads as window chrome, not an app-store icon.
 - **Prompt = Focus Stack.** One ask rendered big; the queue is a "N
   more waiting" line. Header (the mark + "`wrap` wants to use
   `SECRET`" + command line), then the **evidence well** — an inset
