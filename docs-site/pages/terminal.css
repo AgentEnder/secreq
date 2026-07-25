@@ -1,0 +1,278 @@
+/* ════════════════════════════════════════════════════════════════════
+   TERMINALS
+
+   Two things on this site draw a terminal: the hero's interception
+   (a hand-choreographed reconstruction, see `interception.css`) and the
+   recorded sessions the `::term{id=…}` directive replays. This file owns
+   what they share — the panel, the title bar, the monospace grid — so
+   "what a terminal looks like on secreq.dev" has one definition.
+
+   Below the shared chrome is the player: frames stacked in one grid cell
+   and shown one at a time, with an overlay for typing. THE FINAL FRAME IS
+   THE DEFAULT. With no JavaScript, no hydration, or reduced motion, a
+   reader gets the finished session — a complete transcript — rather than
+   a first frame waiting for an animation that never comes.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── Shared chrome ──
+   The hero's terminal and a recorded one are the same object, so they are
+   the same rule. `interception.css` styles only what is unique to the
+   hero's choreography. */
+
+.term-frame-wrap,
+.icept-term {
+  background: var(--sq-well);
+  border: 1px solid var(--sq-hairline);
+  border-radius: var(--radius-sq-lg, 12px);
+  overflow: hidden;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+.term-bar,
+.icept-term-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.8rem;
+  border-bottom: 1px solid var(--sq-hairline);
+  font-family: 'Martian Mono', ui-monospace, monospace;
+  font-size: 0.52rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--sq-text-3);
+}
+
+/* ── A recorded session ── */
+
+.term {
+  --term-cols: 80;
+  margin: 1.75rem 0;
+}
+
+.term-cmd::before {
+  content: '$ ';
+  opacity: 0.6;
+}
+
+.term-replay {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font: inherit;
+  color: var(--sq-text-3);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+.term-replay:hover {
+  color: var(--sq-accent);
+}
+.term-replay svg {
+  transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.term-replay:hover svg {
+  transform: rotate(-180deg);
+}
+
+/* The body is a grid with ONE cell: every frame stacks in it, so the
+   terminal's height is the tallest frame's and the panel never jumps as
+   the session plays. */
+.term-body {
+  display: grid;
+  position: relative;
+  padding: 0.9rem 1rem 1.1rem;
+  overflow-x: auto;
+  /* Sized so `--term-cols` characters fit exactly. A recording is laid
+     out at a fixed column count; anything else re-wraps text the CLI
+     already wrapped. */
+  font-size: clamp(0.58rem, 1.55vw, 0.78rem);
+  line-height: 1.5;
+  tab-size: 8;
+}
+
+.term-frame {
+  grid-area: 1 / 1;
+  display: block;
+  width: calc(var(--term-cols) * 1ch);
+  white-space: pre;
+  color: var(--sq-text-2);
+}
+
+/* Only the active frame shows.
+
+   Two rules, and no rule that hides the fallback. `:last-child` is the
+   finished session — what a reader gets with no JavaScript, before
+   hydration, and under reduced motion. `[data-active='true']` is the
+   player's override, and the player marks exactly one frame at a time,
+   removing the attribute from the rest rather than setting it false.
+
+   An earlier version hid `[data-active='false']` explicitly, which beat
+   `:last-child` on source order: the instant no frame held `"true"` —
+   any gap between two runs racing over the same terminal — every frame
+   was hidden and the panel rendered blank at full height, with nothing
+   thrown to explain it. There is now no declaration anywhere that can
+   hide the last frame, so the failure has no way to express itself. */
+.term-frame {
+  visibility: hidden;
+}
+
+/* The fallback, scoped to "no frame is marked" so it cannot show through
+   behind the active one. */
+.term-body:not(:has(.term-frame[data-active='true'])) .term-frame:last-child {
+  visibility: visible;
+}
+
+.term-frame[data-active='true'] {
+  visibility: visible;
+}
+
+.term-line {
+  display: block;
+  min-height: 1lh;
+}
+
+/* Typed text, drawn over the frame at the recorded cell.
+
+   The overlay spans the whole rest of the row, not just the characters
+   typed so far, and it is opaque. That is what erases the prompt's dim
+   placeholder — `(empty to skip)` is longer than some of the answers, so
+   an overlay sized to the text would leave its tail sticking out from
+   under the last character. A real terminal clears the placeholder the
+   instant the first key lands, and so does this: the element exists, at
+   full width, before its first character is written.
+
+   Safe because only an input line is ever overlaid, and cliclack draws
+   nothing to the right of one. */
+.term-typed {
+  position: absolute;
+  top: calc(0.9rem + var(--row) * 1lh);
+  left: calc(1rem + var(--col) * 1ch);
+  width: calc((var(--term-cols) - var(--col)) * 1ch);
+  white-space: pre;
+  color: var(--sq-text);
+  background: var(--sq-well);
+}
+
+/* Above the typed overlay: the caret sits at the end of the text, inside
+   the region the overlay repaints, and the overlay is appended after it
+   in the DOM — so without this the caret is painted over exactly when it
+   is meant to be visible. */
+.term-caret {
+  position: absolute;
+  top: calc(0.9rem + var(--row) * 1lh);
+  left: calc(1rem + var(--col) * 1ch);
+  width: 0.55ch;
+  height: 1lh;
+  background: var(--sq-accent);
+  opacity: 0;
+  z-index: 1;
+}
+.term-caret[data-on='true'] {
+  opacity: 1;
+  animation: term-blink 0.9s steps(2, end) infinite;
+}
+
+@keyframes term-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.term figcaption {
+  margin-top: 0.7rem;
+  font-size: 0.8rem;
+  line-height: 1.55;
+  color: var(--sq-text-3);
+}
+.term figcaption code {
+  font-size: 0.95em;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   THE ANSI PALETTE
+
+   cliclack colours its prompts with the terminal's 16-colour palette, so
+   a recording stores palette *indices*, not pixels — the same session has
+   to be legible on this site's near-black panel and on its white one.
+   These are the two resolutions of that palette, tuned for contrast
+   against `--sq-well` rather than copied from a terminal theme.
+   ════════════════════════════════════════════════════════════════════ */
+
+.term-body {
+  --a0: #3b4048;
+  --a1: #e0705f;
+  --a2: #58a55d;
+  --a3: #d4920a;
+  --a4: #3584e4;
+  --a5: #b17fd6;
+  --a6: #4aa8b8;
+  --a7: #a1a8b1;
+  --a8: #737a84;
+  --a9: #ef8977;
+  --a10: #6fbf74;
+  --a11: #e8a92a;
+  --a12: #6aa6ee;
+  --a13: #c79ae4;
+  --a14: #6cc3d2;
+  --a15: #d8dbdf;
+}
+
+:root[data-theme='light'] .term-body {
+  --a0: #1a1c1f;
+  --a1: #c04030;
+  --a2: #2f7a35;
+  --a3: #8a6000;
+  --a4: #1a63c0;
+  --a5: #8248a8;
+  --a6: #1f7c8c;
+  --a7: #4d525a;
+  --a8: #767c85;
+  --a9: #d05540;
+  --a10: #3f9146;
+  --a11: #a37400;
+  --a12: #2f78d4;
+  --a13: #9a5cc0;
+  --a14: #2f93a4;
+  --a15: #1a1c1f;
+}
+
+.term-body .f0 { color: var(--a0); }
+.term-body .f1 { color: var(--a1); }
+.term-body .f2 { color: var(--a2); }
+.term-body .f3 { color: var(--a3); }
+.term-body .f4 { color: var(--a4); }
+.term-body .f5 { color: var(--a5); }
+.term-body .f6 { color: var(--a6); }
+.term-body .f7 { color: var(--a7); }
+.term-body .f8 { color: var(--a8); }
+.term-body .f9 { color: var(--a9); }
+.term-body .f10 { color: var(--a10); }
+.term-body .f11 { color: var(--a11); }
+.term-body .f12 { color: var(--a12); }
+.term-body .f13 { color: var(--a13); }
+.term-body .f14 { color: var(--a14); }
+.term-body .f15 { color: var(--a15); }
+
+.term-body .g0 { background: var(--a0); }
+.term-body .g1 { background: var(--a1); }
+.term-body .g2 { background: var(--a2); }
+.term-body .g3 { background: var(--a3); }
+.term-body .g4 { background: var(--a4); }
+.term-body .g5 { background: var(--a5); }
+.term-body .g6 { background: var(--a6); }
+.term-body .g7 { background: var(--a7); }
+
+.term-body .b { font-weight: 600; }
+.term-body .d { opacity: 0.62; }
+.term-body .i { font-style: italic; }
+.term-body .u { text-decoration: underline; }
+.term-body .v { background: var(--sq-text); color: var(--sq-well); }
+
+@media (prefers-reduced-motion: reduce) {
+  .term-caret {
+    display: none;
+  }
+}
