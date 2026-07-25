@@ -10,7 +10,9 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    // The crate now lives at `packages/secreq`; the scripts/docs/dist it guards
+    // stay at the workspace root, two levels up from the manifest dir.
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
 fn read(rel: &str) -> String {

@@ -105,8 +105,8 @@ On the wire this is JSON with snake_case field names
 (`joined_argv`, `secrets`, …) and decisions encoded as
 `"approve"`, `"pass"`, or `{"deny": "reason"}` — but the SDK's build
 tool generates all of that glue; you only write `decide`. The exact
-ABI is documented in `sdk/secreq-rule/README.md` and
-`src/wasm_rules.rs` if you want to author modules in another language.
+ABI is documented in `packages/secreq-rule/README.md` and
+`packages/secreq/src/wasm_rules.rs` if you want to author modules in another language.
 
 ## Write a rule
 
@@ -137,7 +137,7 @@ mkdir -p assembly
 
 Then write `assembly/rule.ts` exporting `decide(ctx)`. The worked
 example at
-[`sdk/secreq-rule/examples/npm-publish-guard/`](../sdk/secreq-rule/examples/npm-publish-guard/)
+[`packages/secreq-rule/examples/npm-publish-guard/`](../packages/secreq-rule/examples/npm-publish-guard/)
 is a complete, runnable package for this policy: approve `npm publish`
 from checkouts under `/home/me/oss/`, deny it when an agent session
 appears anywhere in the caller chain, pass on everything else:

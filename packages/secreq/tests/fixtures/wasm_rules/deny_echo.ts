@@ -1,7 +1,7 @@
 // Fixture: always deny, echoing every ctx field into the reason. The host
 // test asserts on the echoed string, proving the full ctx marshals across
 // the ABI intact (including non-ASCII and quote characters).
-import { RuleCtx, Decision, deny } from "../../../sdk/secreq-rule/assembly";
+import { RuleCtx, Decision, deny } from "../../../../secreq-rule/assembly";
 
 export function decide(ctx: RuleCtx): Decision {
   let callers = "";

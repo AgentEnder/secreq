@@ -58,7 +58,7 @@ The package ships AssemblyScript **source** (`assembly/*.ts`, the root
 compile step, so publishing is just:
 
 ```sh
-cd sdk/secreq-rule
+cd packages/secreq-rule
 npm publish            # runs from a clean checkout; needs npm auth
 ```
 

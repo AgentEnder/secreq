@@ -11,7 +11,7 @@
 fn committed_schema_matches_source_of_truth() {
     let generated = secreq::schema::wraps_schema();
     let expected = serde_json::to_string_pretty(&generated).expect("schema must serialize as JSON");
-    let on_disk = std::fs::read_to_string("docs/wraps.schema.json")
+    let on_disk = std::fs::read_to_string("../../docs/wraps.schema.json")
         .expect("docs/wraps.schema.json must exist; run `cargo run --example gen-schema > docs/wraps.schema.json`");
     assert_eq!(
         expected.trim_end(),
@@ -24,7 +24,7 @@ fn committed_schema_matches_source_of_truth() {
 fn committed_auto_rules_schema_matches_source_of_truth() {
     let generated = secreq::schema::auto_rules_schema();
     let expected = serde_json::to_string_pretty(&generated).expect("schema must serialize as JSON");
-    let on_disk = std::fs::read_to_string("docs/auto-rules.schema.json")
+    let on_disk = std::fs::read_to_string("../../docs/auto-rules.schema.json")
         .expect("docs/auto-rules.schema.json must exist; run `cargo run --example gen-auto-rules-schema > docs/auto-rules.schema.json`");
     assert_eq!(
         expected.trim_end(),

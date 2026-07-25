@@ -6,7 +6,7 @@ import {
   Decision,
   approve,
   pass,
-} from "../../../sdk/secreq-rule/assembly";
+} from "../../../../secreq-rule/assembly";
 
 export function decide(ctx: RuleCtx): Decision {
   if (ctx.wrap != "gh") return pass();

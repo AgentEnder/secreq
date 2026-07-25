@@ -22,7 +22,7 @@ fn read(path: &str) -> String {
 /// secreq ships prebuilt binaries for; every other channel must cover exactly
 /// these four target triples.
 fn release_targets() -> Vec<String> {
-    let yml = read(".github/workflows/release.yml");
+    let yml = read("../../.github/workflows/release.yml");
     let mut targets: Vec<String> = yml
         .lines()
         .filter_map(|l| l.trim().strip_prefix("- target:"))
@@ -54,7 +54,7 @@ fn split_target(triple: &str) -> (&str, &str) {
 /// "unsupported" error against a binary that exists.
 #[test]
 fn installer_covers_every_release_target() {
-    let sh = read("dist/install.sh");
+    let sh = read("../../dist/install.sh");
     for triple in release_targets() {
         let (arch, rest) = split_target(&triple);
         assert!(sh.contains(arch), "install.sh omits arch token {arch:?}");
@@ -67,7 +67,7 @@ fn installer_covers_every_release_target() {
 #[test]
 fn homebrew_formula_links_every_release_target() {
     let version = env!("CARGO_PKG_VERSION");
-    let formula = read("dist/homebrew/secreq.rb");
+    let formula = read("../../dist/homebrew/secreq.rb");
     for triple in release_targets() {
         let asset = format!("secreq-{version}-{triple}.tar.gz");
         assert!(
@@ -84,7 +84,7 @@ fn homebrew_formula_links_every_release_target() {
 #[test]
 fn homebrew_formula_version_matches_crate() {
     let version = env!("CARGO_PKG_VERSION");
-    let formula = read("dist/homebrew/secreq.rb");
+    let formula = read("../../dist/homebrew/secreq.rb");
     let needle = format!("version \"{version}\"");
     assert!(
         formula.contains(&needle),
@@ -100,7 +100,7 @@ fn homebrew_formula_version_matches_crate() {
 /// the download.
 #[test]
 fn homebrew_formula_shas_are_wellformed() {
-    let formula = read("dist/homebrew/secreq.rb");
+    let formula = read("../../dist/homebrew/secreq.rb");
     let mut seen = 0;
     for line in formula.lines() {
         let line = line.trim();

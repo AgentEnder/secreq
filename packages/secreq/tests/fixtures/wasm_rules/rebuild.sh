@@ -11,7 +11,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-SDK=../../../sdk/secreq-rule
+SDK=../../../../secreq-rule
 (cd "$SDK" && npm install --no-fund --no-audit)
 
 BUILD="$SDK/bin/build.js"

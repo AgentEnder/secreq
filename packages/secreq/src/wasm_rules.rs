@@ -2,7 +2,7 @@
 //!
 //! Users author a rule as a single AssemblyScript function
 //! (`decide(ctx) -> approve | pass | deny`), compile it with the
-//! `sdk/secreq-rule` helper package, and register the resulting `.wasm`
+//! `packages/secreq-rule` helper package, and register the resulting `.wasm`
 //! module. At decision time the daemon evaluates the module in the same
 //! pre-queue path as the declarative rules in [`crate::rules`].
 //!
@@ -34,7 +34,7 @@
 //! pointer, invalid UTF-8, malformed decision JSON — surfaces as an
 //! `anyhow` error. Nothing in here panics the daemon.
 //!
-//! ## ABI (kept in lock-step with `sdk/secreq-rule/assembly/abi.ts`)
+//! ## ABI (kept in lock-step with `packages/secreq-rule/assembly/abi.ts`)
 //!
 //! The module must export:
 //!

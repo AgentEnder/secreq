@@ -150,7 +150,7 @@ pub fn scaffold_rule(parent: &Path, slug: &str) -> Result<Scaffold> {
 }
 
 /// Starter `rule.ts` — a compiling, passing rule the user edits in place.
-/// Mirrors the shape documented in `sdk/secreq-rule` and `docs/wasm-rules.md`.
+/// Mirrors the shape documented in `packages/secreq-rule` and `docs/wasm-rules.md`.
 const RULE_TS_TEMPLATE: &str = r#"// A programmatic secreq auto-rule.
 //
 // You write one function — `decide(ctx)` — that returns `approve()`,

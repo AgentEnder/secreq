@@ -13,7 +13,7 @@
 fn changelog_has_a_section_for_the_current_version() {
     let version = env!("CARGO_PKG_VERSION");
     let changelog =
-        std::fs::read_to_string("CHANGELOG.md").expect("CHANGELOG.md must exist at the crate root");
+        std::fs::read_to_string("../../CHANGELOG.md").expect("CHANGELOG.md must exist at the repo root");
     let header = format!("## [{version}]");
     assert!(
         changelog.contains(&header),
@@ -28,7 +28,7 @@ fn changelog_has_a_section_for_the_current_version() {
 #[test]
 fn changelog_keeps_an_unreleased_section() {
     let changelog =
-        std::fs::read_to_string("CHANGELOG.md").expect("CHANGELOG.md must exist at the crate root");
+        std::fs::read_to_string("../../CHANGELOG.md").expect("CHANGELOG.md must exist at the repo root");
     assert!(
         changelog.contains("## [Unreleased]"),
         "CHANGELOG.md must keep a `## [Unreleased]` section for in-flight changes."

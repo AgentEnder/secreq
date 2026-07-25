@@ -1,4 +1,4 @@
-//! Guards that the `secreq-rule` SDK (`sdk/secreq-rule/`) stays
+//! Guards that the `secreq-rule` SDK (`packages/secreq-rule/`) stays
 //! publishable to npm. `cargo test` has no node/npm toolchain, so this
 //! test can't run `npm pack` — instead it checks the manifest invariants
 //! that make `npm install secreq-rule` yield a working
@@ -10,15 +10,17 @@
 //!     the whole `assembly/` tree it compiles through `asc`.
 //!
 //! If this fails after adding a file the wrapper imports, extend the
-//! `files` allowlist in `sdk/secreq-rule/package.json` to cover it.
+//! `files` allowlist in `packages/secreq-rule/package.json` to cover it.
 
 use std::path::Path;
 
-const PKG_DIR: &str = "sdk/secreq-rule";
+// The SDK is a sibling workspace package; `cargo test` runs with the crate
+// dir (`packages/secreq`) as CWD, so reach up one level to `packages/`.
+const PKG_DIR: &str = "../secreq-rule";
 
 fn manifest() -> serde_json::Value {
     let text = std::fs::read_to_string(format!("{PKG_DIR}/package.json"))
-        .expect("sdk/secreq-rule/package.json must exist");
+        .expect("packages/secreq-rule/package.json must exist");
     serde_json::from_str(&text).expect("package.json must be valid JSON")
 }
 
@@ -52,7 +54,7 @@ fn package_is_not_private() {
     assert_ne!(
         pkg.get("private"),
         Some(&serde_json::Value::Bool(true)),
-        "sdk/secreq-rule/package.json is `private: true` — npm will refuse to \
+        "packages/secreq-rule/package.json is `private: true` — npm will refuse to \
          publish it. Drop the field to make the SDK publishable."
     );
 }
@@ -85,7 +87,7 @@ fn files_allowlist_ships_the_build_toolchain() {
         assert!(
             covered(&allowlist, rel),
             "{rel} is needed by secreq-rule-build but is not covered by the \
-             `files` allowlist {allowlist:?} in sdk/secreq-rule/package.json — \
+             `files` allowlist {allowlist:?} in packages/secreq-rule/package.json — \
              `npm install secreq-rule` would ship an incomplete package"
         );
     }
