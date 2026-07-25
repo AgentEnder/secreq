@@ -1,0 +1,43 @@
+name: Deploy Docs
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  deploy-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org/
+
+      - name: Upgrade npm for OIDC support
+        # Two-step upgrade: npm 10.9.7 (bundled with Node 22.22.2) crashes
+        # self-upgrading directly to npm@latest due to npm/cli#9151.
+        # First upgrade to 11.11.0 (which still bundles promise-retry),
+        # then to latest.
+        run: npm install -g npm@11.11.0 && npm install -g npm@latest
+
+      - name: Setup Git User
+        run: |
+          git config --global user.name "${GITHUB_ACTOR}"
+          git config --global user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+
+      - run: pnpm install --frozen-lockfile
+      - run: npx nx deploy docs-site
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
