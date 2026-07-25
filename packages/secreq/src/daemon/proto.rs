@@ -1002,6 +1002,14 @@ pub enum DaemonMsg {
         /// kernel's answer. See [`crate::audit::AuditEntry::declared_by`].
         #[serde(default)]
         declared_by: Option<crate::audit::ScopeDeclarant>,
+        /// Per-secret approver attribution on an `ApproveAuto`: each
+        /// granted secret name → the id of the rule that blessed it. The
+        /// client records it in the audit row. Empty on every other
+        /// decision (a deny grants nothing); `#[serde(default,
+        /// skip_serializing_if)]` so older daemons and non-approve
+        /// replies round-trip unchanged.
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        approvers: std::collections::BTreeMap<String, String>,
     },
     /// Generic acknowledgement (Ping / ConsentWindowDetach / Shutdown).
     Ok,
@@ -1134,6 +1142,7 @@ impl std::fmt::Debug for DaemonMsg {
                 rule_name,
                 deny_message,
                 declared_by,
+                approvers,
             } => f
                 .debug_struct("Decision")
                 .field("decision", decision)
@@ -1142,6 +1151,9 @@ impl std::fmt::Debug for DaemonMsg {
                 .field("rule_name", rule_name)
                 .field("deny_message", deny_message)
                 .field("declared_by", declared_by)
+                // Secret *names* → rule ids. No values, so it prints in
+                // full — the same reasoning that keeps names above.
+                .field("approvers", approvers)
                 .finish(),
             DaemonMsg::Ok => f.write_str("Ok"),
             DaemonMsg::Hello { build_id } => {
@@ -1322,6 +1334,7 @@ mod debug_redaction_tests {
                 rule_name: None,
                 deny_message: None,
                 declared_by: None,
+                approvers: std::collections::BTreeMap::new(),
             }
         );
 

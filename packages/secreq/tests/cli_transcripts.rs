@@ -994,6 +994,9 @@ fn serve_stub(listener: UnixListener, asked: Sender<()>, approve: Receiver<()>) 
                     rule_name: None,
                     deny_message: None,
                     declared_by: None,
+                    // A manual approve has no rule behind it, so nothing
+                    // to attribute per secret.
+                    approvers: std::collections::BTreeMap::new(),
                 }
             }
             _ => DaemonMsg::Ok,

@@ -509,6 +509,7 @@ mod tests {
             secrets: secrets.iter().map(|s| (*s).to_owned()).collect(),
             decision: decision.to_owned(),
             rule_id: None,
+            approvers: Default::default(),
             fingerprint: None,
             sign_anchor: None,
             declared_by: None,

@@ -1314,6 +1314,8 @@ fn handle_rule_hit(
                 rule_name: Some(hit.rule_name),
                 deny_message: hit.deny_message,
                 declared_by,
+                // A deny grants nothing — no per-secret attribution.
+                approvers: std::collections::BTreeMap::new(),
             }
         }
         crate::rules::RuleDecision::Approve => {
@@ -1341,6 +1343,9 @@ fn handle_rule_hit(
                     rule_name: Some(hit.rule_name),
                     deny_message: None,
                     declared_by,
+                    // Per-secret attribution: which rule blessed which
+                    // secret, recorded in the client's audit row.
+                    approvers: hit.approvals,
                 },
                 WaiterReply::Err { message } => DaemonMsg::Err { message },
             }
@@ -1409,11 +1414,13 @@ fn waiter_reply_to_daemon_msg(
             // The user-decision path (manual click) never carries
             // rule attribution. Auto-decisions take a different path
             // and construct DaemonMsg::Decision directly with
-            // `rule_id` / `rule_name` / `deny_message` populated.
+            // `rule_id` / `rule_name` / `deny_message` / `approvers`
+            // populated.
             rule_id: None,
             rule_name: None,
             deny_message: None,
             declared_by,
+            approvers: std::collections::BTreeMap::new(),
         },
         WaiterReply::Err { message } => DaemonMsg::Err { message },
     }
@@ -1495,6 +1502,7 @@ mod tests {
             rule_name: None,
             deny_message: None,
             declared_by: None,
+            approvers: std::collections::BTreeMap::new(),
         }
     }
 

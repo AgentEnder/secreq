@@ -34,7 +34,7 @@
 //! caller in `daemon::server` builds an [`EvalCtx`] from an `Ask` and
 //! passes it in.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1312,6 +1312,13 @@ pub struct RuleHit {
     /// reason for wasm rules. The wrap client prints this to stderr;
     /// the consent UI surfaces it as a toast.
     pub deny_message: Option<String>,
+    /// Per-secret approver attribution on an approve: each requested
+    /// secret name → the id of the rule that blessed it. `rule_id`
+    /// above is only the *representative* (most-specific) approver, so
+    /// on a multi-secret ask blessed by several rules it names one of
+    /// them; this map is the whole answer. Empty on a deny — a deny
+    /// grants nothing, so there is nothing to attribute.
+    pub approvals: BTreeMap<String, String>,
 }
 
 /// A wasm rule that errored at evaluation time (trap, abort, fuel
@@ -1366,11 +1373,16 @@ pub struct Evaluation {
 /// or declarative — beats every approve.
 pub const WASM_DECISION_SPECIFICITY: u32 = u32::MAX;
 
-/// One matching rule with its (possibly wasm-computed) decision,
-/// competing for the hit.
+/// One matching rule competing for the hit — as the whole-ask deny, or
+/// as the approver of one requested secret.
+///
+/// Carries no `decide`: which side a candidate is on is the slot it
+/// lands in ([`record_deny`] vs [`record_approval`]), not a field that
+/// could disagree with it. `Clone` because a single approving rule is
+/// recorded against every secret it blesses.
+#[derive(Clone)]
 struct Candidate<'r> {
     rule: &'r Rule,
-    decide: RuleDecision,
     deny_message: Option<String>,
     specificity: u32,
 }
@@ -1381,19 +1393,42 @@ struct Candidate<'r> {
 /// [`RuleModules`]); a wasm rule with no entry was refused at load
 /// time and never matches.
 ///
+/// Approval is aggregated **per secret** (#265): a rule approves the
+/// secrets it is responsible for, and the ask is approved only when
+/// every requested secret reached an approved state. Denial stays a
+/// whole-ask veto.
+///
 /// Returns an [`Evaluation`] whose `hit` is:
 ///
 /// - `Some(RuleHit { Deny, .. })` if any enabled, candidate-matching
 ///   deny fires — a declarative deny match or a wasm `Deny(reason)`
-///   return. Among multiple denies the most specific wins
-///   (deterministic for audit clarity); semantically all denies block,
-///   so the "winner" only matters for which rule_id is logged.
-/// - `Some(RuleHit { Approve, .. })` if no deny matches and at least
-///   one approve does — declarative or a wasm `Approve` return.
-///   Most-specific approve wins ([`WASM_DECISION_SPECIFICITY`] for
-///   wasm); ties broken by lexically-smallest `id`.
-/// - `None` if nothing matches. The daemon falls through to the
-///   interactive prompt.
+///   return. A deny is a **whole-ask veto** and is never scoped by the
+///   denying rule's trained snapshot: rules see the full ask so they can
+///   refuse a *combination* that no individual secret would justify.
+///   Among multiple denies the most specific wins (deterministic for
+///   audit clarity); semantically all denies block, so the "winner" only
+///   matters for which rule_id is logged.
+/// - `Some(RuleHit { Approve, .. })` if no deny fires, no prompt is
+///   mandated, and **every** requested secret was blessed:
+///   - a wasm `Approve` blesses only `requested ∩ trained_secrets`, so
+///     it is structurally unable to approve a secret outside its
+///     trained set;
+///   - a declarative `Approve` whose clause matched blesses the whole
+///     ask, but only when the ask is a subset of its `trained_secrets`
+///     snapshot (empty = unbounded). Declarative rules are transparent
+///     and stay whole-ask-scoped by decision; only wasm approvals are
+///     intersected per secret.
+///
+///   The most-specific approver wins **per secret**; [`RuleHit::approvals`]
+///   records which rule blessed which, and `rule_id` names the
+///   most-specific approver overall.
+/// - `None` if any requested secret went unblessed. The ask is
+///   **atomic** — one uncovered secret sends the *whole* ask to the
+///   interactive prompt, rather than granting the covered subset.
+///
+/// Stricter coverage is the intent: dropping the old whole-ask
+/// subset-gate means every rule that *overlaps* the ask now runs, but
+/// each is only credited with the secrets it actually vouches for.
 ///
 /// Declarative semantics within the pass:
 ///
@@ -1409,16 +1444,24 @@ struct Candidate<'r> {
 ///
 /// Wasm semantics within the pass:
 ///
-/// - The trained-secrets guard applies **before** the module runs — a
-///   wasm rule must not even see an ask that requests secrets outside
-///   its trained snapshot, let alone decide it.
-/// - A `Pass` return means "no opinion": the rule does not match.
-/// - A runtime error (trap, fuel, bad decision) means the rule does
-///   not match either — fail safe to the prompt — and is reported in
+/// - A wasm rule runs when it **overlaps** the ask — the ask requests at
+///   least one name in its trained snapshot (empty snapshot =
+///   `--all-secrets`, overlaps everything). This replaces the old
+///   subset-gate: a rule trained on `{A}` now runs on an `{A, B}` ask
+///   and blesses only `A`, where before it was skipped entirely and its
+///   opinion on `A` was lost.
+/// - A `Pass` return means "no opinion": the rule contributes nothing.
+/// - A `Prompt(reason)` return removes the option of an approve without
+///   producing a hit — a deny still outranks it.
+/// - A runtime error (trap, fuel, bad decision) means the rule's opinion
+///   is unavailable, which mandates the prompt for the same reason a
+///   refused module does, and is reported in
 ///   [`Evaluation::wasm_failures`] for the caller to log.
 pub fn evaluate(rules: &[Rule], modules: &RuleModules, ctx: &EvalCtx) -> Evaluation {
     let mut best_deny: Option<Candidate> = None;
-    let mut best_approve: Option<Candidate> = None;
+    // The most-specific rule that approved each requested secret, keyed
+    // by the secret name (borrowed from `ctx.secrets`).
+    let mut approvers: HashMap<&str, Candidate> = HashMap::new();
     let mut mandated_prompt: Option<PromptMandate> = None;
     let mut wasm_failures = Vec::new();
 
@@ -1435,11 +1478,17 @@ pub fn evaluate(rules: &[Rule], modules: &RuleModules, ctx: &EvalCtx) -> Evaluat
     };
 
     for rule in rules {
-        if !rule.enabled || !trained_secrets_allow(rule, ctx) {
+        if !rule.enabled {
             continue;
         }
-        let candidate = match &rule.body {
+        match &rule.body {
             RuleBody::Wasm(_) => {
+                // Overlap, not subset: a rule with nothing to say about
+                // any requested secret is not consulted at all, so its
+                // module never sees an ask outside its remit.
+                if !wasm_overlaps(rule, ctx) {
+                    continue;
+                }
                 let Some(module) = modules.get(&rule.id) else {
                     // Refused at load time (sha256 mismatch, missing file).
                     // "Cannot be consulted" is not "passed": this rule may have
@@ -1455,24 +1504,39 @@ pub fn evaluate(rules: &[Rule], modules: &RuleModules, ctx: &EvalCtx) -> Evaluat
                     continue;
                 };
                 match module.evaluate(ctx) {
-                    Ok(WasmDecision::Pass) => continue,
-                    Ok(WasmDecision::Approve) => Candidate {
-                        rule,
-                        decide: RuleDecision::Approve,
-                        deny_message: None,
-                        specificity: WASM_DECISION_SPECIFICITY,
-                    },
-                    Ok(WasmDecision::Deny(reason)) => Candidate {
-                        rule,
-                        decide: RuleDecision::Deny,
-                        deny_message: Some(reason),
-                        specificity: WASM_DECISION_SPECIFICITY,
-                    },
+                    Ok(WasmDecision::Pass) => {}
+                    Ok(WasmDecision::Approve) => {
+                        let candidate = Candidate {
+                            rule,
+                            deny_message: None,
+                            specificity: WASM_DECISION_SPECIFICITY,
+                        };
+                        // Per-secret scoping — the structural half of
+                        // #265. The module said "approve"; it is only
+                        // credited with the requested secrets inside its
+                        // trained set, so a rule cannot bless a secret it
+                        // was never trained on however it decides.
+                        for secret in ctx.secrets {
+                            if rule.trained_secrets.is_empty()
+                                || rule.trained_secrets.contains(*secret)
+                            {
+                                record_approval(&mut approvers, secret, &candidate);
+                            }
+                        }
+                    }
+                    Ok(WasmDecision::Deny(reason)) => record_deny(
+                        &mut best_deny,
+                        Candidate {
+                            rule,
+                            deny_message: Some(reason),
+                            specificity: WASM_DECISION_SPECIFICITY,
+                        },
+                    ),
                     Ok(WasmDecision::Prompt(reason)) => {
-                        // Not a candidate: `Prompt` produces no hit, it removes
-                        // the option of one. A deny still outranks it.
+                        // Approves nothing and denies nothing: `Prompt`
+                        // produces no hit, it removes the option of one.
+                        // A deny still outranks it.
                         mandate(rule, reason);
-                        continue;
                     }
                     Err(err) => {
                         // Same reasoning as a refused module: a rule that trapped
@@ -1486,7 +1550,6 @@ pub fn evaluate(rules: &[Rule], modules: &RuleModules, ctx: &EvalCtx) -> Evaluat
                             rule,
                             "a rule module errored, so the ruleset is incomplete".to_owned(),
                         );
-                        continue;
                     }
                 }
             }
@@ -1517,39 +1580,55 @@ pub fn evaluate(rules: &[Rule], modules: &RuleModules, ctx: &EvalCtx) -> Evaluat
                     }
                     continue;
                 }
-                ClauseOutcome::Match => Candidate {
-                    rule,
-                    decide: decide.decision(),
-                    // No "…only if this is a deny" guard: an approve has
-                    // no message to guard against carrying.
-                    deny_message: decide.deny_message().map(str::to_owned),
-                    specificity: specificity(r#match),
+                ClauseOutcome::Match => match decide.decision() {
+                    RuleDecision::Deny => record_deny(
+                        &mut best_deny,
+                        Candidate {
+                            rule,
+                            deny_message: decide.deny_message().map(str::to_owned),
+                            specificity: specificity(r#match),
+                        },
+                    ),
+                    RuleDecision::Approve => {
+                        // A declarative approve stays whole-ask (#265
+                        // decision 2A) but keeps the trained-snapshot
+                        // subset guard: a transparent rule may bless the
+                        // whole ask, and must not silently widen to env
+                        // vars added since it was written. No deny_message
+                        // — an approve has nothing to explain.
+                        if declarative_approve_in_scope(rule, ctx) {
+                            let candidate = Candidate {
+                                rule,
+                                deny_message: None,
+                                specificity: specificity(r#match),
+                            };
+                            for secret in ctx.secrets {
+                                record_approval(&mut approvers, secret, &candidate);
+                            }
+                        }
+                    }
                 },
             },
-        };
-        let slot = match candidate.decide {
-            RuleDecision::Deny => &mut best_deny,
-            RuleDecision::Approve => &mut best_approve,
-        };
-        if slot.as_ref().is_none_or(|cur| beats(&candidate, cur)) {
-            *slot = Some(candidate);
         }
     }
 
-    // Deny > Prompt > Approve. A deny still wins outright: refusing is
-    // strictly stronger than asking, and a mandate that could veto a deny
-    // would let a broken module turn a block into a dialog.
-    let winner = match (best_deny, &mandated_prompt) {
-        (Some(deny), _) => Some(deny),
+    // Deny > Prompt > Approve. A deny wins outright: refusing is strictly
+    // stronger than asking, and a mandate that could veto a deny would let a
+    // broken module turn a block into a dialog. A mandate outranks the
+    // aggregate approve for the same reason it outranked the single one — it
+    // exists precisely to stop an approve from carrying the ask.
+    let hit = match (best_deny, &mandated_prompt) {
+        (Some(deny), _) => Some(RuleHit {
+            rule_id: deny.rule.id.clone(),
+            rule_name: deny.rule.name.clone(),
+            decide: RuleDecision::Deny,
+            deny_message: deny.deny_message,
+            // A deny grants nothing, so there is nothing to attribute.
+            approvals: BTreeMap::new(),
+        }),
         (None, Some(_)) => None,
-        (None, None) => best_approve,
+        (None, None) => approve_hit(ctx, &approvers),
     };
-    let hit = winner.map(|c| RuleHit {
-        rule_id: c.rule.id.clone(),
-        rule_name: c.rule.name.clone(),
-        decide: c.decide,
-        deny_message: c.deny_message,
-    });
     // A mandate that lost to a deny is spent: the ask is already blocked, and
     // reporting "we also wanted to ask you" alongside it would only be noise.
     if hit.is_some() {
@@ -1562,20 +1641,91 @@ pub fn evaluate(rules: &[Rule], modules: &RuleModules, ctx: &EvalCtx) -> Evaluat
     }
 }
 
-/// The trained-secrets guard, applied to declarative and wasm rules
-/// alike: with a non-empty snapshot, the rule may only fire when every
-/// requested secret is inside it. Empty set = guard disabled (see
-/// [`Rule::trained_secrets`]).
-fn trained_secrets_allow(rule: &Rule, ctx: &EvalCtx) -> bool {
+/// The aggregation step: approve iff **every** requested secret was
+/// blessed. One uncovered secret sends the whole ask to the prompt —
+/// asks are atomic, so there is no "approve the covered subset".
+///
+/// An ask requesting *no* secrets never approves. `.all()` over an empty
+/// iterator is vacuously true, which would make an empty ask satisfy any
+/// ruleset at all; callers mint a subject for each ask kind that resolves
+/// nothing (`ssh:<key_id>`, `wrap:<name>`), so this should be unreachable —
+/// it is here so the next ask kind fails closed on the day someone adds one
+/// and forgets.
+fn approve_hit(ctx: &EvalCtx, approvers: &HashMap<&str, Candidate>) -> Option<RuleHit> {
+    if ctx.secrets.is_empty() || !ctx.secrets.iter().all(|s| approvers.contains_key(*s)) {
+        return None;
+    }
+    let approvals: BTreeMap<String, String> = ctx
+        .secrets
+        .iter()
+        .map(|s| ((*s).to_owned(), approvers[*s].rule.id.clone()))
+        .collect();
+    // The representative for the whole-ask attribution: the most-specific
+    // approver across all secrets (id tiebreak). `approvals` above is the
+    // complete answer; this is what a single-rule-id audit field can hold.
+    let winner = approvers
+        .values()
+        .reduce(|acc, cur| if beats(cur, acc) { cur } else { acc })
+        .expect("full coverage of a non-empty ask implies at least one approver");
+    Some(RuleHit {
+        rule_id: winner.rule.id.clone(),
+        rule_name: winner.rule.name.clone(),
+        decide: RuleDecision::Approve,
+        deny_message: None,
+        approvals,
+    })
+}
+
+/// Record a whole-ask deny candidate, keeping the most specific (the rule
+/// whose id the audit row will name). Semantically any deny blocks; the
+/// choice only decides which rule is attributed.
+fn record_deny<'r>(slot: &mut Option<Candidate<'r>>, candidate: Candidate<'r>) {
+    if slot.as_ref().is_none_or(|cur| beats(&candidate, cur)) {
+        *slot = Some(candidate);
+    }
+}
+
+/// Record that `candidate` approved `secret`, keeping the most-specific
+/// approver for that secret (id tiebreak) — the per-secret analogue of the
+/// single `best_approve` slot this replaced.
+fn record_approval<'a, 'r>(
+    approvers: &mut HashMap<&'a str, Candidate<'r>>,
+    secret: &'a str,
+    candidate: &Candidate<'r>,
+) {
+    if approvers
+        .get(secret)
+        .is_none_or(|cur| beats(candidate, cur))
+    {
+        approvers.insert(secret, candidate.clone());
+    }
+}
+
+/// Whether a wasm rule is consulted at all: the ask must request at least
+/// one name in its trained snapshot (empty = `--all-secrets`, overlapping
+/// everything). Overlap rather than subset is the point of #265 — a rule
+/// trained on `{A}` runs on an `{A, B}` ask and blesses only `A`.
+fn wasm_overlaps(rule: &Rule, ctx: &EvalCtx) -> bool {
+    rule.trained_secrets.is_empty()
+        || ctx
+            .secrets
+            .iter()
+            .any(|n| rule.trained_secrets.contains(*n))
+}
+
+/// Whether a declarative rule's whole-ask `Approve` may fire: the ask must
+/// be a subset of its trained snapshot (empty = unbounded). The retained
+/// trained-secrets guard, now scoped to declarative approvals only — wasm
+/// approvals are scoped per secret instead, and denies are never
+/// trained-scoped.
+fn declarative_approve_in_scope(rule: &Rule, ctx: &EvalCtx) -> bool {
     if rule.trained_secrets.is_empty() {
         return true;
     }
-    // `.all()` over an empty iterator is vacuously true, so an ask declaring
-    // no subject would satisfy *every* rule's snapshot — the opposite of what
-    // a guard means. Callers mint a subject for each ask kind that resolves
-    // nothing (`ssh:<key_id>`, `wrap:<name>`), so this should be unreachable;
-    // it is here so the next ask kind fails closed on the day someone adds
-    // one and forgets, rather than silently consulting every rule.
+    // Vacuous-truth guard, for the reason spelled out on `approve_hit`.
+    // Redundant with that check today; kept because this predicate reads as
+    // a standalone "is this rule in scope?" and must not answer yes to an
+    // ask it knows nothing about.
     if ctx.secrets.is_empty() {
         return false;
     }
@@ -2155,11 +2305,11 @@ mod tests {
     // ── Trained-secrets guard ─────────────────────────────────────────
 
     #[test]
-    fn trained_secrets_guard_blocks_rule_when_ask_widens() {
+    fn declarative_approve_blocked_when_ask_widens_past_trained_snapshot() {
         // Rule was trained on {GITHUB_TOKEN}; the ask now also wants
         // GITHUB_REPO_TOKEN (a newly-added env var in the wrap). The
-        // rule must NOT fire, otherwise the user silently leaks the
-        // new env var they never approved.
+        // declarative rule must NOT fire, otherwise the user silently
+        // leaks the new env var they never approved.
         let r = mk_rule(
             "01",
             "r",
@@ -2178,8 +2328,9 @@ mod tests {
     }
 
     #[test]
-    fn trained_secrets_guard_allows_subset_asks() {
-        // Trained on {A, B}; ask only wants {A}. Subset of trained — fine.
+    fn declarative_approve_covers_a_subset_ask() {
+        // Trained on {A, B}; ask only wants {A}. Subset of trained — the
+        // whole-ask approval blesses the one requested secret.
         let r = mk_rule(
             "01",
             "r",
@@ -2192,10 +2343,30 @@ mod tests {
     }
 
     #[test]
-    fn empty_trained_secrets_disables_the_guard() {
-        // Hand-edited rule with no trained_secrets field. Caller's
-        // requested set is irrelevant; rule still fires if the rest
-        // of the match clauses pass.
+    fn declarative_approve_covers_all_secrets_in_a_matched_ask() {
+        // The whole-ask nature (decision 2A): one declarative rule
+        // trained on {A, B} blesses BOTH secrets of an ask for {A, B} —
+        // you don't need a rule per secret. The approvals map attributes
+        // each secret to that rule.
+        let r = mk_rule(
+            "01",
+            "covers both",
+            RuleDecision::Approve,
+            match_for("gh", None, None, None),
+            &["A", "B"],
+        );
+        let c = ctx("gh", "gh api", &[], "/x", &["A", "B"]);
+        let hit = eval(&[r], &c).expect("should approve the whole ask");
+        assert_eq!(hit.decide, RuleDecision::Approve);
+        assert_eq!(hit.approvals.get("A").map(String::as_str), Some("01"));
+        assert_eq!(hit.approvals.get("B").map(String::as_str), Some("01"));
+    }
+
+    #[test]
+    fn empty_trained_secrets_makes_declarative_approve_unbounded() {
+        // Hand-edited rule with no trained_secrets field. The scope is
+        // unbounded; the rule blesses whatever the ask requests as long
+        // as the match clauses pass.
         let r = mk_rule(
             "01",
             "r",
@@ -2205,6 +2376,22 @@ mod tests {
         );
         let c = ctx("gh", "gh api", &[], "/x", &["ANYTHING"]);
         assert!(eval(&[r], &c).is_some());
+    }
+
+    #[test]
+    fn ask_with_no_requested_secrets_falls_through_to_the_prompt() {
+        // Nothing to bless ⇒ no auto-approval, even with a matching
+        // unbounded rule. Guards the vacuous-`all()` trap: an empty
+        // requested set must not read as "every secret approved."
+        let r = mk_rule(
+            "01",
+            "r",
+            RuleDecision::Approve,
+            match_for("gh", None, None, None),
+            &[],
+        );
+        let c = ctx("gh", "gh api", &[], "/x", &[]);
+        assert_eq!(eval(&[r], &c), None);
     }
 
     // ── Precedence: deny-wins → most-specific approve → id tiebreak ──
@@ -2671,26 +2858,255 @@ mod tests {
         assert!(out.wasm_failures.is_empty());
     }
 
-    #[test]
-    fn trained_secrets_guard_blocks_a_wasm_rule_before_it_runs() {
-        // The ctx would make APPROVE_IF approve, but the ask requests a
-        // secret outside the rule's trained snapshot — the guard must
-        // veto the rule exactly like it does declarative ones.
-        let rule = mk_wasm_rule("01", "wasm approve", &["GITHUB_TOKEN"]);
-        let modules = modules_for(&[("01", APPROVE_IF)]);
-        let callers = &[EvalCaller {
+    // ── Wasm per-secret approval scoping (#265) ───────────────────────
+
+    /// Cursor.app caller + `gh api --get …` ask that makes the APPROVE_IF
+    /// fixture return Approve. The `secrets` list is the only thing that
+    /// varies across the per-secret tests below (the fixture ignores it).
+    fn approve_if_callers() -> [EvalCaller<'static>; 1] {
+        [EvalCaller {
             name: "Cursor",
             command: "/Applications/Cursor.app/Contents/MacOS/Cursor",
             exe: None,
-        }];
+        }]
+    }
+
+    #[test]
+    fn wasm_rule_contributes_its_trained_secret_but_ask_still_prompts_when_another_is_uncovered() {
+        // A wasm rule trained on {NPM_TOKEN} now RUNS for an ask that
+        // also wants SSH_KEY (the old subset-gate would have skipped it
+        // entirely). It blesses NPM_TOKEN — but SSH_KEY has no approver,
+        // so the atomic ask still falls through to the prompt.
+        let rule = mk_wasm_rule("01", "npm approver", &["NPM_TOKEN"]);
+        let modules = modules_for(&[("01", APPROVE_IF)]);
+        let callers = approve_if_callers();
         let c = ctx(
             "gh",
             "gh api --get /repos/me/x/pulls",
-            callers,
+            &callers,
             "/x",
-            &["GITHUB_TOKEN", "GITHUB_REPO_TOKEN"],
+            &["NPM_TOKEN", "SSH_KEY"],
         );
-        assert_eq!(evaluate(&[rule], &modules, &c).hit, None);
+        assert_eq!(
+            evaluate(&[rule], &modules, &c).hit,
+            None,
+            "SSH_KEY is uncovered, so the whole ask must prompt"
+        );
+    }
+
+    #[test]
+    fn two_wasm_rules_each_trained_on_one_secret_together_cover_the_ask() {
+        // Composition: neither rule alone covers {A, B}, but together
+        // they bless both — approved, with per-secret attribution.
+        let a = mk_wasm_rule("01", "A approver", &["A"]);
+        let b = mk_wasm_rule("02", "B approver", &["B"]);
+        let modules = modules_for(&[("01", APPROVE_IF), ("02", APPROVE_IF)]);
+        let callers = approve_if_callers();
+        let c = ctx(
+            "gh",
+            "gh api --get /repos/me/x/pulls",
+            &callers,
+            "/x",
+            &["A", "B"],
+        );
+        let hit = evaluate(&[a, b], &modules, &c)
+            .hit
+            .expect("both secrets covered ⇒ approve");
+        assert_eq!(hit.decide, RuleDecision::Approve);
+        assert_eq!(hit.approvals.get("A").map(String::as_str), Some("01"));
+        assert_eq!(hit.approvals.get("B").map(String::as_str), Some("02"));
+    }
+
+    #[test]
+    fn a_wasm_approve_does_not_bless_a_secret_outside_its_trained_set() {
+        // Structural scoping: a rule trained on {A} that returns Approve
+        // must NOT approve B, even though the module said "approve." B is
+        // covered here by a second rule trained on {B}, and the approvals
+        // map proves A came from rule 01 and B from rule 02 — the {A}
+        // rule never reached across to B.
+        let a_only = mk_wasm_rule("01", "A only", &["A"]);
+        let b_only = mk_wasm_rule("02", "B only", &["B"]);
+        let modules = modules_for(&[("01", APPROVE_IF), ("02", APPROVE_IF)]);
+        let callers = approve_if_callers();
+        let c = ctx(
+            "gh",
+            "gh api --get /repos/me/x/pulls",
+            &callers,
+            "/x",
+            &["A", "B"],
+        );
+        let hit = evaluate(&[a_only, b_only], &modules, &c)
+            .hit
+            .expect("both covered");
+        assert_eq!(hit.approvals.get("A").map(String::as_str), Some("01"));
+        assert_ne!(
+            hit.approvals.get("B").map(String::as_str),
+            Some("01"),
+            "the {{A}}-trained rule must not approve B"
+        );
+        assert_eq!(hit.approvals.get("B").map(String::as_str), Some("02"));
+    }
+
+    #[test]
+    fn a_wasm_approve_alone_cannot_cover_a_secret_outside_its_trained_set() {
+        // The same structural property viewed as a veto: with ONLY the
+        // {A}-trained rule present, B is uncovered and the ask prompts —
+        // the wasm Approve cannot stretch to bless B.
+        let a_only = mk_wasm_rule("01", "A only", &["A"]);
+        let modules = modules_for(&[("01", APPROVE_IF)]);
+        let callers = approve_if_callers();
+        let c = ctx(
+            "gh",
+            "gh api --get /repos/me/x/pulls",
+            &callers,
+            "/x",
+            &["A", "B"],
+        );
+        assert_eq!(evaluate(&[a_only], &modules, &c).hit, None);
+    }
+
+    #[test]
+    fn an_all_secrets_wasm_rule_covers_every_requested_secret() {
+        // An empty trained snapshot is `--all-secrets`: it overlaps every
+        // ask and its Approve blesses all requested secrets at once.
+        let rule = mk_wasm_rule("01", "all secrets", &[]);
+        let modules = modules_for(&[("01", APPROVE_IF)]);
+        let callers = approve_if_callers();
+        let c = ctx(
+            "gh",
+            "gh api --get /repos/me/x/pulls",
+            &callers,
+            "/x",
+            &["A", "B", "C"],
+        );
+        let hit = evaluate(&[rule], &modules, &c)
+            .hit
+            .expect("all-secrets rule covers everything");
+        assert_eq!(hit.approvals.get("A").map(String::as_str), Some("01"));
+        assert_eq!(hit.approvals.get("B").map(String::as_str), Some("01"));
+        assert_eq!(hit.approvals.get("C").map(String::as_str), Some("01"));
+    }
+
+    #[test]
+    fn a_non_overlapping_wasm_rule_is_never_instantiated() {
+        // A rule trained on {OTHER} shares no secret with an ask for
+        // {A, B}, so it does not overlap and never runs. Pointing it at a
+        // module that would trap proves the module was never touched:
+        // no wasm_failure is recorded (an instantiated ABORTS traps).
+        let rule = mk_wasm_rule("01", "unrelated", &["OTHER"]);
+        let modules = modules_for(&[("01", ABORTS)]);
+        let callers = approve_if_callers();
+        let c = ctx(
+            "gh",
+            "gh api --get /repos/me/x/pulls",
+            &callers,
+            "/x",
+            &["A", "B"],
+        );
+        let out = evaluate(&[rule], &modules, &c);
+        assert_eq!(out.hit, None);
+        assert!(
+            out.wasm_failures.is_empty(),
+            "non-overlapping rule must not run: {:?}",
+            out.wasm_failures
+        );
+    }
+
+    #[test]
+    fn a_deny_vetoes_the_whole_ask_even_when_every_secret_is_approved() {
+        // Every secret is blessed by the all-secrets approver, but an
+        // overlapping deny kills the entire ask — deny beats the
+        // per-secret AND.
+        let approver = mk_wasm_rule("01", "all secrets", &[]);
+        let deny = mk_rule(
+            "02",
+            "block deletes",
+            RuleDecision::Deny,
+            match_for("gh", None, None, None),
+            &[],
+        );
+        let modules = modules_for(&[("01", APPROVE_IF)]);
+        let callers = approve_if_callers();
+        let c = ctx(
+            "gh",
+            "gh api --get /repos/me/x/pulls",
+            &callers,
+            "/x",
+            &["A", "B"],
+        );
+        let hit = evaluate(&[approver, deny], &modules, &c)
+            .hit
+            .expect("deny should fire");
+        assert_eq!(hit.decide, RuleDecision::Deny);
+        assert_eq!(hit.rule_id, "02");
+        assert!(
+            hit.approvals.is_empty(),
+            "a deny hit carries no per-secret approvals"
+        );
+    }
+
+    #[test]
+    fn a_wasm_deny_vetoes_a_dangerous_combination_it_only_partly_overlaps() {
+        // Decision 1: a deny is a whole-ask veto and is NOT
+        // trained-scoped. A rule trained on {NPM_TOKEN} still runs for an
+        // ask for {NPM_TOKEN, SSH_KEY} (overlap on NPM_TOKEN), sees the
+        // full requested set, and denies the combination.
+        let combo_deny = mk_wasm_rule("01", "combo deny", &["NPM_TOKEN"]);
+        let modules = modules_for(&[("01", DENY_ECHO)]);
+        let callers = approve_if_callers();
+        let c = ctx(
+            "gh",
+            "gh api --get /repos/me/x/pulls",
+            &callers,
+            "/x",
+            &["NPM_TOKEN", "SSH_KEY"],
+        );
+        let hit = evaluate(&[combo_deny], &modules, &c)
+            .hit
+            .expect("the combination should be denied");
+        assert_eq!(hit.decide, RuleDecision::Deny);
+        assert_eq!(hit.rule_id, "01");
+    }
+
+    #[test]
+    fn per_secret_precedence_picks_the_most_specific_approver_for_each_secret() {
+        // A broad all-secrets declarative approve (specificity 0) covers
+        // both A and B; a narrow wasm rule trained on {A}
+        // (WASM_DECISION_SPECIFICITY) also approves A. Per secret, A goes
+        // to the more-specific wasm rule while B stays with the
+        // declarative one — precedence resolved independently per secret.
+        let broad = mk_rule(
+            "01",
+            "broad approve",
+            RuleDecision::Approve,
+            match_for("gh", None, None, None),
+            &[],
+        );
+        let narrow_a = mk_wasm_rule("02", "narrow A", &["A"]);
+        let modules = modules_for(&[("02", APPROVE_IF)]);
+        let callers = approve_if_callers();
+        let c = ctx(
+            "gh",
+            "gh api --get /repos/me/x/pulls",
+            &callers,
+            "/x",
+            &["A", "B"],
+        );
+        let hit = evaluate(&[broad, narrow_a], &modules, &c)
+            .hit
+            .expect("both covered");
+        assert_eq!(
+            hit.approvals.get("A").map(String::as_str),
+            Some("02"),
+            "A resolves to the most-specific (wasm) approver"
+        );
+        assert_eq!(
+            hit.approvals.get("B").map(String::as_str),
+            Some("01"),
+            "B resolves to the only approver, the declarative rule"
+        );
+        // The whole-ask representative is the most-specific approver.
+        assert_eq!(hit.rule_id, "02");
     }
 
     #[test]

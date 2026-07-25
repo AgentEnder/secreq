@@ -70,6 +70,10 @@ pub struct ConsentOutcome {
     /// itself. `NotRead` on every other path, including the fail-closed denies
     /// below, which never reach a daemon.
     pub declared_by: crate::audit::ScopeDeclarant,
+    /// Per-secret approver attribution on an auto-approve (secret name →
+    /// blessing rule id); empty otherwise. The wrap client records it in
+    /// the audit row alongside the representative `rule_id`.
+    pub approvers: std::collections::BTreeMap<String, String>,
 }
 
 impl ConsentOutcome {
@@ -83,6 +87,7 @@ impl ConsentOutcome {
             rule_name: None,
             deny_message: None,
             declared_by: crate::audit::ScopeDeclarant::NotRead,
+            approvers: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -122,6 +127,7 @@ pub fn request_consent(ask: Ask, show_indicator: bool) -> Result<ConsentOutcome>
             rule_name,
             deny_message,
             declared_by,
+            approvers,
         } => Ok(ConsentOutcome {
             decision,
             secrets,
@@ -132,6 +138,7 @@ pub fn request_consent(ask: Ask, show_indicator: bool) -> Result<ConsentOutcome>
             // always gets an answer, so `NotRead` here means the reply carried
             // nothing to record, not that the daemon declined to look.
             declared_by: declared_by.unwrap_or(crate::audit::ScopeDeclarant::NotRead),
+            approvers,
         }),
         DaemonMsg::Err { message } => {
             bail!("daemon could not resolve secrets: {message}")

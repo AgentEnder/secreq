@@ -111,7 +111,8 @@ pub fn wrap_run(
         let env_names: Vec<String> = wrap.env.keys().cloned().collect();
         let _ = audit::append(
             &AuditEntry::new(binary, args, &chain, &env_names, outcome.decision)
-                .with_rule_id(outcome.rule_id.clone()),
+                .with_rule_id(outcome.rule_id.clone())
+                .with_approvers(outcome.approvers.clone()),
         );
         if !outcome.decision.approved() {
             // Auto-deny: surface the rule's configured message (or a
@@ -358,7 +359,8 @@ pub fn run(
             .context("daemon consent request failed")?;
         let _ = audit::append(
             &AuditEntry::new("run", command, &chain, &names, outcome.decision)
-                .with_rule_id(outcome.rule_id.clone()),
+                .with_rule_id(outcome.rule_id.clone())
+                .with_approvers(outcome.approvers.clone()),
         );
         if !outcome.decision.approved() {
             // Mirror `wrap_run`'s deny messaging.

@@ -4,6 +4,7 @@
 //! the caller chain, the secret **names** released, and the decision. Secret
 //! **values never appear** here — only names, per the threat model (§11).
 
+use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -74,6 +75,18 @@ pub struct AuditEntry {
     /// older `secreq` deserialize cleanly here.
     #[serde(default)]
     pub rule_id: Option<String>,
+    /// Per-secret approver attribution for an auto-approve: a map from
+    /// each granted secret name to the id of the rule that blessed it.
+    /// Populated on `approve+auto` rows where the ruleset resolved the
+    /// ask secret-by-secret (a single whole-ask rule maps every name to
+    /// its own id; a composed approval maps each name to its own rule).
+    /// Empty on every other row — including auto-denies (a deny is a
+    /// whole-ask veto with no per-secret grant). `rule_id` remains the
+    /// representative rule for compact display; this is the full
+    /// breakdown. `#[serde(default, skip_serializing_if)]` so older logs
+    /// and rows without a breakdown round-trip unchanged.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub approvers: BTreeMap<String, String>,
     /// SHA256 fingerprint of the public key, set only for SSH-agent sign
     /// rows (`Some("SHA256:…")`); `None` for every wrap-run row. This is a
     /// public-key fingerprint — never the private key and never the
@@ -332,6 +345,7 @@ impl AuditEntry {
             secrets: secret_names.to_vec(),
             decision: decision.as_str().to_owned(),
             rule_id: None,
+            approvers: BTreeMap::new(),
             fingerprint: None,
             // Not a sign, so there is no anchor — absent for the same reason
             // `fingerprint` is.
@@ -383,6 +397,7 @@ impl AuditEntry {
             secrets: Vec::new(),
             decision: decision.as_str().to_owned(),
             rule_id: None,
+            approvers: BTreeMap::new(),
             fingerprint: Some(fingerprint.to_owned()),
             sign_anchor: Some(AuditSignAnchor::from_runtime(anchor)),
             declared_by: None,
@@ -441,6 +456,7 @@ impl AuditEntry {
             secrets: vec![reference.to_owned()],
             decision: decision.as_str().to_owned(),
             rule_id: None,
+            approvers: BTreeMap::new(),
             fingerprint: None,
             // Nothing was signed, so there is no anchor.
             sign_anchor: None,
@@ -488,6 +504,7 @@ impl AuditEntry {
             secrets: ask.secret_names.to_vec(),
             decision: Decision::Abandoned.as_str().to_owned(),
             rule_id: None,
+            approvers: BTreeMap::new(),
             fingerprint: None,
             sign_anchor: ask.sign_anchor,
             declared_by: ask.declared_by,
@@ -500,6 +517,15 @@ impl AuditEntry {
     /// to the rule that fired.
     pub fn with_rule_id(mut self, rule_id: Option<String>) -> AuditEntry {
         self.rule_id = rule_id;
+        self
+    }
+
+    /// Chainable setter for the per-secret approver breakdown. Used on
+    /// the `ApproveAuto` path so the audit row records which rule
+    /// blessed which secret, alongside the representative
+    /// [`AuditEntry::rule_id`]. A no-op empty map on every other path.
+    pub fn with_approvers(mut self, approvers: BTreeMap<String, String>) -> AuditEntry {
+        self.approvers = approvers;
         self
     }
 }
