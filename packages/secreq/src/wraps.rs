@@ -202,6 +202,27 @@ impl WrapsConfig {
         self.wraps.get(name)
     }
 
+    /// The distinct `secret://provider/locator` references already used across
+    /// every wrap's `env` map, sorted. Reuse is common — the same token often
+    /// backs several wrapped binaries — so the interactive `secreq wrap`
+    /// authoring flow offers these as pickable suggestions instead of making
+    /// the user retype (or misremember) a locator they've already wired up.
+    ///
+    /// Only values that actually look like a `secret://` reference are
+    /// collected; a stray non-reference `env` value (there shouldn't be one,
+    /// but the type doesn't forbid it) is skipped rather than suggested.
+    pub fn known_secret_refs(&self) -> Vec<String> {
+        let mut refs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for wrap in self.wraps.values() {
+            for value in wrap.env.values() {
+                if Reference::looks_like_ref(value) {
+                    refs.insert(value.clone());
+                }
+            }
+        }
+        refs.into_iter().collect()
+    }
+
     /// Merge built-in providers in as a base layer (user `providers` entries
     /// override). Convenience for callers that load a raw file and want the
     /// built-ins available.
@@ -375,6 +396,39 @@ mod tests {
             w.env.get("GITHUB_TOKEN").map(String::as_str),
             Some("secret://op/Personal/GitHub Token/credential")
         );
+    }
+
+    #[test]
+    fn known_secret_refs_dedupes_and_sorts_across_wraps() {
+        let c = WrapsConfig::parse(
+            r#"{
+                gh: { env: { GITHUB_TOKEN: "secret://op/Personal/GitHub/token" } },
+                gh_alt: { env: { GH_TOKEN: "secret://op/Personal/GitHub/token" } },
+                aws: {
+                    env: {
+                        AWS_ACCESS_KEY_ID:     "secret://op/Work/AWS/access_key_id",
+                        AWS_SECRET_ACCESS_KEY: "secret://op/Work/AWS/secret_access_key",
+                    },
+                },
+            }"#,
+            "t",
+        )
+        .unwrap();
+        // The token shared by `gh` and `gh_alt` appears once; output is sorted.
+        assert_eq!(
+            c.known_secret_refs(),
+            vec![
+                "secret://op/Personal/GitHub/token".to_owned(),
+                "secret://op/Work/AWS/access_key_id".to_owned(),
+                "secret://op/Work/AWS/secret_access_key".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn known_secret_refs_is_empty_for_gate_only_wraps() {
+        let c = WrapsConfig::parse(r#"{ op: { env: {} } }"#, "t").unwrap();
+        assert!(c.known_secret_refs().is_empty());
     }
 
     #[test]
