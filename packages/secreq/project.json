@@ -1,0 +1,20 @@
+{
+  "name": "secreq",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "targets": {
+    "check": {
+      "command": "cargo check --all-targets",
+      "options": { "cwd": "{projectRoot}" }
+    },
+    "build": {
+      "command": "cargo build --release",
+      "options": { "cwd": "{projectRoot}" },
+      "cache": false
+    },
+    "test": {
+      "command": "cargo test",
+      "options": { "cwd": "{projectRoot}" }
+    }
+  }
+}

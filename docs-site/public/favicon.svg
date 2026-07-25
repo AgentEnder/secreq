@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="secreq">
+  <title>secreq</title>
+  <defs>
+    <filter id="amber-glow" x="-120%" y="-120%" width="340%" height="340%">
+      <feGaussianBlur stdDeviation="3.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Shackle -->
+  <path
+    d="M 20 28 L 20 21 A 12 12 0 0 1 44 21 L 44 28"
+    fill="none"
+    stroke="#50a0e0"
+    stroke-width="4"
+    stroke-linecap="round"
+    opacity="0.85"
+  />
+
+  <!-- Lock body -->
+  <rect x="14" y="28" width="36" height="27" rx="4"
+    fill="#101820" stroke="#ecb030" stroke-width="2.5" filter="url(#amber-glow)"/>
+
+  <!-- Keyhole -->
+  <circle cx="32" cy="39" r="4.5" fill="#ecb030"/>
+  <rect x="30" y="40" width="4" height="9" rx="1.5" fill="#ecb030"/>
+</svg>

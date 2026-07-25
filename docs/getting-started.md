@@ -59,7 +59,7 @@ brew install AgentEnder/secreq/secreq
 
 # …or from crates.io / a local checkout:
 cargo install secreq
-cargo install --path .   # build this checkout instead
+cargo install --path packages/secreq   # build this checkout instead
 ```
 
 > ⚠ A dev/`cargo` build run against your real home can corrupt

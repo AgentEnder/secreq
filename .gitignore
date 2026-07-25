@@ -1,8 +1,10 @@
 # Rust build output
 /target
 
-# Node dependencies (SDK + examples)
+# Node dependencies (SDK + examples) and the Nx monorepo scaffold
 node_modules/
+.nx/
+*.tsbuildinfo
 
 # Logs and scratch output
 *.log

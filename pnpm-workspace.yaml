@@ -1,0 +1,9 @@
+# Phase 1 lays only the workspace foundation. `docs-site` is added in Phase 2;
+# listing it now is a harmless no-op until that directory exists.
+#
+# NOTE: `packages/secreq-rule` is deliberately NOT a member of this pnpm
+# workspace. It keeps its own npm `package-lock.json` island so its publish /
+# build behavior is unchanged by the monorepo conversion. Do not add
+# `packages/*` here — that would fold secreq-rule in.
+packages:
+  - docs-site

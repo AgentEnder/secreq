@@ -7,7 +7,7 @@ first-class Windows equivalent. The support matrix below is what you can
 expect before you invest in setting it up.
 
 There are **no prebuilt binaries.** You build from source with
-`cargo install --path .` (or `cargo build --release`), so "supported"
+`cargo install --path packages/secreq` (or `cargo build --release`), so "supported"
 here means "the crate builds and runs on that host," not "a package
 exists."
 

@@ -79,7 +79,7 @@ frameworks on macOS need nothing extra).
 To build from a local checkout instead:
 
 ```sh
-cargo install --path .
+cargo install --path packages/secreq
 # or: cargo build --release  →  target/release/secreq
 ```
 
