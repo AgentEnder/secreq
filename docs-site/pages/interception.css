@@ -1,0 +1,500 @@
+/* ════════════════════════════════════════════════════════════════════
+   THE INTERCEPTION
+
+   secreq's whole argument is a moment: you type a command, and before
+   the credential reaches it, something stops and asks. That moment is
+   invisible in prose and obvious in motion, so the hero performs it —
+   command typed, request caught mid-air, provenance assembled, decision
+   taken, secret released masked.
+
+   The base rules below are the FINAL frame, drawn statically. The
+   animation lives entirely inside `prefers-reduced-motion: no-preference`,
+   so a reader who has asked for stillness gets a complete, legible
+   composition rather than a pile of half-faded elements.
+   ════════════════════════════════════════════════════════════════════ */
+
+.icept {
+  --step: 1;
+  position: relative;
+  display: grid;
+  gap: 0.9rem;
+}
+
+/* The stage holds a fixed height and centres whatever is in it.
+
+   That is what makes the ask *arrive*: at rest the terminal sits alone in
+   the middle of the stage, and as the ask expands underneath, the pair
+   re-centres — so the terminal rises to make room rather than having been
+   parked too high, waiting for something invisible. */
+.icept-stage {
+  min-height: 32rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+/* The stage's height never changes. It is what makes the sequence
+   symmetrical: the terminal starts centred in it, rises as the ask opens
+   beneath, and comes back to exactly the same place when the ask stands
+   down. Shrinking the stage afterwards — which an earlier version did to
+   close up the space — moves the centre, so the terminal settles higher
+   than it began and the whole thing reads as drift. */
+
+.icept-term-wrap {
+  position: relative;
+}
+
+/* An `0fr -> 1fr` grid row is the trick that lets the ask open from nothing
+   without anyone measuring it: the row resolves to the content's own height,
+   and the browser interpolates between the two. */
+.icept-ask-shell {
+  display: grid;
+  grid-template-rows: 1fr;
+}
+
+/* Clipping is what makes the collapsed row actually collapse — but a naked
+   `overflow: hidden` would also shear off the ask's drop shadow. The padding
+   gives the shadow room inside the clip box and doubles as the gap under the
+   terminal; the negative margins put the layout back where it was. */
+.icept-ask-clip {
+  min-height: 0;
+  overflow: hidden;
+  padding: 0.9rem 1.25rem 1.25rem;
+  margin: 0 -1.25rem -1.25rem;
+}
+
+/* ── Terminal ──
+   The panel and title bar come from `terminal.css`, which both this and
+   the recorded `::term` sessions share. Only the hero's own typography
+   and the choreography below are local. */
+
+.icept-term {
+  font-size: 0.8rem;
+  line-height: 1.85;
+}
+
+.icept-term-body {
+  padding: 0.9rem 1rem 1.1rem;
+  min-height: 7.2rem;
+}
+
+.icept-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7ch;
+  white-space: pre;
+}
+
+.icept-sigil {
+  color: var(--sq-text-3);
+  flex-shrink: 0;
+}
+
+.icept-cmd {
+  color: var(--sq-text);
+  overflow: hidden;
+}
+
+.icept-out {
+  color: var(--sq-text-3);
+}
+
+/* The released value never appears in full, on the page or anywhere
+   else — masking is the product's behaviour, so the demo obeys it. */
+.icept-mask {
+  color: var(--sq-approve);
+  letter-spacing: 0.08em;
+}
+
+/* ── The gate: a hairline that catches the command ── */
+
+.icept-gate {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--sq-accent) 20%,
+    var(--sq-accent) 80%,
+    transparent
+  );
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ── The ask ── */
+
+.icept-ask {
+  background: var(--sq-panel);
+  border: 1px solid var(--sq-hairline-strong);
+  border-radius: var(--radius-sq-lg, 12px);
+  box-shadow: var(--sq-shadow-lift);
+  padding: 1rem 1.1rem 0.85rem;
+  display: grid;
+  gap: 0.85rem;
+}
+
+.icept-ask-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5ch;
+  font-size: 0.92rem;
+  color: var(--sq-text);
+  flex-wrap: wrap;
+}
+.icept-ask-head b {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-weight: 600;
+}
+
+.icept-well {
+  background: var(--sq-well);
+  border: 1px solid var(--sq-hairline);
+  border-radius: var(--radius-sq, 8px);
+  display: grid;
+}
+
+.icept-row {
+  padding: 0.6rem 0.85rem;
+}
+.icept-row + .icept-row {
+  border-top: 1px solid var(--sq-hairline);
+}
+
+.icept-key {
+  display: block;
+  font-family: 'Martian Mono', ui-monospace, monospace;
+  font-size: 0.5rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--sq-text-3);
+  margin-bottom: 0.3rem;
+}
+
+.icept-val {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.76rem;
+  color: var(--sq-text);
+  overflow-wrap: anywhere;
+}
+.icept-val .dim {
+  color: var(--sq-text-3);
+}
+
+.icept-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.icept-btn {
+  font-family: 'Instrument Sans', system-ui, sans-serif;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.4rem 1.1rem;
+  border-radius: var(--radius-sq-sm, 5px);
+  border: 1px solid var(--sq-hairline-strong);
+  background: var(--sq-raised);
+  color: var(--sq-text);
+}
+.icept-btn--approve {
+  position: relative;
+  background: var(--sq-accent);
+  border-color: var(--sq-accent);
+  color: #fff;
+}
+
+/* The ring the press throws off. Kept at scale 0 and fully transparent at
+   rest so it costs nothing until the moment it fires. */
+.icept-btn--approve::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 2px solid var(--sq-accent);
+  opacity: 0;
+  transform: scale(1);
+  pointer-events: none;
+}
+
+/* The pointer that takes the decision.
+
+   The hero's whole claim is that a person is in the loop, and a button that
+   merely dims at the four-second mark does not say that — it reads as the
+   dialog timing out. Something has to arrive and press it. */
+.icept-cursor {
+  display: none;
+  position: absolute;
+  left: 52%;
+  top: 56%;
+  color: var(--sq-text);
+  line-height: 0;
+  pointer-events: none;
+  filter: drop-shadow(0 2px 4px rgb(0 0 0 / 0.35));
+}
+
+/* ── Replay ── */
+
+/* Sits in the terminal's own title bar, pushed to the far end so it reads
+   as window chrome rather than as another word in `zsh · ~/project`. */
+.icept-replay {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: 'Martian Mono', ui-monospace, monospace;
+  font-size: 0.52rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--sq-text-3);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+.icept-replay:hover {
+  color: var(--sq-accent);
+}
+.icept-replay svg {
+  transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.icept-replay:hover svg {
+  transform: rotate(-180deg);
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   THE SEQUENCE
+
+   One shared delay ladder. Each element's `animation-delay` is written
+   in terms of the beat it lands on, so retiming the sequence means
+   editing this block and nothing else.
+   ════════════════════════════════════════════════════════════════════ */
+
+@media (prefers-reduced-motion: no-preference) {
+  .icept {
+    --t-type: 0s; /* command types out        */
+    --t-catch: 1.05s; /* the gate sweeps          */
+    --t-ask: 1.35s; /* the ask rises            */
+    --t-rows: 1.65s; /* evidence assembles       */
+    --t-reach: 2.2s; /* the pointer comes over   */
+    --t-decide: 3s; /* approve is pressed       */
+    --t-settle: 3.5s; /* the ask stands down      */
+    --t-out: 3.75s; /* the masked value prints  */
+    --t-replay: 4.2s; /* the offer to watch again */
+  }
+
+  .icept-cmd {
+    max-width: 0;
+    animation: icept-type 0.85s steps(13, end) var(--t-type) both;
+  }
+
+  .icept-cmd::after {
+    content: '';
+    display: inline-block;
+    width: 0.55em;
+    height: 1em;
+    margin-left: 0.15em;
+    vertical-align: -0.15em;
+    background: var(--sq-accent);
+    animation:
+      icept-caret 0.75s steps(2, end) 6,
+      icept-caret-off 0.01s linear var(--t-catch) forwards;
+  }
+
+  /* The terminal loses its colour while the request is held — the
+     command is suspended, not running. */
+  .icept-term {
+    animation: icept-hold 2.5s ease var(--t-catch) both;
+  }
+
+  .icept-gate {
+    top: 50%;
+    animation: icept-sweep 0.5s cubic-bezier(0.4, 0, 0.2, 1) var(--t-catch) both;
+  }
+
+  /* The row opens as the ask fades up, and closes as it stands down — so
+     the terminal glides to centre and back rather than jumping. */
+  .icept-ask-shell {
+    animation:
+      icept-open 0.5s cubic-bezier(0.2, 0.8, 0.3, 1) var(--t-ask) both,
+      icept-close 0.45s cubic-bezier(0.4, 0, 1, 1) var(--t-settle) forwards;
+  }
+
+  .icept-ask {
+    animation:
+      icept-ask-in 0.5s cubic-bezier(0.2, 0.8, 0.3, 1) var(--t-ask) both,
+      icept-ask-out 0.35s cubic-bezier(0.4, 0, 1, 1) var(--t-settle) forwards;
+  }
+
+  /* Offered only once there is something to replay. */
+  .icept-replay {
+    animation: sq-fade 0.4s ease-out var(--t-replay) both;
+  }
+
+  /* Evidence assembles top-down, the way a reader reads it. */
+  .icept-row {
+    animation: sq-rise 0.34s cubic-bezier(0.2, 0.8, 0.3, 1) both;
+    animation-delay: calc(var(--t-rows) + var(--step) * 0.13s);
+  }
+
+  /* The pointer's click beat lands at 47% of its travel, which is what puts
+     it exactly on `--t-decide` — the same instant the button depresses and
+     the ring leaves. Retiming the sequence means keeping those two aligned. */
+  .icept-cursor {
+    display: block;
+    animation: icept-reach 1.7s cubic-bezier(0.3, 0, 0.2, 1) var(--t-reach) both;
+  }
+
+  .icept-btn--approve {
+    animation: icept-press 0.42s cubic-bezier(0.3, 0, 0.2, 1) var(--t-decide) both;
+  }
+
+  .icept-btn--approve::after {
+    animation: icept-ring 0.55s cubic-bezier(0.2, 0.7, 0.3, 1) var(--t-decide) both;
+  }
+
+  .icept-out {
+    animation: sq-fade 0.3s ease-out var(--t-out) both;
+  }
+}
+
+@keyframes icept-type {
+  to {
+    max-width: 13ch;
+  }
+}
+
+@keyframes icept-caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes icept-caret-off {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes icept-sweep {
+  0% {
+    opacity: 0;
+    transform: scaleX(0.2);
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: scaleX(1);
+  }
+}
+
+@keyframes icept-hold {
+  0%,
+  100% {
+    filter: none;
+  }
+  15%,
+  85% {
+    filter: saturate(0.25) brightness(0.86);
+  }
+}
+
+@keyframes icept-open {
+  from {
+    grid-template-rows: 0fr;
+  }
+  to {
+    grid-template-rows: 1fr;
+  }
+}
+
+@keyframes icept-close {
+  from {
+    grid-template-rows: 1fr;
+  }
+  to {
+    grid-template-rows: 0fr;
+  }
+}
+
+@keyframes icept-ask-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes icept-ask-out {
+  to {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.98);
+  }
+}
+
+@keyframes icept-press {
+  0% {
+    transform: none;
+    filter: none;
+  }
+  30% {
+    transform: translateY(1.5px) scale(0.965);
+    filter: brightness(0.86);
+  }
+  55% {
+    transform: translateY(0) scale(1.015);
+    filter: brightness(1.18);
+  }
+  100% {
+    transform: none;
+    filter: none;
+  }
+}
+
+@keyframes icept-ring {
+  0% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.45);
+  }
+}
+
+/* Arrives from below-right, settles on the button, dips for the click at
+   47% — see the note where this is applied — then withdraws. */
+@keyframes icept-reach {
+  0% {
+    opacity: 0;
+    transform: translate(30px, 36px) scale(1);
+  }
+  22% {
+    opacity: 1;
+    transform: translate(14px, 17px) scale(1);
+  }
+  42% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+  47% {
+    transform: translate(0, 0) scale(0.78);
+  }
+  58% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(6px, 10px) scale(1);
+  }
+}
