@@ -223,6 +223,15 @@ enum Command {
         /// Repeatable.
         #[arg(long = "env-file", value_name = "PATH")]
         env_file: Vec<PathBuf>,
+        /// For each `secret://` reference whose locator resolves to nothing,
+        /// prompt for the value (masked, no echo) and write it — via the
+        /// provider's `store` capability — to exactly where the locator points,
+        /// so this and every later run resolves it normally. A reference whose
+        /// provider is read-only (no `store` capability) fails with a clear
+        /// error instead of being silently skipped. Without this flag an
+        /// unresolved reference fails as before.
+        #[arg(long = "prompt-unresolved")]
+        prompt_unresolved: bool,
         /// The command to run, followed by its arguments.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
@@ -806,7 +815,11 @@ pub fn run() -> i32 {
             );
             return 2;
         }
-        Some(Command::Run { env_file, command }) => commands::run(
+        Some(Command::Run {
+            env_file,
+            prompt_unresolved,
+            command,
+        }) => commands::run(
             &command,
             &env_file,
             WrapRunOpts {
@@ -814,6 +827,7 @@ pub fn run() -> i32 {
                 no_remember: cli.no_remember,
                 assume_yes: cli.yes,
             },
+            prompt_unresolved,
             config,
         ),
         // `read` is always daemon-gated: `cli.yes` is intentionally not

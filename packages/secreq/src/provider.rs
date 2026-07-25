@@ -320,6 +320,153 @@ pub fn store(
     Ok(substitute_fields(&cap.locator_template, &resolved))
 }
 
+/// Persist `value` at exactly `locator` through `provider`'s store capability.
+///
+/// The bridge feature 1 (`secreq run --prompt-unresolved`) builds on: given a
+/// `secret://provider/locator` reference that resolves to nothing, we want to
+/// write the freshly-prompted value to *where the locator points* so the next
+/// run resolves it normally. To do that we run [`store`] "backwards": the store
+/// capability's `locator_template` describes how a locator is *built* from the
+/// field inputs, so we parse `locator` against that template to recover those
+/// same field inputs ([`fields_from_locator`]), then call [`store`] with them.
+///
+/// Errors when the provider is read-only (no `store` capability), when the
+/// locator doesn't match the store's `locator_template`, when a required store
+/// field isn't captured by the template (surfaced by [`store`]'s own field
+/// validation — e.g. keychain's `account`, which its `{service}` template can't
+/// recover), or when the underlying store command fails.
+pub fn store_at_locator(provider: &Provider, locator: &str, value: &SecretValue) -> Result<()> {
+    let cap = provider.store.as_ref().with_context(|| {
+        format!(
+            "provider `{}` is read-only (no `store` capability); cannot save a value for `{locator}`",
+            provider.name
+        )
+    })?;
+    let fields = fields_from_locator(cap, locator)?;
+    let computed = store(provider, &fields, value)?;
+    // The retrieve-locator `store` computed must point back at exactly where we
+    // were asked to write, or a subsequent resolve won't find the value. If a
+    // provider's `locator_template` doesn't round-trip (e.g. it references a
+    // field the template can't recover), fail loudly rather than silently
+    // writing to the wrong address.
+    if computed != locator {
+        bail!(
+            "provider `{}`: stored value's retrieve-locator `{computed}` does not match the \
+             requested locator `{locator}` (the store `locator_template` does not round-trip)",
+            provider.name
+        );
+    }
+    Ok(())
+}
+
+/// Recover a [`StoreCapability`]'s field inputs by parsing `locator` against
+/// its `locator_template` — the inverse of the `{field}` substitution [`store`]
+/// applies when it *builds* a locator.
+///
+/// The template is a sequence of literal spans and `{field}` placeholders
+/// (e.g. `{name}`, or `{vault}/{item}/{field}`). Each placeholder's value is
+/// the text between its surrounding literals: a trailing placeholder takes the
+/// rest of the locator, and an interior one runs up to the next literal.
+///
+/// Only fields the template mentions are recovered; a required store field the
+/// template doesn't reference (keychain's `account`) is left for [`store`]'s
+/// own `resolve_fields` to flag. Two adjacent placeholders with no literal
+/// between them are genuinely ambiguous and error here.
+pub fn fields_from_locator(
+    cap: &StoreCapability,
+    locator: &str,
+) -> Result<BTreeMap<String, String>> {
+    let tokens = tokenize_locator_template(&cap.locator_template);
+    let mut fields = BTreeMap::new();
+    let mut rest = locator;
+    let mut i = 0;
+    while i < tokens.len() {
+        match &tokens[i] {
+            TemplateToken::Literal(lit) => {
+                rest = rest.strip_prefix(lit.as_str()).with_context(|| {
+                    format!(
+                        "locator `{locator}` does not match store template `{}` \
+                         (expected literal `{lit}`)",
+                        cap.locator_template
+                    )
+                })?;
+                i += 1;
+            }
+            TemplateToken::Field(name) => match tokens.get(i + 1) {
+                None => {
+                    // Trailing placeholder: it takes whatever is left.
+                    fields.insert(name.clone(), rest.to_owned());
+                    rest = "";
+                    i += 1;
+                }
+                Some(TemplateToken::Literal(lit)) => {
+                    let idx = rest.find(lit.as_str()).with_context(|| {
+                        format!(
+                            "locator `{locator}` does not match store template `{}` \
+                             (looking for `{lit}` after `{{{name}}}`)",
+                            cap.locator_template
+                        )
+                    })?;
+                    fields.insert(name.clone(), rest[..idx].to_owned());
+                    rest = &rest[idx..];
+                    i += 1;
+                }
+                Some(TemplateToken::Field(_)) => {
+                    bail!(
+                        "store template `{}` has adjacent placeholders with no separator; \
+                         cannot unambiguously recover fields from locator `{locator}`",
+                        cap.locator_template
+                    );
+                }
+            },
+        }
+    }
+    if !rest.is_empty() {
+        bail!(
+            "locator `{locator}` has trailing content `{rest}` not matched by store template `{}`",
+            cap.locator_template
+        );
+    }
+    Ok(fields)
+}
+
+/// One span of a `locator_template`: literal text or a `{field}` placeholder.
+#[derive(Debug, PartialEq)]
+enum TemplateToken {
+    Literal(String),
+    Field(String),
+}
+
+/// Split a `locator_template` into its literal and `{field}` spans. Mirrors the
+/// `{key}` replacement [`substitute_fields`] performs: an unclosed `{` is
+/// treated as literal text.
+fn tokenize_locator_template(template: &str) -> Vec<TemplateToken> {
+    let mut tokens = Vec::new();
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        if open > 0 {
+            tokens.push(TemplateToken::Literal(rest[..open].to_owned()));
+        }
+        match rest[open..].find('}') {
+            Some(close_rel) => {
+                let close = open + close_rel;
+                tokens.push(TemplateToken::Field(rest[open + 1..close].to_owned()));
+                rest = &rest[close + 1..];
+            }
+            None => {
+                // No closing brace — the remainder is literal.
+                tokens.push(TemplateToken::Literal(rest[open..].to_owned()));
+                rest = "";
+                break;
+            }
+        }
+    }
+    if !rest.is_empty() {
+        tokens.push(TemplateToken::Literal(rest.to_owned()));
+    }
+    tokens
+}
+
 /// Apply the provider's field schema to the caller's inputs: defaults fill in
 /// for absent fields; required fields with no input and no default error.
 fn resolve_fields(
@@ -717,6 +864,163 @@ mod tests {
         let p = retrieve_only_provider(&["printf", "%s", "{locator}"]);
         let err = store(&p, &BTreeMap::new(), &SecretValue::new("v".into())).unwrap_err();
         assert!(err.to_string().contains("no `store` capability"));
+    }
+
+    fn store_cap(locator_template: &str, fields: &[(&str, FieldSpec)]) -> StoreCapability {
+        StoreCapability {
+            command: vec!["true".into()],
+            fields: fields
+                .iter()
+                .map(|(n, s)| ((*n).to_owned(), s.clone()))
+                .collect(),
+            value_mode: ValueMode::Stdin,
+            locator_template: locator_template.to_owned(),
+        }
+    }
+
+    #[test]
+    fn fields_from_locator_recovers_a_single_whole_field() {
+        // The `pass`/`op` shape: `locator_template: "{name}"`.
+        let cap = store_cap("{name}", &[("name", FieldSpec::default())]);
+        let fields = fields_from_locator(&cap, "myservice").unwrap();
+        assert_eq!(
+            fields,
+            BTreeMap::from([("name".to_owned(), "myservice".to_owned())])
+        );
+    }
+
+    #[test]
+    fn fields_from_locator_splits_on_interior_literals() {
+        let cap = store_cap(
+            "{vault}/{item}/{field}",
+            &[
+                ("vault", FieldSpec::default()),
+                ("item", FieldSpec::default()),
+                ("field", FieldSpec::default()),
+            ],
+        );
+        let fields = fields_from_locator(&cap, "Work/Stripe/api_key").unwrap();
+        assert_eq!(
+            fields,
+            BTreeMap::from([
+                ("vault".to_owned(), "Work".to_owned()),
+                ("item".to_owned(), "Stripe".to_owned()),
+                ("field".to_owned(), "api_key".to_owned()),
+            ])
+        );
+    }
+
+    #[test]
+    fn fields_from_locator_honors_leading_and_trailing_literals() {
+        let cap = store_cap("kv/{name}.txt", &[("name", FieldSpec::default())]);
+        let fields = fields_from_locator(&cap, "kv/token.txt").unwrap();
+        assert_eq!(
+            fields,
+            BTreeMap::from([("name".to_owned(), "token".to_owned())])
+        );
+    }
+
+    #[test]
+    fn fields_from_locator_recovers_only_templated_fields() {
+        // keychain: `{service}` template, but `account` is also a store field.
+        // We recover `service`; `account` is left for `store` to flag.
+        let cap = store_cap(
+            "{service}",
+            &[
+                (
+                    "service",
+                    FieldSpec {
+                        required: true,
+                        default: None,
+                    },
+                ),
+                (
+                    "account",
+                    FieldSpec {
+                        required: true,
+                        default: None,
+                    },
+                ),
+            ],
+        );
+        let fields = fields_from_locator(&cap, "github.com").unwrap();
+        assert_eq!(
+            fields,
+            BTreeMap::from([("service".to_owned(), "github.com".to_owned())])
+        );
+        assert!(!fields.contains_key("account"));
+    }
+
+    #[test]
+    fn fields_from_locator_errors_on_a_missing_literal() {
+        let cap = store_cap("{vault}/{item}", &[]);
+        let err = fields_from_locator(&cap, "no-slash-here").unwrap_err();
+        assert!(err.to_string().contains("does not match store template"));
+    }
+
+    #[test]
+    fn fields_from_locator_errors_on_adjacent_placeholders() {
+        let cap = store_cap("{a}{b}", &[]);
+        let err = fields_from_locator(&cap, "whatever").unwrap_err();
+        assert!(err.to_string().contains("adjacent placeholders"));
+    }
+
+    #[test]
+    fn store_at_locator_writes_and_round_trips_the_locator() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("captured");
+        let p = stdin_capture_provider(&target);
+        store_at_locator(&p, "myservice", &SecretValue::new("hunter2".into())).unwrap();
+        let written = std::fs::read_to_string(&target).unwrap();
+        assert_eq!(written.trim_end_matches('\n'), "hunter2");
+    }
+
+    #[test]
+    fn store_at_locator_errors_on_a_read_only_provider() {
+        let p = retrieve_only_provider(&["printf", "%s", "{locator}"]);
+        let err = store_at_locator(&p, "anything", &SecretValue::new("v".into())).unwrap_err();
+        assert!(
+            err.to_string().contains("read-only"),
+            "expected a read-only error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn store_at_locator_surfaces_a_required_field_the_template_cannot_recover() {
+        // A `{service}` template with a second required `account` field: the
+        // locator recovers `service` only, so `store` must error on `account`.
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("captured");
+        let p = Provider {
+            name: "keychain-like".to_owned(),
+            retrieve: vec!["printf".into(), "%s".into(), "{locator}".into()],
+            store: Some(StoreCapability {
+                command: vec![
+                    "sh".into(),
+                    "-c".into(),
+                    format!("cat > {}", target.display()),
+                ],
+                fields: BTreeMap::from([
+                    ("service".to_owned(), required_field_spec()),
+                    ("account".to_owned(), required_field_spec()),
+                ]),
+                value_mode: ValueMode::Stdin,
+                locator_template: "{service}".to_owned(),
+            }),
+            retrieve_batch: None,
+        };
+        let err = store_at_locator(&p, "github.com", &SecretValue::new("v".into())).unwrap_err();
+        assert!(
+            err.to_string().contains("requires field `account`"),
+            "expected the store's required-field error, got: {err}"
+        );
+    }
+
+    fn required_field_spec() -> FieldSpec {
+        FieldSpec {
+            required: true,
+            default: None,
+        }
     }
 
     fn batch_provider_echoing_env() -> Provider {

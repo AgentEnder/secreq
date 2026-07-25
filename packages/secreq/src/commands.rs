@@ -249,6 +249,7 @@ pub fn run(
     command: &[String],
     env_files: &[PathBuf],
     opts: WrapRunOpts,
+    prompt_unresolved: bool,
     config_path: Option<&Path>,
 ) -> Result<i32> {
     if command.is_empty() {
@@ -305,6 +306,14 @@ pub fn run(
         scanned.into_iter().map(|r| (r.name, r.reference)).collect();
 
     let cwd = std::env::current_dir().context("could not determine current directory")?;
+
+    // 2b. `--prompt-unresolved`: fill any reference whose locator resolves to
+    // nothing by prompting for the value and writing it to where the locator
+    // points, so the resolution below finds it normally. A read-only provider
+    // surfaces a clear error here (never a silent skip).
+    if prompt_unresolved && !refs.is_empty() {
+        prompt_and_store_unresolved(&config, &refs, command)?;
+    }
 
     // 3. Nothing to resolve → exec directly with the file-only plain vars.
     // No daemon contact, no consent (honest "nothing to resolve" fast path).
@@ -389,6 +398,73 @@ pub fn run(
         resolved.into_iter().map(|(_, v)| v).collect()
     };
     crate::exec::run(command, &env_overrides, &secrets_for_masking, &cwd)
+}
+
+/// The `--prompt-unresolved` pre-pass: for each reference whose locator
+/// resolves to nothing, prompt for the value (masked) and persist it to
+/// exactly where the locator points via the provider's `store` capability, so
+/// the resolution that follows finds it. Values that already resolve are left
+/// untouched (their probe value is dropped, unread).
+///
+/// **Consent / provenance.** Writing a secret is a write side-effect, so each
+/// store is audited with an explicit `store` row (the reference address, never
+/// the value; `decision = approve`). The value itself is read at the user's own
+/// terminal and handed straight to the provider — the same deliberate carve-out
+/// the `wrap` authoring flow already relies on (`prompt::locator_resolves`):
+/// the consent daemon gates which *programs* receive secrets, and here the user
+/// is interactively configuring their own secret at their own keyboard. The
+/// provider's own auth still applies (1Password will biometric-prompt, etc.).
+fn prompt_and_store_unresolved(
+    config: &WrapsConfig,
+    refs: &[(String, Reference)],
+    command: &[String],
+) -> Result<()> {
+    let callers = provenance::caller_chain();
+    for (env_name, reference) in refs {
+        // Unknown provider: let the resolution step below produce its own
+        // "unknown provider scheme" error rather than storing nowhere.
+        let Some(provider) = config.providers.get(&reference.provider) else {
+            continue;
+        };
+
+        match provider::retrieve(provider, &reference.locator) {
+            // Already resolvable — the probe value is dropped here, unread.
+            Ok(provider::RetrieveOutcome::Found(_)) => {}
+            Ok(provider::RetrieveOutcome::NotFound { .. }) => {
+                let ref_display = reference.to_string();
+                cliclack::log::info(format!(
+                    "`{env_name}` ({ref_display}) is not set yet — enter its value to store it."
+                ))
+                .ok();
+                let entered = cliclack::password(format!("Value for {env_name}"))
+                    .mask('•')
+                    .interact()
+                    .with_context(|| {
+                        format!("could not read a value for `{env_name}` (need a real terminal)")
+                    })?;
+                let value = SecretValue::new(entered);
+                // A read-only provider (or a locator the store template can't
+                // round-trip) fails here with a clear error — never a silent
+                // skip.
+                provider::store_at_locator(provider, &reference.locator, &value).with_context(
+                    || format!("could not store a value for `{env_name}` ({ref_display})"),
+                )?;
+                let _ = audit::append(&AuditEntry::new(
+                    "store",
+                    command,
+                    &callers,
+                    std::slice::from_ref(&ref_display),
+                    Decision::Approve,
+                ));
+                cliclack::log::success(format!("Stored `{env_name}` at {ref_display}")).ok();
+            }
+            // The provider CLI couldn't run at all (not installed, etc.): that's
+            // no evidence the locator is empty, so don't prompt. The resolution
+            // step surfaces the real error.
+            Err(_) => {}
+        }
+    }
+    Ok(())
 }
 
 /// `secreq agent open --scope <name> --allow <ref>… [--sock <path>]` — bind a
@@ -1619,7 +1695,10 @@ pub fn wrap(args: WrapArgs, config_path: Option<&Path>) -> Result<i32> {
         if prompt::wrap_is_gate_only()? {
             BTreeMap::new()
         } else {
-            prompt::interactive_wrap_envs(&config.providers)?
+            // Suggest secrets already referenced by other wraps — computed
+            // before the new wrap is inserted, so it only offers prior work.
+            let known = config.known_secret_refs();
+            prompt::interactive_wrap_envs(&config.providers, &known)?
         }
     } else {
         BTreeMap::new()
@@ -3154,11 +3233,41 @@ mod prompt {
         }
     }
 
-    /// Drive the interactive `secreq wrap` env-collection loop: pick a
-    /// provider, name the env var, supply a locator; loop until the user
-    /// signals they're done.
+    /// Prompt for an environment variable name, validating the shell-identifier
+    /// shape. Shared by the "reuse an existing secret" and "define a new one"
+    /// branches of [`interactive_wrap_envs`].
+    fn prompt_env_var_name() -> Result<String> {
+        cliclack::input("Environment variable name")
+            .placeholder("e.g. GITHUB_TOKEN")
+            .validate(|s: &String| {
+                if !s.is_empty()
+                    && s.chars()
+                        .next()
+                        .is_some_and(|c| c == '_' || c.is_ascii_alphabetic())
+                    && s.chars().all(|c| c == '_' || c.is_ascii_alphanumeric())
+                {
+                    Ok(())
+                } else {
+                    Err("env var names must match `[A-Za-z_][A-Za-z0-9_]*`")
+                }
+            })
+            .interact()
+            .context("interactive input failed")
+    }
+
+    /// The sentinel value returned by the reuse picker when the user wants to
+    /// define a brand-new secret rather than reuse an existing reference. It is
+    /// not a valid `secret://` reference, so it can never collide with a real
+    /// suggestion.
+    const DEFINE_NEW_REF: &str = "\0new";
+
+    /// Drive the interactive `secreq wrap` env-collection loop: for each env
+    /// var, either reuse a `secret://` reference already wired up elsewhere
+    /// (`known_refs`) or define a new one (pick a provider, supply a locator);
+    /// loop until the user signals they're done.
     pub(super) fn interactive_wrap_envs(
         providers: &BTreeMap<String, Provider>,
+        known_refs: &[String],
     ) -> Result<BTreeMap<String, String>> {
         if providers.is_empty() {
             anyhow::bail!("no providers available; declare some in your config first");
@@ -3166,70 +3275,82 @@ mod prompt {
 
         let mut env = BTreeMap::new();
         loop {
-            // cliclack `select<T>` returns the value associated with the
-            // chosen item (not an index) — passing the provider name as the
-            // value means no lookup-by-position bug surface.
-            let mut sel = cliclack::select::<String>("Provider for the next env var");
-            for (name, provider) in providers {
-                let hint = if provider.store.is_some() {
-                    "supports store"
-                } else {
-                    "retrieve-only"
-                };
-                sel = sel.item(name.clone(), name.as_str(), hint);
-            }
-            let provider: String = sel
-                .interact()
-                .context("interactive provider selection failed")?;
-
-            let env_name: String = cliclack::input("Environment variable name")
-                .placeholder("e.g. GITHUB_TOKEN")
-                .validate(|s: &String| {
-                    if !s.is_empty()
-                        && s.chars()
-                            .next()
-                            .is_some_and(|c| c == '_' || c.is_ascii_alphabetic())
-                        && s.chars().all(|c| c == '_' || c.is_ascii_alphanumeric())
-                    {
-                        Ok(())
-                    } else {
-                        Err("env var names must match `[A-Za-z_][A-Za-z0-9_]*`")
-                    }
-                })
-                .interact()
-                .context("interactive input failed")?;
-
-            // The provider was chosen from `providers`, so the lookup holds.
-            let provider_def = &providers[&provider];
-            let ref_str = loop {
-                let raw: String = cliclack::input("Locator")
-                    .placeholder(
-                        "provider-specific address (e.g. Personal/GitHub Token/credential)",
-                    )
+            // Offer reuse first: the same token often backs several wrapped
+            // binaries, so surfacing what's already configured saves retyping
+            // (and mistyping) a locator. Empty ⇒ straight to defining a new one.
+            let reused = if known_refs.is_empty() {
+                None
+            } else {
+                let mut sel =
+                    cliclack::select::<String>("Reuse a secret already used by another wrap?");
+                for r in known_refs {
+                    sel = sel.item(r.clone(), r.as_str(), "");
+                }
+                sel = sel.item(
+                    DEFINE_NEW_REF.to_owned(),
+                    "Define a new secret…",
+                    "pick a provider and locator",
+                );
+                let choice: String = sel
                     .interact()
-                    .context("interactive input failed")?;
-
-                // Accept whatever the store handed the user — a quoted
-                // `op://…` reference, our own `secret://…` form, or a bare
-                // locator — and reduce it to the bare locator the template
-                // wants. Without this, a pasted `"op://…"` gets re-prefixed
-                // into `op://"op://…"` and fails only at run time.
-                let locator = crate::provider::normalize_pasted_locator(provider_def, &raw);
-                if locator != raw.trim() {
-                    cliclack::log::info(format!("Reading that as locator `{locator}`"))?;
-                }
-
-                let ref_str = format!("secret://{provider}/{locator}");
-                if Reference::parse(&ref_str).is_none() {
-                    cliclack::log::warning(format!("invalid ref `{ref_str}`; try again"))?;
-                    continue;
-                }
-
-                if locator_resolves(provider_def, &locator)? {
-                    break ref_str;
-                }
+                    .context("interactive secret selection failed")?;
+                (choice != DEFINE_NEW_REF).then_some(choice)
             };
-            env.insert(env_name, ref_str);
+
+            if let Some(ref_str) = reused {
+                let env_name = prompt_env_var_name()?;
+                env.insert(env_name, ref_str);
+            } else {
+                // cliclack `select<T>` returns the value associated with the
+                // chosen item (not an index) — passing the provider name as the
+                // value means no lookup-by-position bug surface.
+                let mut sel = cliclack::select::<String>("Provider for the next env var");
+                for (name, provider) in providers {
+                    let hint = if provider.store.is_some() {
+                        "supports store"
+                    } else {
+                        "retrieve-only"
+                    };
+                    sel = sel.item(name.clone(), name.as_str(), hint);
+                }
+                let provider: String = sel
+                    .interact()
+                    .context("interactive provider selection failed")?;
+
+                let env_name = prompt_env_var_name()?;
+
+                // The provider was chosen from `providers`, so the lookup holds.
+                let provider_def = &providers[&provider];
+                let ref_str = loop {
+                    let raw: String = cliclack::input("Locator")
+                        .placeholder(
+                            "provider-specific address (e.g. Personal/GitHub Token/credential)",
+                        )
+                        .interact()
+                        .context("interactive input failed")?;
+
+                    // Accept whatever the store handed the user — a quoted
+                    // `op://…` reference, our own `secret://…` form, or a bare
+                    // locator — and reduce it to the bare locator the template
+                    // wants. Without this, a pasted `"op://…"` gets re-prefixed
+                    // into `op://"op://…"` and fails only at run time.
+                    let locator = crate::provider::normalize_pasted_locator(provider_def, &raw);
+                    if locator != raw.trim() {
+                        cliclack::log::info(format!("Reading that as locator `{locator}`"))?;
+                    }
+
+                    let ref_str = format!("secret://{provider}/{locator}");
+                    if Reference::parse(&ref_str).is_none() {
+                        cliclack::log::warning(format!("invalid ref `{ref_str}`; try again"))?;
+                        continue;
+                    }
+
+                    if locator_resolves(provider_def, &locator)? {
+                        break ref_str;
+                    }
+                };
+                env.insert(env_name, ref_str);
+            }
 
             let again = cliclack::confirm("Add another env var?")
                 .initial_value(false)
