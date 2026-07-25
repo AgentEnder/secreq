@@ -13,7 +13,7 @@ If you want the full command reference, that's [`cli.md`](./cli.md).
   [macOS Keychain (`security`)](https://ss64.com/mac/security.html),
   [LastPass (`lpass`)](https://github.com/lastpass/lastpass-cli), and
   [`pass`](https://www.passwordstore.org/). You can also declare your
-  own — see [providers.md](./providers.md).
+  own — see [providers](./providers.md).
 - A login session for that store (e.g. `op signin`, or
   `pass init …`). `secreq` never logs into your store on your behalf.
 - A graphical session if you're on Linux/BSD: `secreq`'s consent
@@ -24,31 +24,9 @@ If you want the full command reference, that's [`cli.md`](./cli.md).
 
 ## 1. Install
 
-**Internal / coworker path (recommended).** One command from a fresh clone:
-it compiles the release binary, installs it onto your PATH, and hands off to
-`secreq init` for the shim-directory + PATH wiring (step 2 below).
-
-```sh
-bash scripts/install.sh
-```
-
-By default the binary lands in `~/.local/bin`; override with
-`--bin-dir <dir>` (or `$SECREQ_BIN_DIR`). Pass `--no-init` to install the
-binary only. If the script's stdin isn't a terminal (piped/CI), it installs
-the binary and prints the `secreq init` command to run yourself.
-
-**Even easier — a prebuilt binary.** If a teammate shared a release tarball
-(`secreq-<version>-<os>-<arch>.tar.gz`, produced by
-`scripts/package-release.sh`), you skip compilation entirely:
-
-```sh
-tar xzf secreq-*-*.tar.gz
-cd secreq-*-*/
-./install.sh              # installs the bundled binary, no Rust toolchain needed
-```
-
-**By hand.** The script wraps these — reach for them if you'd rather drive
-cargo yourself:
+Pick whichever channel fits your setup — they all install the same
+binary, and none of them create any wraps or shims (that's `secreq
+init`, step 2 below).
 
 ```sh
 # macOS / Linux, one-liner (downloads + verifies the release binary):
@@ -57,16 +35,44 @@ curl -fsSL https://secreq.dev/install.sh | sh
 # …or Homebrew:
 brew install AgentEnder/secreq/secreq
 
-# …or from crates.io / a local checkout:
+# …or from crates.io, if you'd rather build from source:
 cargo install secreq
-cargo install --path packages/secreq   # build this checkout instead
+```
+
+**From a release tarball.** A downloaded
+`secreq-<version>-<os>-<arch>.tar.gz` (produced by
+`scripts/package-release.sh`) carries its own installer, so you skip
+compilation entirely:
+
+```sh
+tar xzf secreq-*-*.tar.gz
+cd secreq-*-*/
+./install.sh              # installs the bundled binary, no Rust toolchain needed
+```
+
+**From a checkout.** One command from a fresh clone: it compiles the
+release binary, installs it onto your PATH, and hands off to `secreq
+init` for the shim-directory + PATH wiring.
+
+```sh
+bash scripts/install.sh
+```
+
+By default the binary lands in `~/.local/bin`; override with
+`--bin-dir <dir>` (or `$SECREQ_BIN_DIR`). Pass `--no-init` to install the
+binary only. If the script's stdin isn't a terminal (piped/CI), it installs
+the binary and prints the `secreq init` command to run yourself. To drive
+cargo against the checkout yourself instead:
+
+```sh
+cargo install --path packages/secreq
 ```
 
 > ⚠ A dev/`cargo` build run against your real home can corrupt
 > `~/.secreq` — see
 > [docs/troubleshooting.md#dev-builds-can-corrupt-your-real-secreq](./troubleshooting.md#dev-builds-can-corrupt-your-real-secreq).
 
-See [install.md](./install.md) for every channel and how to verify a download.
+See [install](./install.md) for every channel and how to verify a download.
 Confirm:
 
 ```sh
@@ -78,6 +84,8 @@ secreq --version
 ```sh
 secreq init
 ```
+
+::term{id=init}
 
 This:
 
@@ -105,7 +113,24 @@ echo $PATH | tr ':' '\n' | grep secreq    # should print your shim dir
 ## 3. Wrap your first binary
 
 Pick a CLI you regularly hand a credential to via env var. Common
-candidates: `gh`, `aws`, `kubectl`, `psql`, `terraform`. Let's say `gh`:
+candidates: `gh`, `aws`, `kubectl`, `psql`, `terraform`. Let's say `gh`.
+
+Run `secreq wrap` with just the binary name and it asks for the rest:
+
+```sh
+secreq wrap gh
+```
+
+::term{id=wrap-gh}
+
+This is the recommended path — not because typing is nicer, but because
+the interactive flow **checks its work**. Choosing the provider from a
+list means you can't misspell it, and the locator is resolved against
+your store before the wrap is written, so a bad path fails while you're
+still looking at it rather than the first time you run `gh`.
+
+Everything it asked can also be passed up front, which is what you want
+in a dotfiles script or a setup playbook:
 
 ```sh
 secreq wrap gh \
@@ -113,11 +138,20 @@ secreq wrap gh \
   --reason "GitHub API access"
 ```
 
-This:
+Supplying `--env` skips the questions entirely — there's nothing left to
+ask. Either way, the result is the same:
 
 - Adds an entry to `~/.secreq/wraps.json5`.
 - Drops a 5-line POSIX shim at `<shim_dir>/gh` whose body is
   `exec secreq x gh "$@"`.
+
+### Wraps that inject nothing
+
+Not every wrap carries a secret. A **gate-only** wrap injects nothing and
+exists purely to put the consent prompt in front of a command — the model
+for a tool that already holds its own credentials, like `op` itself:
+
+::term{id=wrap-gate-only}
 
 Confirm:
 
@@ -132,7 +166,7 @@ The `secret://op/Personal/GitHub/credential` part is a **reference**.
 `op` is the provider; `Personal/GitHub/credential` is the locator. The
 provider knows how to turn the locator into a value (here:
 `op read op://Personal/GitHub/credential`). See
-[providers.md](./providers.md) for the full list of schemes and how to
+[providers](./providers.md) for the full list of schemes and how to
 add your own.
 
 ## 4. Run it
@@ -140,6 +174,8 @@ add your own.
 ```sh
 gh repo list
 ```
+
+::shot{id=02-single-pending}
 
 What happens (the first time):
 
@@ -151,23 +187,24 @@ What happens (the first time):
    the command (`gh repo list`), the working directory, the parent
    process chain (so you can tell *what* asked for the secret), and the
    env vars + providers being released.
-5. You click **Approve** (one shot) or **Approve all** (remember). On
-   approve, the daemon runs `op read …` itself, ships the resolved
-   value back to the `secreq` client, and the client execs the real
-   `gh` with `GITHUB_TOKEN` in its env.
+5. You press **Approve** (or <kbd>A</kbd>). The daemon runs `op read …`
+   itself, ships the resolved value back to the `secreq` client, and
+   the client execs the real `gh` with `GITHUB_TOKEN` in its env.
 6. Any byte that matches the resolved value gets redacted from the
    wrapped `gh`'s stdout/stderr.
 
-Run it again — if you clicked **Approve all**, the cache hits and
-nothing prompts. The cache is keyed on `(wrap, ppid,
-parent_start_time)` — see [wraps.md](./wraps.md) for what scope that
-covers.
+Run it again from the same shell and nothing prompts — approving also
+remembers. The cache is keyed on `(wrap, ppid, parent_start_time)`, so
+the approval belongs to *that shell*: a different terminal, an editor,
+or an `npm` postinstall each get asked in their own right. See
+[wraps](./wraps.md) for what that scope covers, and
+[consent-window](./consent-window.md) for the window itself.
 
 ## 5. Things to know
 
 - **The consent daemon stays alive** between invocations. It exits
   after 2 hours of empty queue, or when you run `secreq daemon
-  stop`. Stopping it also clears every "Approve all" you've given (the
+  stop`. Stopping it also clears every approval you've given (the
   approvals cache is in-memory only).
 - **Pass-through is safe.** If you've blanket-aliased your shim dir
   before wrapping every binary, calling an unwrapped one (e.g. `git`)

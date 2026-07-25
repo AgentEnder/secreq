@@ -21,7 +21,15 @@ If you want the mental model for the rest of `secreq` first, read
   reads the private key from your provider, signs in-process, and zeroizes
   the key material. Only the signature leaves the daemon.
 
+::shot{id=24-ssh-sign-pending}
+
 ## Configure
+
+> **The short way is `secreq ssh setup`** — it declares the identity,
+> offers to keep the daemon alive, and wires your SSH clients, showing you
+> every file it wants to touch first. See [Onboarding](#onboarding). This
+> section describes the config it writes, for when you'd rather write it
+> yourself or want to know what a field means.
 
 Add an `ssh` block to your `wraps.json5`. Each entry is one identity: the
 public key inline (it isn't secret), the private key as a `secret://`
@@ -70,6 +78,8 @@ it**. The guided command walks all three:
 ```sh
 secreq ssh setup
 ```
+
+::term{id=ssh-setup}
 
 Run bare, it offers each step in turn (each is skippable): add an
 identity if you have none, install the login service if it isn't there,

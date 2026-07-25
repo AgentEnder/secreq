@@ -1,5 +1,15 @@
 # Authoring `wraps.json5`
 
+> **You may not need this page.** `secreq wrap <binary>` with no flags asks
+> for everything a wrap needs and writes the entry for you — and unlike
+> hand-editing, it resolves the locator against your store before saving,
+> so a typo fails while you're still looking at it. This page is the
+> reference for the file it produces: read it when you want to know what a
+> field means, hand-edit something the prompts don't cover, or check a
+> config into a dotfiles repo.
+
+::term{id=wrap-gh}
+
 The config lives at `~/.secreq/wraps.json5` (or `$SECREQ_HOME/wraps.json5`
 when `$SECREQ_HOME` is set). For schema-driven validation in your
 editor, point it at [`./wraps.schema.json`](./wraps.schema.json):
@@ -47,7 +57,7 @@ JSON5: comments, unquoted keys, trailing commas, single-quoted strings.
 | `$wait_indicator` | Boolean (default `true`). Whether a wrap prints a "waiting for approval" indicator to stderr while blocked on the consent prompt — a spinner on a TTY, a timestamped line (reprinted every 30s) on a pipe. Set `false` to silence. The `SECREQ_NO_WAIT_INDICATOR` env var silences it per-invocation regardless of this setting. |
 | `$editor` | Editor id (e.g. `code`, `cursor`, `zed`, `nvim`) the rule editor's "Open in editor" split-button opens by default. Machine-local, like `$shim_dir`; written when you pick an editor in the Rules view of `secreq view`. |
 | `$schema` | Editor pointer; ignored at runtime. |
-| `providers` | Provider scheme definitions. Optional — see [providers.md](./providers.md). |
+| `providers` | Provider scheme definitions. Optional — see [providers](./providers.md). |
 | Any other identifier | A **wrap** (binary name). |
 
 ## Wraps
@@ -98,6 +108,8 @@ op: {
 }
 ```
 
+::shot{id=21-gate-only-pending}
+
 Now every `op` invocation (`op read …`, `op item get …`, …) pauses for a
 consent prompt that shows the full command, the working directory, and
 the caller process tree — the "why am I getting this request?" context
@@ -105,12 +117,20 @@ the tool's own prompt usually omits. The consent card displays a
 **"Gate only — no secrets injected"** marker in place of the secret
 rows. Create one non-interactively with:
 
+In an interactive terminal, `secreq wrap op` offers this as a choice —
+"Gate only (no secrets)" is the second option on the first question:
+
+::term{id=wrap-gate-only}
+
+Or create one in a single non-interactive command:
+
 ```sh
 secreq wrap op --reason "1Password vault access"
 ```
 
-(`secreq wrap op` with no `--env` and no terminal creates a gate; in an
-interactive terminal it offers a "Gate only (no secrets)" choice.)
+(`secreq wrap op` with no `--env` and no terminal creates a gate too —
+with nothing to inject and nobody to ask, "just gate it" is the only
+sensible reading.)
 
 Gate-only wraps participate in [auto-rules](./consent-window.md) like any
 other wrap — e.g. auto-approve `op read op://Work/*` while still
@@ -137,7 +157,7 @@ secret://<provider>/<locator>
 - `<provider>` matches a provider scheme name (built-in or in `providers`).
 - `<locator>` is everything after the first `/`.
 
-See [providers.md](./providers.md) for the built-in providers and how to add
+See [providers](./providers.md) for the built-in providers and how to add
 your own.
 
 ## How approval is scoped (the cache)

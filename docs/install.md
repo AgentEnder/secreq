@@ -112,9 +112,6 @@ cosign verify-blob --certificate SHA256SUMS.pem --signature SHA256SUMS.sig \
   SHA256SUMS
 ```
 
-See [`dev-docs/RELEASING.md`](../dev-docs/RELEASING.md) for the full release
-and verification process.
-
 ## After installing
 
 Confirm the binary runs and reports its version + build id:
@@ -130,5 +127,5 @@ routes wrapped commands through:
 secreq init
 ```
 
-From there, [getting-started.md](./getting-started.md) walks you through your
+From there, [getting-started](./getting-started.md) walks you through your
 first wrap.

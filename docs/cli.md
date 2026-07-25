@@ -33,6 +33,21 @@ flag because the daemon design coalesces parallel asks; a one-shot
 
 ## Admin verbs
 
+### Bare `secreq`
+
+```
+secreq
+```
+
+With no subcommand and a terminal to prompt on, `secreq` presents an
+action picker — open the viewer, list wraps, manage auto-rules, open
+pending requests, set up the SSH agent, or run first-time setup — and
+dispatches into the verb you choose. The cursor starts on the viewer, so
+`secreq` then <kbd>Enter</kbd> opens the window.
+
+Without a terminal (a shim, a pipe, CI) there is nothing to pick from, so
+a bare invocation exits 2 with the usage hint instead.
+
 ### `init`
 
 ```
@@ -44,6 +59,8 @@ checks whether it's on `PATH`, and if not, offers to append a
 sentinel-bracketed `export PATH=…` block to the appropriate shell config
 (`~/.zshenv`, `~/.bashrc`, `~/.config/fish/conf.d/secreq.fish`, or
 `~/.profile`).
+
+::term{id=init}
 
 Idempotent: re-running detects the sentinel and skips the append.
 
@@ -106,6 +123,8 @@ identity (`ssh add`), install the login service (`daemon install`), then
 wire your SSH clients at secreq's agent socket by writing a
 sentinel-bracketed managed block to a config file.
 
+::term{id=ssh-setup}
+
 | Flag | Meaning |
 |---|---|
 | `--method ssh-config` | Prepend a `Host *` / `IdentityAgent` stanza to `~/.ssh/config` (scoped to SSH). |
@@ -157,9 +176,20 @@ Adds (or updates) a wrap entry in the config and installs a PATH shim at
 | `--env NAME=secret://provider/locator` | Repeatable. Each env var to inject. |
 | `--reason "..."` | Reason shown in the consent prompt. |
 
-If `--env` is not given, runs an interactive flow that prompts for each
-env var, picks a provider from the available list, and asks for the
-locator.
+**With no `--env`, `wrap` asks.** It first offers the choice between
+injecting secrets and a [gate-only wrap](./wraps.md#gate-only-wraps),
+then — for the injecting path — loops over env vars: reuse a
+`secret://` reference another wrap already uses, or pick a provider from
+the available list and give a locator. Each new locator is resolved
+against its provider before the wrap is written, so a typo fails here
+rather than the first time you run the binary.
+
+::term{id=wrap-gh}
+
+`--env` and `--reason` each answer one of those questions up front;
+supplying `--env` skips the interactive flow entirely. With no `--env`
+**and** no terminal to prompt on (a script, a pipe, CI), `wrap` creates a
+gate-only wrap — there is nothing to inject and nobody to ask.
 
 The shim file carries a sentinel comment so `unwrap` knows it's safe to
 remove; if a file already exists at the target without our sentinel,
@@ -290,17 +320,21 @@ window auto-hides ~2 seconds after the queue empties.
 secreq view
 ```
 
-Open the daemon's window in **viewer mode** — pinned, so it stays
-open after the queue empties. The window has two tabs:
+Open the **manager** window, which holds the two browsable surfaces:
 
-- **Pending** — the consent tree, same as `secreq pending`.
-- **Audit log** — recent grant decisions read from `audit.log`, newest
-  first. Names only (the audit log never contains secret values).
+- **Rules** — your saved auto-rules, plus the suggestions the
+  recommendation engine has drawn from your decisions.
+- **Audit** — past decisions read from `audit.log`, newest first.
+  Names only (the audit log never contains secret values).
 
-`view` lands on the **Audit log** tab; switch via the tab bar to act
-on queued requests. Clicking the window's close button exits viewer
-mode and hides the window (the daemon keeps running). Auto-spawns the
-daemon if it isn't running.
+`view` lands on **Audit**; a segmented control switches between them.
+The manager never holds a pending decision — that is the prompt
+window's job (`secreq pending`), and the two are independent, so
+browsing history never blocks a request. Closing the manager leaves
+the daemon running. Auto-spawns the daemon if it isn't running.
+
+See [`consent-window.md`](./consent-window.md) for both windows in
+full.
 
 ### `rules`
 
@@ -317,7 +351,7 @@ Headless management of auto-approve / auto-deny rules. Declarative
 rules are created from the consent window's Rules tab; the CLI covers
 list, inspect, enable/disable, delete — and `add-wasm`, which registers
 a compiled programmable rule module (see
-[wasm-rules.md](./wasm-rules.md)). `<id|name>` matches by id first,
+[wasm-rules](./wasm-rules.md)). `<id|name>` matches by id first,
 then exact name.
 
 - `list` marks a wasm rule whose module was refused at the daemon's
@@ -495,7 +529,7 @@ The **guest** side of the secret agent: ask the *host's* `secreq`, over the
 socket named by `$SECREQ_SOCK`, for one secret this sandbox was declared
 allowed to have. Nothing is stored in the guest — every use is asked for,
 gated by consent on the host, and audited there. Full story:
-[secret-agent.md](./secret-agent.md).
+[secret-agent](./secret-agent.md).
 
 `$SECREQ_SOCK` is set for you inside a brain `--vm` sandbox. On a host, the
 other end is `secreq agent open --scope <name> --allow <ref>… --sock <path>`,
@@ -537,5 +571,5 @@ nothing for `--yes`, `--no-remember`, or `--config` to act on.
 | `XDG_RUNTIME_DIR` | Consent daemon socket + pidfile. Falls back to `$TMPDIR/secreq-<uid>`. |
 | `EDITOR` / `VISUAL` | Used by `secreq edit`. |
 | `DISPLAY` / `WAYLAND_DISPLAY` | Linux/BSD: when neither is set, `secreq` fails closed instead of spawning a daemon that can't render. |
-| `SECREQ_SOCK` | Read by `secreq resolve`: the scoped secret agent socket to ask, mirroring `SSH_AUTH_SOCK`. Set inside a brain `--vm` sandbox, where the host forwards its `secreq agent open` socket in. See [secret-agent.md](./secret-agent.md). |
+| `SECREQ_SOCK` | Read by `secreq resolve`: the scoped secret agent socket to ask, mirroring `SSH_AUTH_SOCK`. Set inside a brain `--vm` sandbox, where the host forwards its `secreq agent open` socket in. See [secret-agent](./secret-agent.md). |
 | `SECREQ_NO_DAEMON` | Set to `1` to disable the daemon entirely — consent fails closed unless `--yes` is used. Intended for tests and headless automation. |

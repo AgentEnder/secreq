@@ -205,8 +205,8 @@ names in fresh files.
 ## Contributing a new built-in
 
 If you want to land a new built-in provider in `secreq` itself, see
-[`../dev-docs/architecture.md`](../dev-docs/architecture.md) for the
-internals and edit `src/manifest.rs::builtin_providers()`. (Users who
+[`../CONTRIBUTING.md`](../CONTRIBUTING.md) for the dev loop and edit
+`src/manifest.rs::builtin_providers()`. (Users who
 just need a custom provider should declare it in their `wraps.json5`
 `providers` block — no Rust changes needed.)
 

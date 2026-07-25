@@ -2,7 +2,7 @@
 
 The snags a first-week `secreq` user actually hits, and how to get
 un-stuck. If you're just getting started, read
-[getting-started.md](./getting-started.md) first; this page assumes you
+[getting-started](./getting-started.md) first; this page assumes you
 have `secreq` installed and at least one wrap configured.
 
 ## Start here: self-diagnosis
@@ -90,7 +90,7 @@ build handshake. If a window still won't appear after an upgrade, force
 it:
 
 ```sh
-secreq daemon stop     # also clears every in-memory "Approve all"
+secreq daemon stop     # also clears every in-memory approval
 ```
 
 The next wrap invocation spawns a fresh daemon on the current build.
@@ -264,7 +264,7 @@ secreq: error: provider `op`: failed to run `op`: <os error> (is it installed an
 ```
 
 Install the provider's CLI and make sure it's on the `$PATH` that
-`secreq` sees. See [providers.md](./providers.md) for each built-in's
+`secreq` sees. See [providers](./providers.md) for each built-in's
 CLI.
 
 ### The store is locked / you're not signed in
@@ -334,8 +334,8 @@ the next invocation re-spawn cleanly.
 
 - Re-run `secreq doctor` — it's the fastest triage.
 - Check `~/.secreq/audit.log` and `~/.secreq/daemon.log`.
-- For the command surface and every flag, see [cli.md](./cli.md).
+- For the command surface and every flag, see [cli](./cli.md).
 - For the consent window's tabs and audit format, see
-  [consent-window.md](./consent-window.md).
+  [consent-window](./consent-window.md).
 </content>
 </invoke>

@@ -97,6 +97,14 @@ retrying.
   through nor enumerate your vault one prompt at a time.
 - **Every allowed request is gated.** The prompt shows the **scope** as the
   principal — "sandbox `my-vm` wants `secret://op/Dev/gh/token`".
+
+  ::shot{id=34-agent-scope-pending}
+
+  A guest may volunteer a caller chain. It is shown, disclaimed, and
+  audited as a claim — it never reaches the decision or the grant cache:
+
+  ::shot{id=36-agent-guest-chain-pending}
+
 - **Approvals cache per scope, with a 5-minute TTL.** "Approve for 5 min"
   anchors the decision to that `(scope, ref)`; requests within the window are
   silent. The *decision* is cached — the secret is resolved fresh and

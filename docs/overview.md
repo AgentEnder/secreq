@@ -132,9 +132,7 @@ provenance-aware consent**. Nobody else covers all three.
 - **SSH approval has a TTL.** The SSH sign approval cache is clock-bounded
   (~5 min per anchor) — the only clock-based expiry in the approvals model.
   Wrap approvals have no TTL; they live as long as the parent process.
-- See [`ssh-agent.md`](./ssh-agent.md) for the SSH agent in detail, and
-  [`../dev-docs/architecture.md`](../dev-docs/architecture.md) for the
-  technical details.
+- See [`ssh-agent.md`](./ssh-agent.md) for the SSH agent in detail.
 
 ## Next step
 
@@ -143,4 +141,4 @@ If you've never run `secreq` before, start with
 walkthrough. Then [`cli.md`](./cli.md) is the full command reference
 and [`wraps.md`](./wraps.md) covers authoring `wraps.json5` by hand.
 If you want to *change* `secreq`, see
-[`../dev-docs/`](../dev-docs/).
+[`../CONTRIBUTING.md`](../CONTRIBUTING.md).
