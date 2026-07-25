@@ -472,7 +472,7 @@ fn prompt_and_store_unresolved(
 /// until the process is interrupted.
 ///
 /// This is the host-side end of the remote secret agent (design:
-/// `dev-docs/plans/2026-07-16-remote-secret-agent.md`). The scope name and
+/// `brain: areas/secreq/design/2026-07-16-remote-secret-agent.md`). The scope name and
 /// allowlist are declared here and are immutable for the socket's life; the
 /// guest can only ask, never widen. Blocks — the socket's lifetime *is* this
 /// process's lifetime — so the caller (brain, at sandbox start) backgrounds
@@ -554,7 +554,7 @@ const RESOLVE_DENIED_EXIT: i32 = 3;
 /// side of the remote secret agent: ask the host, over `$SECREQ_SOCK`, for a
 /// ref the host declared this sandbox may have.
 ///
-/// Design: `dev-docs/plans/2026-07-16-remote-secret-agent.md` (build step C).
+/// Design: `brain: areas/secreq/design/2026-07-16-remote-secret-agent.md` (build step C).
 /// The host side is [`agent_open`]; the protocol is
 /// [`crate::scoped_agent::proto`].
 ///

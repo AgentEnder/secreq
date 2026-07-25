@@ -1,7 +1,7 @@
 //! Auto-approve / auto-deny rules — persisted policy evaluated before the
 //! consent prompt fires.
 //!
-//! See `dev-docs/plans/2026-06-02-auto-rules.md` for the design.
+//! See `brain: areas/secreq/design/2026-06-02-auto-rules.md` for the design.
 //!
 //! ## Trust model
 //!

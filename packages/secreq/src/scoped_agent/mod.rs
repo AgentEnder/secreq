@@ -10,7 +10,7 @@
 //! <ref>`, dialling `$SECREQ_SOCK`. This module is the host's half; nothing
 //! the client can say changes anything it decides.
 //!
-//! Design: `dev-docs/plans/2026-07-16-remote-secret-agent.md`.
+//! Design: `brain: areas/secreq/design/2026-07-16-remote-secret-agent.md`.
 //!
 //! ## Why this is not `daemon/ssh_agent.rs`
 //!

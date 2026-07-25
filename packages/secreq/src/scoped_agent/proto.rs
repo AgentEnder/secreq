@@ -12,7 +12,7 @@
 //!
 //! - **`SO_PEERCRED` / fd passing / any socket-only syscall.** Nothing
 //!   here reads the peer's credentials — see the provenance note in
-//!   `dev-docs/plans/2026-07-16-remote-secret-agent.md`; over a forwarded
+//!   `brain: areas/secreq/design/2026-07-16-remote-secret-agent.md`; over a forwarded
 //!   socket the peer is the tunnel, not the asker.
 //! - **Line-orientation.** A pump is free to chunk or coalesce writes, so
 //!   a `\n`-delimited codec (what `daemon/proto.rs` uses on its own local
@@ -59,7 +59,7 @@ pub enum Request {
         /// (`["node", "pnpm", "postinstall"]`). Untrusted, optional, and
         /// **display-only**: the host cannot check a word of it (see the
         /// provenance section of
-        /// `dev-docs/plans/2026-07-16-remote-secret-agent.md`), so it is
+        /// `brain: areas/secreq/design/2026-07-16-remote-secret-agent.md`), so it is
         /// shown to the user marked as a guest claim and is never allowed to
         /// influence the decision or the cache key.
         ///

@@ -318,6 +318,10 @@ fn handle_sign(
         return ssh_proto::encode_failure();
     };
     let chain = crate::provenance::caller_chain_from_pid(peer_pid);
+    // The peer's cwd stands in for the wrap client's self-reported `cwd`:
+    // a sign request has no such field, so we read it off the connecting
+    // process. Best-effort — an unreadable cwd renders as absent.
+    let cwd = crate::provenance::cwd_for_pid(peer_pid).unwrap_or_default();
     let Some(anchor) = crate::provenance::select_anchor(&chain) else {
         super::log::log_at(
             "ssh-agent",
@@ -345,10 +349,10 @@ fn handle_sign(
     // 3. Decide whether to sign: approval-cache hit (skip the prompt) or
     //    interactive consent. The lock is held only for the cache check and
     //    the queue submission, never across the (blocking) consent wait.
-    let decision = match decide_sign(state, identity, anchor_pid, anchor_start_time, &chain) {
+    let decision = match decide_sign(state, identity, anchor_pid, anchor_start_time, &chain, &cwd) {
         Some(d) if d.approved() => d,
         Some(deny) => {
-            audit_sign(identity, &chain, deny);
+            audit_sign(identity, &chain, &cwd, deny);
             super::log::log_at(
                 "ssh-agent",
                 format_args!(
@@ -402,7 +406,7 @@ fn handle_sign(
             // carries the decision that authorized it (`ApproveCached` on a
             // cache hit, or whatever the user chose). The signature bytes are
             // never recorded; the row holds only the key id + fingerprint.
-            audit_sign(identity, &chain, decision);
+            audit_sign(identity, &chain, &cwd, decision);
             super::log::log_at(
                 "ssh-agent",
                 format_args!(
@@ -443,6 +447,7 @@ fn decide_sign(
     anchor_pid: u32,
     anchor_start_time: u64,
     chain: &[crate::provenance::Caller],
+    cwd: &str,
 ) -> Option<Decision> {
     // Grant check — lock held only for the lookup. A live session grant needs
     // no UI, so this path is unaffected by whether a display is available; it
@@ -464,7 +469,7 @@ fn decide_sign(
     // every request), so reload hand-edits here too before evaluating. Lock is
     // held only for the reload + evaluation; we drop it before returning.
     {
-        let ask = sign_ask(identity, anchor_pid, anchor_start_time, chain);
+        let ask = sign_ask(identity, anchor_pid, anchor_start_time, chain, cwd);
         let mut guard = state.lock().expect("state mutex");
         guard.reload_rules_if_changed();
         if let Some(hit) = guard.evaluate_rules_for_ask(&ask) {
@@ -490,6 +495,7 @@ fn decide_sign(
         anchor_pid,
         anchor_start_time,
         chain,
+        cwd,
         super::client::graphical_environment_available(),
     )
 }
@@ -509,6 +515,7 @@ fn decide_sign_on_miss(
     anchor_pid: u32,
     anchor_start_time: u64,
     chain: &[crate::provenance::Caller],
+    cwd: &str,
     gui_available: bool,
 ) -> Option<Decision> {
     // No display → the consent window can never render, so `rx.recv()` below
@@ -529,7 +536,7 @@ fn decide_sign_on_miss(
     // Miss → enqueue an Ask and park on the reply channel. Build the Ask so
     // the consent UI and the audit row have the identity, the caller chain,
     // and the anchor scope to render.
-    let ask = sign_ask(identity, anchor_pid, anchor_start_time, chain);
+    let ask = sign_ask(identity, anchor_pid, anchor_start_time, chain, cwd);
     let (tx, rx) = mpsc::channel();
     {
         let mut guard = state.lock().expect("state mutex");
@@ -593,11 +600,12 @@ fn sign_ask(
     anchor_pid: u32,
     anchor_start_time: u64,
     chain: &[crate::provenance::Caller],
+    cwd: &str,
 ) -> Ask {
     let wrap = format!("ssh:{}", identity.key_id);
     Ask {
         command: vec![format!("ssh-sign {}", identity.key_id)],
-        cwd: String::new(),
+        cwd: cwd.to_owned(),
         callers: chain
             .iter()
             .map(|c| Caller {
@@ -693,12 +701,14 @@ fn resolve_and_sign(
 fn audit_sign(
     identity: &PreparedIdentity,
     chain: &[crate::provenance::Caller],
+    cwd: &str,
     decision: Decision,
 ) {
     let entry = crate::audit::AuditEntry::ssh_sign(
         &identity.key_id,
         &identity.fingerprint,
         chain,
+        cwd,
         decision,
     );
     if let Err(err) = crate::audit::append(&entry) {
@@ -816,7 +826,12 @@ mod tests {
         let chain: Vec<crate::provenance::Caller> = Vec::new();
 
         let decision = decide_sign_on_miss(
-            &state, &identity, /* anchor_pid */ 4242, /* anchor_start_time */ 1, &chain,
+            &state,
+            &identity,
+            /* anchor_pid */ 4242,
+            /* anchor_start_time */ 1,
+            &chain,
+            /* cwd */ "/home/dev/repos/acme",
             /* gui_available */ false,
         );
 
@@ -901,7 +916,12 @@ mod tests {
         let chain: Vec<crate::provenance::Caller> = Vec::new();
 
         let decision = decide_sign(
-            &state, &identity, /* anchor_pid */ 4242, /* start */ 1, &chain,
+            &state,
+            &identity,
+            /* anchor_pid */ 4242,
+            /* start */ 1,
+            &chain,
+            /* cwd */ "/home/dev/repos/acme",
         );
 
         assert_eq!(
@@ -935,7 +955,7 @@ mod tests {
         let identity = test_identity("github");
         let chain: Vec<crate::provenance::Caller> = Vec::new();
 
-        let decision = decide_sign(&state, &identity, 4242, 1, &chain);
+        let decision = decide_sign(&state, &identity, 4242, 1, &chain, "/home/dev/repos/acme");
 
         assert_eq!(decision, Some(Decision::DenyAuto));
         assert!(

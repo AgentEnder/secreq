@@ -22,7 +22,7 @@
 //! Before this module the same XDG-resolution logic lived in four places
 //! (`wraps.rs`, `rules.rs`, `audit.rs`, `daemon/server.rs`), each with its
 //! own base dir and its own fallback. See
-//! `dev-docs/plans/2026-07-16-secreq-root-and-migrations.md`.
+//! `brain: areas/secreq/design/2026-07-16-secreq-root-and-migrations.md`.
 //!
 //! **Migrations must not call into this module.** A migration is frozen
 //! history: if `m0001` resolved its target through `secreq_root()` and this
@@ -39,6 +39,28 @@ use anyhow::{Context, Result};
 /// relocation knob — one var instead of four, which is also what lets tests
 /// isolate with a single tempdir.
 pub const SECREQ_HOME_ENV: &str = "SECREQ_HOME";
+
+/// The one process-wide lock for `$SECREQ_HOME`, for tests.
+///
+/// Every path in this module resolves through [`secreq_root`], which reads
+/// a process-global env var (falling back to a single per-process tempdir
+/// when it is unset). Two kinds of test contend for that global: ones that
+/// **set** it to their own tempdir (`audit::with_temp_log`) and ones that
+/// only **read** a directory beneath it (the wasm-store tests, which list
+/// [`rule_wasm_dir`] before and after a rollback and compare).
+///
+/// Both must hold *this* lock. A lock per module — which is what used to
+/// exist — leaves a reader free to run while another module repoints the
+/// root out from under it, so a before/after comparison silently spans two
+/// different directories and the assertion fails on a file that was never
+/// orphaned. Guarding the mutation without guarding the reads is the same
+/// as not guarding it at all, so the lock lives with the global it
+/// protects rather than with either caller.
+#[cfg(test)]
+pub(crate) fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// Root for all secreq state: `$SECREQ_HOME`, else `~/.secreq`.
 pub fn secreq_root() -> Result<PathBuf> {

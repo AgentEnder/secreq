@@ -569,8 +569,9 @@ pub(crate) fn now_unix() -> u64 {
 /// accent dot (the secret); it passes through only with consent. No
 /// tile, no border: the brackets ride the theme foreground directly on
 /// the panel, so the mark reads as chrome, not as an app-store icon.
-/// Master SVG: `dev-docs/design-drafts/consent-ui/shared/assets/logo.svg`
-/// (viewBox 0 0 64 64; geometry below mirrors it).
+/// Master SVG: `dev-docs/brand/logo.svg` (viewBox 0 0 64 64; geometry
+/// below mirrors it). The docs site's favicon and header mark are
+/// derived from the same file — change the master, not one consumer.
 pub(crate) fn paint_app_icon(ui: &mut egui::Ui, size: f32) {
     let th = Theme::of(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
@@ -2453,6 +2454,35 @@ fn truncate_to_width(ui: &egui::Ui, text: &str, font: &egui::FontId, max_width: 
     chars[..lo].iter().collect::<String>() + "\u{2026}"
 }
 
+/// The arguments a process was invoked with, with `argv[0]` removed.
+///
+/// `Caller::command` is the whole joined argv, and its first token is
+/// the program itself — the same thing every caller row already prints
+/// as the process name. Rendering both gives `gh  gh repo list` and
+/// `zsh  zsh`, where the repetition crowds out the part that actually
+/// carries information: the arguments.
+///
+/// The leading token is dropped only when it names the same program the
+/// row is labelled with, bare (`gh`) or as a path (`/usr/bin/node`).
+/// When it does **not** match, the full command line is kept: a process
+/// whose `argv[0]` disagrees with its executable — a login shell's
+/// `-zsh`, a busybox-style symlink alias, something deliberately
+/// masquerading — is precisely what a consent prompt must not hide.
+/// That branch also covers the case this can't parse, an `argv[0]`
+/// containing spaces, so an unsplittable path degrades to showing
+/// everything rather than to a wrong split.
+pub(crate) fn caller_args<'a>(name: &str, command: &'a str) -> &'a str {
+    let (head, rest) = match command.split_once(' ') {
+        Some((head, rest)) => (head, rest.trim_start()),
+        None => (command, ""),
+    };
+    if head.rsplit('/').next().unwrap_or(head) == name {
+        rest
+    } else {
+        command
+    }
+}
+
 /// Render an audit entry's caller chain as an indented process tree,
 /// outermost-first (the way `pstree` prints). Each row carries the bare
 /// process name, its pid, and — load-bearingly — the argv it was invoked
@@ -2496,13 +2526,14 @@ fn render_audit_caller_chain(ui: &mut egui::Ui, callers: &[AuditCaller]) {
                     .size(10.0)
                     .color(th.faint),
             );
-            if !c.command.is_empty() && c.command != c.name {
+            let args = caller_args(&c.name, &c.command);
+            if !args.is_empty() {
                 let cmd_font = egui::FontId::monospace(11.0);
                 let avail = (ui.available_width() - 4.0).max(40.0);
-                let shown = truncate_to_width(ui, &c.command, &cmd_font, avail);
+                let shown = truncate_to_width(ui, args, &cmd_font, avail);
                 let resp = ui.label(egui::RichText::new(&shown).font(cmd_font).color(th.dim));
-                if shown != c.command {
-                    resp.on_hover_text(&c.command);
+                if shown != args {
+                    resp.on_hover_text(args);
                 }
             }
         });
@@ -2515,10 +2546,11 @@ fn render_audit_caller_chain(ui: &mut egui::Ui, callers: &[AuditCaller]) {
                 .iter()
                 .skip(visible)
                 .map(|c| {
-                    if !c.command.is_empty() && c.command != c.name {
-                        format!("{} (pid {})  {}", c.name, c.pid, c.command)
-                    } else {
+                    let args = caller_args(&c.name, &c.command);
+                    if args.is_empty() {
                         format!("{} (pid {})", c.name, c.pid)
+                    } else {
+                        format!("{} (pid {})  {}", c.name, c.pid, args)
                     }
                 })
                 .collect::<Vec<_>>()
@@ -2638,10 +2670,111 @@ fn short_cwd(cwd: &str) -> String {
     }
 }
 
+/// Render a path with the user's home directory collapsed to `~`.
+///
+/// The prompt's `IN` row shows a full absolute cwd, and its leading
+/// `/Users/<you>/` is the same on every ask — it carries nothing the
+/// reader needs while pushing the part that does (the project) toward
+/// truncation. Shells, file dialogs and the OS's own prompts all
+/// abbreviate the same way, so `~` reads as itself rather than as a
+/// literal directory named `~`.
+pub(crate) fn abbreviate_home(path: &str) -> String {
+    let home = dirs::home_dir().map(|h| h.display().to_string());
+    abbreviate_home_within(path, home.as_deref())
+}
+
+/// The pure half of [`abbreviate_home`], with `$HOME` injected so it can
+/// be tested without touching the environment.
+///
+/// Collapses only on a path boundary: `/Users/youthful/x` keeps its full
+/// prefix rather than becoming `~thful/x`.
+fn abbreviate_home_within(path: &str, home: Option<&str>) -> String {
+    let Some(home) = home.map(|h| h.trim_end_matches('/')) else {
+        return path.to_owned();
+    };
+    if home.is_empty() {
+        return path.to_owned();
+    }
+    if path == home {
+        return "~".to_owned();
+    }
+    match path.strip_prefix(home) {
+        Some(rest) if rest.starts_with('/') => format!("~{rest}"),
+        _ => path.to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::audit::AuditCaller;
+
+    // ── abbreviate_home ──────────────────────────────────────────
+
+    #[test]
+    fn a_home_prefix_collapses_to_a_tilde() {
+        assert_eq!(
+            abbreviate_home_within("/Users/dev/repos/acme", Some("/Users/dev")),
+            "~/repos/acme"
+        );
+        // The home directory itself, with and without a trailing slash.
+        assert_eq!(
+            abbreviate_home_within("/Users/dev", Some("/Users/dev")),
+            "~"
+        );
+        assert_eq!(
+            abbreviate_home_within("/Users/dev/x", Some("/Users/dev/")),
+            "~/x"
+        );
+    }
+
+    #[test]
+    fn a_partial_match_is_left_alone() {
+        // `/Users/youthful` merely starts with `/Users/you`; collapsing on
+        // a non-boundary would rewrite it to a path that does not exist.
+        assert_eq!(
+            abbreviate_home_within("/Users/youthful/x", Some("/Users/you")),
+            "/Users/youthful/x"
+        );
+        // Nothing to collapse against.
+        assert_eq!(
+            abbreviate_home_within("/opt/build", Some("/Users/dev")),
+            "/opt/build"
+        );
+        assert_eq!(abbreviate_home_within("/opt/build", None), "/opt/build");
+        assert_eq!(abbreviate_home_within("/opt/build", Some("")), "/opt/build");
+    }
+
+    // ── caller_args ──────────────────────────────────────────────
+
+    #[test]
+    fn argv0_is_dropped_when_it_just_repeats_the_process_name() {
+        // The row already prints the name, so `gh  gh repo list` spends
+        // its most legible column re-stating what the name said.
+        assert_eq!(caller_args("gh", "gh repo list"), "repo list");
+        // Nothing but argv[0] means there are no arguments to show.
+        assert_eq!(caller_args("zsh", "zsh"), "");
+        assert_eq!(caller_args("Superset.app", "Superset.app"), "");
+        // argv[0] as an absolute path still names the same program.
+        assert_eq!(
+            caller_args("node", "/usr/bin/node ./scripts/import.js"),
+            "./scripts/import.js"
+        );
+    }
+
+    #[test]
+    fn a_mismatched_argv0_is_kept_in_full() {
+        // A login shell announces itself as `-zsh`; that divergence is
+        // information, so the row shows the command line as it really is.
+        assert_eq!(caller_args("zsh", "-zsh"), "-zsh");
+        // Same for a process whose argv[0] claims to be something else —
+        // exactly what a consent prompt must not quietly swallow.
+        assert_eq!(caller_args("curl", "systemd --user"), "systemd --user");
+        // An argv[0] with spaces can't be split reliably, so we show all
+        // of it rather than guess at a boundary.
+        let spaced = "/Applications/My App.app/Contents/MacOS/My App --flag";
+        assert_eq!(caller_args("My App", spaced), spaced);
+    }
 
     // ── audit_entry_matches ──────────────────────────────────────
 

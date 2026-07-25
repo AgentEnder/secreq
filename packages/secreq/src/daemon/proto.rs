@@ -171,7 +171,7 @@ pub enum ClientMsg {
     // These messages are sent by the UI (the consent-window child) and
     // by the `secreq rules …` CLI verbs. The daemon is the single
     // writer of the rules file — clients never poke the file directly.
-    // See `src/rules.rs` and `dev-docs/plans/2026-06-02-auto-rules.md`.
+    // See `src/rules.rs` and `brain: areas/secreq/design/2026-06-02-auto-rules.md`.
     /// "Give me the current ruleset." Daemon replies with
     /// [`DaemonMsg::RulesList`].
     ListRules,
@@ -264,7 +264,7 @@ pub struct Ask {
     /// declared scope is the principal, and there is deliberately **no
     /// caller chain** (`callers` is empty on these asks — a guest has no
     /// host pid to walk; see the provenance section of
-    /// `dev-docs/plans/2026-07-16-remote-secret-agent.md`). `None` for every
+    /// `brain: areas/secreq/design/2026-07-16-remote-secret-agent.md`). `None` for every
     /// local ask. `#[serde(default)]` keeps the attach protocol
     /// back-compatible, same as [`Ask::ssh`].
     #[serde(default)]

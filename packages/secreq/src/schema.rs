@@ -77,7 +77,7 @@ pub fn manifest_schema() -> Value {
 
 /// JSON Schema for `auto-rules.json5` — the persisted ruleset the
 /// daemon evaluates before prompting the user. Source of truth in
-/// `src/rules.rs`; see `dev-docs/plans/2026-06-02-auto-rules.md`.
+/// `src/rules.rs`; see `brain: areas/secreq/design/2026-06-02-auto-rules.md`.
 ///
 /// Regenerate:
 /// ```sh

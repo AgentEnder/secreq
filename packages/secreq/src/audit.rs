@@ -135,15 +135,21 @@ impl AuditEntry {
     /// It carries **no secret material**: `secrets` is empty (the private
     /// key is resolved fresh, signed from, and zeroized — never named here),
     /// and the signature bytes are never recorded.
+    ///
+    /// `cwd` is the *socket peer's* working directory, read by the daemon via
+    /// [`crate::provenance::cwd_for_pid`], because a sign request has no wrap
+    /// client to self-report one the way [`AuditEntry::new`] does. Empty when
+    /// it couldn't be read — the row records what was observed, not a guess.
     pub fn ssh_sign(
         key_id: &str,
         fingerprint: &str,
         callers: &[Caller],
+        cwd: &str,
         decision: Decision,
     ) -> AuditEntry {
         AuditEntry {
             ts_unix: now_unix(),
-            cwd: String::new(),
+            cwd: cwd.to_owned(),
             wrap: format!("ssh:{key_id}"),
             args: Vec::new(),
             callers: callers.iter().map(AuditCaller::from_runtime).collect(),
@@ -167,7 +173,7 @@ impl AuditEntry {
     /// address, never a value), and the **decision**. It carries `callers:
     /// []` deliberately: a guest has no host-verifiable caller chain, and
     /// this row must not imply one existed (see the provenance section of
-    /// `dev-docs/plans/2026-07-16-remote-secret-agent.md`).
+    /// `brain: areas/secreq/design/2026-07-16-remote-secret-agent.md`).
     ///
     /// `guest_chain` is whatever the guest *claimed* about itself, already
     /// rendered for display, or `None`. It lands in
@@ -306,16 +312,16 @@ fn now_unix() -> u64 {
 /// [`read_history`] inside `f` reads it back. Restores the previous value
 /// afterwards.
 ///
-/// A single process-wide lock serializes every caller: `$SECREQ_HOME` is
+/// Serialized on [`crate::paths::env_lock`]: `$SECREQ_HOME` is
 /// process-global, so two of these running at once (e.g. a `state` test and
 /// a `server` test in the same binary) would otherwise clobber each other's
-/// target dir. Shared here — not duplicated per module — so *all* audit-
-/// writing tests contend on the one lock.
+/// target dir. The lock lives in `paths` rather than here because setting
+/// the var is only half the hazard — tests that merely *read* a path under
+/// it (the wasm-store listings in `daemon::state`) have to take the same
+/// lock, or this function moves the root out from under them mid-test.
 #[cfg(test)]
 pub(crate) fn with_temp_log<R>(f: impl FnOnce() -> R) -> R {
-    use std::sync::Mutex;
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = crate::paths::env_lock();
     let dir = tempfile::tempdir().expect("tempdir");
     let prev = std::env::var_os(crate::paths::SECREQ_HOME_ENV);
     std::env::set_var(crate::paths::SECREQ_HOME_ENV, dir.path());
@@ -394,6 +400,7 @@ mod tests {
             "ssh.deploy",
             "SHA256:Nh0Me49Zh9fDwabc",
             &callers,
+            "/home/dev/repos/acme",
             Decision::ApproveCached,
         );
         let json = serde_json::to_string(&entry).expect("serialize ssh-sign entry");

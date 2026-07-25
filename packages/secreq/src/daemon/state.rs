@@ -242,7 +242,7 @@ pub struct State {
     // ── Auto-rules ────────────────────────────────────────────────
     //
     // Persisted policy that fires before the consent prompt. See
-    // `src/rules.rs` and `dev-docs/plans/2026-06-02-auto-rules.md`.
+    // `src/rules.rs` and `brain: areas/secreq/design/2026-06-02-auto-rules.md`.
     /// Path to the rules file. `None` in default state (test/legacy
     /// constructor). Set by [`State::with_rules_path`] at daemon
     /// startup.
@@ -3841,9 +3841,13 @@ mod tests {
     /// that write to it (or assert on its listing) serialize through
     /// this lock to keep the "no orphan left behind" assertions
     /// race-free.
+    ///
+    /// It is deliberately [`crate::paths::env_lock`] and not a lock of
+    /// our own: the store's location is derived from `$SECREQ_HOME`, so
+    /// a private lock would still let `audit::with_temp_log` repoint the
+    /// root between this test's two `store_listing()` calls.
     fn store_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: Mutex<()> = Mutex::new(());
-        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        crate::paths::env_lock()
     }
 
     /// Names of the files currently in the canonical wasm store

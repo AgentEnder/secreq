@@ -4,7 +4,7 @@
 //! the one chokepoint every entry point passes through, *including* the
 //! daemon (it re-execs `current_exe()` and lands back in `cli::run`, see
 //! `daemon::client`). Design:
-//! `dev-docs/plans/2026-07-16-secreq-root-and-migrations.md`.
+//! `brain: areas/secreq/design/2026-07-16-secreq-root-and-migrations.md`.
 //!
 //! # Rules for writing a migration
 //!

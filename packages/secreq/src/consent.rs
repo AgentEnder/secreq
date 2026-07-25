@@ -230,7 +230,7 @@ impl SshGrant {
 //     over a forwarded socket the peer is the tunnel), so the anchor is the
 //     one thing about a guest the host *does* know unforgeably, because the
 //     host itself said it. See the provenance section of
-//     `dev-docs/plans/2026-07-16-remote-secret-agent.md`.
+//     `brain: areas/secreq/design/2026-07-16-remote-secret-agent.md`.
 //
 // The anchor's lifetime problem is if anything sharper here: a scoped socket
 // lives as long as the sandbox does, which is hours. Without the timer, one

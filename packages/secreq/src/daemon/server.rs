@@ -1535,6 +1535,14 @@ mod tests {
     fn add_wasm_rule_over_ipc_registers_and_lists() {
         use std::sync::{Arc, Mutex};
 
+        // `rules_path` is a tempdir, but the *module store* is not: it
+        // resolves from `$SECREQ_HOME` and is shared by every test in this
+        // process. Registering without this lock lets a module land in the
+        // store while `daemon::state`'s rollback tests are comparing that
+        // directory before and after, failing them on a file they never
+        // created.
+        let _store = crate::paths::env_lock();
+
         const APPROVE_IF: &[u8] = include_bytes!("../../tests/fixtures/wasm_rules/approve_if.wasm");
         let dir = tempfile::tempdir().expect("tempdir");
         let module_src = dir.path().join("uploaded.wasm");

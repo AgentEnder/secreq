@@ -126,6 +126,35 @@ pub fn select_anchor(chain: &[Caller]) -> Option<&Caller> {
         .or_else(|| chain.last())
 }
 
+/// The working directory of a single process, best-effort.
+///
+/// Used by the SSH-agent path, where the requester is a socket peer rather
+/// than a wrapped exec: the wrap client reports its own `cwd` in the ask it
+/// sends, but a sign request carries no such field, so the daemon reads it
+/// off the peer instead. `ssh` inherits its cwd from whatever spawned it,
+/// so for a `git push` this is the repository — the fact that distinguishes
+/// a push you started from one a script started.
+///
+/// Deliberately refreshes **only** the target pid rather than reusing
+/// [`refreshed_system`]: cwd is an extra per-process syscall, and the chain
+/// walk refreshes every process on the machine. Scoping it to one pid keeps
+/// that walk exactly as cheap as it was.
+///
+/// `None` when the process is gone or the platform won't tell us — a cwd we
+/// can't read is rendered as absent, never guessed at.
+pub fn cwd_for_pid(pid: u32) -> Option<String> {
+    let target = sysinfo::Pid::from_u32(pid);
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[target]),
+        true,
+        ProcessRefreshKind::nothing().with_cwd(UpdateKind::Always),
+    );
+    sys.process(target)
+        .and_then(|p| p.cwd())
+        .map(|p| p.display().to_string())
+}
+
 /// A `System` refreshed with the command line and executable path of every
 /// process — the data the caller chain renders.
 fn refreshed_system() -> System {
