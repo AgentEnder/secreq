@@ -25,8 +25,14 @@ pub mod child;
 pub mod client;
 pub mod in_flight;
 pub mod log;
+// The egui surfaces are dense with unsuffixed float layout constants
+// (sizes, rounding, spacing) whose type fallback to `f32` is exactly what's
+// intended — allow the future-incompat `float_literal_f32_fallback` lint here
+// rather than suffixing dozens of egui literals.
+#[allow(float_literal_f32_fallback)]
 pub mod manager_ui;
 pub mod peercred;
+#[allow(float_literal_f32_fallback)]
 pub mod prompt_ui;
 pub mod proto;
 pub mod server;
@@ -34,6 +40,7 @@ pub mod ssh_agent;
 pub mod ssh_proto;
 pub mod state;
 pub mod theme;
+#[allow(float_literal_f32_fallback)]
 pub mod ui;
 
 use std::os::unix::io::AsRawFd;
