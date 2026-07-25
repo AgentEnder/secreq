@@ -37,6 +37,10 @@
 //! to integration binaries — that's why this module exists.)
 #![allow(dead_code)] // each test binary uses a subset of the helpers
 
+/// Driving a sandboxed run on a real pty, for the interactive flows that
+/// only exist in front of a terminal.
+pub mod pty;
+
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;

@@ -1,0 +1,879 @@
+{
+  "caption": "First-time setup. Installing secreq changes nothing on your <code>PATH</code> — <code>init</code> shows you the exact block it wants to add and the exact file it would go in, then waits for an answer.",
+  "cols": 80,
+  "command": "secreq init",
+  "id": "init",
+  "steps": [
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "f": "8",
+            "t": "┌"
+          },
+          {
+            "t": "  secreq init — first-time setup"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "◆"
+          },
+          {
+            "t": "  Where should secreq drop PATH shims?"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 16,
+            "t": "/"
+          },
+          {
+            "s": 2,
+            "t": "tmp/sqdoc/.secreq/shims"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "└"
+          }
+        ]
+      ]
+    },
+    {
+      "key": "Enter",
+      "kind": "key"
+    },
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "f": "8",
+            "t": "┌"
+          },
+          {
+            "t": "  secreq init — first-time setup"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  Where should secreq drop PATH shims?"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "/Users/you/.secreq/shims"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  /Users/you/.secreq/shims isn't on PATH. I can append this to /Users/you/.zshr"
+          }
+        ],
+        [
+          {
+            "t": "c (Zsh): "
+          },
+          {
+            "f": "8",
+            "t": "──╮"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "t": "           "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "# >>> secreq managed PATH (do not edit by hand) >>>"
+          }
+        ],
+        [
+          {
+            "t": "           "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "export PATH=\"/Users/you/.secreq/shims:$PATH\""
+          }
+        ],
+        [
+          {
+            "t": "           "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "# <<< secreq managed PATH <<<"
+          }
+        ],
+        [
+          {
+            "t": "           "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "├───────────────────────────────────────────────────────────────────────────────"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "───────────╯"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "3",
+            "t": "▲"
+          },
+          {
+            "t": "  zsh note: writing to .zshrc (which runs after .zprofile, where homebrew lives"
+          }
+        ],
+        [
+          {
+            "t": ") so our prepend wins on PATH. Non-interactive zsh launched externally (ssh non-"
+          }
+        ],
+        [
+          {
+            "t": "login, cron) doesn't read .zshrc — children of your interactive shell inherit PA"
+          }
+        ],
+        [
+          {
+            "t": "TH from it though, so npm postinstalls and the like still see the shim."
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "◆"
+          },
+          {
+            "t": "  Append it?"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "f": "2",
+            "t": "●"
+          },
+          {
+            "t": " Yes "
+          },
+          {
+            "s": 2,
+            "t": " / ○"
+          },
+          {
+            "t": " "
+          },
+          {
+            "s": 2,
+            "t": "No"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "└"
+          }
+        ]
+      ]
+    },
+    {
+      "key": "y",
+      "kind": "key"
+    },
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "f": "8",
+            "t": "┌"
+          },
+          {
+            "t": "  secreq init — first-time setup"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  Where should secreq drop PATH shims?"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "/Users/you/.secreq/shims"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  /Users/you/.secreq/shims isn't on PATH. I can append this to /Users/you/.zshr"
+          }
+        ],
+        [
+          {
+            "t": "c (Zsh): "
+          },
+          {
+            "f": "8",
+            "t": "──╮"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "t": "           "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "# >>> secreq managed PATH (do not edit by hand) >>>"
+          }
+        ],
+        [
+          {
+            "t": "           "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "export PATH=\"/Users/you/.secreq/shims:$PATH\""
+          }
+        ],
+        [
+          {
+            "t": "           "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "# <<< secreq managed PATH <<<"
+          }
+        ],
+        [
+          {
+            "t": "           "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "├───────────────────────────────────────────────────────────────────────────────"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "───────────╯"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "3",
+            "t": "▲"
+          },
+          {
+            "t": "  zsh note: writing to .zshrc (which runs after .zprofile, where homebrew lives"
+          }
+        ],
+        [
+          {
+            "t": ") so our prepend wins on PATH. Non-interactive zsh launched externally (ssh non-"
+          }
+        ],
+        [
+          {
+            "t": "login, cron) doesn't read .zshrc — children of your interactive shell inherit PA"
+          }
+        ],
+        [
+          {
+            "t": "TH from it though, so npm postinstalls and the like still see the shim."
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  Append it?"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "Yes"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◆"
+          },
+          {
+            "t": "  wrote /Users/you/.zshrc. Open a new terminal (or `source /Users/you/.zshrc`)"
+          }
+        ],
+        [
+          {
+            "t": "to pick it up."
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "◆"
+          },
+          {
+            "t": "  Also set up secreq as your SSH agent?"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "f": "2",
+            "t": "●"
+          },
+          {
+            "t": " Yes "
+          },
+          {
+            "s": 2,
+            "t": " / ○"
+          },
+          {
+            "t": " "
+          },
+          {
+            "s": 2,
+            "t": "No"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "└"
+          }
+        ]
+      ]
+    },
+    {
+      "key": "n",
+      "kind": "key"
+    },
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "f": "8",
+            "t": "┌"
+          },
+          {
+            "t": "  secreq init — first-time setup"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  Where should secreq drop PATH shims?"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "/Users/you/.secreq/shims"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  /Users/you/.secreq/shims isn't on PATH. I can append this to /Users/you/.zshr"
+          }
+        ],
+        [
+          {
+            "t": "c (Zsh): "
+          },
+          {
+            "f": "8",
+            "t": "──╮"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "t": "           "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "# >>> secreq managed PATH (do not edit by hand) >>>"
+          }
+        ],
+        [
+          {
+            "t": "           "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "export PATH=\"/Users/you/.secreq/shims:$PATH\""
+          }
+        ],
+        [
+          {
+            "t": "           "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "# <<< secreq managed PATH <<<"
+          }
+        ],
+        [
+          {
+            "t": "           "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "├───────────────────────────────────────────────────────────────────────────────"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "───────────╯"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "3",
+            "t": "▲"
+          },
+          {
+            "t": "  zsh note: writing to .zshrc (which runs after .zprofile, where homebrew lives"
+          }
+        ],
+        [
+          {
+            "t": ") so our prepend wins on PATH. Non-interactive zsh launched externally (ssh non-"
+          }
+        ],
+        [
+          {
+            "t": "login, cron) doesn't read .zshrc — children of your interactive shell inherit PA"
+          }
+        ],
+        [
+          {
+            "t": "TH from it though, so npm postinstalls and the like still see the shim."
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  Append it?"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "Yes"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◆"
+          },
+          {
+            "t": "  wrote /Users/you/.zshrc. Open a new terminal (or `source /Users/you/.zshrc`)"
+          }
+        ],
+        [
+          {
+            "t": "to pick it up."
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  Also set up secreq as your SSH agent?"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "No"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "└"
+          },
+          {
+            "t": "  Wrote /Users/you/.secreq/wraps.json5.  Next: `secreq wrap <binary>`, e.g. `se"
+          }
+        ],
+        [
+          {
+            "t": "creq wrap gh`."
+          }
+        ]
+      ]
+    }
+  ]
+}

@@ -1,0 +1,1338 @@
+{
+  "caption": "Wiring SSH at secreq's agent socket. Like every other flow that edits a file you own, it shows the block and the path first and waits for an answer.",
+  "cols": 80,
+  "command": "secreq ssh setup",
+  "id": "ssh-setup",
+  "steps": [
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "f": "4",
+            "t": "●"
+          },
+          {
+            "t": "  Configured SSH identities: github."
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "◆"
+          },
+          {
+            "t": "  Add another identity?"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "○"
+          },
+          {
+            "t": " "
+          },
+          {
+            "s": 2,
+            "t": "Yes"
+          },
+          {
+            "t": " "
+          },
+          {
+            "s": 2,
+            "t": " / "
+          },
+          {
+            "f": "2",
+            "t": "●"
+          },
+          {
+            "t": " No"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "└"
+          }
+        ]
+      ]
+    },
+    {
+      "key": "n",
+      "kind": "key"
+    },
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "f": "4",
+            "t": "●"
+          },
+          {
+            "t": "  Configured SSH identities: github."
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  Add another identity?"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "No"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "◆"
+          },
+          {
+            "t": "  Install the login service so the agent is always running?"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "f": "2",
+            "t": "●"
+          },
+          {
+            "t": " Yes "
+          },
+          {
+            "s": 2,
+            "t": " / ○"
+          },
+          {
+            "t": " "
+          },
+          {
+            "s": 2,
+            "t": "No"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "└"
+          }
+        ]
+      ]
+    },
+    {
+      "key": "n",
+      "kind": "key"
+    },
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "f": "4",
+            "t": "●"
+          },
+          {
+            "t": "  Configured SSH identities: github."
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  Add another identity?"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "No"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  Install the login service so the agent is always running?"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "No"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "◆"
+          },
+          {
+            "t": "  How should SSH find the secreq agent?"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "f": "2",
+            "t": "●"
+          },
+          {
+            "t": " Modify ~/.ssh/config (IdentityAgent) "
+          },
+          {
+            "s": 2,
+            "t": "(a Host * stanza pointing at the agent"
+          }
+        ],
+        [
+          {
+            "s": 2,
+            "t": " socket)"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "○"
+          },
+          {
+            "t": " "
+          },
+          {
+            "s": 2,
+            "t": "Modify your shell rc (SSH_AUTH_SOCK)"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "└"
+          }
+        ]
+      ]
+    },
+    {
+      "key": "Enter",
+      "kind": "key"
+    },
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "f": "4",
+            "t": "●"
+          },
+          {
+            "t": "  Configured SSH identities: github."
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  Add another identity?"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "No"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  Install the login service so the agent is always running?"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "No"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  How should SSH find the secreq agent?"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "Modify ~/.ssh/config (IdentityAgent)"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  I'll write this in /Users/you/.ssh/config: "
+          },
+          {
+            "f": "8",
+            "t": "────────────────╮"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "                                                             "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "# >>> secreq managed SSH agent (do not edit by hand) >>>"
+          },
+          {
+            "t": "   "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "Host *"
+          },
+          {
+            "t": "                                                     "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "    IdentityAgent \"/Users/you/.secreq/run/agent.sock\""
+          },
+          {
+            "t": "      "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "# <<< secreq managed SSH agent <<<"
+          },
+          {
+            "t": "                         "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "├─────────────────────────────────────────────────────────────╯"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "3",
+            "t": "▲"
+          },
+          {
+            "t": "  ssh uses the first IdentityAgent it finds for a host, which is why this block"
+          }
+        ],
+        [
+          {
+            "t": " is prepended above your existing ~/.ssh/config."
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "◆"
+          },
+          {
+            "t": "  write it?"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "f": "2",
+            "t": "●"
+          },
+          {
+            "t": " Yes "
+          },
+          {
+            "s": 2,
+            "t": " / ○"
+          },
+          {
+            "t": " "
+          },
+          {
+            "s": 2,
+            "t": "No"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "└"
+          }
+        ]
+      ]
+    },
+    {
+      "key": "y",
+      "kind": "key"
+    },
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "f": "4",
+            "t": "●"
+          },
+          {
+            "t": "  Configured SSH identities: github."
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  Add another identity?"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "No"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  Install the login service so the agent is always running?"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "No"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  How should SSH find the secreq agent?"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "Modify ~/.ssh/config (IdentityAgent)"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  I'll write this in /Users/you/.ssh/config: "
+          },
+          {
+            "f": "8",
+            "t": "────────────────╮"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "                                                             "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "# >>> secreq managed SSH agent (do not edit by hand) >>>"
+          },
+          {
+            "t": "   "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "Host *"
+          },
+          {
+            "t": "                                                     "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "    IdentityAgent \"/Users/you/.secreq/run/agent.sock\""
+          },
+          {
+            "t": "      "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "# <<< secreq managed SSH agent <<<"
+          },
+          {
+            "t": "                         "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "├─────────────────────────────────────────────────────────────╯"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "3",
+            "t": "▲"
+          },
+          {
+            "t": "  ssh uses the first IdentityAgent it finds for a host, which is why this block"
+          }
+        ],
+        [
+          {
+            "t": " is prepended above your existing ~/.ssh/config."
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  write it?"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "Yes"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◆"
+          },
+          {
+            "t": "  wrote /Users/you/.ssh/config."
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "4",
+            "t": "●"
+          },
+          {
+            "t": "  secreq's daemon must be running to serve keys — step 2 (or `secreq daemon ins"
+          }
+        ],
+        [
+          {
+            "t": "tall`) sets it to start at login. New shells / SSH sessions pick up the socket;"
+          }
+        ],
+        [
+          {
+            "t": "restart your shell or run `exec $SHELL`."
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "4",
+            "t": "●"
+          },
+          {
+            "t": "  Each identity's `private_key` reference must resolve to an OpenSSH private ke"
+          }
+        ],
+        [
+          {
+            "t": "y, e.g. `op read \"op://Vault/My Key/private key\"`."
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "◆"
+          },
+          {
+            "t": "  Test that the agent can sign now?"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "f": "2",
+            "t": "●"
+          },
+          {
+            "t": " Yes "
+          },
+          {
+            "s": 2,
+            "t": " / ○"
+          },
+          {
+            "t": " "
+          },
+          {
+            "s": 2,
+            "t": "No"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "└"
+          }
+        ]
+      ]
+    },
+    {
+      "key": "n",
+      "kind": "key"
+    },
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "f": "4",
+            "t": "●"
+          },
+          {
+            "t": "  Configured SSH identities: github."
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  Add another identity?"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "No"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  Install the login service so the agent is always running?"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "No"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  How should SSH find the secreq agent?"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "Modify ~/.ssh/config (IdentityAgent)"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  I'll write this in /Users/you/.ssh/config: "
+          },
+          {
+            "f": "8",
+            "t": "────────────────╮"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "                                                             "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "# >>> secreq managed SSH agent (do not edit by hand) >>>"
+          },
+          {
+            "t": "   "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "Host *"
+          },
+          {
+            "t": "                                                     "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "    IdentityAgent \"/Users/you/.secreq/run/agent.sock\""
+          },
+          {
+            "t": "      "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "# <<< secreq managed SSH agent <<<"
+          },
+          {
+            "t": "                         "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "├─────────────────────────────────────────────────────────────╯"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "3",
+            "t": "▲"
+          },
+          {
+            "t": "  ssh uses the first IdentityAgent it finds for a host, which is why this block"
+          }
+        ],
+        [
+          {
+            "t": " is prepended above your existing ~/.ssh/config."
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  write it?"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "Yes"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◆"
+          },
+          {
+            "t": "  wrote /Users/you/.ssh/config."
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "4",
+            "t": "●"
+          },
+          {
+            "t": "  secreq's daemon must be running to serve keys — step 2 (or `secreq daemon ins"
+          }
+        ],
+        [
+          {
+            "t": "tall`) sets it to start at login. New shells / SSH sessions pick up the socket;"
+          }
+        ],
+        [
+          {
+            "t": "restart your shell or run `exec $SHELL`."
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "4",
+            "t": "●"
+          },
+          {
+            "t": "  Each identity's `private_key` reference must resolve to an OpenSSH private ke"
+          }
+        ],
+        [
+          {
+            "t": "y, e.g. `op read \"op://Vault/My Key/private key\"`."
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  Test that the agent can sign now?"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "No"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ]
+      ]
+    }
+  ]
+}

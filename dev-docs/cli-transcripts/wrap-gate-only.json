@@ -1,0 +1,351 @@
+{
+  "caption": "A gate-only wrap injects nothing — it just puts the consent prompt in front of a command. Use it for tools that already hold their own credentials.",
+  "cols": 80,
+  "command": "secreq wrap op",
+  "id": "wrap-gate-only",
+  "steps": [
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "f": "8",
+            "t": "┌"
+          },
+          {
+            "t": "  Wrap `op`"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "◆"
+          },
+          {
+            "t": "  What should this wrap do?"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "f": "2",
+            "t": "●"
+          },
+          {
+            "t": " Inject secrets "
+          },
+          {
+            "s": 2,
+            "t": "(resolve secret:// references into env vars)"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "○"
+          },
+          {
+            "t": " "
+          },
+          {
+            "s": 2,
+            "t": "Gate only (no secrets)"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "└"
+          }
+        ]
+      ]
+    },
+    {
+      "key": "Down",
+      "kind": "key"
+    },
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "f": "8",
+            "t": "┌"
+          },
+          {
+            "t": "  Wrap `op`"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "◆"
+          },
+          {
+            "t": "  What should this wrap do?"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "○"
+          },
+          {
+            "t": " "
+          },
+          {
+            "s": 2,
+            "t": "Inject secrets"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "f": "2",
+            "t": "●"
+          },
+          {
+            "t": " Gate only (no secrets) "
+          },
+          {
+            "s": 2,
+            "t": "(just require consent before the command runs)"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "└"
+          }
+        ]
+      ]
+    },
+    {
+      "key": "Enter",
+      "kind": "key"
+    },
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "f": "8",
+            "t": "┌"
+          },
+          {
+            "t": "  Wrap `op`"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  What should this wrap do?"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "Gate only (no secrets)"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "◆"
+          },
+          {
+            "t": "  Reason (shown in consent prompt)"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 16,
+            "t": "("
+          },
+          {
+            "s": 2,
+            "t": "empty to skip)"
+          }
+        ],
+        [
+          {
+            "f": "6",
+            "t": "└"
+          }
+        ]
+      ]
+    },
+    {
+      "col": 3,
+      "kind": "type",
+      "row": 6,
+      "text": "gate the 1Password CLI itself"
+    },
+    {
+      "key": "Enter",
+      "kind": "key"
+    },
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "f": "8",
+            "t": "┌"
+          },
+          {
+            "t": "  Wrap `op`"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  What should this wrap do?"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "Gate only (no secrets)"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "2",
+            "t": "◇"
+          },
+          {
+            "t": "  Reason (shown in consent prompt)"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "gate the 1Password CLI itself"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "└"
+          },
+          {
+            "t": "  Wrapped `op` (gate-only — consent required, nothing injected)."
+          }
+        ],
+        [
+          {
+            "t": "  config: /Users/you/.secreq/wraps.json5"
+          }
+        ],
+        [
+          {
+            "t": "  shim: /Users/you/.secreq/shims/op"
+          }
+        ]
+      ]
+    }
+  ]
+}

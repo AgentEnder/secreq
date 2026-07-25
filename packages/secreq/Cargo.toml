@@ -115,3 +115,4 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # Assembles the hand-written .wat fixtures in tests/fixtures/wasm_rules/
 # at test time. Dev-only: the production loader accepts binaries only.
 wat = "1.253.0"
+vt100 = "0.16.2"

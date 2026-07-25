@@ -1,0 +1,27 @@
+$ secreq wrap gh
+
+┌  Wrap `gh`
+│
+◇  What should this wrap do?
+│  Inject secrets
+│
+◇  Provider for the next env var
+│  op
+│
+◇  Environment variable name
+│  GITHUB_TOKEN
+│
+◇  Locator
+│  Personal/GitHub/credential
+│
+◇  Locator resolves ✓
+│
+◇  Add another env var?
+│  No
+│
+◇  Reason (shown in consent prompt)
+│  GitHub API access
+│
+└  Wrapped `gh`.
+  config: /Users/you/.secreq/wraps.json5
+  shim: /Users/you/.secreq/shims/gh

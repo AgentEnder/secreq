@@ -1,0 +1,39 @@
+$ secreq ssh setup
+
+●  Configured SSH identities: github.
+│
+◇  Add another identity?
+│  No
+│
+◇  Install the login service so the agent is always running?
+│  No
+│
+◇  How should SSH find the secreq agent?
+│  Modify ~/.ssh/config (IdentityAgent)
+│
+◇  I'll write this in /Users/you/.ssh/config: ────────────────╮
+│                                                             │
+│  # >>> secreq managed SSH agent (do not edit by hand) >>>   │
+│  Host *                                                     │
+│      IdentityAgent "/Users/you/.secreq/run/agent.sock"      │
+│  # <<< secreq managed SSH agent <<<                         │
+├─────────────────────────────────────────────────────────────╯
+│
+▲  ssh uses the first IdentityAgent it finds for a host, which is why this block
+ is prepended above your existing ~/.ssh/config.
+│
+◇  write it?
+│  Yes
+│
+◆  wrote /Users/you/.ssh/config.
+│
+●  secreq's daemon must be running to serve keys — step 2 (or `secreq daemon ins
+tall`) sets it to start at login. New shells / SSH sessions pick up the socket;
+restart your shell or run `exec $SHELL`.
+│
+●  Each identity's `private_key` reference must resolve to an OpenSSH private ke
+y, e.g. `op read "op://Vault/My Key/private key"`.
+│
+◇  Test that the agent can sign now?
+│  No
+│

@@ -1,0 +1,13 @@
+$ secreq wrap op
+
+┌  Wrap `op`
+│
+◇  What should this wrap do?
+│  Gate only (no secrets)
+│
+◇  Reason (shown in consent prompt)
+│  gate the 1Password CLI itself
+│
+└  Wrapped `op` (gate-only — consent required, nothing injected).
+  config: /Users/you/.secreq/wraps.json5
+  shim: /Users/you/.secreq/shims/op
