@@ -66,7 +66,7 @@ enum Command {
     /// First-time setup: pick the shim dir and (optionally) wire it into PATH.
     Init {
         /// Default shim dir to suggest (overrides `~/.secreq/shims`).
-        #[arg(long)]
+        #[arg(long, value_name = "PATH")]
         shim_dir: Option<PathBuf>,
     },
 
@@ -146,11 +146,12 @@ enum Command {
     /// the daemon if it isn't running.
     Pending,
 
-    /// Open the daemon's window in viewer mode — pinned so the
-    /// auto-hide doesn't fire while you browse the audit log. Lands
-    /// on the Audit tab; switch to Pending via the tab bar if you
-    /// want to act on queued requests. Auto-spawns the daemon if it
-    /// isn't running. Also reachable as `secreq ui`.
+    /// Open the manager window — the persistent surface holding your
+    /// auto-rules and the audit log. Lands on Audit; a segmented
+    /// control switches to Rules. It never holds a pending decision
+    /// (that is the prompt window's job, `secreq pending`), so
+    /// browsing history never blocks a waiting request. Auto-spawns
+    /// the daemon if it isn't running.
     #[command(visible_alias = "ui")]
     View,
 
@@ -203,6 +204,12 @@ enum Command {
     /// options use the reserved `--sq-` prefix — `secreq x --sq-help` lists
     /// them. Parsed by hand in `run_x`, never by clap; this variant exists so
     /// `secreq --help` documents the verb.
+    // The args below are hidden so `secreq --help` doesn't advertise a
+    // placeholder, which leaves clap with no usage line worth printing.
+    // Spelling it out here keeps the correction beside the thing it
+    // corrects — `gen_cli_reference` reads it back rather than special-casing
+    // this one command.
+    #[command(override_usage = "secreq x [--sq-OPTIONS] <WRAP> [ARGS...]")]
     X {
         /// Wrap name plus forwarded args; see `secreq x --sq-help`.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
@@ -267,6 +274,8 @@ enum Command {
     ///
     /// Exits 0 on a release, 3 when the host denies (reason on stderr,
     /// nothing on stdout), 1 on any error.
+    // See `AgentAction::Open` — the shell line above has to survive as one.
+    #[command(verbatim_doc_comment)]
     Resolve {
         /// The reference to resolve, e.g. `secret://op/Dev/gh/token` or the
         /// bare `op/Dev/gh/token`. It must be one the host declared with
@@ -303,6 +312,12 @@ enum AgentAction {
     ///   secreq agent open --scope my-vm --allow secret://op/Dev/gh/token \
     ///     --sock /tmp/secreq-my-vm.sock &
     ///   ssh -R /run/secreq.sock:/tmp/secreq-my-vm.sock my-vm
+    //
+    // Without `verbatim_doc_comment` clap rewraps the whole comment as
+    // prose, which folds the `\`-continued line onto its head and prints an
+    // example that does not run — in `--help` as well as in the generated
+    // reference, since both read the same string.
+    #[command(verbatim_doc_comment)]
     Open {
         /// The scope name shown in the consent prompt as the principal —
         /// typically the sandbox / VM name.
@@ -410,14 +425,27 @@ enum RulesAction {
     /// Show one rule in full (every match field, trained_secrets,
     /// deny_message, created_at). `target` matches by id, falling
     /// back to exact name.
-    Show { target: String },
+    Show {
+        /// The rule's id, or its exact name.
+        target: String,
+    },
     /// Set `enabled = true` on a rule.
-    Enable { target: String },
+    Enable {
+        /// The rule's id, or its exact name.
+        target: String,
+    },
     /// Set `enabled = false` on a rule. The rule stays in the file;
     /// re-enable later without re-typing.
-    Disable { target: String },
-    /// Delete a rule by id or exact name.
-    Rm { target: String },
+    Disable {
+        /// The rule's id, or its exact name.
+        target: String,
+    },
+    /// Delete a rule by id or exact name. A wasm rule's stored module
+    /// file goes with it.
+    Rm {
+        /// The rule's id, or its exact name.
+        target: String,
+    },
     /// Register a compiled wasm rule module (built with the
     /// `secreq-rule` SDK). The daemon vets the module in its sandbox,
     /// copies it into the canonical store under the secreq root, pins
@@ -644,6 +672,20 @@ fn run_x() -> i32 {
     }
 }
 
+/// The built clap command tree, for the reference generator and its drift
+/// test.
+///
+/// `Cli` itself stays private: the only thing outside this module has any
+/// business with is the *described* surface — names, flags and the doc
+/// comments attached to them — not the parse types. `docs/cli-reference.md`
+/// is rendered from exactly this, so a new subcommand or flag reaches the
+/// docs by existing rather than by someone remembering to write it down.
+///
+/// See `examples/gen_cli_reference.rs` and `tests/cli_drift.rs`.
+pub fn command() -> clap::Command {
+    <Cli as clap::CommandFactory>::command()
+}
+
 /// Parse args, dispatch, return the process exit code.
 pub fn run() -> i32 {
     // `secreq x` never reaches clap: everything after the wrap name belongs
@@ -680,6 +722,12 @@ pub fn run() -> i32 {
         // level protects nothing, no foreground command ever runs there to
         // stamp it, and verifying would brick every fresh guest. It must not
         // apply either: a guest has no business writing host-shaped state.
+        //
+        // Deliberately its own arm. It shares `Ok(())` with `migrate` by
+        // coincidence, not by reason — merging the two patterns would leave
+        // one body under two unrelated paragraphs, and the next time either
+        // bypass grows a condition the arm has to be split back apart.
+        #[allow(clippy::match_same_arms)]
         Some(Command::Resolve { .. }) => Ok(()),
         // Verify-only: the daemon, the host-side agent socket, and the three
         // daemon-spawned window children.

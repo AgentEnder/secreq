@@ -32,7 +32,13 @@ export const DOCS_NAV: NavSection[] = [
   {
     section: 'Reference',
     docs: [
-      { slug: 'cli', label: 'CLI reference' },
+      { slug: 'cli', label: 'CLI guide' },
+      // Generated from the clap tree by
+      // `cargo run --example gen-cli-reference`, guarded by
+      // `packages/secreq/tests/cli_drift.rs`. It follows the guide because a
+      // reader who needs the exhaustive flag list already knows what they are
+      // looking for; one arriving cold needs `x` versus `run` explained first.
+      { slug: 'cli-reference', label: 'All commands' },
       { slug: 'wraps', label: 'Authoring wraps' },
       { slug: 'providers', label: 'Providers' },
     ],
