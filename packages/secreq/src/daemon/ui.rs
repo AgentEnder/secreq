@@ -2642,6 +2642,34 @@ impl AuditVerdict {
                 tag: None,
                 color: th.faint,
             },
+            // The three TTL grants. Each authorises a *window* of silent
+            // operation rather than the one request in front of the user,
+            // which makes them the most consequential rows in the log — so
+            // they carry the same weight as an approve and a tag naming the
+            // scope of what was granted.
+            //
+            // These fell through to the `_` arm until 2026-07-26 and rendered
+            // as a faint "seen": a thirty-minute signing grant read as the
+            // least eventful row on the page. The catch-all is deliberately
+            // muted, which is right for a decision verb we do not know and
+            // exactly wrong for the three we do.
+            // The SSH and agent single-subject grants share a tag: the row
+            // already names the wrap (`ssh:<key_id>` versus `agent:<scope>`),
+            // so repeating the kind in the pill would only crowd it.
+            "approve+ssh-session" | "approve+agent-session" => AuditVerdict {
+                label: "approved",
+                tag: Some("session"),
+                color: th.ok,
+            },
+            // Distinct from `session` because it grants every configured key
+            // for the window, not just the one that was asked for — the row's
+            // wrap names one key, so without this the pill would understate
+            // what was actually authorised.
+            "approve+ssh-session-all" => AuditVerdict {
+                label: "approved",
+                tag: Some("session · all keys"),
+                color: th.ok,
+            },
             // Unknown decisions map to a static "seen" so `label`
             // stays `&'static` (no borrow of `decision`).
             _ => AuditVerdict {
@@ -3029,6 +3057,88 @@ fn abbreviate_home_within(path: &str, home: Option<&str>) -> String {
 mod tests {
     use super::*;
     use crate::audit::AuditCaller;
+
+    // ── every decision the daemon can record is rendered ─────────
+
+    /// `from_decision`'s `_` arm exists so `label` can stay `&'static` for a
+    /// verb this build does not know. It is not a place for verbs we *do*
+    /// know to land: until 2026-07-26 the three TTL grants fell through it,
+    /// so a thirty-minute signing grant — the row authorising a window of
+    /// silent operation, and so the most consequential kind in the log —
+    /// rendered as a faint `seen`, the least eventful thing on the page.
+    ///
+    /// The match below is **exhaustive on purpose**: adding a `Decision`
+    /// variant fails to compile here until someone decides how it reads in
+    /// the audit view. That is the whole point of the test — the previous gap
+    /// was silent because nothing forced the question.
+    #[test]
+    fn every_decision_variant_renders_as_more_than_seen() {
+        use crate::consent::Decision;
+
+        let all = [
+            Decision::Approve,
+            Decision::ApproveRemember,
+            Decision::ApproveCached,
+            Decision::ApproveAuto,
+            Decision::ApproveSshSession,
+            Decision::ApproveSshSessionAll,
+            Decision::ApproveAgentSession,
+            Decision::Deny,
+            Decision::DenyAuto,
+            Decision::DenyOutOfScope,
+            Decision::Abandoned,
+        ];
+
+        // Exhaustiveness guard: this match names every variant, so a new one
+        // is a compile error here, not a silent `seen` in the UI.
+        for d in all {
+            match d {
+                Decision::Approve
+                | Decision::ApproveRemember
+                | Decision::ApproveCached
+                | Decision::ApproveAuto
+                | Decision::ApproveSshSession
+                | Decision::ApproveSshSessionAll
+                | Decision::ApproveAgentSession
+                | Decision::Deny
+                | Decision::DenyAuto
+                | Decision::DenyOutOfScope
+                | Decision::Abandoned => {}
+            }
+        }
+
+        let th = Theme::resolve(OsFlavor::current(), true);
+        for d in all {
+            let v = AuditVerdict::from_decision(d.as_str(), &th);
+            assert_ne!(
+                v.label,
+                "seen",
+                "`{}` falls through to the unknown-verb arm",
+                d.as_str()
+            );
+        }
+    }
+
+    /// An approve and a deny must not read the same at a glance, and a TTL
+    /// grant must read as an approve rather than as its own muted thing.
+    #[test]
+    fn a_session_grant_reads_as_an_approval() {
+        let th = Theme::resolve(OsFlavor::current(), true);
+        let plain = AuditVerdict::from_decision("approve", &th);
+        for granted in [
+            "approve+ssh-session",
+            "approve+ssh-session-all",
+            "approve+agent-session",
+        ] {
+            let v = AuditVerdict::from_decision(granted, &th);
+            assert_eq!(v.label, plain.label, "{granted} should read as approved");
+            assert_eq!(
+                v.color, plain.color,
+                "{granted} should carry approve's colour"
+            );
+            assert!(v.tag.is_some(), "{granted} must say what was granted");
+        }
+    }
 
     // ── the audit tree's completeness marker ─────────────────────
 
