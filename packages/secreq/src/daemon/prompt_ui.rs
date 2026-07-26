@@ -477,10 +477,13 @@ fn render_evidence_well(
         }
 
         well_row(ui, th, "HISTORY", |ui, th| {
-            let caller_name = ask.callers.first().map(|c| c.name.as_str());
+            let caller = ask.callers.first().map(|c| super::ui::CallerIdentity {
+                name: c.name.as_str(),
+                exe: c.exe.as_deref(),
+            });
             let summary = state
                 .audit
-                .summarize(history_wrap(row).as_ref(), caller_name);
+                .summarize(history_wrap(row).as_ref(), caller);
             let (line, color) = if ask.agent.is_some() && summary.is_empty() {
                 // The shared empty-history line says "first request from
                 // this caller". There is no caller on this path — that's

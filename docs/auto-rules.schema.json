@@ -103,7 +103,7 @@
     },
     "RuleMatch": {
       "additionalProperties": false,
-      "description": "The match clause. All present fields must match (logical AND). `wrap` is required and exact; the rest are patterns: glob if they contain `*`, `?`, or `[`, otherwise literal. Literal `argv`/`cwd` match as prefix; literal `ancestor` matches as substring (friendlier for `.app` bundle names).",
+      "description": "The match clause. All present fields must match (logical AND). `wrap` is required and exact; the rest are patterns: glob if they contain `*`, `?`, or `[`, otherwise literal. Literal `argv`/`cwd` match as prefix; literal `ancestor` matches as substring against the caller's executable path (friendlier for `.app` bundle names, and not self-reported).",
       "properties": {
         "ancestor": {
           "description": "Pattern matched against each caller in the process tree. For each caller, the pattern is checked against BOTH its short process name (sysinfo `name()`, typically the executable basename like `zsh` or `Cursor`) AND its full joined command line (sysinfo `cmd()` joined with spaces, e.g. `/Applications/Cursor.app/Contents/MacOS/Cursor --psn_0_12345`). Match if ANY caller's name or command satisfies the pattern. Substring match for literals, full-string glob for wildcards. The `exe` path is NOT currently part of the match input.",

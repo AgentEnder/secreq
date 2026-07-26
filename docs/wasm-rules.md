@@ -38,30 +38,29 @@ A rule module is untrusted code that helps decide whether a secret is
 released. The daemon constrains what it can do structurally, so the limits
 hold whatever the module contains.
 
-| Constraint                   | How it is enforced                                                                                                                                                             |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| No I/O of any kind           | The only import a module may declare is AssemblyScript's `env.abort`. Anything else, WASI included, is refused at registration with an error naming the import.                |
-| No secret values             | The ctx carries names: env-var names, or `ssh:<key_id>` for a signing. No value enters the sandbox.                                                                             |
-| Bounded time                 | A fixed fuel budget of 10⁸ instructions per call. An infinite loop stops in well under a second.                                                                                |
-| Bounded memory               | 64 MiB of guest memory, and 64 KiB for the decision it returns.                                                                                                                |
-| No state between asks        | Every evaluation instantiates the module fresh.                                                                                                                                 |
-| Only the bytes you registered | Registration records the module's SHA-256 and re-verifies it on every rules load. A file that changed is refused, and `rules list`, `rules show` and the manager say so.        |
-| Only the secrets you trained it on | Each rule carries the secret names it was registered with, checked before the module runs. An ask naming anything outside that set skips the rule entirely.               |
+| Constraint                         | How it is enforced                                                                                                                                                       |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| No I/O of any kind                 | The only import a module may declare is AssemblyScript's `env.abort`. Anything else, WASI included, is refused at registration with an error naming the import.          |
+| No secret values                   | The ctx carries names: env-var names, or `ssh:<key_id>` for a signing. No value enters the sandbox.                                                                      |
+| Bounded time                       | A fixed fuel budget of 10⁸ instructions per call. An infinite loop stops in well under a second.                                                                         |
+| Bounded memory                     | 64 MiB of guest memory, and 64 KiB for the decision it returns.                                                                                                          |
+| No state between asks              | Every evaluation instantiates the module fresh.                                                                                                                          |
+| Only the bytes you registered      | Registration records the module's SHA-256 and re-verifies it on every rules load. A file that changed is refused, and `rules list`, `rules show` and the manager say so. |
+| Only the secrets you trained it on | Each rule carries the secret names it was registered with, checked before the module runs. An ask naming anything outside that set skips the rule entirely.              |
 
 Two behaviors matter when you write one.
 
-Decisions rank deny, then prompt, then approve. If any enabled rule denies,
-declarative or wasm, the ask is denied whatever else approved. If any rule
-returns `prompt()`, no approve applies and the ask goes to the consent
-window. Among approves, a wasm rule that returned a decision counts as
+Decisions rank deny, then prompt, then approve. A deny from any enabled rule
+denies the ask, whatever else approved. A `prompt()` from any enabled rule
+sends it to the consent window, and no approve applies. Among approves, a wasm rule that returned a decision counts as
 maximally specific (it made a programmatic decision about this exact ask),
 and ties break on the lexically smallest rule id.
 
 A failure never becomes an approve. A module that traps, aborts, exhausts
-its fuel, exceeds a cap, or returns malformed output has no opinion to
-give — and a rule that cannot be consulted may have been the one that would
-have denied. So a failure suppresses any competing approve and sends the ask
-to the consent prompt, which the daemon logs. The same applies to a module
+its fuel, exceeds a cap, or returns malformed output has no opinion to give,
+and a rule that cannot be consulted may have been the one that would have
+denied. So a failure suppresses any competing approve and sends the ask to
+the consent prompt, which the daemon logs. The same applies to a module
 refused at load time for a SHA-256 mismatch: tampering with one file must
 not both disable a guard and leave the thing it guarded auto-approved.
 
@@ -83,7 +82,7 @@ evaluation context:
 | ------------ | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `wrap`       | `string`   | The wrap being asked for (e.g. `gh`, `npm`).                                                                                                        |
 | `joinedArgv` | `string`   | Joined argv of the wrapped command (e.g. `gh api --get /repos/x`).                                                                                  |
-| `callers`    | `Caller[]` | Caller chain, **nearest-first**. Each entry has `name` (short process name, e.g. `zsh`, `Cursor`) and `command` (full joined command line).         |
+| `callers`    | `Caller[]` | Caller chain, **nearest-first**. Each entry has `name` (`comm`), `command` (joined argv), and `exe` (absolute path, `''` when unknown). `name` and `command` are chosen by the process; `exe` is not. Gate on `exe`. |
 | `cwd`        | `string`   | Working directory of the requesting process.                                                                                                        |
 | `secrets`    | `string[]` | What the ask would release, by name: env-var names for a wrap run, or the single identity `ssh:<key_id>` for an SSH sign. Names only, never values. |
 

@@ -1,76 +1,83 @@
 # Platform support
 
-`secreq` is a **Unix tool at its core.** It leans on peer-credential lookup
-over unix-domain sockets (`SO_PEERCRED` / `LOCAL_PEERPID`), process-tree
-walking, PATH shims and `execvp`, none of which have a first-class Windows
-equivalent.
+`secreq` runs on macOS and Linux today. Everything it does is written against
+Unix interfaces, so a Windows port is a real piece of work rather than a
+recompile, but it is wanted and nothing about the design rules it out.
 
-| Platform                             | Status                      | Login service                                                          | Consent window needs                              |
-| ------------------------------------ | --------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------- |
-| **macOS**                            | ✅ First-class              | launchd LaunchAgent (`~/Library/LaunchAgents/com.secreq.daemon.plist`) | Nothing; the WindowServer is always present.      |
-| **Linux**                            | ✅ First-class              | systemd `--user` unit (`~/.config/systemd/user/secreq.service`)        | `$DISPLAY` (X11) or `$WAYLAND_DISPLAY` (Wayland). |
-| **\*BSD** (FreeBSD, OpenBSD, NetBSD) | ⚠️ Best-effort, unsupported | None: no systemd `--user` manager, no plist.                           | Same as Linux. **Known compile gap, below.**      |
-| **Windows**                          | ❌ Not supported            | —                                                                      | —                                                 |
+| Platform                         | Status        |
+| -------------------------------- | ------------- |
+| macOS                            | Supported     |
+| Linux                            | Supported     |
+| \*BSD (FreeBSD, OpenBSD, NetBSD) | Not supported |
+| Windows                          | Not supported |
 
-**x86_64 and aarch64 are both supported wherever the OS is.** The gating is
-the OS, not the CPU; there are no arch-specific code paths.
-
-Prebuilt binaries ship for the four first-class targets
-(`{x86_64,aarch64}-{unknown-linux-gnu,apple-darwin}`). Anywhere else,
+The gating is the OS, not the CPU: x86_64 and aarch64 both work wherever the
+OS does. Prebuilt binaries ship for all four supported combinations
+(`{x86_64,aarch64}-{unknown-linux-gnu,apple-darwin}`); anywhere else,
 [`cargo install`](./install.md#cargo-install) builds from source.
 
 ## macOS
 
-Everything works out of the box.
-
-- **App Nap is disabled** for the consent window and the pending badge, so a
-  backgrounded window still repaints when the daemon has something to ask.
-- **launchd** runs the daemon as a LaunchAgent, written by
-  `secreq daemon install` and kept alive across logins.
-- Peer credentials come from `getsockopt(LOCAL_PEERPID)`.
+Everything works out of the box. `secreq daemon install` writes a launchd
+LaunchAgent, which keeps the daemon running across logins. A backgrounded
+consent window still repaints when the daemon has something to ask, so a
+prompt never arrives frozen.
 
 ## Linux
 
-- The daemon runs as a **systemd `--user` unit**, installed by
-  `secreq daemon install`. It inherits your user-session environment, so
-  `op` and other provider CLIs are on `PATH`, and journals to
-  `journalctl --user -u secreq`.
-- Sockets live under **`$XDG_RUNTIME_DIR`** when set (the correct
-  tmpfs-backed per-user location); secreq falls back to its own root only
-  when it is unset.
-- The consent window needs a **graphical session**. `eframe` is built with
-  both the X11 and Wayland backends.
-- Peer credentials come from `getsockopt(SO_PEERCRED)`.
+`secreq daemon install` writes a systemd `--user` unit. It inherits your
+user-session environment, so `op` and the other provider CLIs are on `PATH`,
+and it journals to `journalctl --user -u secreq`.
+
+The consent window needs a graphical session; both X11 and Wayland work.
+Without one, see [headless use](#headless-use) below.
+
+Sockets live under `$XDG_RUNTIME_DIR` when it is set, which is the
+tmpfs-backed per-user directory that gets cleaned up when you log out. If it
+is unset, secreq falls back to its own root at `~/.secreq/run`.
 
 ## \*BSD
 
-Most of secreq is portable to the BSDs in principle: unix sockets, PATH
-shims, `execvp`, the provider CLIs. Two things stop them being first-class:
+Unix sockets, PATH shims, `execvp` and the provider CLIs all port to the
+BSDs. Two things are missing:
 
-1. **A compile gap.** The SSH-agent peer-credential lookup
-   (`daemon/peercred.rs::peer_pid`) has implementations only for Linux and
-   macOS and is called unconditionally on the SSH path, so a BSD build
-   **fails to compile** until a `getpeereid` / `LOCAL_PEERCRED` branch is
-   added.
-2. **No login service.** Autostart knows launchd and systemd only, so
-   `daemon install` produces nothing usable; you'd run `secreq daemon --fg`
-   under your own supervisor.
+1. It does not compile yet. The SSH agent reads the peer process id through
+   code written for Linux and macOS only, so a BSD build fails at compile
+   time. The missing piece is a `getpeereid` / `LOCAL_PEERCRED` branch in
+   `daemon/peercred.rs`.
+2. There is no login service. Autostart knows launchd and systemd, so
+   `secreq daemon install` produces nothing usable. Run `secreq daemon --fg`
+   under your own supervisor instead.
 
-Treat BSD as "patches welcome," not "supported."
+Patches welcome. BSD is not supported today.
 
 ## Windows
 
-`secreq` **does not run on Windows,** by design rather than by omission. The
-model depends on peer credentials over unix sockets to attribute a request
-to a process, `execvp` PATH shims to interpose on every call including the
-ones `npm` and your IDE spawn, and process-tree provenance walked with Unix
-pid semantics.
+Not yet. There is no Windows build, and nobody is running one.
 
-You may notice a `windows` arm in the consent UI's theme flavors and Windows
-screenshots in the docs. **Those do not imply Windows support.** They exist
-so the theming code and the screenshot harness stay total, and so the docs
-can show a reader chrome they recognize. There is no working Windows build,
-login service, or socket path.
+It is not blocked on anything conceptual: each interface secreq relies on has
+a Windows counterpart, and porting means writing against them rather than
+finding a substitute for something missing.
+
+| What secreq uses on Unix                         | The Windows counterpart                                                     |
+| ------------------------------------------------ | --------------------------------------------------------------------------- |
+| `SO_PEERCRED` / `LOCAL_PEERPID` on a unix socket | A named pipe, whose client pid comes from `GetNamedPipeClientProcessId`     |
+| Walking `/proc` or `sysctl` for the caller chain | `CreateToolhelp32Snapshot`, which reports each process's parent             |
+| Process start time, to defeat pid recycling      | `GetProcessTimes`                                                           |
+| A PATH shim that `execvp`s the real binary       | A shim executable on `PATH`, the mechanism scoop and chocolatey already use |
+| launchd and systemd `--user`                     | Task Scheduler, or a Run key                                                |
+
+Two of those are more than renaming a call. Windows has `AF_UNIX` but carries
+no peer credentials over it, so the daemon's socket layer would become named
+pipes rather than gaining a `#[cfg]` arm. And nothing on Windows replaces a
+process in place the way `execvp` does: the shim either exits and leaves the
+binary running under a new pid, or stays alive as its parent and forwards the
+exit code. Either way the caller chain the consent prompt shows you gains a
+frame that isn't there on Unix.
+
+The screenshots in these docs are rendered in a Windows theme as well as
+macOS and GNOME, so you may see one that looks native. That is the docs
+showing you chrome you recognise, not a working port.
 
 ## Headless use
 

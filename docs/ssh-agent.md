@@ -11,15 +11,15 @@ If you want the mental model for the rest of `secreq` first, read
 
 ## What it does
 
-- **Lists your keys without a biometric.** `ssh-add -l` (and any client's
-  identity listing) answers from the inline public keys in your config.
-  No provider call, no prompt.
-- **Gates every new signature.** The first sign per _anchor_ (your shell,
-  IDE, or git session) pops the consent window showing the caller chain
-  and the key's SHA256 fingerprint. You approve or deny.
-- **Resolves the private key fresh, then drops it.** On approval `secreq`
-  reads the private key from your provider, signs in-process, and zeroizes
-  the key material. Only the signature leaves the daemon.
+`ssh-add -l` and other identity listings answer from the public keys in your
+config: no provider call, no prompt. The first signature per _anchor_ (your
+shell, IDE, or git session) opens the consent window instead. `ssh` itself is
+treated as a transport frame and skipped, so the prompt names the real
+initiator rather than `ssh`.
+
+On approval secreq reads the private key from your provider, signs
+in-process, and zeroizes the key material. Only the signature leaves the
+daemon.
 
 ::shot{id=24-ssh-sign-pending}
 
@@ -75,19 +75,15 @@ Getting secreq serving your SSH keys is three steps: **declare the
 identity**, **keep the daemon running**, and **point your SSH clients at
 it**. The guided command walks all three:
 
-```sh
-secreq ssh setup
-```
-
 ::term{id=ssh-setup}
 
-Run bare, it offers each step in turn (each is skippable): add an
-identity if you have none, install the login service if it isn't there,
-then wire your clients. `secreq init` also offers `ssh setup` once it has
-set up your PATH. The rest of this section covers each step as a
-standalone command, so you can run them granularly or by hand.
+Every step is skippable, and `secreq init` offers the same flow once it has
+set up your PATH. Each block it writes is bracketed by sentinel comments, so
+re-running changes nothing and `secreq ssh setup --undo` removes it.
 
-### 1. Declare the identity
+The three steps run standalone too, for scripting or for doing it by hand.
+
+### Declare the identity
 
 ```sh
 secreq ssh add github \
@@ -95,106 +91,38 @@ secreq ssh add github \
   --private-key "secret://op/Private/GitHub/private key"
 ```
 
-This writes the identity into the `ssh` block of `wraps.json5`. The
-public key is stored inline; the private key is the `secret://` reference
-resolved only at sign time. With both keys on the command line the
-command runs without prompts.
+The public key is stored inline in `wraps.json5`; the private key stays a
+`secret://` reference, resolved only at sign time. Omit either flag and
+secreq asks, offering to pick the item out of `op` when it is on `PATH`.
 
-Omit `--public-key` or `--private-key` and `secreq` resolves the missing
-pieces interactively. When 1Password's `op` is on `PATH` it offers
-**op-assisted discovery**: it lists your SSH-Key items, you pick one, and
-it derives the private-key reference (`secret://op/<vault>/<title>/private
-key`), and fetches the public key too if you didn't supply one. Without
-`op`, it prompts for the reference manually. You can also skip the
-command entirely and hand-edit the `ssh` block (see [Configure](#configure)).
+### Keep the daemon running
 
-### 2. Keep the daemon running
+The agent socket exists only while the daemon does. Wraps auto-spawn it, but
+nothing spawns it for an _incoming_ sign, so `SSH_AUTH_SOCK` points at a dead
+socket unless one is already up. `secreq daemon install` writes a launchd
+LaunchAgent or a systemd `--user` unit, shows it to you first, and loads it;
+`--undo` removes it.
 
-The agent socket only exists **while the daemon runs**. Wraps auto-spawn
-the daemon on demand, but nothing spawns it for an _incoming_ SSH sign, so
-`SSH_AUTH_SOCK` points at a dead socket unless a daemon already happens to
-be up. Install a per-user login service to fix that:
+One gotcha on macOS: launchd starts jobs with almost no environment, so the
+plist pins a `PATH` covering the usual install locations. If your `op` lives
+somewhere else, add that directory to the plist's
+`EnvironmentVariables.PATH`.
 
-```sh
-secreq daemon install
-```
+### Point SSH clients at it
 
-This shows the service file it will write, then (after you confirm)
-writes and loads it so the daemon is running immediately and restarts at
-every login. What it writes, per platform:
-
-- **macOS:** a launchd LaunchAgent at
-  `~/Library/LaunchAgents/com.secreq.daemon.plist` running `secreq daemon
---fg`, with `RunAtLoad` and `KeepAlive` set (start at login, restart on
-  exit). launchd hands jobs a near-empty environment, so the plist pins a
-  `PATH` (`/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`)
-  so the daemon can find `op` and other provider binaries. **If your `op`
-  lives somewhere unusual** (outside those directories), add that
-  directory to the plist's `EnvironmentVariables.PATH`.
-- **Linux:** a systemd `--user` unit at
-  `~/.config/systemd/user/secreq.service` running `secreq daemon --fg`
-  with `Restart=on-failure`. systemd `--user` inherits your login
-  environment, so no `PATH` is pinned, but **`op` (and any other provider
-  binary) must be reachable on your user systemd `PATH`** for the daemon to
-  resolve secrets.
-
-Undo it (unload and remove the service) with:
-
-```sh
-secreq daemon install --undo
-```
-
-### 3. Point SSH clients at it
-
-Your SSH client needs to know where secreq's agent socket lives. The
-socket path is per-user and platform-dependent:
-
-- **macOS:** `~/Library/Caches/secreq/agent.sock`
-- **Linux/BSD:** `$XDG_RUNTIME_DIR/secreq/agent.sock` (e.g.
-  `/run/user/1000/secreq/agent.sock`)
-
-Let secreq wire it for you. The scripted form does only this client
-wiring (it skips the identity and auto-start prompts):
+The socket is at `~/Library/Caches/secreq/agent.sock` on macOS, and
+`$XDG_RUNTIME_DIR/secreq/agent.sock` on Linux and BSD. Two ways to name it:
 
 ```sh
 secreq ssh setup --yes --method ssh-config   # ~/.ssh/config IdentityAgent
 secreq ssh setup --yes --method shell-rc     # SSH_AUTH_SOCK export
 ```
 
-This resolves the socket path for your machine, shows you the exact block
-it will write, and applies it after you confirm. The block is bracketed
-by sentinel comments, so the command is **idempotent** (re-running is a
-no-op) and **reversible**:
+`ssh-config` prepends a `Host *` stanza, which affects `ssh` alone. `shell-rc`
+exports `SSH_AUTH_SOCK`, which affects every SSH client launched from that
+shell. Start a new shell afterwards so the change takes effect.
 
-```sh
-secreq ssh setup --undo
-```
-
-**Pick a method.** Omit `--method` for an interactive prompt, or name one
-directly:
-
-- **`ssh-config`** prepends a `Host *` / `IdentityAgent` stanza to
-  `~/.ssh/config`. Scoped to SSH only; it doesn't touch other clients'
-  environments. (It's prepended because ssh applies the _first_
-  `IdentityAgent` it finds for a host.) secreq creates `~/.ssh` as
-  `0700` and keeps the config `0600`, which ssh requires.
-- **`shell-rc`** appends an `SSH_AUTH_SOCK` export to your shell rc
-  (`~/.zshrc`, `~/.bashrc`, fish `conf.d`, …). Affects _every_ SSH
-  client launched from that shell, not just `ssh`.
-
-After it writes, restart your shell (`exec $SHELL`) or open a new SSH
-session so the change takes effect. With the login service from step 2
-in place, the daemon is already running, so the new session just picks up
-the socket.
-
-**Or add it by hand.** If you'd rather not let secreq edit your dotfiles,
-write one of these yourself (substitute the socket path for your
-platform):
-
-```sh
-# shell rc (~/.zshrc, ~/.bashrc, …)
-export SSH_AUTH_SOCK="$HOME/Library/Caches/secreq/agent.sock"
-```
+To write it yourself instead:
 
 ```
 # ~/.ssh/config
@@ -235,24 +163,15 @@ things up.
 
 ## Behavior
 
-- **First sign prompts.** The first signature per anchor opens the consent
-  window with the caller chain and the key's fingerprint. `ssh` itself is
-  treated as a transport frame and skipped, so the prompt anchors on the
-  real initiator: your git command, shell, or IDE.
-- **Approvals cache per anchor, with a TTL.** Approving "remember" caches
-  the _decision_ (not the key) for that anchor for about five minutes.
-  Subsequent signs within the window sign silently; each still resolves
-  the key fresh and zeroizes it. Unlike the wrap cache, which lives as long
-  as the parent process, the SSH approval cache is clock-bounded: an anchor
-  (shell/IDE/git session) can live for hours, so the approval expires on a
-  timer rather than tracking the session's whole lifetime.
-- **Listing is free.** `ssh-add -l` and identity listings never prompt and
-  never touch a provider.
-- **Every sign is audited.** Each signature (approved, cached, or denied)
-  is recorded in the audit log with the key id, fingerprint, decision, and
-  caller chain, never the key or the signature bytes. (For SSH signs the
-  daemon writes the audit row itself, since there's no wrap client in the
-  loop.)
+Approving "remember" caches the decision, not the key, for that anchor for
+about five minutes. Signs inside the window are silent, and each still
+resolves the key fresh and zeroizes it. The wrap cache lives as long as the
+parent process; this one expires on a clock, because an anchor like a shell
+or an IDE can stay open for hours.
+
+Every signature is audited whether approved or denied, with the key id,
+fingerprint, decision, and caller chain. Never the key or the signature
+bytes.
 
 ## Trust-model note: key custody is downgraded
 

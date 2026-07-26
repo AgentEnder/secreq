@@ -2772,6 +2772,7 @@ pub(crate) fn build_ask(
                 name: c.name.clone(),
                 command: c.command.clone(),
                 start_time: c.start_time,
+                exe: c.exe.clone(),
             })
             .collect(),
         secrets,

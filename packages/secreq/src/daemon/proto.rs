@@ -415,6 +415,20 @@ pub struct Caller {
     /// hasn't been updated yet; matching against 0 just falls through.
     #[serde(default)]
     pub start_time: u64,
+    /// Absolute path to the executable, when the kernel will say.
+    ///
+    /// The identity that cannot be chosen by the process it names. `name` is
+    /// `comm`, which a process sets on itself with one `prctl(PR_SET_NAME)`
+    /// on Linux, or by being a file called `zsh` on macOS — so anything that
+    /// keys on the name inherits whatever the namer wanted. `exe` is what was
+    /// loaded.
+    ///
+    /// `Option` because sysinfo cannot always resolve it (short-lived
+    /// processes, some platforms). Consumers fall back to `name` when it is
+    /// absent rather than dropping the frame, so an unresolvable exe degrades
+    /// to the old behaviour instead of erasing the caller.
+    #[serde(default)]
+    pub exe: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -32,10 +32,6 @@ None of them create any wraps or shims. That's the next step.
 
 ## 2. First-time setup
 
-```sh
-secreq init
-```
-
 ::term{id=init}
 
 `init` picks a **shim directory** (`~/.secreq/shims` by default, a dedicated
@@ -56,10 +52,6 @@ echo $PATH | tr ':' '\n' | grep secreq    # should print your shim dir
 Pick a CLI you regularly hand a credential to by env var: `gh`, `aws`,
 `kubectl`, `psql`, `terraform`. Run `wrap` with just the binary name and it
 asks for the rest:
-
-```sh
-secreq wrap gh
-```
 
 ::term{id=wrap-gh}
 

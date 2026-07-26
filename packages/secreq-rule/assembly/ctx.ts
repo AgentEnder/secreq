@@ -4,10 +4,28 @@
 
 /** One entry of the caller chain, nearest-first. */
 export class Caller {
-  /** Short process name (executable basename, e.g. `zsh`, `Cursor`). */
+  /**
+   * Short process name (`comm`, e.g. `zsh`, `Cursor`).
+   *
+   * **Self-reported.** A process sets this on itself — one
+   * `prctl(PR_SET_NAME)` on Linux, or simply being a file with that name on
+   * macOS. Gate on `exe` when it matters who is really calling.
+   */
   name: string = '';
-  /** Full joined command line of the caller. */
+  /**
+   * Full joined command line of the caller.
+   *
+   * **Self-reported**, same as `name`: a process chooses its own argv.
+   */
   command: string = '';
+  /**
+   * Absolute path to the caller's executable, or `''` when the kernel would
+   * not say (short-lived processes, some platforms).
+   *
+   * The one caller field the process cannot choose for itself, so it is the
+   * one worth gating on. Treat `''` as "unknown", not as "no match".
+   */
+  exe: string = '';
 }
 
 /** Everything a rule can see about one live ask. */

@@ -71,44 +71,6 @@ Check the kill-switch: `SECREQ_NO_DAEMON` (any non-empty value) tells the
 client to neither connect to nor spawn the daemon, so every consent request
 fails closed. It's meant for automation; unset it for interactive use.
 
-## Dev builds can corrupt your real `~/.secreq`
-
-**Read this before you `cargo run` or `cargo test` a dev build against your
-real home.** It is the one trap that can brick a working setup.
-
-secreq keeps everything under one root (`$SECREQ_HOME`, else `~/.secreq`),
-and every deliberate foreground command applies any pending **migrations**,
-stamping the schema level it reached. Running a development build at a
-different schema level than your installed release against that same home
-goes wrong two ways:
-
-- A newer dev build migrates your live config and bumps the level. Your
-  installed release then reads that as a _downgrade_ and refuses to run
-  anything until you `secreq migrate restore <level>`.
-- Worse, a test that pins only `$SECREQ_HOME` but leaves `$HOME` pointing at
-  your real home makes the migration's legacy probe aim at your **real**
-  `~/.config/secreq` and move your live config into a tempdir that is
-  deleted moments later. This has actually happened during a `cargo test`.
-
-**Isolate every dev build.** `$SECREQ_HOME` alone is not enough: migrations
-resolve the _pre-migration_ locations through frozen XDG logic, and the
-socket directory prefers `$XDG_RUNTIME_DIR` over the root.
-
-```sh
-export SECREQ_HOME="$(mktemp -d)"
-export XDG_RUNTIME_DIR="$SECREQ_HOME/run"   # sockets don't hang off SECREQ_HOME
-mkdir -p "$XDG_RUNTIME_DIR"
-export HOME="$SECREQ_HOME"                   # backstop: makes a forgotten pin harmless
-export XDG_CONFIG_HOME="$SECREQ_HOME/config" # the migration's legacy probe
-export XDG_STATE_HOME="$SECREQ_HOME/state"
-
-cargo run -- doctor        # now safely sandboxed
-```
-
-Pinning `$HOME` is what makes a _forgotten_ pin harmless rather than
-destructive. The project's own integration tests do this; see
-`tests/ssh_agent.rs::isolate_paths`.
-
 ## `which gh` points at the wrong binary
 
 For a wrap to fire, the **first** thing `execvp("gh", …)` finds on `$PATH`

@@ -137,6 +137,13 @@ struct CtxJson<'a> {
 struct CallerJson<'a> {
     name: &'a str,
     command: &'a str,
+    /// Absolute path to the executable, when the kernel would say.
+    ///
+    /// The one caller field a process cannot choose for itself. `name` and
+    /// `command` are `comm` and argv; a rule that gates on either is gating
+    /// on something the caller wrote. `null` when unresolvable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exe: Option<&'a str>,
 }
 
 /// Per-store host state: just the resource limiter. No host functions
@@ -218,7 +225,11 @@ impl RuleModule {
             callers: ctx
                 .callers
                 .iter()
-                .map(|&(name, command)| CallerJson { name, command })
+                .map(|c| CallerJson {
+                    name: c.name,
+                    command: c.command,
+                    exe: c.exe,
+                })
                 .collect(),
             cwd: ctx.cwd,
             secrets: ctx.secrets,
@@ -356,6 +367,7 @@ fn check_abi_exports(module: &Module) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::EvalCaller;
 
     // Compiled from the .ts sources in tests/fixtures/wasm_rules/ by
     // rebuild.sh (checked in so `cargo test` needs no node toolchain).
@@ -381,7 +393,7 @@ mod tests {
     fn ctx<'a>(
         wrap: &'a str,
         joined_argv: &'a str,
-        callers: &'a [(&'a str, &'a str)],
+        callers: &'a [EvalCaller<'a>],
         cwd: &'a str,
         secrets: &'a [&'a str],
     ) -> EvalCtx<'a> {
@@ -407,11 +419,16 @@ mod tests {
     fn approve_if_approves_matching_ask() {
         let module = RuleModule::from_binary(APPROVE_IF).expect("load");
         let callers = &[
-            ("zsh", "-zsh"),
-            (
-                "Cursor",
-                "/Applications/Cursor.app/Contents/MacOS/Cursor --psn_0_12345",
-            ),
+            EvalCaller {
+                name: "zsh",
+                command: "-zsh",
+                exe: None,
+            },
+            EvalCaller {
+                name: "Cursor",
+                command: "/Applications/Cursor.app/Contents/MacOS/Cursor --psn_0_12345",
+                exe: Some("/Applications/Cursor.app/Contents/MacOS/Cursor"),
+            },
         ];
         let c = ctx(
             "gh",
@@ -430,7 +447,7 @@ mod tests {
         let c = ctx(
             "gh",
             "gh api --get /repos/me/x/pulls",
-            &[("zsh", "-zsh")],
+            &[EvalCaller { name: "zsh", command: "-zsh", exe: None }],
             "/home/me/x",
             &["GITHUB_TOKEN"],
         );
@@ -447,7 +464,18 @@ mod tests {
         // exercise both the host's serializer and the guest's hand-rolled
         // JSON parse/escape.
         let module = RuleModule::from_binary(DENY_ECHO).expect("load");
-        let callers = &[("zsh", "-zsh"), ("Cursor", "/Apps/Cursor.app — β")];
+        let callers = &[
+            EvalCaller {
+                name: "zsh",
+                command: "-zsh",
+                exe: None,
+            },
+            EvalCaller {
+                name: "Cursor",
+                command: "/Apps/Cursor.app — β",
+                exe: None,
+            },
+        ];
         let c = ctx(
             "gh",
             r#"gh api --jq ".name""#,

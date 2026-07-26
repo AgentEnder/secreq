@@ -164,6 +164,7 @@ fn caller(pid: u32, name: &str, start_time: u64) -> Caller {
         name: name.to_owned(),
         command: name.to_owned(),
         start_time,
+        exe: None,
     }
 }
 
@@ -390,6 +391,7 @@ fn audit_line(
             pid: 1000,
             name: caller_name.to_owned(),
             command: caller_name.to_owned(),
+            exe: None,
         }],
         secrets: secrets.iter().map(|s| (*s).to_owned()).collect(),
         decision: decision.to_owned(),
@@ -435,6 +437,7 @@ fn audit_line_traced(
                 pid: *pid,
                 name: (*name).to_owned(),
                 command: (*cmd).to_owned(),
+                exe: None,
             })
             .collect(),
         secrets: secrets.iter().map(|s| (*s).to_owned()).collect(),
@@ -459,6 +462,7 @@ fn audit_auto_fire(secs_ago: u64, rule_id: &str, decision: &str) -> AuditEntry {
             pid: 4242,
             name: "Cursor.app".to_owned(),
             command: "Cursor.app".to_owned(),
+            exe: None,
         }],
         secrets: vec!["GITHUB_TOKEN".to_owned()],
         decision: decision.to_owned(),

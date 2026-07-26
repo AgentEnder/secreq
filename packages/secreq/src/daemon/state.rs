@@ -1288,6 +1288,7 @@ impl State {
                 pid: c.pid,
                 name: c.name.clone(),
                 command: c.command.clone(),
+                exe: c.exe.clone(),
             })
             .collect();
         let secret_names: Vec<String> = waiter.requested.iter().map(|s| s.name.clone()).collect();
@@ -1520,10 +1521,14 @@ impl State {
             return None;
         }
         let joined_argv = ask.command.join(" ");
-        let callers: Vec<(&str, &str)> = ask
+        let callers: Vec<rules::EvalCaller<'_>> = ask
             .callers
             .iter()
-            .map(|c| (c.name.as_str(), c.command.as_str()))
+            .map(|c| rules::EvalCaller {
+                name: c.name.as_str(),
+                command: c.command.as_str(),
+                exe: c.exe.as_deref(),
+            })
             .collect();
         // An SSH sign resolves nothing, so `sign_ask` builds no
         // `SecretAsk` — but the ask still asks for *something*: the use
@@ -2648,6 +2653,7 @@ mod tests {
                     name: String::new(),
                     command: String::new(),
                     start_time,
+                    exe: None,
                 })
                 .collect(),
             secrets: vec![],
@@ -3905,6 +3911,7 @@ mod tests {
             name: "Cursor".to_owned(),
             command: "/Applications/Cursor.app/Contents/MacOS/Cursor".to_owned(),
             start_time: 0,
+            exe: None,
         }];
         ask
     }

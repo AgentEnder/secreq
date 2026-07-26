@@ -477,8 +477,12 @@ impl AuditCache {
         self.last_mtime = mtime;
     }
 
-    pub(crate) fn summarize(&self, wrap: &str, caller_name: Option<&str>) -> WrapHistorySummary {
-        summarize_history(&self.entries, wrap, caller_name, now_unix())
+    pub(crate) fn summarize(
+        &self,
+        wrap: &str,
+        caller: Option<CallerIdentity<'_>>,
+    ) -> WrapHistorySummary {
+        summarize_history(&self.entries, wrap, caller, now_unix())
     }
 
     /// The parsed entries, newest last (file order). The manager's
@@ -510,13 +514,49 @@ impl WrapHistorySummary {
     }
 }
 
+/// How the direct caller is identified when matching audit history.
+///
+/// The prompt's HISTORY row ("approved 12 times, last approve 2 minutes ago")
+/// is the strongest "you have seen this and said yes" signal the UI offers,
+/// and it used to be matched on `callers[0].name` — `comm`, which a process
+/// sets on itself with one `prctl(PR_SET_NAME)` on Linux, or by being a file
+/// called `zsh` on macOS. So `cp /bin/sh /tmp/zsh` inherited the victim's
+/// entire approval record for the cost of a filename.
+///
+/// `exe` is the kernel's record of what was loaded and cannot be chosen by
+/// the process it names, so it wins whenever both sides have one. The name is
+/// the fallback, not a supplement: rows written before `exe` existed have
+/// none, and dropping them would blank the history for every existing install.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CallerIdentity<'a> {
+    pub name: &'a str,
+    pub exe: Option<&'a str>,
+}
+
+impl CallerIdentity<'_> {
+    /// Does `entry_caller` name the same caller?
+    fn matches(self, entry_caller: Option<&crate::audit::AuditCaller>) -> bool {
+        let Some(entry_caller) = entry_caller else {
+            return false;
+        };
+        match (self.exe, entry_caller.exe.as_deref()) {
+            // Both known: the path decides, and a mismatch is a mismatch
+            // however the two processes chose to name themselves.
+            (Some(want), Some(got)) => want == got,
+            // Either side is missing a path — an older audit row, or a
+            // process sysinfo could not resolve. Fall back to the name.
+            _ => entry_caller.name == self.name,
+        }
+    }
+}
+
 /// Pure summarizer split from `AuditCache` so it can be unit-tested without
 /// touching the filesystem. Matches on `entry.wrap == wrap` and, when
-/// `caller_name` is supplied, the direct (callers[0]) caller's name.
+/// `caller` is supplied, the direct (callers[0]) caller's identity.
 fn summarize_history(
     entries: &[AuditEntry],
     wrap: &str,
-    caller_name: Option<&str>,
+    caller: Option<CallerIdentity<'_>>,
     now_unix: u64,
 ) -> WrapHistorySummary {
     let cutoff = now_unix.saturating_sub(AUDIT_WINDOW_SECS);
@@ -525,9 +565,8 @@ fn summarize_history(
         if e.wrap != wrap {
             continue;
         }
-        if let Some(cn) = caller_name {
-            let direct = e.callers.first().map_or("", |c| c.name.as_str());
-            if direct != cn {
+        if let Some(want) = caller {
+            if !want.matches(e.callers.first()) {
                 continue;
             }
         }
@@ -2821,6 +2860,7 @@ mod tests {
                 pid: 1,
                 name: caller_name.to_owned(),
                 command: caller_name.to_owned(),
+                exe: None,
             }],
             secrets: secrets.iter().map(|s| (*s).to_owned()).collect(),
             decision: decision.to_owned(),
@@ -2868,6 +2908,7 @@ mod tests {
             pid: 2,
             name: "Cursor".to_owned(),
             command: "/Applications/Cursor.app/Contents/MacOS/Cursor".to_owned(),
+            exe: None,
         }];
         // Substring on the caller's bare name.
         assert!(audit_entry_matches(&e, "cursor"));
@@ -3087,6 +3128,7 @@ mod tests {
                 pid: 100,
                 name: caller.to_owned(),
                 command: caller.to_owned(),
+                exe: None,
             }],
             secrets: vec![],
             decision: decision.to_owned(),
@@ -3100,7 +3142,7 @@ mod tests {
     fn summarize_returns_empty_when_no_match() {
         // Wrong wrap → no signal.
         let entries = vec![mk_audit(1000, "aws", "zsh", "approve")];
-        let s = summarize_history(&entries, "gh", Some("zsh"), 2000);
+        let s = summarize_history(&entries, "gh", Some(CallerIdentity { name: "zsh", exe: None }), 2000);
         assert!(s.is_empty());
     }
 
@@ -3112,7 +3154,7 @@ mod tests {
             mk_audit(1000, "gh", "zsh", "approve+remember"),
             mk_audit(1500, "gh", "npm", "deny"),
         ];
-        let s = summarize_history(&entries, "gh", Some("zsh"), 2000);
+        let s = summarize_history(&entries, "gh", Some(CallerIdentity { name: "zsh", exe: None }), 2000);
         assert_eq!(s.total_count, 1);
         assert_eq!(s.approve_count, 1);
         assert_eq!(s.deny_count, 0);
@@ -3128,7 +3170,7 @@ mod tests {
         let now = 100 * 24 * 3600;
         let sixty_days_ago = now - 60 * 24 * 3600;
         let entries = vec![mk_audit(sixty_days_ago, "gh", "zsh", "deny")];
-        let s = summarize_history(&entries, "gh", Some("zsh"), now);
+        let s = summarize_history(&entries, "gh", Some(CallerIdentity { name: "zsh", exe: None }), now);
         assert_eq!(s.total_count, 0, "outside 30d window, not counted");
         assert_eq!(s.last_decision.as_deref(), Some("deny"));
     }
@@ -3142,7 +3184,7 @@ mod tests {
             mk_audit(recent + 100, "gh", "zsh", "approve+remember"),
             mk_audit(recent + 200, "gh", "zsh", "deny"),
         ];
-        let s = summarize_history(&entries, "gh", Some("zsh"), now);
+        let s = summarize_history(&entries, "gh", Some(CallerIdentity { name: "zsh", exe: None }), now);
         assert_eq!(s.total_count, 3);
         assert_eq!(s.approve_count, 2);
         assert_eq!(s.deny_count, 1);
@@ -3179,5 +3221,48 @@ mod tests {
         let (text, color) = format_audit_line(&denied, now, &th);
         assert!(text.contains("denied"));
         assert_eq!(color, th.danger, "denied last must use the danger token");
+    }
+
+    /// The prompt's HISTORY row is the strongest "you have seen this and said
+    /// yes" signal the UI offers, and it used to match on the caller's *name*
+    /// — `comm`, which a process sets on itself. `cp /bin/sh /tmp/zsh`
+    /// inherited the victim's entire approval record for the cost of a
+    /// filename.
+    #[test]
+    fn history_does_not_match_an_impostor_with_the_same_name() {
+        let mut entry = mk_audit(1_000, "gh", "zsh", "approve");
+        entry.callers[0].exe = Some("/bin/zsh".to_owned());
+        let entries = vec![entry];
+
+        // The real shell: same name, same path → its own history.
+        let real = CallerIdentity {
+            name: "zsh",
+            exe: Some("/bin/zsh"),
+        };
+        assert_eq!(summarize_history(&entries, "gh", Some(real), 2_000).total_count, 1);
+
+        // The impostor: same name, different binary → no history at all.
+        let impostor = CallerIdentity {
+            name: "zsh",
+            exe: Some("/tmp/zsh"),
+        };
+        assert_eq!(
+            summarize_history(&entries, "gh", Some(impostor), 2_000).total_count,
+            0,
+            "a process merely named `zsh` must not inherit the real shell's record"
+        );
+    }
+
+    /// Rows written before `exe` existed carry none. Dropping them would
+    /// blank the history on every existing install, so the name remains the
+    /// fallback when either side lacks a path.
+    #[test]
+    fn history_falls_back_to_the_name_for_rows_without_an_exe() {
+        let entries = vec![mk_audit(1_000, "gh", "zsh", "approve")];
+        let want = CallerIdentity {
+            name: "zsh",
+            exe: Some("/bin/zsh"),
+        };
+        assert_eq!(summarize_history(&entries, "gh", Some(want), 2_000).total_count, 1);
     }
 }

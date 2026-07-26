@@ -627,6 +627,7 @@ fn sign_ask(
                 name: c.name.clone(),
                 command: c.command.clone(),
                 start_time: c.start_time,
+                exe: c.exe.clone(),
             })
             .collect(),
         // No SecretAsk: the daemon resolves nothing for an SSH sign.

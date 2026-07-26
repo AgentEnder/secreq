@@ -411,9 +411,27 @@ impl Pattern {
         }
     }
 
-    /// Match for the ancestor field. Literal = substring; glob = full
-    /// pattern match. Substring is friendlier than prefix for matching
-    /// `.app` bundle names against noisy macOS argv strings like
+    /// Match one caller for the `ancestor` field.
+    ///
+    /// Tested against the caller's **`exe`** when the kernel gave one, and
+    /// against its self-reported `name`/`command` only when it did not.
+    ///
+    /// The pair is attacker-chosen: a process sets `comm` on itself and picks
+    /// its own argv, so `ancestor: "Cursor.app"` — the example in the docs,
+    /// the tests and the schema — used to be satisfied by any process that
+    /// merely put that text in its command line. The canonical example still
+    /// works against the path, because
+    /// `/Applications/Cursor.app/Contents/MacOS/Cursor` *is* the exe.
+    pub fn matches_ancestor(&self, caller: &EvalCaller<'_>) -> bool {
+        match caller.exe {
+            Some(exe) => self.matches_substring(exe),
+            None => self.matches_substring(caller.name) || self.matches_substring(caller.command),
+        }
+    }
+
+    /// Substring (literal) or full-pattern (glob) match. Substring is
+    /// friendlier than prefix for matching `.app` bundle names inside a
+    /// noisy path like
     /// `/Applications/Cursor.app/Contents/MacOS/Cursor --psn_0_12345`.
     pub fn matches_substring(&self, s: &str) -> bool {
         match &self.kind {
@@ -609,14 +627,30 @@ pub struct EvalCtx<'a> {
     pub wrap: &'a str,
     /// The joined argv of the wrapped command (e.g. `"gh api --get /repos/x"`).
     pub joined_argv: &'a str,
-    /// Caller chain, nearest-first. Each entry is `(name, command)`.
-    /// Matched against the `ancestor` pattern.
-    pub callers: &'a [(&'a str, &'a str)],
+    /// Caller chain, nearest-first. Matched against the `ancestor` pattern.
+    pub callers: &'a [EvalCaller<'a>],
     /// Working directory of the requesting process.
     pub cwd: &'a str,
     /// Names of the secrets requested. Checked against the rule's
     /// `trained_secrets` guard.
     pub secrets: &'a [&'a str],
+}
+
+/// One caller as a rule sees it.
+///
+/// `exe` is the kernel's record of what was loaded. `name` and `command` are
+/// `comm` and argv, both of which the process chooses for itself: one
+/// `prctl(PR_SET_NAME)` on Linux, or an argv element on any platform. So
+/// `ancestor: "Cursor.app"` matched against `command` was satisfiable by
+/// `sh -c '# /Applications/Cursor.app/Contents/MacOS/Cursor'`.
+///
+/// [`Pattern::matches_ancestor`] prefers the path for that reason, and falls
+/// back to the self-reported pair only when the kernel would not give one.
+#[derive(Debug, Clone, Copy)]
+pub struct EvalCaller<'a> {
+    pub name: &'a str,
+    pub command: &'a str,
+    pub exe: Option<&'a str>,
 }
 
 /// One rule's hit, returned by [`evaluate`].
@@ -883,11 +917,7 @@ fn match_clause_matches(m: &RuleMatch, ctx: &EvalCtx) -> bool {
         }
     }
     if let Some(p) = &m.ancestor {
-        let any_caller_matches = ctx
-            .callers
-            .iter()
-            .any(|(name, command)| p.matches_substring(name) || p.matches_substring(command));
-        if !any_caller_matches {
+        if !ctx.callers.iter().any(|c| p.matches_ancestor(c)) {
             return false;
         }
     }
@@ -1000,7 +1030,7 @@ mod tests {
     fn ctx<'a>(
         wrap: &'a str,
         joined_argv: &'a str,
-        callers: &'a [(&'a str, &'a str)],
+        callers: &'a [EvalCaller<'a>],
         cwd: &'a str,
         secrets: &'a [&'a str],
     ) -> EvalCtx<'a> {
@@ -1082,11 +1112,16 @@ mod tests {
             &["GITHUB_TOKEN"],
         );
         let callers = &[
-            ("zsh", "-zsh"),
-            (
-                "Cursor",
-                "/Applications/Cursor.app/Contents/MacOS/Cursor --psn_0_12345",
-            ),
+            EvalCaller {
+                name: "zsh",
+                command: "-zsh",
+                exe: None,
+            },
+            EvalCaller {
+                name: "Cursor",
+                command: "/Applications/Cursor.app/Contents/MacOS/Cursor --psn_0_12345",
+                exe: Some("/Applications/Cursor.app/Contents/MacOS/Cursor"),
+            },
         ];
         let c = ctx(
             "gh",
@@ -1189,7 +1224,7 @@ mod tests {
         let c = ctx(
             "gh",
             "gh repo delete me/x",
-            &[("Cursor", "Cursor.app")],
+            &[EvalCaller { name: "Cursor", command: "Cursor.app", exe: None }],
             "/x",
             &["GITHUB_TOKEN"],
         );
@@ -1220,7 +1255,7 @@ mod tests {
         let c = ctx(
             "gh",
             "gh api --get /repos/x",
-            &[("Cursor", "Cursor.app")],
+            &[EvalCaller { name: "Cursor", command: "Cursor.app", exe: None }],
             "/x",
             &["GITHUB_TOKEN"],
         );
@@ -1249,7 +1284,7 @@ mod tests {
         let c = ctx(
             "gh",
             "gh api",
-            &[("Cursor", "Cursor.app")],
+            &[EvalCaller { name: "Cursor", command: "Cursor.app", exe: None }],
             "/x",
             &["GITHUB_TOKEN"],
         );
@@ -1429,7 +1464,13 @@ mod tests {
         );
         let wasm_approve = mk_wasm_rule("02", "wasm approve", &["GITHUB_TOKEN"]);
         let modules = modules_for(&[("02", APPROVE_IF)]);
-        let callers = &[("Cursor", "/Applications/Cursor.app/Contents/MacOS/Cursor")];
+        let callers = &[
+            EvalCaller {
+                name: "Cursor",
+                command: "/Applications/Cursor.app/Contents/MacOS/Cursor",
+                exe: None,
+            },
+        ];
         let c = ctx(
             "gh",
             "gh api --get /repos/me/x/pulls",
@@ -1459,10 +1500,11 @@ mod tests {
         );
         let wasm = mk_wasm_rule("02", "wasm approve", &["GITHUB_TOKEN"]);
         let modules = modules_for(&[("02", APPROVE_IF)]);
-        let callers = &[(
-            "Cursor",
-            "/Applications/Cursor.app/Contents/MacOS/Cursor --psn_0_12345",
-        )];
+        let callers = &[EvalCaller {
+            name: "Cursor",
+            command: "/Applications/Cursor.app/Contents/MacOS/Cursor",
+            exe: Some("/Applications/Cursor.app/Contents/MacOS/Cursor"),
+        }];
         let c = ctx(
             "gh",
             "gh api --get /repos/me/x/pulls",
@@ -1482,7 +1524,13 @@ mod tests {
         let b = mk_wasm_rule("r_bbb", "bbb", &["GITHUB_TOKEN"]);
         let a = mk_wasm_rule("r_aaa", "aaa", &["GITHUB_TOKEN"]);
         let modules = modules_for(&[("r_bbb", APPROVE_IF), ("r_aaa", APPROVE_IF)]);
-        let callers = &[("Cursor", "/Applications/Cursor.app/Contents/MacOS/Cursor")];
+        let callers = &[
+            EvalCaller {
+                name: "Cursor",
+                command: "/Applications/Cursor.app/Contents/MacOS/Cursor",
+                exe: None,
+            },
+        ];
         let c = ctx(
             "gh",
             "gh api --get /repos/me/x/pulls",
@@ -1511,7 +1559,13 @@ mod tests {
         // veto the rule exactly like it does declarative ones.
         let rule = mk_wasm_rule("01", "wasm approve", &["GITHUB_TOKEN"]);
         let modules = modules_for(&[("01", APPROVE_IF)]);
-        let callers = &[("Cursor", "/Applications/Cursor.app/Contents/MacOS/Cursor")];
+        let callers = &[
+            EvalCaller {
+                name: "Cursor",
+                command: "/Applications/Cursor.app/Contents/MacOS/Cursor",
+                exe: None,
+            },
+        ];
         let c = ctx(
             "gh",
             "gh api --get /repos/me/x/pulls",
@@ -1738,7 +1792,13 @@ mod tests {
         );
         assert!(loaded.modules.contains_key("01"));
         // And the loaded module actually evaluates.
-        let callers = &[("Cursor", "/Applications/Cursor.app/Contents/MacOS/Cursor")];
+        let callers = &[
+            EvalCaller {
+                name: "Cursor",
+                command: "/Applications/Cursor.app/Contents/MacOS/Cursor",
+                exe: None,
+            },
+        ];
         let c = ctx(
             "gh",
             "gh api --get /repos/me/x/pulls",
@@ -1974,5 +2034,42 @@ mod tests {
 
         assert_eq!(out.hit.expect("the deny fires").decide, RuleDecision::Deny);
         assert!(out.mandated_prompt.is_none());
+    }
+
+    /// `name` is `comm` and `command` is argv; a process picks both. So
+    /// `ancestor: "Cursor.app"` — the example in the docs, the tests and the
+    /// schema — used to be satisfied by anything that merely put that text in
+    /// its command line.
+    #[test]
+    fn an_ancestor_pattern_is_not_satisfied_by_a_self_reported_name() {
+        let p = Pattern::parse("Cursor.app");
+
+        // The real editor: the text is in the path the kernel recorded.
+        assert!(p.matches_ancestor(&EvalCaller {
+            name: "Cursor",
+            command: "/Applications/Cursor.app/Contents/MacOS/Cursor --psn_0_1",
+            exe: Some("/Applications/Cursor.app/Contents/MacOS/Cursor"),
+        }));
+
+        // An impostor: `sh -c '# /Applications/Cursor.app/…'`. The argv says
+        // Cursor, the binary does not.
+        assert!(!p.matches_ancestor(&EvalCaller {
+            name: "Cursor",
+            command: "sh -c # /Applications/Cursor.app/Contents/MacOS/Cursor",
+            exe: Some("/bin/sh"),
+        }));
+    }
+
+    /// sysinfo cannot always resolve an exe. Falling back to the pair keeps
+    /// existing rules working there rather than silently never matching —
+    /// weaker, but honest about which of the two states it is in.
+    #[test]
+    fn an_ancestor_pattern_falls_back_to_the_pair_without_an_exe() {
+        let p = Pattern::parse("Cursor.app");
+        assert!(p.matches_ancestor(&EvalCaller {
+            name: "Cursor",
+            command: "/Applications/Cursor.app/Contents/MacOS/Cursor",
+            exe: None,
+        }));
     }
 }

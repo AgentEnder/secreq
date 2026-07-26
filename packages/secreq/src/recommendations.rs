@@ -220,7 +220,13 @@ fn redundant_with_existing_rules(s: &Suggestion, rules: &[Rule]) -> bool {
     let joined_argv = s.argv.clone().unwrap_or_else(|| s.wrap.clone());
     let cwd = s.cwd.clone().unwrap_or_else(|| "/".to_owned());
     let secrets: Vec<&str> = s.trained_secrets.iter().map(String::as_str).collect();
-    let callers = [(s.ancestor.as_str(), s.ancestor.as_str())];
+    // A suggestion is derived from audit rows keyed on the caller's name,
+    // so that is all it can offer here.
+    let callers = [rules::EvalCaller {
+        name: s.ancestor.as_str(),
+        command: s.ancestor.as_str(),
+        exe: None,
+    }];
     let ctx = EvalCtx {
         wrap: &s.wrap,
         joined_argv: &joined_argv,
@@ -488,6 +494,7 @@ mod tests {
                 pid: 1,
                 name: ancestor.to_owned(),
                 command: ancestor.to_owned(),
+                exe: None,
             }],
             secrets: secrets.iter().map(|s| (*s).to_owned()).collect(),
             decision: decision.to_owned(),

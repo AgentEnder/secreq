@@ -191,7 +191,7 @@ fn wasm_rule_schema() -> Value {
 fn rule_match_schema() -> Value {
     json!({
         "type": "object",
-        "description": "The match clause. All present fields must match (logical AND). `wrap` is required and exact; the rest are patterns: glob if they contain `*`, `?`, or `[`, otherwise literal. Literal `argv`/`cwd` match as prefix; literal `ancestor` matches as substring (friendlier for `.app` bundle names).",
+        "description": "The match clause. All present fields must match (logical AND). `wrap` is required and exact; the rest are patterns: glob if they contain `*`, `?`, or `[`, otherwise literal. Literal `argv`/`cwd` match as prefix; literal `ancestor` matches as substring against the caller's executable path (friendlier for `.app` bundle names, and not self-reported).",
         "required": ["wrap"],
         "properties": {
             "wrap": {

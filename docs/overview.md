@@ -92,24 +92,19 @@ consent**. Nobody else covers all three.
 
 ## Trust and threat model
 
-- **Approval is direct-parent scoped.** An approved `gh` in your zsh does
-  not extend to `gh` spawned by an npm postinstall: different ppid, so it
-  re-prompts. The key includes the parent's start time, so a recycled pid
-  can't inherit a grant.
-- **Injected secrets are visible to the child**, and to anything that can
-  read `ps eww` or `/proc/<pid>/environ`. That is an accepted limit of
-  putting secrets in an environment at all.
-- **Mitigations:** output masking, zeroizing in-process memory, an audit
-  log of every release (names only, never values), and provenance-aware
-  consent.
-- **SSH key custody is downgraded.** secreq resolves the private key into
-  the daemon's memory to sign, then zeroizes it. 1Password's sealed agent
-  differs: there the key never leaves. You gain consent and one agent
-  across providers; you give up hardware sealing.
+- Approval is scoped to the direct parent. An approved `gh` in your zsh does
+  not extend to `gh` spawned by an npm postinstall, and the key includes the
+  parent's start time, so a recycled pid cannot inherit a grant.
+- Injected secrets are visible to the child, and to anything that can read
+  `ps eww` or `/proc/<pid>/environ`. Masking, zeroizing and the audit log
+  narrow that; putting secrets in an environment does not make it go away.
+- SSH key custody is downgraded: the key is resolved into the daemon's
+  memory to sign and then zeroized, where 1Password's sealed agent never
+  releases it at all.
   [Details](./ssh-agent.md#trust-model-note-key-custody-is-downgraded).
-- **Sandbox granularity is downgraded.** A guest VM has no host pid, so
-  the declared scope is the principal rather than a verified process
-  chain. [Details](./secret-agent.md#trust-model-note-granularity-is-downgraded).
+- Sandbox granularity is downgraded: a guest VM has no host pid, so the
+  declared scope is the principal rather than a verified process chain.
+  [Details](./secret-agent.md#trust-model-note-granularity-is-downgraded).
 
 ## Next
 

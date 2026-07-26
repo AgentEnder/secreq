@@ -1085,6 +1085,7 @@ fn adopt_peer_provenance(ask: &mut Ask, stream: &UnixStream) -> Result<()> {
             name: c.name.clone(),
             command: c.command.clone(),
             start_time: c.start_time,
+            exe: c.exe.clone(),
         })
         .collect();
     // A cwd we cannot read is rendered as absent rather than guessed at, and
@@ -1763,6 +1764,7 @@ mod tests {
                 name: "zsh".to_owned(),
                 command: "-zsh".to_owned(),
                 start_time: 12345,
+                exe: None,
             }],
             secrets: Vec::new(),
             providers: std::collections::HashMap::new(),

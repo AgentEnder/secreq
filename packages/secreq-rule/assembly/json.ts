@@ -1,7 +1,7 @@
 // Minimal JSON support for the rule ABI — hand-rolled so it runs under the
 // AssemblyScript `stub` runtime with zero dependencies. The parser is
 // shape-specific: it decodes exactly the ctx object the secreq host sends
-// (strings, string arrays, and an array of `{name, command}` objects) and
+// (strings, string arrays, and an array of `{name, command, exe}` objects) and
 // skips unknown fields so a newer host can add ctx fields without breaking
 // already-compiled rules. Malformed input aborts (host sees a clean trap).
 
@@ -149,6 +149,7 @@ class Parser {
       this.expect(0x3a); // `:`
       if (key == 'name') caller.name = this.parseString();
       else if (key == 'command') caller.command = this.parseString();
+      else if (key == 'exe') caller.exe = this.parseString();
       else this.skipValue();
       this.skipWs();
       const c = this.peek();

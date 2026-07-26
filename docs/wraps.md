@@ -66,6 +66,11 @@ A reference is `secret://<provider>/<locator>`: the provider is a scheme
 name (built-in or declared in `providers`), and the locator is everything
 after the first `/`. See [providers](./providers.md).
 
+At the `Locator` prompt you can paste the store's own reference instead of
+retyping the tail of it. 1Password's "Copy Secret Reference" gives you
+`op://Vault/Item/field`, quoted or not, and `secreq wrap` strips the scheme,
+the quotes and the whitespace, then tells you what it read.
+
 ### Already-satisfied env vars
 
 An `env` entry whose variable is **already set** in the calling environment

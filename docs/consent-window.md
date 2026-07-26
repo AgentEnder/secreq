@@ -217,18 +217,7 @@ you:
 | `deny+out-of-scope`       | A sandbox asked for something outside its allowlist. Refused without asking you. |
 | `abandoned`               | The requesting process exited before you decided. Nothing was released.          |
 
-The distinctions are the point. `approve` and `approve+cached` both mean the
-secret went out, but only one means you were asked. `deny` versus
-`deny+out-of-scope` separates "I refused this" from "a sandbox probed for
-something it was never offered."
-
 ::shot{id=27-audit-tab-abandoned}
-
-The **wrap client** writes the log after the daemon replies; the daemon does
-not. A grant is therefore recorded with full attribution even if the daemon
-dies between the decision and the write. Two cases have no client to do it,
-so the daemon writes them itself: SSH signatures, where the daemon _is_ the
-agent, and abandoned requests, where the client is already gone.
 
 ## The daemon behind them
 

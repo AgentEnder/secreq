@@ -86,6 +86,10 @@ pub struct AuditCaller {
     pub pid: u32,
     pub name: String,
     pub command: String,
+    /// Absolute path to the executable; see [`crate::daemon::proto::Caller`].
+    /// `#[serde(default)]` so rows written before this decode as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exe: Option<String>,
 }
 
 impl AuditCaller {
@@ -94,6 +98,7 @@ impl AuditCaller {
             pid: caller.pid,
             name: caller.name.clone(),
             command: caller.command.clone(),
+            exe: caller.exe.clone(),
         }
     }
 }
@@ -566,11 +571,13 @@ mod tests {
                 pid: 4242,
                 name: "gh".to_owned(),
                 command: "gh pr view 42".to_owned(),
+                exe: None,
             },
             AuditCaller {
                 pid: 4000,
                 name: "zsh".to_owned(),
                 command: "-zsh".to_owned(),
+                exe: None,
             },
         ];
         let entry = AuditEntry::abandoned(

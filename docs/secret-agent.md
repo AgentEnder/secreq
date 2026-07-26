@@ -85,63 +85,51 @@ retrying.
   in your guest but nothing answers. Either the host's `secreq agent open`
   stopped, or the `ssh -R` forward is down. Check both; from inside the
   guest you can't tell which.
-- **`denied by the host: reference is outside this socket's declared
-scope`**: the ref isn't in the `--allow` list this socket was opened
-  with. This is refused **without a prompt** (and audited), so nobody on the
-  host saw a window. Re-open the socket with the ref in its allowlist.
+- **`denied by the host: reference is outside this socket's declared scope`**:
+  the ref isn't in the `--allow` list this socket was opened with. This is
+  refused without a prompt (and audited), so nobody on the host saw a
+  window. Re-open the socket with the ref in its allowlist.
 
 ## Behavior on the host
 
-- **The allowlist is the coarse bound.** A ref outside it is denied without
-  a prompt and audited as `deny+out-of-scope`, which is distinct from a
-  `deny` you chose, because nobody was asked. A run of these rows is what a probing
-  sandbox looks like, and it is the reason the refusal is silent: a
-  compromised guest can neither train you to click through nor enumerate
-  your vault one prompt at a time.
+The allowlist is the coarse bound. A ref outside it is denied without a
+prompt and audited as `deny+out-of-scope`, which is distinct from a `deny`
+you chose, because nobody was asked. A run of these rows is what a probing
+sandbox looks like, and it is why the refusal is silent: a compromised guest
+can neither train you to click through nor enumerate your vault one prompt
+at a time.
 
-  ::shot{id=35-audit-tab-agent-out-of-scope}
+::shot{id=35-audit-tab-agent-out-of-scope}
 
-- **Every allowed request is gated.** The prompt shows the **scope** as the
-  principal: "sandbox `my-vm` wants `secret://op/Dev/gh/token`".
+Every allowed request is gated. The prompt shows the scope as the principal:
+"sandbox `my-vm` wants `secret://op/Dev/gh/token`".
 
-  ::shot{id=34-agent-scope-pending}
+::shot{id=34-agent-scope-pending}
 
-  A guest may volunteer a caller chain. It is shown, disclaimed, and
-  audited as a claim. It never reaches the decision or the grant cache:
+A guest may volunteer a caller chain. It is shown, disclaimed, and audited
+as `unverified_guest_chain`. It never reaches the decision or the grant
+cache:
 
-  ::shot{id=36-agent-guest-chain-pending}
+::shot{id=36-agent-guest-chain-pending}
 
-- **Approvals cache per scope, with a 5-minute TTL.** "Approve for 5 min"
-  anchors the decision to that `(scope, ref)`; requests within the window are
-  silent. The _decision_ is cached; the secret is resolved fresh and
-  zeroized every single time.
-- **The socket is ephemeral.** It lives exactly as long as the `agent open`
-  process. Kill it and the grants die with it; there is nothing to revoke.
-- **Every release is audited**: scope, ref, decision. Never the value.
+Three shorter rules apply to every socket:
+
+- Approving for 5 minutes anchors the decision to that `(scope, ref)`, and
+  requests inside the window are silent. The decision is cached; the secret
+  is resolved fresh and zeroized every time.
+- The socket lives as long as the `agent open` process. Kill it and the
+  grants die with it; there is nothing to revoke.
+- Every release is audited: scope, ref, decision. Never the value.
 
 ## Trust-model note: granularity is downgraded
 
-Like [`ssh-agent.md`](./ssh-agent.md)'s key-custody note, this is a tradeoff
-rather than a free win.
+For guest callers, secreq cannot see what is asking, only which sandbox.
+Consent normally rests on a kernel fact: secreq reads the asking process's
+pid and walks its parent tree, so you see `node → pnpm → postinstall` and
+know it is true. A guest VM has no host pid, and over a forwarded socket the
+peer is the tunnel (sshd), not the asker. There is nothing to check.
 
-**For guest callers, secreq cannot see what is asking, only which sandbox.**
-secreq's consent normally rests on a kernel fact: it reads the asking
-process's pid and walks its parent tree, so you see `node → pnpm →
-postinstall` and know it's true. A guest VM has no host pid, and over a
-forwarded socket the socket's peer is the tunnel (sshd), not the asker.
-There is nothing to check.
-
-So the **sandbox is the principal**. Approving a ref for a sandbox approves
-_everything running in that sandbox_ for the TTL, not one process. That is
-strictly weaker than the local wrap and SSH stories.
-
-A guest may report its own caller chain, and the prompt shows it, marked
-**guest-reported, not verifiable**, and filed in the audit log as
-`unverified_guest_chain`. It is display only: it can't influence the
-decision, can't key the approval cache, and can't talk an out-of-scope ref
-past the allowlist. Read it as context from a source you may not trust.
-
-What you gain over copying tokens into the guest: nothing is persisted
-there, each use is gated and audited, and killing the socket revokes
-everything immediately. If a workload needs per-process consent, it doesn't
-belong in a VM the host can't inspect.
+So the sandbox is the principal. Approving a ref for a sandbox approves
+everything running in that sandbox for the TTL, not one process. That is
+weaker than the local wrap and SSH paths. If a workload needs per-process
+consent, it does not belong in a VM the host cannot inspect.
