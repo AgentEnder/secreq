@@ -58,6 +58,24 @@ pub struct BatchTiming {
     pub parse: Duration,
 }
 
+/// Everything one [`retrieve_batch`] call produced.
+///
+/// The resolver holds this across the salvage-and-fold stretch that follows a
+/// batch, so the pair wants a name there rather than an
+/// `Option<(BTreeMap<…>, BatchTiming)>` whose halves are told apart by
+/// position. It also lets each half carry its own contract in rustdoc instead
+/// of both being described in [`retrieve_batch`]'s prose.
+#[derive(Debug)]
+pub struct RetrievedBatch {
+    /// One entry per request: `Found` when the value appeared in the batch
+    /// output, `NotFound` when it didn't. A `NotFound` here is not a failure —
+    /// it tells the resolver to apply a default or retry that name through a
+    /// per-secret retrieve, which is also how a multi-line value gets salvaged.
+    pub outcomes: BTreeMap<String, RetrieveOutcome>,
+    /// Where the wall-clock went, for the daemon's `resolve` log line.
+    pub timing: BatchTiming,
+}
+
 /// Run `provider`'s retrieve template against `locator`.
 ///
 /// Returns [`RetrieveOutcome::NotFound`] when the command runs but exits
@@ -127,18 +145,16 @@ pub fn validate(provider: &Provider) -> Result<()> {
 /// 3. The child's stdout is parsed as `KEY=VALUE` lines; lines whose key
 ///    matches one of our requested names yield the resolved value.
 ///
-/// The returned map has one entry per request: `Found` when the value
-/// appeared in output, `NotFound` when it didn't (the caller decides whether
-/// to apply a default or fall back to per-secret retrieve). Alongside it we
-/// return a [`BatchTiming`] so the caller (ultimately the daemon) can log how
-/// much of the read was the provider subprocess versus our own parsing.
+/// See [`RetrievedBatch`] for what comes back: an outcome per request, plus
+/// the [`BatchTiming`] the daemon logs so a slow read can be attributed to the
+/// provider subprocess rather than to our own parsing.
 ///
 /// Errors propagate out of `Command::spawn` failures and non-zero exits — the
 /// caller is expected to fall back to per-secret retrieve in those cases.
 pub fn retrieve_batch(
     provider: &Provider,
     requests: &[(String, String)],
-) -> Result<(BTreeMap<String, RetrieveOutcome>, BatchTiming)> {
+) -> Result<RetrievedBatch> {
     let cap: &BatchRetrieve = provider.retrieve_batch.as_ref().with_context(|| {
         format!(
             "provider `{}` has no retrieve_batch capability",
@@ -211,11 +227,11 @@ pub fn retrieve_batch(
     // lines we see are noise.
     let requested: std::collections::BTreeSet<&str> =
         requests.iter().map(|(n, _)| n.as_str()).collect();
-    let mut found: BTreeMap<String, RetrieveOutcome> = BTreeMap::new();
+    let mut outcomes: BTreeMap<String, RetrieveOutcome> = BTreeMap::new();
     for line in text.lines() {
         if let Some((k, v)) = line.split_once('=') {
             if requested.contains(k) {
-                found.insert(
+                outcomes.insert(
                     k.to_owned(),
                     RetrieveOutcome::Found(SecretValue::new(v.to_owned())),
                 );
@@ -225,10 +241,10 @@ pub fn retrieve_batch(
     // Requests that didn't appear in the output get NotFound; the caller
     // applies the default or hard-errors per the resolution rules. This
     // doubles as the multi-line-value safety net: a value with an internal
-    // newline would mis-parse, leaving its name missing from `found`, which
+    // newline would mis-parse, leaving its name missing from `outcomes`, which
     // tells the resolver to fall back to per-secret retrieve.
     for (name, _) in requests {
-        found
+        outcomes
             .entry(name.clone())
             .or_insert_with(|| RetrieveOutcome::NotFound {
                 status: "not present in batch output (multi-line value? command misconfigured?)"
@@ -237,7 +253,10 @@ pub fn retrieve_batch(
             });
     }
     let parse = parse_started.elapsed();
-    Ok((found, BatchTiming { subprocess, parse }))
+    Ok(RetrievedBatch {
+        outcomes,
+        timing: BatchTiming { subprocess, parse },
+    })
 }
 
 // ── store: persist a new value through a provider ─────────────────────────
@@ -1057,7 +1076,7 @@ mod tests {
             ("BAR".to_owned(), "bar-locator".to_owned()),
             ("BAZ".to_owned(), "baz-locator".to_owned()),
         ];
-        let (out, _timing) = retrieve_batch(&p, &reqs).unwrap();
+        let out = retrieve_batch(&p, &reqs).unwrap().outcomes;
         for (name, locator) in &reqs {
             match out.get(name).unwrap() {
                 RetrieveOutcome::Found(v) => {
@@ -1074,7 +1093,7 @@ mod tests {
         // emits the whole lot. We must keep only the requested names.
         let p = batch_provider_echoing_env();
         let reqs = vec![("FOO".to_owned(), "x".to_owned())];
-        let (out, _timing) = retrieve_batch(&p, &reqs).unwrap();
+        let out = retrieve_batch(&p, &reqs).unwrap().outcomes;
         assert_eq!(out.len(), 1, "only the requested name should appear");
         assert!(matches!(out.get("FOO"), Some(RetrieveOutcome::Found(_))));
     }
@@ -1096,7 +1115,7 @@ mod tests {
             ("FOO".to_owned(), "f".to_owned()),
             ("BAR".to_owned(), "b".to_owned()),
         ];
-        let (out, _timing) = retrieve_batch(&p, &reqs).unwrap();
+        let out = retrieve_batch(&p, &reqs).unwrap().outcomes;
         assert!(matches!(out.get("FOO"), Some(RetrieveOutcome::Found(_))));
         assert!(matches!(
             out.get("BAR"),

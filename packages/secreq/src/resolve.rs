@@ -195,13 +195,13 @@ pub fn resolve_all(
         // Try batch when it pays off: ≥2 requests AND a batch capability
         // declared. A single request through batch is no faster and adds a
         // wrapper process (e.g. `op run` instead of `op read`).
-        let batched = if reqs.len() >= 2 && provider.retrieve_batch.is_some() {
+        let batch = if reqs.len() >= 2 && provider.retrieve_batch.is_some() {
             let pairs: Vec<(String, String)> = reqs
                 .iter()
                 .map(|r| (r.name.clone(), r.locator.clone()))
                 .collect();
             match provider::retrieve_batch(provider, &pairs) {
-                Ok(batched) => Some(batched),
+                Ok(batch) => Some(batch),
                 Err(err) => {
                     // Loud-but-recoverable: tell the user we're falling back
                     // so they can debug their batch template if needed, then
@@ -216,10 +216,10 @@ pub fn resolve_all(
             None
         };
 
-        if let Some((map, timing)) = batched {
-            stats.batch_subprocess += timing.subprocess;
-            stats.batch_parse += timing.parse;
-            for (name, outcome) in map {
+        if let Some(batch) = batch {
+            stats.batch_subprocess += batch.timing.subprocess;
+            stats.batch_parse += batch.timing.parse;
+            for (name, outcome) in batch.outcomes {
                 outcomes.insert(name, outcome);
             }
             // If batching produced NotFound for some names (e.g. a value
