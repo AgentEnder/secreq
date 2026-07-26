@@ -1,0 +1,5 @@
+# Agent worktrees are full checkouts of this repo living inside it, so Nx
+# discovers a second copy of every project and refuses to build with a
+# duplicate-name error. They are scratch space for isolated agent runs and
+# are never a build target.
+.claude/worktrees

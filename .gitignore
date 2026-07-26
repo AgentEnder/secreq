@@ -12,3 +12,9 @@ node_modules/
 # Release tarballs from scripts/package-release.sh. NOT /dist wholesale —
 # dist/install.sh and dist/homebrew/ are tracked.
 /dist/*.tar.gz
+
+# Agent worktrees: full checkouts of this repo living inside it. Every tool
+# that walks the tree finds a second copy of every file — Nx sees duplicate
+# projects, formatters and linters check stale code and report errors against
+# a file nobody is editing. Scratch space, never a build input.
+.claude/worktrees/
