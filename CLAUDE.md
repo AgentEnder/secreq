@@ -281,6 +281,20 @@ there when the change lands — the repo has no copy to fall out of sync.
   `cargo run --example gen-auto-rules-schema`. A test in
   `tests/schema_drift.rs` fails CI if either is stale.
 
+  **`schema_drift` does not guard the on-disk format.** The schemas are built
+  from a hand-written `serde_json::json!` tree in `schema.rs` — there is no
+  `schemars` in the crate and nothing derives them from `Rule` or `Wrap`. So
+  the generator and the committed file can agree with each other while both
+  disagree with the Rust type. The test catches "someone forgot to
+  regenerate"; it cannot catch "the serialized shape moved".
+
+  What does guard it is the round-trip suite in `rules.rs` — exact serialized
+  objects for each legal shape, the written key order (`save_rules` rewrites
+  the whole file on every mutation, so key order is user-visible churn), and a
+  hand-authored JSON5 file through load→save→load→save requiring byte-stable
+  output. **If you change a serialized type, that suite is your evidence, not
+  `schema_drift`.**
+
 ## Tool versions come from `mise.toml`
 
 Rust, Node and Vale are pinned in `mise.toml`, and CI installs the same
