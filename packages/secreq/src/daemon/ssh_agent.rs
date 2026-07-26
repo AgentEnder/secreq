@@ -834,12 +834,17 @@ fn read_frame(stream: &mut UnixStream) -> Result<Option<Vec<u8>>> {
             "agent frame payload length {payload_len} exceeds cap of {MAX_AGENT_MSG_LEN} bytes"
         ));
     }
+    // Fill the payload in its own buffer and append it, rather than
+    // over-sizing `frame` and reading into the tail past the prefix: the
+    // read target is then the whole of a slice we just made, with no
+    // offset for a reader to check.
+    let mut payload = vec![0u8; payload_len];
+    stream
+        .read_exact(&mut payload)
+        .context("read agent frame payload")?;
     let mut frame = Vec::with_capacity(4 + payload_len);
     frame.extend_from_slice(&len_buf);
-    frame.resize(4 + payload_len, 0);
-    stream
-        .read_exact(&mut frame[4..])
-        .context("read agent frame payload")?;
+    frame.append(&mut payload);
     Ok(Some(frame))
 }
 
@@ -853,16 +858,21 @@ enum ReadOutcome {
 /// between frames, which is expected. An EOF *partway* through the buffer
 /// is a truncated frame and still errors.
 fn read_exact_or_eof(stream: &mut UnixStream, buf: &mut [u8]) -> Result<ReadOutcome> {
+    let wanted = buf.len();
     let mut filled = 0;
-    while filled < buf.len() {
-        match stream.read(&mut buf[filled..]) {
+    // `buf.get_mut(filled..)` rather than `&mut buf[filled..]`: `filled` only
+    // grows by what `read` reports, so the range is always in bounds — but
+    // asking for it as an `Option` ends the fill instead of panicking if a
+    // `Read` impl ever over-reports, and `None`/empty is the same "done" the
+    // `filled < buf.len()` condition expressed.
+    while let Some(rest) = buf.get_mut(filled..).filter(|rest| !rest.is_empty()) {
+        match stream.read(rest) {
             Ok(0) => {
                 if filled == 0 {
                     return Ok(ReadOutcome::Eof);
                 }
                 return Err(anyhow::anyhow!(
-                    "truncated agent frame: got {filled} of {} length-prefix bytes before EOF",
-                    buf.len()
+                    "truncated agent frame: got {filled} of {wanted} length-prefix bytes before EOF"
                 ));
             }
             Ok(n) => filled += n,

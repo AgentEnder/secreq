@@ -135,10 +135,13 @@ fn read_response(stream: &mut UnixStream) -> Result<AgentResponse> {
     if payload_len > MAX_AGENT_MSG_LEN {
         bail!("agent reply length {payload_len} exceeds cap of {MAX_AGENT_MSG_LEN} bytes");
     }
+    // Fill the payload in its own buffer and append it, rather than
+    // over-sizing `frame` and reading into the tail past the prefix.
+    let mut payload = vec![0u8; payload_len];
+    read_exact_or_timeout(stream, &mut payload)?;
     let mut frame = Vec::with_capacity(4 + payload_len);
     frame.extend_from_slice(&len_buf);
-    frame.resize(4 + payload_len, 0);
-    read_exact_or_timeout(stream, &mut frame[4..])?;
+    frame.append(&mut payload);
     ssh_proto::parse_response(&frame)
 }
 

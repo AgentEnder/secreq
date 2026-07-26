@@ -205,16 +205,21 @@ pub fn read_message<T: for<'de> Deserialize<'de>, R: Read>(r: &mut R) -> Result<
 /// first byte* (the peer closed between frames — expected); an EOF partway
 /// through is a truncated frame and errors.
 fn read_exact_or_eof<R: Read>(r: &mut R, buf: &mut [u8]) -> Result<bool> {
+    let wanted = buf.len();
     let mut filled = 0;
-    while filled < buf.len() {
-        match r.read(&mut buf[filled..]) {
+    // `buf.get_mut(filled..)` rather than `&mut buf[filled..]`: `filled` only
+    // grows by what `read` reports, so the range is always in bounds — but
+    // asking for it as an `Option` ends the fill instead of panicking if a
+    // `Read` impl ever over-reports, and `None`/empty is the same "done" the
+    // `filled < buf.len()` condition expressed.
+    while let Some(rest) = buf.get_mut(filled..).filter(|rest| !rest.is_empty()) {
+        match r.read(rest) {
             Ok(0) => {
                 if filled == 0 {
                     return Ok(false);
                 }
                 anyhow::bail!(
-                    "truncated scoped-agent frame: got {filled} of {} length-prefix bytes before EOF",
-                    buf.len()
+                    "truncated scoped-agent frame: got {filled} of {wanted} length-prefix bytes before EOF"
                 );
             }
             Ok(n) => filled += n,
