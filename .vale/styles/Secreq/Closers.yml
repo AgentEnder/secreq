@@ -1,0 +1,13 @@
+extends: existence
+message: "Possible restatement closer '%s'. Real docs stop at the last fact rather than recapping."
+level: warning
+ignorecase: true
+tokens:
+  - 'In short'
+  - 'In summary'
+  - 'Ultimately'
+  - 'All in all'
+  - 'All told'
+  - 'At the end of the day'
+  - 'The (key|main) takeaway'
+  - 'Taken together'

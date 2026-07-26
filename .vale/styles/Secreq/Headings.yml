@@ -1,0 +1,66 @@
+extends: capitalization
+message: "Use sentence case for headings. '%s' should be '%s'."
+level: error
+scope: heading
+match: $sentence
+indicators:
+  - ':'
+exceptions:
+  # The product and its verbs
+  - secreq
+  - Approve
+  - Deny
+  # Platforms and OSes
+  - macOS
+  - Linux
+  - Windows
+  - BSD
+  - Unix
+  - Wayland
+  - X11
+  - WindowServer
+  - systemd
+  - launchd
+  - Homebrew
+  - Touch ID
+  # Stores and tools
+  - 1Password
+  - LastPass
+  - Keychain
+  - GitHub
+  - GitHub Actions
+  - Rust
+  - Cargo
+  - TypeScript
+  - JavaScript
+  - AssemblyScript
+  - WebAssembly
+  - Node.js
+  - npm
+  - pnpm
+  # Formats and protocols
+  - JSON
+  - JSON5
+  - JSONL
+  - YAML
+  - TOML
+  - PNG
+  - SSH
+  - PATH
+  - PTY
+  # Abbreviations
+  - AI
+  - API
+  - APIs
+  - CI
+  - CLI
+  - GPU
+  - IDE
+  - OS
+  - SDK
+  - TTL
+  - TTY
+  - UI
+  - URL
+  - VM
+  - VMs

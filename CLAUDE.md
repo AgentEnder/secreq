@@ -281,6 +281,41 @@ there when the change lands — the repo has no copy to fall out of sync.
   `cargo run --example gen-auto-rules-schema`. A test in
   `tests/schema_drift.rs` fails CI if either is stale.
 
+## Tool versions come from `mise.toml`
+
+Rust, Node and Vale are pinned in `mise.toml`, and CI installs the same
+versions with `jdx/mise-action`. A local run and a green build therefore use
+one toolchain.
+
+```sh
+mise install         # once, and after any change to mise.toml
+mise run docs        # Vale over the published prose
+mise run docs-audit  # the redundancy / stale-claim sweep
+```
+
+Rust is pinned to an exact version rather than `stable`, so a lint added in a
+new stable release can't turn an unrelated PR red. Bumping it is its own
+commit. `rustfmt` and `clippy` come with mise's rust install, so no separate
+component step is needed.
+
+## Prose is linted
+
+`.vale.ini` + `.vale/styles/Secreq/` lint `docs/`, the READMEs and
+`CONTRIBUTING.md`. The `web` CI job runs `mise run docs`.
+
+**Only `error` fails the build**; warnings and suggestions are advisory, so a
+rule can be tightened without turning open PRs red. Errors are reserved for
+things that are simply wrong: AI-tell phrases (`BannedPhrases`), writing about
+the document instead of the subject (`SelfReferential`), stale terminology
+(`Terminology`), and non-sentence-case headings.
+
+A finding in `docs/cli-reference.md` is real, but **fix it in the doc comments
+in `packages/secreq/src/cli.rs`** — the markdown is regenerated.
+
+The rationale behind the rules, and the wider de-slopping guidance, live in
+`.claude/skills/docs-audit/` (`VOICE.md` in particular). Vale catches what a
+regex can catch; the skill covers the rest.
+
 ## `docs/cli-reference.md` is generated from clap
 
 **Never hand-edit it.** It is the exhaustive command list, walked out of
@@ -311,6 +346,7 @@ The hand-written half is `docs/cli.md`, which carries the narrative (the
 argv contract, `x` versus `run`) and deliberately **no flag tables** — the
 `--sq-` table is the one exception, because those options are parsed by
 hand and clap never sees them.
+
 - The design plan for the remote secret agent (serving `secret://`
   refs to a guest VM over a scoped socket) lives at
   `brain: areas/secreq/design/2026-07-16-remote-secret-agent.md`. Its provenance

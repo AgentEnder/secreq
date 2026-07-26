@@ -1,0 +1,21 @@
+# Adverbs that ask the reader to believe a choice was considered instead of
+# showing why. If the reason is on the page, the adverb is redundant; if it
+# isn't, the adverb is doing the work the reason should.
+#
+# Not banned outright: "you open it deliberately and close it yourself"
+# contrasts with a window that appears on its own, so the word carries
+# meaning. Suggestion level because that judgment is the reader's.
+extends: existence
+message: "Editorialising adverb '%s'. Delete it, or show the reason instead."
+level: suggestion
+ignorecase: true
+tokens:
+  - 'deliberately'
+  - 'precisely so'
+  - 'genuinely'
+  - 'on purpose'
+  - 'carefully'
+  - 'thoughtfully'
+  - 'worth knowing'
+  - 'worth noting'
+  - 'worth stating'

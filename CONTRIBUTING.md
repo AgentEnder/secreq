@@ -13,6 +13,19 @@ By participating you agree to abide by our
 > **Found a security issue?** Do **not** open a public issue or PR.
 > Follow the private disclosure process in [SECURITY.md](./SECURITY.md).
 
+## Toolchain
+
+Rust, Node, and Vale versions live in `mise.toml`, and CI installs the same
+ones. If you have [mise](https://mise.jdx.dev):
+
+```sh
+mise install         # once, and after mise.toml changes
+mise run docs        # lint published prose with Vale
+mise run docs-audit  # sweep the docs for redundancy and stale claims
+```
+
+Without mise, install those versions yourself; nothing else assumes it.
+
 ## Ways to contribute
 
 - **Report a bug** — open an issue with a reproduction (see the bug

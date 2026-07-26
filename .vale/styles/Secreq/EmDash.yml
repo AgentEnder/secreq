@@ -1,0 +1,13 @@
+# The single most common tell in this repo. Most prose here was written by
+# agents, so the density records what a model reaches for by default, not a
+# style anyone chose — real CLI docs (ripgrep, gh, aws-vault) use three or
+# four em dashes in an entire document.
+#
+# The pattern deliberately requires prose on both sides, so a standalone `—`
+# in a table cell (meaning "not applicable") is left alone.
+extends: existence
+message: 'Em dash. Prefer a comma, colon, parentheses, or a full stop.'
+level: warning
+nonword: true
+tokens:
+  - '\w[ ]+—[ ]+\w'

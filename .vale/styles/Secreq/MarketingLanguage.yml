@@ -1,0 +1,27 @@
+extends: existence
+message: "Avoid marketing language '%s'. Say what it does, or give the number."
+level: suggestion
+ignorecase: true
+tokens:
+  - 'effortless'
+  - 'effortlessly'
+  - 'seamless'
+  - 'seamlessly'
+  - 'powerful'
+  - 'robust'
+  - 'comprehensive'
+  - 'leverage'
+  - 'utilize'
+  - 'facilitate'
+  - 'aforementioned'
+  - 'best-in-class'
+  - 'world-class'
+  - 'next-level'
+  - 'supercharge'
+  - 'crucial'
+  - 'vital'
+  - 'paramount'
+  - 'pivotal'
+  - 'delve'
+  - 'tapestry'
+  - 'showcase'

@@ -1,0 +1,19 @@
+extends: existence
+message: "Prefer active voice. '%s' could be rewritten."
+level: suggestion
+ignorecase: true
+tokens:
+  - 'is resolved by'
+  - 'is injected by'
+  - 'is gated by'
+  - 'is recorded by'
+  - 'is written by'
+  - 'is spawned by'
+  - 'is handled by'
+  - 'is managed by'
+  - 'is provided by'
+  - 'is determined by'
+  - 'are resolved by'
+  - 'are recorded by'
+  - 'are written by'
+  - 'are handled by'

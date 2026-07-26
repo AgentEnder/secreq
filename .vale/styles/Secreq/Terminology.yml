@@ -1,0 +1,11 @@
+# Names that changed when the UI became two windows (a transient prompt and a
+# persistent manager). The tab bar is gone; the manager has views. A doc still
+# saying "tab" is describing a UI the reader cannot find.
+extends: substitution
+message: "Use '%s' instead of '%s' — the tab bar was retired when the UI split into two windows."
+level: error
+ignorecase: true
+swap:
+  'rules tab': Rules view
+  'audit tab': Audit view
+  'pending tab': prompt window

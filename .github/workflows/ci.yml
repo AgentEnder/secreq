@@ -24,10 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install stable toolchain (rustfmt)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
+      - name: Set up dev tools with mise
+        uses: jdx/mise-action@146a28175021df8ca24f8ee1828cc2a60f980bd5 # v3
       - run: cargo fmt --all -- --check
 
   # The JS/TS/CSS half of the same gate. Without it these files drift: before
@@ -38,11 +36,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Set up dev tools with mise
+        uses: jdx/mise-action@146a28175021df8ca24f8ee1828cc2a60f980bd5 # v3
       - uses: pnpm/action-setup@v4
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
       - run: pnpm install --frozen-lockfile
       - run: pnpm run format:check
       - run: pnpm run lint
@@ -81,10 +77,8 @@ jobs:
             libxcb-shape0-dev \
             libxcb-xfixes0-dev
 
-      - name: Install stable toolchain (clippy)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+      - name: Set up dev tools with mise
+        uses: jdx/mise-action@146a28175021df8ca24f8ee1828cc2a60f980bd5 # v3
 
       - name: Cache cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2

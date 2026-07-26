@@ -1,0 +1,12 @@
+# "Not just X, but Y" and its relatives: parallel contrast used to sound
+# profound rather than to carry a distinction. State the claim.
+extends: existence
+message: "Parallel-contrast formula '%s'. State the claim directly."
+level: warning
+ignorecase: true
+tokens:
+  - "isn't about \\w+[^.]{0,30}, it's about"
+  - "is not about \\w+[^.]{0,30}, it is about"
+  - 'not just \w+[^.]{0,40}, but'
+  - 'not merely \w+[^.]{0,40}, but'
+  - 'not only \w+[^.]{0,40}, but also'

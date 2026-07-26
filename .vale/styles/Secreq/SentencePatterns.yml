@@ -1,0 +1,12 @@
+extends: existence
+message: "Lead with the reader's action instead of '%s'. For example, 'Run ...' or 'Pass ...'."
+level: warning
+ignorecase: true
+tokens:
+  - 'This allows you to'
+  - 'This enables you to'
+  - 'This lets you'
+  - 'This provides you with'
+  - 'This gives you the ability to'
+  - "You'll want to"
+  - 'You may want to'

@@ -1,0 +1,30 @@
+# Dev tool versions, shared by contributors and CI.
+#
+# CI installs these with `jdx/mise-action`, so a green build and a local run
+# use the same toolchain. Before this existed the two could disagree silently:
+# CI resolved `dtolnay/rust-toolchain@stable` to whatever stable meant that
+# morning, and `vale` was on PATH or it wasn't.
+#
+#   mise install     # once, and after any change here
+#   mise run docs    # lint prose
+#
+[tools]
+# Matches the release workflow's toolchain. Pinned rather than "stable"
+# because a clippy lint added in a new stable release turns an unrelated PR
+# red, and the fix belongs in its own commit.
+rust = "1.97.1"
+
+# The `web` job's version. pnpm comes from package.json's `packageManager`
+# field via corepack, so it is deliberately not listed here.
+node = "26"
+
+# Prose linter. See .vale.ini and .vale/styles/Secreq/.
+vale = "3.15.2"
+
+[tasks.docs]
+description = "Lint published prose with Vale"
+run = "vale docs README.md CONTRIBUTING.md packages/secreq-rule/README.md dev-docs"
+
+[tasks.docs-audit]
+description = "Sweep the docs for redundancy, stale claims and unused fixtures"
+run = "node .claude/skills/docs-audit/scripts/audit.mjs"
