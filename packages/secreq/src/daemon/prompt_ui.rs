@@ -135,22 +135,60 @@ pub fn render_prompt_panel(
         bottom: 0,
     };
 
-    // Reserve the footer band; the body gets the rest and scrolls if
-    // an ask outgrows it (deep ancestries, big secret sets) so the
-    // decision row can never be pushed off-window.
-    let footer_height = match th.flavor {
-        OsFlavor::MacOs => 54.0,
-        OsFlavor::Windows => 84.0,
-        OsFlavor::Gnome => 70.0,
-    };
-    let body_height = (ui.available_height() - footer_height).max(0.0);
-    let body_width = ui.available_width();
+    // Where the decision row sits is a question about the *window*, and
+    // `ui.max_rect()` cannot answer it: it starts out truthful and then
+    // grows to swallow anything that overflows it, so read after the
+    // footer has drawn it reports 473 for a 470pt window. The viewport
+    // rect is the only thing here that describes the window rather than
+    // what got put in it. (`screen_rect()` is its deprecated spelling.)
+    let full = ctx.content_rect();
 
-    ui.allocate_ui(egui::vec2(body_width, body_height), |ui| {
-        ui.set_min_height(body_height);
+    // An ask on screen gets a decision row; an empty queue gets the
+    // manager hand-off. Neither is true while the last ask is resolving
+    // out of a queue that still has entries, and then there is no footer
+    // at all — so nothing is reserved for one.
+    let show_footer = current.is_some() || snapshot.entries.is_empty();
+
+    // How tall that row comes out is not knowable before it is laid out,
+    // and egui cannot move what it has already laid out. So lay it out
+    // twice: once into an invisible, disabled child `Ui` purely to read
+    // a height off its `min_rect`, then again for real, anchored to the
+    // bottom of the window. The measuring pass emits `Shape::Noop` for
+    // every shape and its widgets can neither be hovered nor clicked, so
+    // it costs one extra layout of half a dozen widgets and leaves no
+    // other trace.
+    //
+    // Three hand-tuned per-OS constants stood here before, and each had
+    // drifted from the arm it was meant to describe by a different
+    // amount, because each was silently absorbing a different overshoot.
+    // A number re-derived every frame from the very code that paints
+    // cannot drift from it.
+    let footer_height = if show_footer {
+        measure_footer(ui, &th, current, snapshot, state, full)
+    } else {
+        0.0
+    };
+
+    // The body takes the remainder and scrolls when an ask outgrows it
+    // (deep ancestries, big secret sets). Both halves are placed by
+    // explicit rect rather than by the cursor, so an over-long body
+    // cannot push the decision row off-window no matter what it holds.
+    let split = (full.bottom() - footer_height).max(full.top());
+    let body_rect = egui::Rect::from_min_max(full.min, egui::pos2(full.right(), split));
+    let footer_rect = egui::Rect::from_min_max(egui::pos2(full.left(), split), full.max);
+
+    ui.scope_builder(egui::UiBuilder::new().max_rect(body_rect), |ui| {
+        // The two halves now abut exactly, so the scroll viewport has to
+        // stop exactly where the decision row starts. `ScrollArea` pads
+        // its own clip by `visuals.clip_rect_margin` (3pt, so an
+        // antialiased edge at the boundary isn't shaved) and then
+        // intersects with whatever clip it inherits — which is the hook
+        // this uses. Without it a half-scrolled row's descenders paint a
+        // 3pt sliver into the top of the footer band.
+        ui.set_clip_rect(body_rect);
         egui::ScrollArea::vertical()
             .id_salt("prompt-body")
-            .max_height(body_height)
+            .max_height(body_rect.height())
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 egui::Frame::new().inner_margin(inset).show(ui, |ui| {
@@ -182,8 +220,10 @@ pub fn render_prompt_panel(
             });
     });
 
-    if current.is_some() || snapshot.entries.is_empty() {
-        render_footer(ui, &th, current, snapshot, state, actions_out, &mut out);
+    if show_footer {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(footer_rect), |ui| {
+            render_footer(ui, &th, current, snapshot, state, actions_out, &mut out);
+        });
     }
 
     out
@@ -291,11 +331,7 @@ fn title_job(ui: &egui::Ui, th: &Theme, row: &QueueRow) -> egui::text::LayoutJob
         job.append(" wants ", 0.0, prose);
         job.append(&agent.reference, 0.0, subject);
     } else if let Some(ssh) = &ask.ssh {
-        let requester = ask
-            .callers
-            .first()
-            .map(|c| c.name.as_str())
-            .unwrap_or("ssh");
+        let requester = ask.callers.first().map_or("ssh", |c| c.name.as_str());
         job.append(requester, 0.0, subject.clone());
         job.append(" wants to sign with ", 0.0, prose);
         job.append(&ssh.key_id, 0.0, subject);
@@ -702,10 +738,9 @@ fn render_caller_tree(ui: &mut egui::Ui, th: &Theme, row: &QueueRow) {
         depth += 1;
     }
     let leaf_argv = ask.command.join(" ");
-    let leaf_name = ask
-        .command
-        .first()
-        .map(|c| {
+    let leaf_name = ask.command.first().map_or_else(
+        || row.key.wrap.clone(),
+        |c| {
             c.rsplit('/')
                 .next()
                 .unwrap_or(c.as_str())
@@ -713,8 +748,8 @@ fn render_caller_tree(ui: &mut egui::Ui, th: &Theme, row: &QueueRow) {
                 .next()
                 .unwrap_or(c.as_str())
                 .to_owned()
-        })
-        .unwrap_or_else(|| row.key.wrap.clone());
+        },
+    );
     caller_row(
         ui,
         th,
@@ -910,6 +945,52 @@ fn resolving_text(row: &QueueRow) -> &'static str {
     }
 }
 
+/// How tall the decision row will come out, by laying it out and looking.
+///
+/// This is a *sizing pass*, the same device [`egui::Area`] uses to place a
+/// popup whose size it has never seen: the row is drawn into a child `Ui`
+/// built [`egui::UiBuilder::invisible`], which turns every shape the arm
+/// paints into a `Shape::Noop` and disables its widgets, so nothing lands
+/// in the frame's output, nothing hovers and nothing can be clicked. What
+/// survives is the one thing we came for — the `min_rect` the arm's
+/// content grew to, margins included.
+///
+/// It is laid out against the whole window rather than a guess at the
+/// band, because width is what the arm's content is actually sensitive to
+/// (Windows splits the available width between two buttons, GNOME centers
+/// its meta line in it) and an unconstrained height is what lets the
+/// content report its natural one. The decisions and the manager hand-off
+/// go to scratch buffers that are dropped on return: a disabled widget
+/// cannot report a click, and this makes it impossible for one to be
+/// counted twice even if that ever changed.
+fn measure_footer(
+    ui: &mut egui::Ui,
+    th: &Theme,
+    current: Option<&QueueRow>,
+    snapshot: &QueueSnapshot,
+    state: &mut PromptWindowState,
+    full: egui::Rect,
+) -> f32 {
+    let mut scratch_actions = Vec::new();
+    let mut scratch_out = PromptOutput::default();
+    let mut probe = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt("prompt-footer-measure")
+            .max_rect(full)
+            .invisible(),
+    );
+    render_footer(
+        &mut probe,
+        th,
+        current,
+        snapshot,
+        state,
+        &mut scratch_actions,
+        &mut scratch_out,
+    );
+    probe.min_rect().height()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_footer(
     ui: &mut egui::Ui,
@@ -921,9 +1002,7 @@ fn render_footer(
     out: &mut PromptOutput,
 ) {
     let _ = state;
-    let awaiting = current
-        .map(|r| r.status == super::proto::RowStatus::Awaiting)
-        .unwrap_or(false);
+    let awaiting = current.is_some_and(|r| r.status == super::proto::RowStatus::Awaiting);
     let more_waiting = snapshot.entries.len().saturating_sub(1);
 
     // Full-bleed footer band.
@@ -1068,7 +1147,7 @@ fn render_footer(
                 ui.horizontal(|ui| {
                     manager_link(ui, out);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        queue_label(ui)
+                        queue_label(ui);
                     });
                 });
             });
@@ -1077,75 +1156,98 @@ fn render_footer(
             // Meta line, then the full-width response row: two flat
             // segments split by a hairline; Approve carries the
             // suggested-action accent.
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                // Explicit gap only: the default item spacing would sit
-                // on top of it and desync the row from its measurement.
-                const GAP: f32 = 6.0;
-                ui.spacing_mut().item_spacing.x = 0.0;
-                // Only whichever label lands last gets to hang its
-                // ellipsis; the link's dots are interior ink once the
-                // queue label follows them.
-                let content = match &queue_text {
-                    Some(text) => {
-                        text_width(ui, MANAGER_LINK, meta_size)
-                            + GAP
-                            + centering_width(ui, text, meta_size)
+            //
+            // The margin is load-bearing and it is why this arm has a
+            // `Frame` at all. The response row is painted straight off the
+            // cursor with nothing after it, so unlike its macOS and Windows
+            // siblings it used to end at its own last pixel — the mnemonic
+            // underline under `Approve` sat a point off the window's edge,
+            // and what held it away was the reserved band being taller than
+            // the row. The band is measured now, so the clearance has to be
+            // the arm's own, the way the other two flavors already spell it.
+            let margin = egui::Margin {
+                left: 0,
+                right: 0,
+                top: 6,
+                bottom: 12,
+            };
+            egui::Frame::new().inner_margin(margin).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    // Explicit gap only: the default item spacing would sit
+                    // on top of it and desync the row from its measurement.
+                    const GAP: f32 = 6.0;
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    // Only whichever label lands last gets to hang its
+                    // ellipsis; the link's dots are interior ink once the
+                    // queue label follows them.
+                    let content = match &queue_text {
+                        Some(text) => {
+                            text_width(ui, MANAGER_LINK, meta_size)
+                                + GAP
+                                + centering_width(ui, text, meta_size)
+                        }
+                        None => centering_width(ui, MANAGER_LINK, meta_size),
+                    };
+                    ui.add_space(center_indent(ui, content));
+                    manager_link(ui, out);
+                    if queue_text.is_some() {
+                        ui.add_space(GAP);
+                        queue_label(ui);
                     }
-                    None => centering_width(ui, MANAGER_LINK, meta_size),
-                };
-                ui.add_space(center_indent(ui, content));
-                manager_link(ui, out);
-                if queue_text.is_some() {
-                    ui.add_space(GAP);
-                    queue_label(ui);
+                });
+                ui.add_space(6.0);
+                match current {
+                    Some(row) if awaiting => {
+                        let height = 34.0;
+                        let full = egui::Rect::from_min_size(
+                            egui::pos2(ui.max_rect().left(), ui.cursor().min.y),
+                            egui::vec2(ui.max_rect().width(), height),
+                        );
+                        ui.painter().hline(
+                            full.x_range(),
+                            full.top(),
+                            egui::Stroke::new(1.0, th.rule),
+                        );
+                        let mid = full.center().x;
+                        ui.painter().vline(
+                            mid,
+                            egui::Rangef::new(full.top(), full.bottom()),
+                            egui::Stroke::new(1.0, th.rule),
+                        );
+                        let left = egui::Rect::from_min_max(
+                            full.left_top(),
+                            egui::pos2(mid, full.bottom()),
+                        );
+                        let right = egui::Rect::from_min_max(
+                            egui::pos2(mid, full.top()),
+                            full.right_bottom(),
+                        );
+                        if gnome_response(ui, th, left, "Deny", 'D', false).clicked() {
+                            actions_out.push(PendingAction {
+                                key: row.key.clone(),
+                                decision: Decision::Deny,
+                                scope: row_scope(row),
+                            });
+                        }
+                        if gnome_response(ui, th, right, "Approve", 'A', true).clicked() {
+                            actions_out.push(PendingAction {
+                                key: row.key.clone(),
+                                decision: approve_decision(row),
+                                scope: row_scope(row),
+                            });
+                        }
+                        ui.advance_cursor_after_rect(full);
+                    }
+                    Some(row) => {
+                        ui.horizontal(|ui| {
+                            let width = centering_width(ui, resolving_text(row), th.body_size);
+                            ui.add_space(center_indent(ui, width));
+                            resolving_label(ui, row);
+                        });
+                    }
+                    None => {}
                 }
             });
-            ui.add_space(6.0);
-            match current {
-                Some(row) if awaiting => {
-                    let height = 34.0;
-                    let full = egui::Rect::from_min_size(
-                        egui::pos2(ui.max_rect().left(), ui.cursor().min.y),
-                        egui::vec2(ui.max_rect().width(), height),
-                    );
-                    ui.painter()
-                        .hline(full.x_range(), full.top(), egui::Stroke::new(1.0, th.rule));
-                    let mid = full.center().x;
-                    ui.painter().vline(
-                        mid,
-                        egui::Rangef::new(full.top(), full.bottom()),
-                        egui::Stroke::new(1.0, th.rule),
-                    );
-                    let left =
-                        egui::Rect::from_min_max(full.left_top(), egui::pos2(mid, full.bottom()));
-                    let right =
-                        egui::Rect::from_min_max(egui::pos2(mid, full.top()), full.right_bottom());
-                    if gnome_response(ui, th, left, "Deny", 'D', false).clicked() {
-                        actions_out.push(PendingAction {
-                            key: row.key.clone(),
-                            decision: Decision::Deny,
-                            scope: row_scope(row),
-                        });
-                    }
-                    if gnome_response(ui, th, right, "Approve", 'A', true).clicked() {
-                        actions_out.push(PendingAction {
-                            key: row.key.clone(),
-                            decision: approve_decision(row),
-                            scope: row_scope(row),
-                        });
-                    }
-                    ui.advance_cursor_after_rect(full);
-                }
-                Some(row) => {
-                    ui.horizontal(|ui| {
-                        let width = centering_width(ui, resolving_text(row), th.body_size);
-                        ui.add_space(center_indent(ui, width));
-                        resolving_label(ui, row);
-                    });
-                }
-                None => {}
-            }
         }
     }
 }
