@@ -187,22 +187,40 @@ fn caller_exe(pid: u32, name: &str, start_time: u64, exe: &str) -> Caller {
 
 /// The session an SSH ask's grant buttons would bind to, chosen exactly the
 /// way `daemon::ssh_agent::sign_ask` chooses it — through
-/// `provenance::select_anchor` — so a fixture cannot document a session the
-/// daemon would not have picked.
-fn anchor_of(callers: &[Caller]) -> Option<secreq::daemon::proto::SshAnchorInfo> {
-    let chain: Vec<secreq::provenance::Caller> = callers
-        .iter()
-        .map(|c| secreq::provenance::Caller {
-            pid: c.pid,
-            name: c.name.clone(),
-            command: c.command.clone(),
-            exe: c.exe.clone(),
-            start_time: c.start_time,
-        })
-        .collect();
-    secreq::provenance::select_anchor(&chain).map(|c| secreq::daemon::proto::SshAnchorInfo {
-        name: c.name.clone(),
+/// `provenance::select_sign_anchor` — so a fixture cannot document a session
+/// the daemon would not have picked.
+///
+/// `peer` is the process on the other end of the agent socket: the local
+/// `ssh` client. The chain walk starts *above* it, so it is never one of
+/// `callers`, and it is the only frame that knows whether the agent is being
+/// forwarded. Passing `None` is the ordinary case; a forwarding fixture
+/// passes the `ssh` client itself.
+fn anchor_of(
+    peer: Option<&Caller>,
+    callers: &[Caller],
+) -> Option<secreq::daemon::proto::SshAnchorInfo> {
+    let to_runtime = |c: &Caller| secreq::provenance::Caller {
         pid: c.pid,
+        name: c.name.clone(),
+        command: c.command.clone(),
+        exe: c.exe.clone(),
+        start_time: c.start_time,
+    };
+    let chain: Vec<secreq::provenance::Caller> = callers.iter().map(to_runtime).collect();
+    let peer = peer.map(|p| secreq::provenance::PeerProcess {
+        forwards_agent: secreq::provenance::requests_agent_forwarding(&p.command),
+        caller: to_runtime(p),
+    });
+    secreq::provenance::select_sign_anchor(peer.as_ref(), &chain).map(|a| {
+        secreq::daemon::proto::SshAnchorInfo {
+            name: a.name.clone(),
+            pid: a.identity.pid,
+            kind: a.kind,
+            command: match a.kind {
+                secreq::provenance::SignAnchorKind::ForwardedSsh => Some(a.command.clone()),
+                secreq::provenance::SignAnchorKind::Session => None,
+            },
+        }
     })
 }
 
@@ -342,17 +360,19 @@ fn submit_ssh(
     fingerprint: &str,
     reason: Option<&str>,
     cwd: &str,
+    peer: Option<Caller>,
     callers: Vec<Caller>,
 ) -> mpsc::Receiver<secreq::daemon::state::WaiterReply> {
     // The real sign path keys the ask on the *anchor*, not on the nearest
-    // caller — that is the whole point of `select_anchor`, and it is what
-    // the prompt's "Session:" row now names.
-    let anchor = anchor_of(&callers);
+    // caller — that is the whole point of `select_sign_anchor`, and it is
+    // what the prompt's "Session:" / "Forwarded:" row names.
+    let anchor = anchor_of(peer.as_ref(), &callers);
     let dedupe_key = DedupeKey {
         wrap: format!("ssh:{key_id}"),
         ppid: anchor.as_ref().map_or(0, |a| a.pid),
-        parent_start_time: callers
+        parent_start_time: peer
             .iter()
+            .chain(callers.iter())
             .find(|c| Some(c.pid) == anchor.as_ref().map(|a| a.pid))
             .map_or(0, |c| c.start_time),
         subject_digest: None,
@@ -1266,10 +1286,53 @@ fn ssh_sign_pending() {
                 // pushed — the fact that separates a push you started from
                 // one a script started.
                 "~/repos/acme",
+                // No forwarding: an ordinary local push, so the anchor stays
+                // on the shell and the grant row reads "Session:".
+                None,
                 vec![
                     caller(8120, "git", 1_700_002_000),
                     caller(7926, "zsh", 1_700_000_000),
                 ],
+            )]
+        },
+    );
+}
+
+#[test]
+fn ssh_forwarded_agent_pending() {
+    // The same sign, arriving under `ssh -A`. What the user is deciding is
+    // not what the rest of the card says: the tree shows their own shell, the
+    // header shows `ssh`, and the machine that can actually use the key is at
+    // the far end of a connection nothing on screen mentioned.
+    //
+    // Two rows carry the difference. `FORWARDED BY` draws the `ssh` client
+    // itself — the socket peer, and the one frame the caller chain
+    // structurally cannot contain, since the walk starts at the peer's parent
+    // — with the argv that names the host. And the grant row says
+    // `Forwarded:` instead of `Session:`, because the 30 minutes now attach to
+    // that ssh client and expire with the SSH session rather than lasting as
+    // long as the terminal.
+    render_prompt_fixture(
+        Shot::new("41-ssh-forwarded-agent").caption(
+            "A sign request that arrived under <code>ssh -A</code>. secreq names the \
+             <code>ssh</code> client that forwarded your agent and the host it \
+             forwarded to — and <b>Approve for 30 min</b> attaches to that session, so \
+             it ends when you log out rather than lasting as long as the terminal.",
+        ),
+        vec![],
+        |state| {
+            let mut ssh = caller_exe(9200, "ssh", 1_700_003_000, "/usr/bin/ssh");
+            ssh.command = "ssh -A build-box".to_owned();
+            vec![submit_ssh(
+                state,
+                "github",
+                "SHA256:Nh0Me49Zh9fDw/VYUfq43IJmI1T+XrjiYONPND8GzaM",
+                Some("git pushes to github.com"),
+                "~/repos/acme",
+                Some(ssh),
+                // Everything the walk can see is the user's own terminal —
+                // which is exactly why the shell used to be the anchor.
+                vec![caller_exe(7926, "-zsh", 1_700_000_000, "/bin/zsh")],
             )]
         },
     );
@@ -1329,6 +1392,7 @@ fn ssh_session_anchor_pending() {
                 // load-bearing for height until the grants moved into the
                 // pinned band; it is now here on its own merits.
                 "",
+                None,
                 vec![git, nvim, tmux],
             )]
         },
@@ -1474,6 +1538,7 @@ fn ssh_deep_chain_pinned_grants() {
                 "SHA256:Nh0Me49Zh9fDw/VYUfq43IJmI1T+XrjiYONPND8GzaM",
                 Some("git pushes to github.com"),
                 "~/repos/acme",
+                None,
                 callers,
             )]
         },

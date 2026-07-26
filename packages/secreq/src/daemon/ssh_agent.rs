@@ -39,7 +39,7 @@ use super::ssh_proto::{self, AgentRequest};
 use super::state::{SharedState, WaiterReply};
 use crate::consent::{Decision, SshGrant, SshGrantScope};
 use crate::manifest::Provider;
-use crate::provenance::ProcessIdentity;
+use crate::provenance::{SignAnchor, SignAnchorKind};
 use crate::wraps::SshIdentity;
 
 /// Upper bound on a single agent frame's payload length. Mirrors OpenSSH's
@@ -325,11 +325,16 @@ fn handle_sign(
         return ssh_proto::encode_failure();
     };
     let chain = crate::provenance::caller_chain_from_pid(peer_pid);
+    // The peer itself, which the chain walk deliberately starts above. It is
+    // the local `ssh` client, and it is the only frame that can say whether
+    // the agent is being forwarded to a remote host — see
+    // `provenance::select_sign_anchor`.
+    let peer = crate::provenance::describe_pid(peer_pid);
     // The peer's cwd stands in for the wrap client's self-reported `cwd`:
     // a sign request has no such field, so we read it off the connecting
     // process. Best-effort — an unreadable cwd renders as absent.
     let cwd = crate::provenance::cwd_for_pid(peer_pid).unwrap_or_default();
-    let Some(anchor) = crate::provenance::select_anchor(&chain.frames) else {
+    let Some(anchor) = crate::provenance::select_sign_anchor(peer.as_ref(), &chain.frames) else {
         super::log::log_at(
             "ssh-agent",
             format_args!(
@@ -339,9 +344,15 @@ fn handle_sign(
         );
         return ssh_proto::encode_failure();
     };
-    // The consent layer identifies a session by the pair, not by the frame,
-    // so convert once here rather than passing two loose integers down.
-    let anchor = anchor.identity();
+    if anchor.kind == SignAnchorKind::ForwardedSsh {
+        super::log::log_at(
+            "ssh-agent",
+            format_args!(
+                "SIGN_REQUEST for {:?} arrived under agent forwarding; anchoring any grant on ssh pid {} rather than the shell",
+                identity.key_id, anchor.identity.pid
+            ),
+        );
+    }
 
     // The production daemon always supplies state; the listing-only test
     // path doesn't. With no state there is no consent machinery, so fail
@@ -357,7 +368,7 @@ fn handle_sign(
     // 3. Decide whether to sign: approval-cache hit (skip the prompt) or
     //    interactive consent. The lock is held only for the cache check and
     //    the queue submission, never across the (blocking) consent wait.
-    let decision = match decide_sign(state, identity, anchor, &chain, &cwd, data) {
+    let decision = match decide_sign(state, identity, &anchor, &chain, &cwd, data) {
         Some(d) if d.approved() => d,
         Some(deny) => {
             audit_sign(identity, &chain, &cwd, deny);
@@ -385,7 +396,9 @@ fn handle_sign(
 
     // 4. On a session grant, remember it scoped to the anchor with the
     //    session TTL. "Approve 30m" (and the Enter shortcut) grant this key;
-    //    "Approve all keys 30m" grants every key on this anchor.
+    //    "Approve all keys 30m" grants every key on this anchor. Under agent
+    //    forwarding that anchor is the `ssh` client, so the grant expires with
+    //    the SSH session as well as with the clock.
     if let Some(scope) = grant_scope_for(decision, &identity.key_id) {
         let expires_at = now_unix_secs().saturating_add(SSH_SESSION_GRANT_TTL_SECS);
         state
@@ -393,7 +406,7 @@ fn handle_sign(
             .expect("state mutex")
             .remember_ssh_grant(SshGrant {
                 scope,
-                anchor,
+                anchor: anchor.identity,
                 expires_at,
             });
     }
@@ -449,7 +462,7 @@ fn handle_sign(
 fn decide_sign(
     state: &SharedState,
     identity: &PreparedIdentity,
-    anchor: ProcessIdentity,
+    anchor: &SignAnchor,
     chain: &crate::provenance::CallerChain,
     cwd: &str,
     data: &[u8],
@@ -459,7 +472,7 @@ fn decide_sign(
     // works headless.
     {
         let mut guard = state.lock().expect("state mutex");
-        if guard.has_ssh_grant(&identity.key_id, anchor) {
+        if guard.has_ssh_grant(&identity.key_id, anchor.identity) {
             // The audit row for a grant hit is written at the sign outcome
             // (with `decision = ApproveCached`), alongside the approve/deny
             // rows — one audit-write site, fed the decision this returns.
@@ -517,7 +530,7 @@ fn decide_sign(
 fn decide_sign_on_miss(
     state: &SharedState,
     identity: &PreparedIdentity,
-    anchor: ProcessIdentity,
+    anchor: &SignAnchor,
     chain: &crate::provenance::CallerChain,
     cwd: &str,
     data: &[u8],
@@ -639,23 +652,18 @@ fn grant_scope_for(decision: Decision, key_id: &str) -> Option<SshGrantScope> {
 /// queue entry.
 fn sign_ask(
     identity: &PreparedIdentity,
-    anchor: ProcessIdentity,
+    anchor: &SignAnchor,
     chain: &crate::provenance::CallerChain,
     cwd: &str,
     data: &[u8],
 ) -> Ask {
     let wrap = format!("ssh:{}", identity.key_id);
-    let anchor_frame = crate::provenance::select_anchor(&chain.frames);
-    debug_assert!(
-        anchor_frame.is_none_or(|c| c.pid == anchor.pid),
-        "the session named in the prompt must be the session the grant keys on"
-    );
     Ask {
         command: vec![format!("ssh-sign {}", identity.key_id)],
         dedupe_key: DedupeKey {
             wrap,
-            ppid: anchor.pid,
-            parent_start_time: anchor.start_time,
+            ppid: anchor.identity.pid,
+            parent_start_time: anchor.identity.start_time,
             // What this ask authorizes is `data`, and `data` appears nowhere
             // else in the key. Without this, two signs for the same key from
             // the same anchor coalesce into one card and one Approve signs
@@ -690,15 +698,23 @@ fn sign_ask(
                 key_id: identity.key_id.clone(),
                 fingerprint: identity.fingerprint.clone(),
                 reason: identity.reason.clone(),
-                // Re-derived from the chain rather than threaded down beside
-                // `anchor`, so the frame the prompt names and the frame the
-                // grant keys on cannot be two different answers: both are
-                // `select_anchor` on this same chain. The assertion below
-                // holds the two together if a future caller ever passes an
-                // anchor it computed some other way.
-                anchor: anchor_frame.map(|c| SshAnchorInfo {
-                    name: c.name.clone(),
-                    pid: c.pid,
+                // Built from the *same value* the grant keys on, not from a
+                // second `select_anchor` pass over the chain. It used to be
+                // re-derived, held honest by a `debug_assert` — which stopped
+                // being possible the moment a forwarded anchor could be the
+                // socket peer, a process the chain does not contain. One
+                // value has no second answer to disagree with.
+                anchor: Some(SshAnchorInfo {
+                    name: anchor.name.clone(),
+                    pid: anchor.identity.pid,
+                    kind: anchor.kind,
+                    // Only the forwarded case: a session anchor is a frame the
+                    // ASKED BY tree already draws with its argv, and repeating
+                    // it under the grant buttons would just be noise.
+                    command: match anchor.kind {
+                        SignAnchorKind::ForwardedSsh => Some(anchor.command.clone()),
+                        SignAnchorKind::Session => None,
+                    },
                 }),
             },
         }),
@@ -887,10 +903,7 @@ mod tests {
         let decision = decide_sign_on_miss(
             &state,
             &identity,
-            ProcessIdentity {
-                pid: 4242,
-                start_time: 1,
-            },
+            &test_anchor(4242, 1),
             &chain,
             /* cwd */ "/home/dev/repos/acme",
             /* data */ b"challenge",
@@ -929,6 +942,18 @@ mod tests {
         }
     }
 
+    /// A session anchor for a fixture that only needs the identity half —
+    /// the `(pid, start_time)` a grant keys on. Fixtures that care which
+    /// frame was chosen build one through `select_sign_anchor` instead.
+    fn test_anchor(pid: u32, start_time: u64) -> SignAnchor {
+        SignAnchor {
+            identity: crate::provenance::ProcessIdentity { pid, start_time },
+            name: "zsh".to_owned(),
+            command: "-zsh".to_owned(),
+            kind: SignAnchorKind::Session,
+        }
+    }
+
     fn test_caller(pid: u32, name: &str, exe: Option<&str>) -> crate::provenance::Caller {
         crate::provenance::Caller {
             pid,
@@ -958,10 +983,10 @@ mod tests {
             test_caller(8120, "git", Some("/usr/bin/git")),
             test_caller(7926, "-zsh", Some("/bin/zsh")),
         ]);
-        let anchor = crate::provenance::select_anchor(&chain.frames).expect("anchor");
+        let anchor = crate::provenance::select_sign_anchor(None, &chain.frames).expect("anchor");
         let ask = sign_ask(
             &test_identity("github"),
-            anchor.identity(),
+            &anchor,
             &chain,
             "/home/dev/repos/acme",
             b"challenge",
@@ -990,10 +1015,10 @@ mod tests {
             test_caller(8000, "zsh", Some("/tmp/.hidden/payload")),
             test_caller(7926, "-zsh", Some("/bin/zsh")),
         ]);
-        let anchor = crate::provenance::select_anchor(&chain.frames).expect("anchor");
+        let anchor = crate::provenance::select_sign_anchor(None, &chain.frames).expect("anchor");
         let ask = sign_ask(
             &test_identity("github"),
-            anchor.identity(),
+            &anchor,
             &chain,
             "/home/dev/repos/acme",
             b"challenge",
@@ -1007,6 +1032,87 @@ mod tests {
         assert_eq!(
             info.pid, ask.dedupe_key.ppid,
             "the session the prompt names must be the session the grant keys on"
+        );
+    }
+
+    /// Under agent forwarding the prompt has to name the `ssh` client, not
+    /// the shell — and it has to carry that client's argv, because the caller
+    /// chain starts *above* the socket peer and the tree therefore cannot
+    /// draw the frame the grant is about.
+    #[test]
+    fn a_forwarded_sign_names_the_ssh_client_and_not_the_shell() {
+        let mut ssh = test_caller(9200, "ssh", Some("/usr/bin/ssh"));
+        ssh.command = "ssh -A build-box".to_owned();
+        let peer = crate::provenance::PeerProcess {
+            forwards_agent: crate::provenance::requests_agent_forwarding(&ssh.command),
+            caller: ssh,
+        };
+        let chain = whole_chain(vec![test_caller(7926, "-zsh", Some("/bin/zsh"))]);
+        let anchor =
+            crate::provenance::select_sign_anchor(Some(&peer), &chain.frames).expect("anchor");
+        let ask = sign_ask(
+            &test_identity("github"),
+            &anchor,
+            &chain,
+            "/home/dev/repos/acme",
+            b"challenge",
+        );
+
+        let AskSubject::SshSign(ssh_subject) = &ask.subject else {
+            panic!("sign_ask builds an SshSign subject");
+        };
+        let info = ssh_subject.info.anchor.as_ref().expect("anchor info");
+        assert_eq!(info.kind, SignAnchorKind::ForwardedSsh);
+        assert_eq!(
+            info.pid, 9200,
+            "the grant must bind to the ssh session, not to the terminal it was launched from"
+        );
+        assert_eq!(
+            info.command.as_deref(),
+            Some("ssh -A build-box"),
+            "the prompt has to show a frame the caller tree cannot"
+        );
+        assert_eq!(
+            info.pid, ask.dedupe_key.ppid,
+            "the session the prompt names must be the session the grant keys on"
+        );
+    }
+
+    /// The grant the forwarded anchor produces must not match a later sign
+    /// from the shell. This is the property the finding is about: 30 minutes
+    /// granted during an `ssh -A` push used to authorize everything under
+    /// that terminal, including the remote host's own requests.
+    #[test]
+    fn a_forwarded_grant_does_not_cover_the_whole_terminal() {
+        let mut ssh = test_caller(9200, "ssh", Some("/usr/bin/ssh"));
+        ssh.command = "ssh -A build-box".to_owned();
+        let shell = test_caller(7926, "-zsh", Some("/bin/zsh"));
+        let peer = crate::provenance::PeerProcess {
+            forwards_agent: crate::provenance::requests_agent_forwarding(&ssh.command),
+            caller: ssh,
+        };
+        let chain = whole_chain(vec![shell.clone()]);
+        let forwarded =
+            crate::provenance::select_sign_anchor(Some(&peer), &chain.frames).expect("anchor");
+
+        let state: SharedState = Arc::new(Mutex::new(State::new()));
+        state
+            .lock()
+            .expect("state mutex")
+            .remember_ssh_grant(SshGrant {
+                scope: SshGrantScope::AllKeys,
+                anchor: forwarded.identity,
+                expires_at: u64::MAX,
+            });
+
+        let mut guard = state.lock().expect("state mutex");
+        assert!(
+            guard.has_ssh_grant("github", forwarded.identity),
+            "the forwarded session keeps its own grant"
+        );
+        assert!(
+            !guard.has_ssh_grant("github", shell.identity()),
+            "a grant given for a forwarded session must not cover the shell"
         );
     }
 
@@ -1061,10 +1167,7 @@ mod tests {
         let decision = decide_sign(
             &state,
             &identity,
-            ProcessIdentity {
-                pid: 4242,
-                start_time: 1,
-            },
+            &test_anchor(4242, 1),
             &chain,
             /* cwd */ "/home/dev/repos/acme",
             /* data */ b"challenge",
@@ -1104,10 +1207,7 @@ mod tests {
         let decision = decide_sign(
             &state,
             &identity,
-            ProcessIdentity {
-                pid: 4242,
-                start_time: 1,
-            },
+            &test_anchor(4242, 1),
             &chain,
             "/home/dev/repos/acme",
             b"challenge",
@@ -1207,20 +1307,14 @@ mod tests {
 
         let a = sign_ask(
             &identity,
-            ProcessIdentity {
-                pid: 4242,
-                start_time: 1,
-            },
+            &test_anchor(4242, 1),
             &chain,
             "/repo",
             b"challenge-one",
         );
         let b = sign_ask(
             &identity,
-            ProcessIdentity {
-                pid: 4242,
-                start_time: 1,
-            },
+            &test_anchor(4242, 1),
             &chain,
             "/repo",
             b"challenge-two",
@@ -1244,20 +1338,14 @@ mod tests {
 
         let a = sign_ask(
             &identity,
-            ProcessIdentity {
-                pid: 4242,
-                start_time: 1,
-            },
+            &test_anchor(4242, 1),
             &chain,
             "/repo",
             b"same-challenge",
         );
         let b = sign_ask(
             &identity,
-            ProcessIdentity {
-                pid: 4242,
-                start_time: 1,
-            },
+            &test_anchor(4242, 1),
             &chain,
             "/repo",
             b"same-challenge",
@@ -1274,10 +1362,7 @@ mod tests {
         let chain = whole_chain(Vec::new());
         let ask = sign_ask(
             &identity,
-            ProcessIdentity {
-                pid: 4242,
-                start_time: 1,
-            },
+            &test_anchor(4242, 1),
             &chain,
             "/repo",
             b"challenge",

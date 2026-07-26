@@ -319,12 +319,256 @@ fn is_transport_frame(caller: &Caller) -> bool {
 /// `name`. What this function returns is what a session grant is scoped to,
 /// so a process able to nominate itself by renaming could collect the user's
 /// 30-minute approval on its own behalf.
+///
+/// **This is the fallback, not the whole rule.** When agent forwarding is in
+/// play the shell is the wrong subject entirely — see [`select_sign_anchor`],
+/// which is what the SSH path calls.
 pub fn select_anchor(chain: &[Caller]) -> Option<&Caller> {
     chain
         .iter()
         .find(|c| is_session_frame(c))
         .or_else(|| chain.iter().find(|c| !is_transport_frame(c)))
         .or_else(|| chain.last())
+}
+
+// ── Agent forwarding ──────────────────────────────────────────────────────
+
+/// Single-letter `ssh` options that take no value.
+///
+/// Needed to read a combined cluster (`-tA`) without mistaking an option's
+/// *value* for a flag: `-i` takes a path, so `-iA` names a key file called
+/// `A` and has nothing to do with agent forwarding. Lowercase `a` is in the
+/// list because it is a real valueless flag — but it *disables* forwarding,
+/// which is why the search below looks for `A` specifically.
+const SSH_VALUELESS_FLAGS: &str = "46AaCfGgKMNnqsTtVvXxYy";
+
+/// `ForwardAgent` values that mean "forwarding may happen".
+///
+/// `ask` is included on purpose: OpenSSH prompts and then forwards, so from
+/// secreq's side that is still a session which may serve a remote's
+/// signatures.
+const FORWARD_AGENT_AFFIRMATIVE: &[&str] = &["yes", "true", "1", "ask"];
+
+/// True when this command line asks `ssh` to forward the agent.
+///
+/// The one signal available from the daemon's position. A forwarded sign
+/// arrives on `agent.sock` from the local `ssh` client exactly as a local
+/// `git push`'s does — same peer, same protocol, same chain shape — so the
+/// kernel cannot tell the two apart. What *can* be read is whether the `ssh`
+/// process behind the socket asked for forwarding in the first place.
+///
+/// **What this cannot see**, and it matters:
+///
+/// - `ForwardAgent yes` in `~/.ssh/config` (including under `Host *`), or in
+///   a file named by `-F`. None of that reaches argv, so a user who turns
+///   forwarding on globally in config still gets a shell-anchored grant.
+///   Reading their ssh_config is not on the table: it would mean
+///   reimplementing `Match` / `Include` / token expansion to second-guess a
+///   process that has already made its own decision.
+/// - Whether forwarding was *used*. An `ssh -A` nobody signs through is
+///   still detected; the grant simply binds to a narrower subject than it
+///   used to.
+///
+/// Which is why argv is *read* rather than *trusted*. The two ways this can
+/// be wrong are "a command line mentions forwarding when nothing is
+/// forwarded" (the grant gets narrower — harmless) and "forwarding is on and
+/// argv doesn't say" (the grant stays exactly as wide as it is today — no
+/// worse than the bug this closes). Neither direction lets a caller *widen* a
+/// grant by choosing what it says, which is the property that matters: `-A`
+/// in a process's own argv can only cost that process reuse, never buy it
+/// reach.
+///
+/// Takes the joined command line rather than an argv slice so a chain frame
+/// (which only ever kept the joined form) and a freshly-read peer are asked
+/// the same question by the same code. Splitting on `=` as well as whitespace
+/// folds `-oForwardAgent=yes`, `-o ForwardAgent=yes` and
+/// `-o "ForwardAgent yes"` into one shape.
+pub fn requests_agent_forwarding(command: &str) -> bool {
+    let mut tokens = command
+        .split(|c: char| c.is_whitespace() || c == '=')
+        .filter(|t| !t.is_empty())
+        .peekable();
+    while let Some(token) = tokens.next() {
+        if token == "-A" {
+            return true;
+        }
+        let option = token.strip_prefix("-o").unwrap_or(token);
+        if option.eq_ignore_ascii_case("ForwardAgent") {
+            if tokens.peek().is_some_and(|value| {
+                FORWARD_AGENT_AFFIRMATIVE.contains(&value.to_ascii_lowercase().as_str())
+            }) {
+                return true;
+            }
+            continue;
+        }
+        if is_valueless_cluster_forwarding_the_agent(token) {
+            return true;
+        }
+    }
+    false
+}
+
+/// True for a bundle of valueless short flags containing `A` (`-tA`, `-4At`).
+/// Anything with a value-taking flag ahead of the `A` is rejected, because
+/// what follows such a flag is its argument rather than another flag.
+fn is_valueless_cluster_forwarding_the_agent(token: &str) -> bool {
+    let Some(flags) = token.strip_prefix('-') else {
+        return false;
+    };
+    !flags.is_empty()
+        && flags.contains('A')
+        && flags.chars().all(|c| SSH_VALUELESS_FLAGS.contains(c))
+}
+
+/// One process the walk did not collect, read on its own.
+///
+/// A caller chain deliberately starts at its seed's *parent* — it answers
+/// "who is behind this request" — which leaves the requester itself
+/// undescribed. For a sign that requester is the local `ssh` client, and it
+/// is the only frame that knows whether the agent is being forwarded, so the
+/// SSH path reads it directly.
+#[derive(Debug, Clone)]
+pub struct PeerProcess {
+    /// The peer described the way a chain frame is: sanitized name, capped
+    /// command line, kernel-reported `exe`.
+    pub caller: Caller,
+    /// Whether this process's command line asks for agent forwarding.
+    ///
+    /// Computed from the **raw** argv, not from `caller.command`, which
+    /// [`sanitize_display`] caps at [`MAX_DISPLAY_CHARS`] for the prompt's
+    /// benefit. What a grant binds to must not depend on a display budget.
+    pub forwards_agent: bool,
+}
+
+/// Read one process without walking its ancestry.
+///
+/// Refreshes only the target pid, for the same reason [`cwd_for_pid`] does:
+/// the chain walk refreshes every process on the machine, and asking about
+/// one more process should not cost a second sweep.
+///
+/// `None` when the process is gone or the platform will not say — every
+/// caller treats that as "we could not establish this", never as a default.
+pub fn describe_pid(pid: u32) -> Option<PeerProcess> {
+    let target = sysinfo::Pid::from_u32(pid);
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[target]),
+        true,
+        ProcessRefreshKind::nothing()
+            .with_cmd(UpdateKind::Always)
+            .with_exe(UpdateKind::Always),
+    );
+    let proc = sys.process(target)?;
+    let raw_command = join_cmd(proc.cmd());
+    Some(PeerProcess {
+        caller: Caller {
+            pid,
+            name: sanitize_display(&proc.name().to_string_lossy()),
+            command: sanitize_display(&raw_command),
+            exe: proc.exe().map(|p| p.display().to_string()),
+            start_time: proc.start_time(),
+        },
+        forwards_agent: requests_agent_forwarding(&raw_command),
+    })
+}
+
+/// Why a sign grant is bound to the frame it is bound to.
+///
+/// Serializable because it rides [`crate::daemon::proto::SshAnchorInfo`] to
+/// the prompt: the two anchors mean different things to the person reading
+/// the window, so the window has to say which one it is offering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignAnchorKind {
+    /// The long-lived shell / multiplexer the signing hangs off — the
+    /// ordinary case, and what [`select_anchor`] picks.
+    #[default]
+    Session,
+    /// An `ssh` client that asked for agent forwarding. The grant binds to
+    /// that client, so it dies with the SSH session rather than with the
+    /// terminal the session was launched from.
+    ForwardedSsh,
+}
+
+/// The frame a sign grant binds to, in the terms the prompt needs to name it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignAnchor {
+    /// What the grant keys on. A [`ProcessIdentity`], not a bare pid: a grant
+    /// that survived pid recycling would be a 30-minute signing window handed
+    /// to whatever started next.
+    pub identity: ProcessIdentity,
+    /// The frame's sanitized `comm`, as the prompt shows it.
+    pub name: String,
+    /// The frame's command line. Worth carrying only for a forwarding `ssh`
+    /// client, which is the socket peer and therefore the one frame the
+    /// `ASKED BY` tree does not draw — the prompt has nowhere else to say
+    /// which host the agent was handed to.
+    pub command: String,
+    pub kind: SignAnchorKind,
+}
+
+impl SignAnchor {
+    fn of(caller: &Caller, kind: SignAnchorKind) -> SignAnchor {
+        SignAnchor {
+            identity: caller.identity(),
+            name: caller.name.clone(),
+            command: caller.command.clone(),
+            kind,
+        }
+    }
+}
+
+/// Pick the process a SIGN grant should bind to, given the socket peer and
+/// the ancestry behind it.
+///
+/// [`select_anchor`] answers "which frame is the stable session", and for a
+/// local `git push` that is right: the `ssh` and the `git` are per-push, the
+/// shell is what the user drives. But it makes a grant a property of the
+/// **terminal**, and `ssh -A` puts a second party inside that terminal. A
+/// user who clicks "Approve for 30 min" during a push has, for the next half
+/// hour, also authorized every signature the forwarded host cares to request
+/// — silently, headlessly, on their own keys. Binding the grant to the `ssh`
+/// client instead makes "30 minutes" mean "30 minutes, and no longer than
+/// this SSH session", which is how the button already read.
+///
+/// ## Which `ssh` frame, when there is more than one
+///
+/// A jump host means nested `ssh` processes, so the rule has to say which.
+/// **The innermost forwarding frame wins.** The search starts at the socket
+/// peer and works outward, and the peer is by construction the innermost
+/// `ssh` — it is the process that opened the agent connection, and the chain
+/// deliberately starts above it.
+///
+/// The other reading — anchor on the outermost — is the one the next person
+/// will assume, so: it is rejected because it produces a grant that outlives
+/// the session which created the exposure. Close the inner hop and the outer
+/// `ssh` is still alive, still carrying a live grant, for a session the user
+/// watched end. Innermost is the tightest live bound available, and every
+/// argument for narrowing the anchor at all is an argument for narrowing it
+/// as far as the process tree allows.
+///
+/// A frame only counts as forwarding when it is *both* an SSH-family process
+/// by [`frame_identity`] (the kernel's `exe`, not a name it chose) and asking
+/// for forwarding on its command line. Neither half alone: a process that
+/// renames itself `ssh` must not get to nominate its own anchor, and an `ssh`
+/// doing ordinary work must not lose the shell anchor that keeps a push loop
+/// from re-prompting.
+pub fn select_sign_anchor(peer: Option<&PeerProcess>, chain: &[Caller]) -> Option<SignAnchor> {
+    if let Some(peer) = peer {
+        if peer.forwards_agent && is_transport_frame(&peer.caller) {
+            return Some(SignAnchor::of(&peer.caller, SignAnchorKind::ForwardedSsh));
+        }
+    }
+    // Then outward through the ancestry, still innermost-first. Reached when
+    // the peer is an inner `ssh` doing its own work — a ProxyJump transport,
+    // say — underneath a session that *is* forwarding.
+    if let Some(frame) = chain
+        .iter()
+        .find(|c| is_transport_frame(c) && requests_agent_forwarding(&c.command))
+    {
+        return Some(SignAnchor::of(frame, SignAnchorKind::ForwardedSsh));
+    }
+    select_anchor(chain).map(|c| SignAnchor::of(c, SignAnchorKind::Session))
 }
 
 /// The working directory of a single process, best-effort.
@@ -672,6 +916,178 @@ mod tests {
     #[test]
     fn anchor_is_none_for_empty_chain() {
         assert!(select_anchor(&[]).is_none());
+    }
+
+    // ── Agent forwarding ─────────────────────────────────────────────────
+
+    fn mk_peer(pid: u32, name: &str, exe: Option<&str>, command: &str) -> PeerProcess {
+        let mut caller = mk_caller(pid, name, exe);
+        caller.command = command.to_owned();
+        PeerProcess {
+            forwards_agent: requests_agent_forwarding(command),
+            caller,
+        }
+    }
+
+    fn mk_frame(pid: u32, name: &str, exe: Option<&str>, command: &str) -> Caller {
+        let mut caller = mk_caller(pid, name, exe);
+        caller.command = command.to_owned();
+        caller
+    }
+
+    /// The finding: `ssh -A` hands a remote host the user's agent, and a
+    /// "30 min" grant anchored on the shell keeps signing for it long after
+    /// the SSH session is the only thing that could still be using it. The
+    /// grant has to bind to the session that created the exposure.
+    #[test]
+    fn a_forwarding_ssh_client_anchors_the_grant_on_itself() {
+        let peer = mk_peer(9200, "ssh", Some("/usr/bin/ssh"), "ssh -A build-box");
+        let chain = vec![mk_frame(7926, "-zsh", Some("/bin/zsh"), "-zsh")];
+        let anchor = select_sign_anchor(Some(&peer), &chain).expect("anchor");
+        assert_eq!(anchor.kind, SignAnchorKind::ForwardedSsh);
+        assert_eq!(
+            anchor.identity.pid, 9200,
+            "the grant must die with the SSH session, not with the terminal"
+        );
+    }
+
+    /// The reason the argv test is load-bearing rather than "peer is ssh →
+    /// anchor on it": a local push spawns a fresh `ssh` per push, so anchoring
+    /// there would re-prompt every time — and a prompt users learn to click
+    /// through is worse than the grant.
+    #[test]
+    fn a_local_git_push_still_anchors_on_the_shell() {
+        let peer = mk_peer(9200, "ssh", Some("/usr/bin/ssh"), "ssh git@github.com");
+        let chain = vec![
+            mk_frame(8120, "git", Some("/usr/bin/git"), "git push origin main"),
+            mk_frame(7926, "-zsh", Some("/bin/zsh"), "-zsh"),
+        ];
+        let anchor = select_sign_anchor(Some(&peer), &chain).expect("anchor");
+        assert_eq!(anchor.kind, SignAnchorKind::Session);
+        assert_eq!(anchor.identity.pid, 7926);
+    }
+
+    /// A jump host is more than one `ssh` frame, and the rule has to say
+    /// which. Innermost: a grant must not outlive the session that created
+    /// the exposure, and the outer `ssh` is still alive when the inner one
+    /// the user was watching ends.
+    #[test]
+    fn the_innermost_forwarding_ssh_frame_wins_over_an_outer_one() {
+        // The peer is the inner hop and it forwards, so it never reaches the
+        // chain search — but the outer one forwards too, and would have been
+        // chosen by the outermost reading.
+        let peer = mk_peer(9310, "ssh", Some("/usr/bin/ssh"), "ssh -A inner-box");
+        let chain = vec![
+            mk_frame(9200, "ssh", Some("/usr/bin/ssh"), "ssh -A jump-box"),
+            mk_frame(7926, "-zsh", Some("/bin/zsh"), "-zsh"),
+        ];
+        let anchor = select_sign_anchor(Some(&peer), &chain).expect("anchor");
+        assert_eq!(anchor.identity.pid, 9310, "innermost forwarding frame");
+    }
+
+    /// The peer is the innermost `ssh` but is doing its own work (a ProxyJump
+    /// transport authenticating to the jump host). The session above it *is*
+    /// forwarding, so the shell is still the wrong anchor.
+    #[test]
+    fn an_outer_forwarding_frame_is_found_when_the_peer_does_not_forward() {
+        let peer = mk_peer(
+            9310,
+            "ssh",
+            Some("/usr/bin/ssh"),
+            "ssh -W target:22 jump-box",
+        );
+        let chain = vec![
+            mk_frame(
+                9200,
+                "ssh",
+                Some("/usr/bin/ssh"),
+                "ssh -A -J jump-box target",
+            ),
+            mk_frame(7926, "-zsh", Some("/bin/zsh"), "-zsh"),
+        ];
+        let anchor = select_sign_anchor(Some(&peer), &chain).expect("anchor");
+        assert_eq!(anchor.kind, SignAnchorKind::ForwardedSsh);
+        assert_eq!(anchor.identity.pid, 9200);
+    }
+
+    /// The same trust split every other frame predicate makes. A process that
+    /// renames itself `ssh` and puts `-A` in its own argv must not get to
+    /// nominate its own anchor; `exe` says what was loaded.
+    #[test]
+    fn a_process_calling_itself_ssh_cannot_nominate_its_own_anchor() {
+        let peer = mk_peer(
+            9200,
+            "ssh",
+            Some("/tmp/.hidden/payload"),
+            "ssh -A build-box",
+        );
+        let chain = vec![mk_frame(7926, "-zsh", Some("/bin/zsh"), "-zsh")];
+        let anchor = select_sign_anchor(Some(&peer), &chain).expect("anchor");
+        assert_eq!(anchor.kind, SignAnchorKind::Session);
+        assert_eq!(anchor.identity.pid, 7926);
+    }
+
+    /// An `ssh -A` whose ancestry the daemon cannot read used to be refused
+    /// outright (no anchor, `SSH_AGENT_FAILURE`). The peer is an anchor in
+    /// its own right, so a forwarding session with no visible parent now has
+    /// one — and it is the narrow one.
+    #[test]
+    fn a_forwarding_peer_anchors_even_with_no_visible_ancestry() {
+        let peer = mk_peer(9200, "ssh", Some("/usr/bin/ssh"), "ssh -A build-box");
+        let anchor = select_sign_anchor(Some(&peer), &[]).expect("anchor");
+        assert_eq!(anchor.identity.pid, 9200);
+    }
+
+    /// Forwarding is spelled several ways on a command line and all of them
+    /// hand the agent over. Reading only `-A` would leave the option form as
+    /// an unguarded way to keep the wide grant.
+    #[test]
+    fn every_argv_spelling_of_forward_agent_is_recognized() {
+        for command in [
+            "ssh -A host",
+            "ssh -tA host",
+            "ssh -4At host",
+            "ssh -oForwardAgent=yes host",
+            "ssh -o ForwardAgent=yes host",
+            "ssh -o ForwardAgent yes host",
+            "ssh -o forwardagent=YES host",
+            "ssh -o ForwardAgent=ask host",
+        ] {
+            assert!(requests_agent_forwarding(command), "{command}");
+        }
+    }
+
+    /// The mirror image, and the reason the parser is not a substring search:
+    /// a false positive costs the user a re-prompt on every push, which is
+    /// how a consent surface gets trained out of being read.
+    #[test]
+    fn ordinary_ssh_command_lines_do_not_read_as_forwarding() {
+        for command in [
+            "ssh git@github.com",
+            "ssh -a host",                 // lowercase: disables it
+            "ssh -o ForwardAgent=no host", // explicitly off
+            "ssh -o ForwardX11=yes host",  // a different forward
+            "ssh -i /keys/A host",         // a key file named A
+            "ssh -iA host",                // the same, bundled
+            "ssh -W target:22 jump",       // ProxyJump transport
+        ] {
+            assert!(!requests_agent_forwarding(command), "{command}");
+        }
+    }
+
+    /// `describe_pid` is what makes the peer readable at all — the chain walk
+    /// starts *above* it, so without this the one frame that knows about
+    /// forwarding is the one frame nothing describes.
+    #[test]
+    fn describe_pid_reads_the_process_the_chain_walk_skips() {
+        let me = std::process::id();
+        let peer = describe_pid(me).expect("our own process is readable");
+        assert_eq!(peer.caller.pid, me);
+        assert!(!peer.caller.name.is_empty());
+        assert!(
+            caller_chain_from_pid(me).frames.iter().all(|c| c.pid != me),
+            "the walk excludes its seed, which is why describe_pid exists"
+        );
     }
 
     #[test]

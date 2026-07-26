@@ -24,7 +24,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::provenance::ProcessIdentity;
+use crate::provenance::{ProcessIdentity, SignAnchorKind};
 
 use std::collections::BTreeSet;
 
@@ -532,12 +532,19 @@ pub struct SshAskInfo {
 }
 
 /// The session an [`SshAskInfo`]'s grant buttons would bind to, in the terms
-/// the prompt shows it: the process's name and its pid.
+/// the prompt shows it: the process's name, its pid, and which of the two
+/// kinds of session it is.
 ///
-/// The pid is here to be *matched by eye*. It also appears on that frame's
-/// row in the ASKED BY tree, so "Session: zsh · pid 7926" points at a line
-/// the user is already reading rather than asserting something they have to
-/// take on faith.
+/// For a [`SignAnchorKind::Session`] anchor the pid is here to be *matched by
+/// eye*: it also appears on that frame's row in the ASKED BY tree, so
+/// "Session: zsh · 7926" points at a line the user is already reading rather
+/// than asserting something they have to take on faith.
+///
+/// A [`SignAnchorKind::ForwardedSsh`] anchor cannot be matched that way — it
+/// is the socket peer, and the chain starts above the peer — so that case
+/// carries its `command` and the prompt draws the frame itself. A grant row
+/// naming a process the window does not otherwise show would be worse than
+/// the bug it replaced.
 ///
 /// `name` is the sanitized `comm` (see `provenance::sanitize_display`), the
 /// same string the tree renders for that frame, so the two agree
@@ -547,6 +554,16 @@ pub struct SshAskInfo {
 pub struct SshAnchorInfo {
     pub name: String,
     pub pid: u32,
+    /// Why this frame, which decides how the prompt labels the grant. A grant
+    /// that says "Session" and attaches to an `ssh` client would be a prompt
+    /// telling the truth about nothing.
+    #[serde(default)]
+    pub kind: SignAnchorKind,
+    /// The anchor's own command line, carried only when the anchor is a frame
+    /// the ASKED BY tree does not draw. `None` for a session anchor, which
+    /// the tree already shows with its argv.
+    #[serde(default)]
+    pub command: Option<String>,
 }
 
 /// Scoped-agent metadata carried on an [`Ask`] so the consent window can

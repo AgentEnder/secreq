@@ -19,14 +19,14 @@ use eframe::egui;
 
 use crate::consent::Decision;
 
-use super::proto::{AskSubject, Caller, SecretAsk};
+use super::proto::{AskSubject, Caller, SecretAsk, SshAnchorInfo, SshAskInfo};
 use super::state::{QueueRow, QueueSnapshot};
 use super::theme::{OsFlavor, Theme};
 use super::ui::{
     abbreviate_home, caller_args, format_audit_line, humanize_duration, paint_app_icon,
     render_auto_deny_toast, AuditCache, AutoDenyToastView, PendingAction,
 };
-use crate::provenance::ProcessIdentity;
+use crate::provenance::{ProcessIdentity, SignAnchorKind};
 
 /// Which manager view the prompt asks the daemon to open. A wire type
 /// (the child forwards it as `ClientMsg::OpenManager`), so it lives in
@@ -441,6 +441,10 @@ fn render_evidence_well(
                     .truncate(),
                 );
             });
+            if let Some(anchor) = forwarding_anchor(&ssh.info) {
+                divide(ui);
+                render_forwarded_by(ui, th, anchor);
+            }
         } else {
             divide(ui);
             well_row(ui, th, &secrets_label(ask.secrets().len()), |ui, th| {
@@ -537,6 +541,57 @@ fn history_line(ui: &mut egui::Ui, th: &Theme, row: &QueueRow, state: &mut Promp
                 .size(th.body_size - 1.0)
                 .color(color),
         );
+    });
+}
+
+/// This ask's anchor when — and only when — it is a forwarding `ssh` client.
+///
+/// One place answers "is forwarding in play", so the well row and the grant
+/// row cannot end up disagreeing about whether to say so.
+fn forwarding_anchor(info: &SshAskInfo) -> Option<&SshAnchorInfo> {
+    info.anchor
+        .as_ref()
+        .filter(|a| a.kind == SignAnchorKind::ForwardedSsh)
+}
+
+/// The `ssh` client that handed this agent to a remote host.
+///
+/// The one frame the `ASKED BY` tree cannot draw. A sign arrives from the
+/// local `ssh` client, and the caller chain deliberately starts at the socket
+/// peer's *parent* — so under `ssh -A` the process that matters most to the
+/// decision was, until this row, the only one the prompt never showed. The
+/// tree said `zsh`, the header said `git`, and nothing on screen mentioned
+/// the machine that could actually be asking.
+///
+/// The argv is here because it names the host. "A remote can sign with your
+/// key" is abstract; `ssh -A build-box` is the sentence the user can act on.
+/// It is requester-influenced text, so it lives in the scrolling well and is
+/// truncated like any other argv — never in the pinned band, which is where
+/// the grant buttons it describes are placed.
+fn render_forwarded_by(ui: &mut egui::Ui, th: &Theme, anchor: &SshAnchorInfo) {
+    well_row(ui, th, "FORWARDED BY", |ui, th| {
+        ui.vertical(|ui| {
+            let command = anchor.command.as_deref().unwrap_or_default();
+            caller_row(
+                ui,
+                th,
+                0,
+                &anchor.name,
+                // The same argv treatment the tree gives every other frame,
+                // so `ssh -A build-box` under a name of `ssh` reads as
+                // `ssh   -A build-box` rather than saying `ssh` twice.
+                caller_args(&anchor.name, command),
+                Some(anchor.pid),
+                false,
+            );
+            ui.add(egui::Label::new(
+                egui::RichText::new(
+                    "\u{26a0} agent forwarding: the host at the other end can ask for signatures",
+                )
+                .size(th.body_size - 2.0)
+                .color(th.danger),
+            ));
+        });
     });
 }
 
@@ -1025,23 +1080,33 @@ const SESSION_LABEL_WIDTH: f32 = 132.0;
 /// approve something it had not shown them.
 ///
 /// The pid is there to be matched by eye against the ASKED BY tree directly
-/// above, which renders the same pid on that frame's row.
+/// above, which renders the same pid on that frame's row — except under agent
+/// forwarding, where the anchor is the socket peer and the tree starts above
+/// it. That case says `Forwarded:` instead of `Session:` and the well's
+/// `FORWARDED BY` row draws the frame, because a grant row naming a process
+/// nothing else on screen mentions is the failure this row exists to avoid.
 fn render_ssh_session_grants(
     ui: &mut egui::Ui,
     th: &Theme,
     row: &QueueRow,
     actions_out: &mut Vec<PendingAction>,
 ) {
+    let anchor = match &row.representative.subject {
+        AskSubject::SshSign(s) => s.info.anchor.as_ref(),
+        AskSubject::Wrap(_) | AskSubject::ScopedAgent(_) => None,
+    };
+    let forwarded = anchor.is_some_and(|a| a.kind == SignAnchorKind::ForwardedSsh);
     ui.horizontal(|ui| {
         ui.label(
-            egui::RichText::new("Session:")
+            egui::RichText::new(if forwarded { "Forwarded:" } else { "Session:" })
                 .size(th.body_size - 2.0)
-                .color(th.faint),
+                // The label is the whole difference between "this grant dies
+                // with your terminal" and "this grant is live for a machine
+                // you are logged in to", so the forwarded spelling is not
+                // allowed to read as quietly as the ordinary one.
+                .color(if forwarded { th.danger } else { th.faint }),
         );
-        if let Some(anchor) = match &row.representative.subject {
-            AskSubject::SshSign(s) => s.info.anchor.as_ref(),
-            AskSubject::Wrap(_) | AskSubject::ScopedAgent(_) => None,
-        } {
+        if let Some(anchor) = anchor {
             let full = format!("{} · {}", anchor.name, anchor.pid);
             let row_height = ui.text_style_height(&egui::TextStyle::Body);
             let resp = ui
@@ -1063,9 +1128,14 @@ fn render_ssh_session_grants(
                     },
                 )
                 .inner;
-            resp.on_hover_text(format!(
-                "A 30-minute grant attaches to this process.\n{full}"
-            ));
+            resp.on_hover_text(if forwarded {
+                format!(
+                    "This ssh client is forwarding your agent, so a 30-minute grant \
+                     attaches to it and ends when the SSH session does.\n{full}"
+                )
+            } else {
+                format!("A 30-minute grant attaches to this process.\n{full}")
+            });
         }
         let scope = row_scope(row);
         if quiet_button(ui, th, "Approve for 30 min").clicked() {
@@ -1773,6 +1843,8 @@ mod tests {
         let anchor = callers.last().map(|c| SshAnchorInfo {
             name: c.name.clone(),
             pid: c.pid,
+            kind: SignAnchorKind::Session,
+            command: None,
         });
         let key = DedupeKey {
             wrap: "ssh:github".to_owned(),
