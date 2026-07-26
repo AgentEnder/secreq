@@ -201,53 +201,29 @@ pub struct State {
     // `broadcast_consent_update` pushes a fresh `ConsentUpdate` onto
     // every sender; senders whose receiver has been dropped (child
     // exited / crashed) are removed lazily on the next broadcast.
-    consent_subscribers: Vec<ConsentSubscriber>,
-    /// Source for unique subscriber IDs. Wraps would be fine — we'd
-    /// need a daemon that ran for decades to overflow u64 — but a
-    /// fresh monotonic counter per daemon keeps the IDs grep-able
-    /// across daemon restarts.
-    consent_next_subscriber_id: u64,
-    /// Set by the spawn path between `Command::spawn` and the child's
-    /// `ConsentWindowAttach` so a burst of Asks doesn't launch N
-    /// children. Cleared when the first child attaches OR after a
-    /// timeout (so a failed spawn doesn't permanently block).
-    consent_spawn: SpawnDebounce,
+    consent: SubscriberGroup<ConsentExtra>,
 
     // ── Manager-window streaming subscribers ──────────────────────
     //
-    // The persistent Rules + Audit window. A separate list from
-    // `consent_subscribers` because the manager has a deliberately
-    // different lifecycle: it opens on user intent (`secreq view`, the
-    // prompt's "Open Manager…"), closes when the user closes it, and is
-    // never touched by the prompt's auto-hide / restart-to-raise
-    // machinery. It receives the same `ConsentUpdate` snapshot stream
-    // (it needs live rules + the viewer-mode flag).
-    manager_subscribers: Vec<ManagerSubscriber>,
-    /// Monotonic ID source for manager subscribers, independent of the
-    /// other counters so the ID spaces stay grep-distinguishable.
-    manager_next_subscriber_id: u64,
-    /// Spawn-debounce for the manager child, mirroring
-    /// `consent_spawn`.
-    manager_spawn: SpawnDebounce,
+    // The persistent Rules + Audit window. A separate group from
+    // `consent` because the manager has a deliberately different
+    // lifecycle: it opens on user intent (`secreq view`, the prompt's
+    // "Open Manager…"), closes when the user closes it, and is never
+    // touched by the prompt's auto-hide / restart-to-raise machinery. It
+    // receives the same `ConsentUpdate` snapshot stream (it needs live
+    // rules + the viewer-mode flag).
+    manager: SubscriberGroup<ManagerExtra>,
 
     // ── Pending-badge streaming subscribers ───────────────────────
     //
-    // The always-on-top "N pending" badge child(ren). A separate list
-    // from `consent_subscribers` because the badge has a deliberately
-    // different lifecycle: it persists while the queue is non-empty
-    // (even when the consent window is closed/backgrounded — that's the
-    // whole point), never restarts-to-raise, and never reports focus.
-    // Keeping it parallel means none of the consent-window focus /
-    // restart / auto-hide logic accidentally tears the badge down.
-    badge_subscribers: Vec<BadgeSubscriber>,
-    /// Monotonic ID source for badge subscribers. Independent of the
-    /// consent counter so the two ID spaces stay grep-distinguishable.
-    badge_next_subscriber_id: u64,
-    /// Spawn-debounce for the badge child, mirroring
-    /// `consent_spawn`: set between `Command::spawn`
-    /// and the child's `BadgeWindowAttach` so a burst of asks doesn't
-    /// launch N badges. Cleared on attach or after `CONSENT_SPAWN_TIMEOUT`.
-    badge_spawn: SpawnDebounce,
+    // The always-on-top "N pending" badge child(ren). A separate group
+    // from `consent` because the badge has a deliberately different
+    // lifecycle: it persists while the queue is non-empty (even when the
+    // consent window is closed/backgrounded — that's the whole point),
+    // never restarts-to-raise, and never reports focus. Keeping it
+    // parallel means none of the consent-window focus / restart /
+    // auto-hide logic accidentally tears the badge down.
+    badge: SubscriberGroup<()>,
     /// `true` between `initiate_consent_restart()` and the moment the
     /// dying child's detach is processed. Tells the detach handler
     /// "this isn't a user-initiated close — preserve viewer_mode and
@@ -329,15 +305,9 @@ impl Default for State {
             window_visible: false,
             viewer_mode: false,
             shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            consent_subscribers: Vec::new(),
-            consent_next_subscriber_id: 1,
-            consent_spawn: SpawnDebounce::default(),
-            manager_subscribers: Vec::new(),
-            manager_next_subscriber_id: 1,
-            manager_spawn: SpawnDebounce::default(),
-            badge_subscribers: Vec::new(),
-            badge_next_subscriber_id: 1,
-            badge_spawn: SpawnDebounce::default(),
+            consent: SubscriberGroup::new("consent window"),
+            manager: SubscriberGroup::new("manager window"),
+            badge: SubscriberGroup::new("badge window"),
             consent_restart_pending: false,
             // Queue starts empty; record the moment so the auto-hide
             // logic has a stable "started counting" anchor.
@@ -394,18 +364,38 @@ impl SpawnDebounce {
 /// new attempt.
 const CONSENT_SPAWN_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// One attached consent-window child, with a stable ID so the
-/// streaming connection handler can detach itself precisely on exit
-/// instead of waiting for a broadcast to lazy-prune the dead sender
-/// (which deadlocks the writer thread on `Receiver::recv()` — see
-/// the "every other view works" bug fix).
-struct ConsentSubscriber {
+/// One attached window child, with a stable ID so the streaming
+/// connection handler can detach itself precisely on exit instead of
+/// waiting for a broadcast to lazy-prune the dead sender (which
+/// deadlocks the writer thread on `Receiver::recv()` — see the "every
+/// other view works" bug fix).
+struct Subscriber<T> {
     id: u64,
-    /// OS pid of the consent-window child. The CLI uses this to call
-    /// `NSRunningApplication.activate(...)` from the user-intent context
-    /// — see `ConsentWindowAttach` in `proto.rs` for why.
-    pid: u32,
     tx: mpsc::Sender<super::proto::DaemonMsg>,
+    /// Whatever this window kind carries beyond its sender — see
+    /// [`SubscriberExtra`].
+    extra: T,
+}
+
+/// The per-kind state a [`Subscriber`] carries beside its sender.
+///
+/// The one thing a [`SubscriberGroup`] itself has to know about that state is
+/// whether there's a pid in it: the CLI activates a child with
+/// `NSRunningApplication.activate(...)` from its own user-intent context (see
+/// `ConsentWindowAttach` in `proto.rs` for why the CLI has to do it, not the
+/// child), and the group's attach log line names the pid when there is one.
+/// The badge is never raised, so it has none — which is why the default impl
+/// is `None` rather than every kind being made to carry a pid it ignores.
+trait SubscriberExtra {
+    fn pid(&self) -> Option<u32> {
+        None
+    }
+}
+
+/// The consent window's extra: the pid the CLI raises, plus the focus state
+/// only this window kind reports.
+struct ConsentExtra {
+    pid: u32,
     /// Latest reported window focus state. Defaults to `true` at attach
     /// because a freshly-spawned child gets foreground intent on macOS;
     /// the child overwrites this whenever the OS reports a focus change
@@ -413,23 +403,128 @@ struct ConsentSubscriber {
     focused: bool,
 }
 
-/// One attached manager-window child (the persistent Rules + Audit
-/// surface). Leaner than [`ConsentSubscriber`]: the manager never
-/// reports focus and is never kill-and-respawn raised, so it carries
-/// only the streaming sender, a detach ID, and the pid the CLI can
-/// activate on `secreq view`.
-struct ManagerSubscriber {
-    id: u64,
-    pid: u32,
-    tx: mpsc::Sender<super::proto::DaemonMsg>,
+impl SubscriberExtra for ConsentExtra {
+    fn pid(&self) -> Option<u32> {
+        Some(self.pid)
+    }
 }
 
-/// One attached pending-badge child. Deliberately leaner than
-/// [`ConsentSubscriber`]: the badge never reports focus and never
-/// restarts, so it carries only the streaming sender and a detach ID.
-struct BadgeSubscriber {
-    id: u64,
-    tx: mpsc::Sender<super::proto::DaemonMsg>,
+/// The manager window's extra (the persistent Rules + Audit surface).
+/// Leaner than [`ConsentExtra`]: the manager is never kill-and-respawn
+/// raised, so it never reports focus — only the pid the CLI can activate on
+/// `secreq view`.
+struct ManagerExtra {
+    pid: u32,
+}
+
+impl SubscriberExtra for ManagerExtra {
+    fn pid(&self) -> Option<u32> {
+        Some(self.pid)
+    }
+}
+
+/// The pending badge carries nothing beyond its sender: it never reports
+/// focus and is never raised, so there is no pid to remember.
+impl SubscriberExtra for () {}
+
+/// The attached children of one window kind, with the ID source and
+/// spawn debounce that belong to them.
+///
+/// [`State`] holds three of these because the lifecycles genuinely differ
+/// (see the field comments there) — but attaching, detaching, counting and
+/// broadcasting are the same operations on each, so they live here once. In
+/// particular the detach-by-ID contract is identical for all three: the
+/// streaming connection handler must call [`detach`](Self::detach) when its
+/// read loop exits, *before* joining the writer thread.
+struct SubscriberGroup<T> {
+    /// Name this group goes by in the daemon log, e.g. `"consent window"`.
+    label: &'static str,
+    subscribers: Vec<Subscriber<T>>,
+    /// Source for unique subscriber IDs. Wraps would be fine — we'd
+    /// need a daemon that ran for decades to overflow u64 — but a
+    /// fresh monotonic counter per group keeps the IDs grep-able
+    /// across daemon restarts, and keeps the three groups' ID spaces
+    /// distinguishable from each other.
+    next_id: u64,
+    /// Set by the spawn path between `Command::spawn` and the child's
+    /// attach so a burst of asks doesn't launch N children. See
+    /// [`SpawnDebounce`].
+    spawn: SpawnDebounce,
+}
+
+impl<T: SubscriberExtra> SubscriberGroup<T> {
+    fn new(label: &'static str) -> SubscriberGroup<T> {
+        SubscriberGroup {
+            label,
+            subscribers: Vec::new(),
+            next_id: 1,
+            spawn: SpawnDebounce::default(),
+        }
+    }
+
+    /// Register a child and hand back its detach ID. Clears the spawn
+    /// debounce — the child we were waiting for has arrived.
+    fn attach(&mut self, tx: mpsc::Sender<super::proto::DaemonMsg>, extra: T) -> u64 {
+        let id = self.next_id;
+        self.next_id = id.wrapping_add(1);
+        self.spawn.clear();
+        let pid = extra.pid();
+        self.subscribers.push(Subscriber { id, tx, extra });
+        let count = self.subscribers.len();
+        let label = self.label;
+        match pid {
+            Some(pid) => super::log::log_at(
+                "state",
+                format_args!("{label} attached (id={id}, pid={pid}, subscribers={count})"),
+            ),
+            None => super::log::log_at(
+                "state",
+                format_args!("{label} attached (id={id}, subscribers={count})"),
+            ),
+        }
+        id
+    }
+
+    /// Remove one subscriber by ID. Removing *this* subscriber rather than
+    /// letting the next broadcast prune its dead sender is the whole point:
+    /// while the sender is still held, the child's writer thread stays parked
+    /// on `Receiver::recv()` and the connection handler hangs on
+    /// `writer_handle.join()`.
+    fn detach(&mut self, id: u64) {
+        let before = self.subscribers.len();
+        self.subscribers.retain(|s| s.id != id);
+        let after = self.subscribers.len();
+        let label = self.label;
+        super::log::log_at(
+            "state",
+            format_args!("{label} detached (id={id}, subscribers {before}→{after})"),
+        );
+    }
+
+    fn count(&self) -> usize {
+        self.subscribers.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.subscribers.is_empty()
+    }
+
+    /// First attached child's pid, for the window kinds that have one.
+    fn first_pid(&self) -> Option<u32> {
+        self.subscribers.first().and_then(|s| s.extra.pid())
+    }
+
+    /// The attached child with this ID, if it hasn't detached in the
+    /// meantime.
+    fn find_mut(&mut self, id: u64) -> Option<&mut Subscriber<T>> {
+        self.subscribers.iter_mut().find(|s| s.id == id)
+    }
+
+    /// Push `msg` to every attached child, pruning senders whose receiver
+    /// has been dropped (child exited / crashed).
+    fn broadcast(&mut self, msg: super::proto::DaemonMsg) {
+        self.subscribers.retain(|s| s.tx.send(msg.clone()).is_ok());
+    }
 }
 
 /// Surface every per-rule wasm refusal from a rules load in the daemon
@@ -503,10 +598,12 @@ impl State {
             .store(true, std::sync::atomic::Ordering::SeqCst);
         // Tell every consent-window child to close so they don't
         // outlive the daemon.
-        self.broadcast(super::proto::DaemonMsg::ConsentExitPlease);
+        self.consent
+            .broadcast(super::proto::DaemonMsg::ConsentExitPlease);
         // Same for the badge child(ren) — it reuses `ConsentExitPlease`
         // as its "please exit" signal.
-        self.broadcast_badge(super::proto::DaemonMsg::ConsentExitPlease);
+        self.badge
+            .broadcast(super::proto::DaemonMsg::ConsentExitPlease);
     }
 
     // ── Consent-window subscriber API ────────────────────────────
@@ -524,22 +621,9 @@ impl State {
         pid: u32,
         sender: mpsc::Sender<super::proto::DaemonMsg>,
     ) -> (u64, super::proto::WireSnapshot) {
-        let id = self.consent_next_subscriber_id;
-        self.consent_next_subscriber_id = id.wrapping_add(1);
-        self.consent_spawn.clear();
-        self.consent_subscribers.push(ConsentSubscriber {
-            id,
-            pid,
-            tx: sender,
-            focused: true,
-        });
-        super::log::log_at(
-            "state",
-            format_args!(
-                "consent window attached (id={id}, pid={pid}, subscribers={})",
-                self.consent_subscribers.len()
-            ),
-        );
+        let id = self
+            .consent
+            .attach(sender, ConsentExtra { pid, focused: true });
         (id, self.snapshot_for_wire())
     }
 
@@ -549,7 +633,7 @@ impl State {
     /// `proto.rs` for why the CLI has to do the activation, not the
     /// child itself.
     pub fn consent_child_pid(&self) -> Option<u32> {
-        self.consent_subscribers.first().map(|s| s.pid)
+        self.consent.first_pid()
     }
 
     /// "Kill the existing consent child and respawn a fresh one."
@@ -581,22 +665,23 @@ impl State {
     ///
     /// No-op if no subscriber is currently attached.
     pub fn initiate_consent_restart(&mut self) {
-        if self.consent_subscribers.is_empty() {
+        if self.consent.is_empty() {
             return;
         }
         super::log::log_at(
             "state",
             format_args!(
                 "consent restart requested ({} subscriber(s) → ConsentExitPlease)",
-                self.consent_subscribers.len()
+                self.consent.count()
             ),
         );
         self.consent_restart_pending = true;
         // Send the exit message before clearing. After clearing, the
         // sender clones are dropped and we'd lose the ability to push
         // anything to the writer threads.
-        self.broadcast(super::proto::DaemonMsg::ConsentExitPlease);
-        self.consent_subscribers.clear();
+        self.consent
+            .broadcast(super::proto::DaemonMsg::ConsentExitPlease);
+        self.consent.subscribers.clear();
     }
 
     /// Detach handler hook. Returns and clears the restart-pending
@@ -623,18 +708,12 @@ impl State {
     /// joining the writer thread — see [`attach_consent_window`] for
     /// the deadlock this avoids.
     pub fn detach_consent_window(&mut self, id: u64) {
-        let before = self.consent_subscribers.len();
-        self.consent_subscribers.retain(|s| s.id != id);
-        let after = self.consent_subscribers.len();
-        super::log::log_at(
-            "state",
-            format_args!("consent window detached (id={id}, subscribers {before}→{after})"),
-        );
+        self.consent.detach(id);
     }
 
     /// Number of currently-attached consent-window children.
     pub fn consent_subscriber_count(&self) -> usize {
-        self.consent_subscribers.len()
+        self.consent.count()
     }
 
     // ── Pending-badge subscriber API ─────────────────────────────
@@ -648,18 +727,7 @@ impl State {
         &mut self,
         sender: mpsc::Sender<super::proto::DaemonMsg>,
     ) -> (u64, super::proto::WireSnapshot) {
-        let id = self.badge_next_subscriber_id;
-        self.badge_next_subscriber_id = id.wrapping_add(1);
-        self.badge_spawn.clear();
-        self.badge_subscribers
-            .push(BadgeSubscriber { id, tx: sender });
-        super::log::log_at(
-            "state",
-            format_args!(
-                "badge window attached (id={id}, subscribers={})",
-                self.badge_subscribers.len()
-            ),
-        );
+        let id = self.badge.attach(sender, ());
         (id, self.snapshot_for_wire())
     }
 
@@ -667,18 +735,12 @@ impl State {
     /// connection handler when its read loop exits — same detach-order
     /// contract as [`detach_consent_window`].
     pub fn detach_badge_window(&mut self, id: u64) {
-        let before = self.badge_subscribers.len();
-        self.badge_subscribers.retain(|s| s.id != id);
-        let after = self.badge_subscribers.len();
-        super::log::log_at(
-            "state",
-            format_args!("badge window detached (id={id}, subscribers {before}→{after})"),
-        );
+        self.badge.detach(id);
     }
 
     /// Number of currently-attached badge children.
     pub fn badge_subscriber_count(&self) -> usize {
-        self.badge_subscribers.len()
+        self.badge.count()
     }
 
     /// Should the daemon ensure a pending-badge child is running? True
@@ -687,7 +749,7 @@ impl State {
     /// badge surfaces *undecided* requests, the ones a process is hung
     /// on, not work that's merely finishing.
     pub fn needs_badge_window(&self) -> bool {
-        !self.queue.is_empty() && self.badge_subscribers.is_empty()
+        !self.queue.is_empty() && self.badge.is_empty()
     }
 
     /// True if a badge `Command::spawn` is in flight and we shouldn't
@@ -695,12 +757,12 @@ impl State {
     /// [`CONSENT_SPAWN_TIMEOUT`] (shared constant — the spawn race is
     /// identical to the consent window's).
     pub fn badge_spawn_in_flight(&mut self) -> bool {
-        self.badge_spawn.in_flight()
+        self.badge.spawn.in_flight()
     }
 
     /// Record that a badge `Command::spawn` has just been kicked off.
     pub fn mark_badge_spawn_in_flight(&mut self) {
-        self.badge_spawn.mark();
+        self.badge.spawn.mark();
     }
 
     /// Tell every attached badge child to exit. Sent when the queue
@@ -710,10 +772,8 @@ impl State {
     /// `queue_empty_since`: the badge has no auto-hide grace period, it
     /// just goes the moment the last awaiting ask resolves.
     pub fn broadcast_badge_exit_please(&mut self) {
-        if self.badge_subscribers.is_empty() {
-            return;
-        }
-        self.broadcast_badge(super::proto::DaemonMsg::ConsentExitPlease);
+        self.badge
+            .broadcast(super::proto::DaemonMsg::ConsentExitPlease);
     }
 
     /// Record a focus-state update for one attached child. Called by
@@ -722,11 +782,8 @@ impl State {
     /// detached between the child sending the message and us draining
     /// it.
     pub fn set_consent_focused(&mut self, id: u64, focused: bool) {
-        for s in &mut self.consent_subscribers {
-            if s.id == id {
-                s.focused = focused;
-                return;
-            }
+        if let Some(s) = self.consent.find_mut(id) {
+            s.extra.focused = focused;
         }
     }
 
@@ -736,7 +793,7 @@ impl State {
     /// new ask just needs the streaming snapshot to land, not a
     /// fresh process.
     pub fn any_consent_focused(&self) -> bool {
-        self.consent_subscribers.iter().any(|s| s.focused)
+        self.consent.subscribers.iter().any(|s| s.extra.focused)
     }
 
     // ── Manager-window subscriber API ────────────────────────────
@@ -750,21 +807,7 @@ impl State {
         pid: u32,
         sender: mpsc::Sender<super::proto::DaemonMsg>,
     ) -> (u64, super::proto::WireSnapshot) {
-        let id = self.manager_next_subscriber_id;
-        self.manager_next_subscriber_id = id.wrapping_add(1);
-        self.manager_spawn.clear();
-        self.manager_subscribers.push(ManagerSubscriber {
-            id,
-            pid,
-            tx: sender,
-        });
-        super::log::log_at(
-            "state",
-            format_args!(
-                "manager window attached (id={id}, pid={pid}, subscribers={})",
-                self.manager_subscribers.len()
-            ),
-        );
+        let id = self.manager.attach(sender, ManagerExtra { pid });
         (id, self.snapshot_for_wire())
     }
 
@@ -773,63 +816,49 @@ impl State {
     /// viewer mode clears: the pin belonged to the window the user just
     /// closed, and the next `secreq view` re-sets it.
     pub fn detach_manager_window(&mut self, id: u64) {
-        let before = self.manager_subscribers.len();
-        self.manager_subscribers.retain(|s| s.id != id);
-        let after = self.manager_subscribers.len();
-        super::log::log_at(
-            "state",
-            format_args!("manager window detached (id={id}, subscribers {before}→{after})"),
-        );
-        if self.manager_subscribers.is_empty() {
+        self.manager.detach(id);
+        if self.manager.is_empty() {
             self.viewer_mode = false;
         }
     }
 
     /// Number of currently-attached manager-window children.
     pub fn manager_subscriber_count(&self) -> usize {
-        self.manager_subscribers.len()
+        self.manager.count()
     }
 
     /// First attached manager child's pid, if any — handed back on
     /// `ShowViewer` so the CLI can activate the existing window.
     pub fn manager_child_pid(&self) -> Option<u32> {
-        self.manager_subscribers.first().map(|s| s.pid)
+        self.manager.first_pid()
     }
 
     /// Should `ensure_manager_window` spawn a child? True iff none is
     /// attached (the manager spawns on demand, never from queue state).
     pub fn needs_manager_window(&self) -> bool {
-        self.manager_subscribers.is_empty()
+        self.manager.is_empty()
     }
 
     /// True if a manager `Command::spawn` is in flight and we shouldn't
     /// start another. Stale entries auto-clear after
     /// [`CONSENT_SPAWN_TIMEOUT`] (shared constant — same race shape).
     pub fn manager_spawn_in_flight(&mut self) -> bool {
-        self.manager_spawn.in_flight()
+        self.manager.spawn.in_flight()
     }
 
     /// Record that a manager `Command::spawn` has just been kicked off.
     pub fn mark_manager_spawn_in_flight(&mut self) {
-        self.manager_spawn.mark();
-    }
-
-    /// Push `msg` to every attached manager child, pruning dead senders.
-    fn broadcast_manager(&mut self, msg: super::proto::DaemonMsg) {
-        self.manager_subscribers
-            .retain(|s| s.tx.send(msg.clone()).is_ok());
+        self.manager.spawn.mark();
     }
 
     /// One-shot toast push for an auto-deny event. Best-effort —
     /// dropped if no child is attached at this moment.
     pub fn broadcast_auto_deny_toast(&mut self, rule_name: String, deny_message: Option<String>) {
-        if self.consent_subscribers.is_empty() {
-            return;
-        }
-        self.broadcast(super::proto::DaemonMsg::AutoDenyToast {
-            rule_name,
-            deny_message,
-        });
+        self.consent
+            .broadcast(super::proto::DaemonMsg::AutoDenyToast {
+                rule_name,
+                deny_message,
+            });
     }
 
     /// Broadcast `ConsentExitPlease` to every attached consent window.
@@ -837,10 +866,14 @@ impl State {
     /// `request_shutdown` path and the idle-exit path that runs on
     /// the main loop. A no-op if no subscribers are attached.
     pub fn broadcast_consent_exit_please(&mut self) {
-        if self.consent_subscribers.is_empty() {
+        // The emptiness check guards the `queue_empty_since` reset below, not
+        // the broadcast: with nobody attached there is nothing to close, and
+        // the grace clock must stay armed for a prompt that attaches later.
+        if self.consent.is_empty() {
             return;
         }
-        self.broadcast(super::proto::DaemonMsg::ConsentExitPlease);
+        self.consent
+            .broadcast(super::proto::DaemonMsg::ConsentExitPlease);
         // Clear the grace timer so the main loop doesn't keep
         // re-broadcasting on every tick while the child winds down.
         self.queue_empty_since = None;
@@ -893,7 +926,7 @@ impl State {
     /// start another. Stale entries auto-clear after
     /// `CONSENT_SPAWN_TIMEOUT`.
     pub fn consent_spawn_in_flight(&mut self) -> bool {
-        self.consent_spawn.in_flight()
+        self.consent.spawn.in_flight()
     }
 
     /// Record that a `Command::spawn` for a consent-window child has
@@ -901,7 +934,7 @@ impl State {
     /// `consent_spawn_in_flight()` return `true` until the child
     /// attaches or `CONSENT_SPAWN_TIMEOUT` elapses.
     pub fn mark_consent_spawn_in_flight(&mut self) {
-        self.consent_spawn.mark();
+        self.consent.spawn.mark();
     }
 
     /// Should the daemon ensure a consent-prompt child is running?
@@ -909,10 +942,10 @@ impl State {
     /// to see *and* nobody is already there to see it. Viewer mode is
     /// the manager window's business, not the prompt's.
     pub fn needs_consent_window(&self) -> bool {
-        (!self.queue.is_empty() || !self.pending.is_empty()) && self.consent_subscribers.is_empty()
+        (!self.queue.is_empty() || !self.pending.is_empty()) && self.consent.is_empty()
     }
 
-    /// Push the current snapshot to every attached consent window.
+    /// Push the current snapshot to every attached window child.
     /// Senders whose receiver has been dropped (child exited) are
     /// pruned out.
     pub fn broadcast_consent_update(&mut self) {
@@ -921,21 +954,9 @@ impl State {
         // Same snapshot feeds all three surfaces: the prompt renders
         // the queue, the manager needs the live rules + viewer-mode
         // flag, and the badge just counts `Awaiting` rows.
-        self.broadcast(msg.clone());
-        self.broadcast_manager(msg.clone());
-        self.broadcast_badge(msg);
-    }
-
-    fn broadcast(&mut self, msg: super::proto::DaemonMsg) {
-        self.consent_subscribers
-            .retain(|s| s.tx.send(msg.clone()).is_ok());
-    }
-
-    /// Push `msg` to every attached badge child, pruning senders whose
-    /// receiver has dropped (badge exited / crashed).
-    fn broadcast_badge(&mut self, msg: super::proto::DaemonMsg) {
-        self.badge_subscribers
-            .retain(|s| s.tx.send(msg.clone()).is_ok());
+        self.consent.broadcast(msg.clone());
+        self.manager.broadcast(msg.clone());
+        self.badge.broadcast(msg);
     }
 
     /// Build a wire-form snapshot for the consent UI.
