@@ -106,11 +106,7 @@ pub fn find_stale_blocks(home: &Path, shell: &Shell, canonical: &Path) -> Vec<Pa
         .iter()
         .map(|name| home.join(name))
         .filter(|p| p != canonical && p.is_file())
-        .filter(|p| {
-            std::fs::read_to_string(p)
-                .map(|s| s.contains(BEGIN_SENTINEL))
-                .unwrap_or(false)
-        })
+        .filter(|p| std::fs::read_to_string(p).is_ok_and(|s| s.contains(BEGIN_SENTINEL)))
         .collect()
 }
 
@@ -128,7 +124,7 @@ pub fn plan(home: &Path, shell: Shell, shim_dir: &Path) -> Result<Plan> {
             shim_dir.display()
         )
     })?;
-    let block = format_block(&shell, shim_dir);
+    let block = format_block(&shell, shim_dir, home);
     let already_configured = match fs::read_to_string(&config_file) {
         Ok(existing) => existing.contains(BEGIN_SENTINEL),
         Err(_) => false, // file doesn't exist → not configured
@@ -204,8 +200,14 @@ pub(crate) fn caveat_for(shell: &Shell) -> Option<String> {
     }
 }
 
-fn format_block(shell: &Shell, shim_dir: &Path) -> String {
-    let dir = shim_dir.display();
+fn format_block(shell: &Shell, shim_dir: &Path, home: &Path) -> String {
+    // `$HOME`, not `~`: the POSIX line quotes the path, and a tilde inside
+    // double quotes is never expanded — `"~/.secreq/shims"` would put a
+    // directory literally named `~` on PATH. `$HOME` expands in both the
+    // POSIX form and fish's, and it keeps the block portable for anyone who
+    // syncs their dotfiles between machines. A shim dir outside `$HOME`
+    // stays absolute.
+    let dir = crate::paths::under_home(shim_dir, home, "$HOME");
     let line = match shell {
         Shell::Fish => format!("fish_add_path --path --prepend {dir}"),
         _ => format!(r#"export PATH="{dir}:$PATH""#),

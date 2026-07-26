@@ -212,11 +212,16 @@ mod tests {
 
         run_in(&sb.home, &sb.legacy_dir, &sb.new_dir).unwrap();
 
+        // The migration regenerates the block through `ssh_setup::plan`, so
+        // it carries whatever spelling that writes today (`~`). Assert on the
+        // socket it resolves to rather than the literal text.
         let content = std::fs::read_to_string(&config).unwrap();
-        assert!(content.contains(&format!(
-            "IdentityAgent \"{}\"",
-            sb.new_dir.join("agent.sock").display()
-        )));
+        assert!(
+            ssh_setup::expand_home_tokens(&content, &sb.home).contains(&format!(
+                "IdentityAgent \"{}\"",
+                sb.new_dir.join("agent.sock").display()
+            ))
+        );
         assert!(
             !content.contains(&sb.legacy_dir.join("agent.sock").display().to_string()),
             "stale path must be gone:\n{content}"
@@ -235,7 +240,7 @@ mod tests {
         for rc in [&zshrc, &bashrc] {
             let content = std::fs::read_to_string(rc).unwrap();
             assert!(
-                content.contains(&want),
+                ssh_setup::expand_home_tokens(&content, &sb.home).contains(&want),
                 "{} not repointed:\n{content}",
                 rc.display()
             );

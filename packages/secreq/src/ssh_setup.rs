@@ -81,8 +81,8 @@ pub fn plan(home: &Path, method: Method, shell: Shell, agent_sock: &Path) -> Res
     match method {
         Method::SshConfig => {
             let config_file = home.join(".ssh/config");
-            let block = ssh_config_block(agent_sock);
-            let (already_configured, updates_existing) = block_state(&config_file, &block);
+            let block = ssh_config_block(agent_sock, home);
+            let (already_configured, updates_existing) = block_state(&config_file, &block, home);
             Ok(SshSetupPlan {
                 method,
                 config_file,
@@ -105,8 +105,8 @@ pub fn plan(home: &Path, method: Method, shell: Shell, agent_sock: &Path) -> Res
                     agent_sock.display()
                 )
             })?;
-            let block = shell_rc_block(&shell, agent_sock);
-            let (already_configured, updates_existing) = block_state(&config_file, &block);
+            let block = shell_rc_block(&shell, agent_sock, home);
+            let (already_configured, updates_existing) = block_state(&config_file, &block, home);
             Ok(SshSetupPlan {
                 method,
                 config_file,
@@ -121,15 +121,35 @@ pub fn plan(home: &Path, method: Method, shell: Shell, agent_sock: &Path) -> Res
 
 /// Classify `config_file` against the block we want: `(already_configured,
 /// updates_existing)`. A missing/unreadable file is neither.
-fn block_state(config_file: &Path, want: &str) -> (bool, bool) {
+fn block_state(config_file: &Path, want: &str, home: &Path) -> (bool, bool) {
     let Ok(content) = fs::read_to_string(config_file) else {
         return (false, false);
     };
     match existing_block(&content) {
-        Some(found) if found == want => (true, false),
+        Some(found) if expand_home_tokens(&found, home) == expand_home_tokens(want, home) => {
+            (true, false)
+        }
         Some(_) => (false, true),
         None => (false, false),
     }
+}
+
+/// Compare blocks by the path they *mean*, not the way they spell it.
+///
+/// The block we write now uses `$HOME` / `~`, but a config written by an
+/// earlier secreq spells the same socket absolutely. Comparing literally
+/// would tell every one of those users their block "points at a different
+/// socket than the agent now uses" and offer to rewrite something already
+/// correct — a spurious prompt, and a false statement.
+///
+/// Expanding (rather than abbreviating) is the safer direction: it needs no
+/// path-boundary rule and leaves a socket outside `$HOME` untouched.
+pub(crate) fn expand_home_tokens(block: &str, home: &Path) -> String {
+    let home = home.display().to_string();
+    let home = home.trim_end_matches('/');
+    block
+        .replace("$HOME/", &format!("{home}/"))
+        .replace("\"~/", &format!("\"{home}/"))
 }
 
 /// Apply the plan. Idempotent — if the file already carries exactly this
@@ -160,9 +180,8 @@ pub fn apply(plan: &SshSetupPlan) -> Result<bool> {
 /// installs whose owner will never re-run `ssh setup`, and must reach the
 /// exact same result.
 pub(crate) fn rewrite_in_place(config_file: &Path, new_block: &str) -> Result<bool> {
-    let content = match fs::read_to_string(config_file) {
-        Ok(c) => c,
-        Err(_) => return Ok(false),
+    let Ok(content) = fs::read_to_string(config_file) else {
+        return Ok(false);
     };
     let Some(updated) = replace_block(&content, new_block) else {
         return Ok(false);
@@ -246,9 +265,9 @@ pub fn remove(home: &Path, method: Method, shell: Shell) -> Result<bool> {
             None => return Ok(false),
         },
     };
-    let existing = match fs::read_to_string(&config_file) {
-        Ok(content) => content,
-        Err(_) => return Ok(false), // file absent → nothing to remove
+    // File absent → nothing to remove.
+    let Ok(existing) = fs::read_to_string(&config_file) else {
+        return Ok(false);
     };
     let Some(stripped) = strip_block(&existing) else {
         return Ok(false);
@@ -332,13 +351,19 @@ fn replace_block(content: &str, new_block: &str) -> Option<String> {
     Some(result)
 }
 
-fn ssh_config_block(agent_sock: &Path) -> String {
-    let sock = agent_sock.display();
+fn ssh_config_block(agent_sock: &Path, home: &Path) -> String {
+    // `~`, not `$HOME`: OpenSSH tilde-expands `IdentityAgent` but performs
+    // no shell-variable expansion, so this is the mirror image of the shell
+    // block below. A socket outside `$HOME` (the usual `$XDG_RUNTIME_DIR`
+    // case on Linux) stays absolute.
+    let sock = crate::paths::under_home(agent_sock, home, "~");
     format!("{BEGIN_SENTINEL}\nHost *\n    IdentityAgent \"{sock}\"\n{END_SENTINEL}")
 }
 
-fn shell_rc_block(shell: &Shell, agent_sock: &Path) -> String {
-    let sock = agent_sock.display();
+fn shell_rc_block(shell: &Shell, agent_sock: &Path, home: &Path) -> String {
+    // Quoted in both forms, so `$HOME` — see `ssh_config_block` for why the
+    // ssh-config sibling uses a tilde instead.
+    let sock = crate::paths::under_home(agent_sock, home, "$HOME");
     let line = match shell {
         Shell::Fish => format!(r#"set -gx SSH_AUTH_SOCK "{sock}""#),
         _ => format!(r#"export SSH_AUTH_SOCK="{sock}""#),
@@ -376,7 +401,8 @@ mod tests {
             "managed block must be prepended above existing config:\n{content}"
         );
         assert!(content.contains("Host *"));
-        assert!(content.contains(&format!("IdentityAgent \"{}\"", sock.display())));
+        assert!(expand_home_tokens(&content, home.path())
+            .contains(&format!("IdentityAgent \"{}\"", sock.display())));
         // ssh refuses a group/world-readable config.
         assert_eq!(mode_of(&config), 0o600, "config file must be 0600");
     }
@@ -410,7 +436,8 @@ mod tests {
         let content = fs::read_to_string(&zshrc).unwrap();
         // Pre-existing content stays on top (append).
         assert!(content.starts_with("# my rc\n"));
-        assert!(content.contains(&format!(r#"export SSH_AUTH_SOCK="{}""#, sock.display())));
+        assert!(expand_home_tokens(&content, home.path())
+            .contains(&format!(r#"export SSH_AUTH_SOCK="{}""#, sock.display())));
         assert!(content.contains(BEGIN_SENTINEL));
     }
 
@@ -423,7 +450,8 @@ mod tests {
         assert!(apply(&p).unwrap());
 
         let content = fs::read_to_string(&p.config_file).unwrap();
-        assert!(content.contains(&format!(r#"set -gx SSH_AUTH_SOCK "{}""#, sock.display())));
+        assert!(expand_home_tokens(&content, home.path())
+            .contains(&format!(r#"set -gx SSH_AUTH_SOCK "{}""#, sock.display())));
         assert!(!content.contains("export SSH_AUTH_SOCK"));
     }
 
@@ -441,6 +469,57 @@ mod tests {
         assert!(!apply(&p2).unwrap(), "second apply must be a no-op");
         let after_second = fs::read_to_string(&p2.config_file).unwrap();
         assert_eq!(after_first, after_second);
+    }
+
+    #[test]
+    fn a_block_written_before_the_tilde_switch_is_still_already_configured() {
+        // Configs written by an earlier secreq spell the socket absolutely,
+        // where we now write `~`. Both name the same socket, so a user who
+        // already ran `ssh setup` must not be told their block "points at a
+        // different socket" and offered a pointless rewrite.
+        let home = tempfile::tempdir().unwrap();
+        let sock = home.path().join(".secreq/run/agent.sock");
+        let ssh_dir = home.path().join(".ssh");
+        fs::create_dir_all(&ssh_dir).unwrap();
+        let legacy = format!(
+            "{BEGIN_SENTINEL}\nHost *\n    IdentityAgent \"{}\"\n{END_SENTINEL}\n",
+            sock.display()
+        );
+        fs::write(ssh_dir.join("config"), &legacy).unwrap();
+
+        let p = plan(home.path(), Method::SshConfig, Shell::Zsh, &sock).unwrap();
+        assert!(p.already_configured, "absolute spelling must still match");
+        assert!(!p.updates_existing);
+        assert!(!apply(&p).unwrap(), "nothing to rewrite");
+        // And the file is left exactly as the user had it.
+        assert_eq!(fs::read_to_string(ssh_dir.join("config")).unwrap(), legacy);
+    }
+
+    #[test]
+    fn a_genuinely_different_socket_still_reports_an_update() {
+        // The normalization must not blunt the check the `already_configured`
+        // doc calls out: a socket that actually moved has to be detected.
+        let home = tempfile::tempdir().unwrap();
+        let ssh_dir = home.path().join(".ssh");
+        fs::create_dir_all(&ssh_dir).unwrap();
+        fs::write(
+            ssh_dir.join("config"),
+            format!(
+                "{BEGIN_SENTINEL}\nHost *\n    IdentityAgent \"{}\"\n{END_SENTINEL}\n",
+                home.path().join("legacy/agent.sock").display()
+            ),
+        )
+        .unwrap();
+
+        let p = plan(
+            home.path(),
+            Method::SshConfig,
+            Shell::Zsh,
+            &home.path().join(".secreq/run/agent.sock"),
+        )
+        .unwrap();
+        assert!(!p.already_configured);
+        assert!(p.updates_existing, "a moved socket must still be rewritten");
     }
 
     #[test]
@@ -483,7 +562,8 @@ mod tests {
         assert!(apply(&p2).unwrap(), "apply must rewrite the stale block");
 
         let content = fs::read_to_string(&p2.config_file).unwrap();
-        assert!(content.contains(&format!("IdentityAgent \"{}\"", new_sock.display())));
+        assert!(expand_home_tokens(&content, home.path())
+            .contains(&format!("IdentityAgent \"{}\"", new_sock.display())));
         assert!(
             !content.contains(&old_sock.display().to_string()),
             "stale path must be gone:\n{content}"
@@ -505,7 +585,7 @@ mod tests {
         let config = ssh_dir.join("config");
 
         // Our block sandwiched between the user's own stanzas.
-        let block = ssh_config_block(&old_sock);
+        let block = ssh_config_block(&old_sock, home.path());
         let before = "Host above\n  User me\n";
         let after = "\nHost below\n  User you\n";
         fs::write(&config, format!("{before}{block}\n{after}")).unwrap();
@@ -522,7 +602,8 @@ mod tests {
         let ours = content.find(BEGIN_SENTINEL).unwrap();
         let below = content.find("Host below").unwrap();
         assert!(above < ours && ours < below, "block moved:\n{content}");
-        assert!(content.contains(&format!("IdentityAgent \"{}\"", new_sock.display())));
+        assert!(expand_home_tokens(&content, home.path())
+            .contains(&format!("IdentityAgent \"{}\"", new_sock.display())));
     }
 
     #[test]
@@ -555,7 +636,8 @@ mod tests {
 
         let content = fs::read_to_string(&zshrc).unwrap();
         assert!(content.starts_with("# my rc\n"), "rc preamble survives");
-        assert!(content.contains(&format!(r#"export SSH_AUTH_SOCK="{}""#, new_sock.display())));
+        assert!(expand_home_tokens(&content, home.path())
+            .contains(&format!(r#"export SSH_AUTH_SOCK="{}""#, new_sock.display())));
         assert!(!content.contains(&old_sock.display().to_string()));
         assert_eq!(content.matches(BEGIN_SENTINEL).count(), 1);
     }

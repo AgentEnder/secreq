@@ -59,7 +59,38 @@ pub const SECREQ_HOME_ENV: &str = "SECREQ_HOME";
 #[cfg(test)]
 pub(crate) fn env_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Rewrite `path` to start with `token` when it sits under `home`, leaving
+/// it absolute otherwise.
+///
+/// **The token is the caller's because the consumers disagree about what
+/// they expand.** A shell rc needs `$HOME`: a tilde inside double quotes is
+/// never expanded, so `export PATH="~/.secreq/shims:$PATH"` would put a
+/// directory literally named `~` on PATH. `ssh_config` is the mirror image —
+/// OpenSSH tilde-expands `IdentityAgent` but performs no shell-variable
+/// expansion at all, so there it must be `~`. The UI, which only displays,
+/// uses `~` as well.
+///
+/// `home` is a parameter rather than an environment read so the planners
+/// that call this — which already take `home` for exactly this reason — stay
+/// testable without touching a process-global.
+///
+/// Rewrites only on a path boundary, so `/Users/youthful/x` under a home of
+/// `/Users/you` keeps its full prefix instead of becoming `<token>thful/x`.
+pub fn under_home(path: &Path, home: &Path, token: &str) -> String {
+    let path = path.display().to_string();
+    let home = home.display().to_string();
+    let home = home.trim_end_matches('/');
+    if home.is_empty() {
+        return path;
+    }
+    match path.strip_prefix(home) {
+        Some(rest) if rest.starts_with('/') => format!("{token}{rest}"),
+        _ => path,
+    }
 }
 
 /// Root for all secreq state: `$SECREQ_HOME`, else `~/.secreq`.
