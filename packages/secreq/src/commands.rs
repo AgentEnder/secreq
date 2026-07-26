@@ -929,7 +929,7 @@ pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Re
             cliclack::log::warning(format!("couldn't auto-configure your shell: {err:#}"))?;
             cliclack::note(
                 "Add this to your shell config yourself:",
-                format!(r#"export PATH="{}:$PATH""#, shim_dir.display()),
+                path_setup::manual_export_line(&shim_dir),
             )?;
         }
     }

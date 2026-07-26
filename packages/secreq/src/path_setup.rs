@@ -260,12 +260,81 @@ fn format_block(shell: &Shell, shim_dir: &Path, home: &Path) -> String {
     // POSIX form and fish's, and it keeps the block portable for anyone who
     // syncs their dotfiles between machines. A shim dir outside `$HOME`
     // stays absolute.
-    let dir = crate::paths::under_home(shim_dir, home, "$HOME");
+    //
+    // The split is what lets both halves be true at once: the token is ours
+    // and must expand, the remainder is the user's path and must not. So the
+    // escaping is applied to the remainder only, never to the whole string.
+    let (token, rest) = split_home_token(shim_dir, home);
+    let dir = format!("{token}{}", escape_for_double_quotes(&rest, shell));
     let line = match shell {
-        Shell::Fish => format!("fish_add_path --path --prepend {dir}"),
+        // Unquoted, fish split the argument on whitespace: a shim dir with a
+        // space in its name added two directories, neither of them the one
+        // the user chose.
+        Shell::Fish => format!(r#"fish_add_path --path --prepend "{dir}""#),
         _ => format!(r#"export PATH="{dir}:$PATH""#),
     };
     format!("{BEGIN_SENTINEL}\n{line}\n{END_SENTINEL}")
+}
+
+/// The POSIX `export PATH=` line to hand a user whose shell we could not
+/// place, for them to paste into whatever config it reads.
+///
+/// Spelled absolute rather than with `$HOME`: an unrecognized shell is
+/// precisely the case where we cannot promise a variable expands. The path
+/// still lands inside double quotes, so it gets the same escaping as the
+/// block — a line the user is told to paste is not a safer place for a `$(…)`
+/// than a line we write for them.
+pub fn manual_export_line(shim_dir: &Path) -> String {
+    let dir = escape_for_double_quotes(&shim_dir.display().to_string(), &Shell::Posix);
+    format!(r#"export PATH="{dir}:$PATH""#)
+}
+
+/// Split the shim dir into the `$HOME` token we emit and the remainder, which
+/// is the user's data. Mirrors [`crate::paths::under_home`]'s boundary rule —
+/// `/Users/youthful/x` under a home of `/Users/you` keeps its full prefix —
+/// but hands back the two pieces rather than one joined string, because only
+/// one of them may be escaped.
+fn split_home_token(shim_dir: &Path, home: &Path) -> (&'static str, String) {
+    let dir = shim_dir.display().to_string();
+    let home = home.display().to_string();
+    let home = home.trim_end_matches('/');
+    if !home.is_empty() {
+        if let Some(rest) = dir.strip_prefix(home) {
+            if rest.starts_with('/') {
+                return ("$HOME", rest.to_owned());
+            }
+        }
+    }
+    ("", dir)
+}
+
+/// Escape `s` for the inside of a double-quoted word in `shell`.
+///
+/// Double quotes stop word splitting but not expansion, so a shim dir
+/// containing `$(…)` (or, in sh, a backtick) is a command the login shell runs
+/// at every start — from a line secreq wrote into their rc file.
+///
+/// The two shells do not have the same special set, and over-escaping is not
+/// the safe direction: inside fish's double quotes a backslash escapes only
+/// `\`, `"` and `$`, and before anything else it stays a literal backslash. A
+/// backtick escaped fish-side would therefore corrupt the path rather than
+/// protect it.
+fn escape_for_double_quotes(s: &str, shell: &Shell) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' | '"' | '$' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            '`' if !matches!(shell, Shell::Fish) => {
+                out.push('\\');
+                out.push(ch);
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -370,6 +439,74 @@ mod tests {
         std::fs::write(home.path().join(".zprofile"), "# nothing to do with us\n").unwrap();
         let stale = find_stale_blocks(home.path(), &Shell::Zsh, &canonical);
         assert!(stale.is_empty(), "got {stale:?}");
+    }
+
+    // ── S9: the shim dir lands in a shell line the user then sources ──
+
+    /// fish's `fish_add_path` argument was unquoted, so a shim dir with a
+    /// space in it split into two arguments and fish put two wrong
+    /// directories on PATH — while the shim dir the user asked for was on
+    /// neither.
+    #[test]
+    fn the_fish_block_quotes_a_shim_dir_with_a_space_in_it() {
+        let home = tempfile::tempdir().unwrap();
+        let p = plan(home.path(), Shell::Fish, Path::new("/opt/my tools/shims")).unwrap();
+
+        assert!(
+            p.block
+                .contains(r#"fish_add_path --path --prepend "/opt/my tools/shims""#),
+            "got: {}",
+            p.block
+        );
+    }
+
+    /// Both blocks put the directory inside double quotes, where `$` and (in
+    /// sh) a backtick still start an expansion — so a shim dir containing one
+    /// becomes a command the login shell runs on every start.
+    #[test]
+    fn the_blocks_neutralise_an_expansion_inside_the_shim_dir() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = Path::new("/opt/$(id -u)/`whoami`/shims");
+
+        let posix = plan(home.path(), Shell::Zsh, dir).unwrap().block;
+        assert!(posix.contains(r"\$(id -u)"), "got: {posix}");
+        assert!(posix.contains(r"\`whoami\`"), "got: {posix}");
+
+        // fish has no backtick substitution, and a backslash before a
+        // non-special character inside its double quotes stays literal — so
+        // escaping one there would corrupt the path rather than protect it.
+        let fish = plan(home.path(), Shell::Fish, dir).unwrap().block;
+        assert!(fish.contains(r"\$(id -u)"), "got: {fish}");
+        assert!(fish.contains("`whoami`"), "got: {fish}");
+        assert!(!fish.contains(r"\`"), "got: {fish}");
+    }
+
+    /// The escaping must not reach the `$HOME` we emit ourselves — that one
+    /// has to expand, which is the whole reason the block says `$HOME` and
+    /// not `~` (a tilde inside double quotes is never expanded).
+    #[test]
+    fn the_home_token_still_expands_after_escaping() {
+        let home = tempfile::tempdir().unwrap();
+        let shim = home.path().join(".secreq/shims");
+
+        assert!(plan(home.path(), Shell::Zsh, &shim)
+            .unwrap()
+            .block
+            .contains(r#"export PATH="$HOME/.secreq/shims:$PATH""#));
+        assert!(plan(home.path(), Shell::Fish, &shim)
+            .unwrap()
+            .block
+            .contains(r#"fish_add_path --path --prepend "$HOME/.secreq/shims""#));
+    }
+
+    /// The same line reaches the user as copy-paste text when we can't place
+    /// their shell, which is not a safer place for an expansion.
+    #[test]
+    fn the_manual_export_line_is_escaped_too() {
+        assert_eq!(
+            manual_export_line(Path::new("/opt/$(id -u)/shims")),
+            r#"export PATH="/opt/\$(id -u)/shims:$PATH""#
+        );
     }
 
     // ── S4/S5: `apply` rewrites a file secreq does not own ──
