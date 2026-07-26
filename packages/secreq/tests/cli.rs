@@ -591,7 +591,13 @@ fn wrap_records_config_and_drops_shim() {
     assert!(shim.is_file());
     let shim_body = fs::read_to_string(&shim).unwrap();
     assert!(shim_body.contains("secreq-managed-shim"));
-    assert!(shim_body.contains("exec secreq x gh"));
+    // Absolute path, not a bare `secreq`: a bare name would resolve
+    // through whatever PATH the caller had.
+    assert!(shim_body.contains("x 'gh' \"$@\""), "got: {shim_body}");
+    assert!(
+        !shim_body.contains("exec secreq "),
+        "shim must not resolve secreq by bare name: {shim_body}"
+    );
 }
 
 #[test]
@@ -636,7 +642,13 @@ fn wrap_with_no_env_creates_a_gate_only_wrap() {
     let shim = shim_dir.join("op");
     assert!(shim.is_file());
     let shim_body = fs::read_to_string(&shim).unwrap();
-    assert!(shim_body.contains("exec secreq x op"));
+    // Absolute path, not a bare `secreq`: a bare name would resolve
+    // through whatever PATH the caller had.
+    assert!(shim_body.contains("x 'op' \"$@\""), "got: {shim_body}");
+    assert!(
+        !shim_body.contains("exec secreq "),
+        "shim must not resolve secreq by bare name: {shim_body}"
+    );
 }
 
 #[test]

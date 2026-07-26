@@ -19,9 +19,11 @@ process.
 
 `x` runs a binary you have wrapped. You rarely type it: `secreq wrap gh`
 drops a five-line shim at `<shim_dir>/gh` whose body is
-`exec secreq x gh "$@"`, so anything that resolves `gh` through `PATH`
-(your shell, `npm`, `make`, your IDE) routes through secreq without knowing
-it.
+`exec '<path to secreq>' x 'gh' "$@"`, so anything that resolves `gh`
+through `PATH` (your shell, `npm`, `make`, your IDE) routes through secreq
+without knowing it. The shim names secreq by absolute path, so a `secreq`
+that appears earlier on `PATH` later (direnv, asdf, `node_modules/.bin`)
+cannot take its place.
 
 ### The argv contract
 

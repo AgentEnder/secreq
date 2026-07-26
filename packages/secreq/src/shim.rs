@@ -1,7 +1,8 @@
 //! PATH shim management for `secreq wrap` / `unwrap`.
 //!
 //! A shim is a tiny POSIX shell script in the user's chosen `$shim_dir` that
-//! `exec`s `secreq <wrap_name> "$@"`. Because it lives on `PATH`, every
+//! `exec`s `'<abs path to secreq>' x '<wrap_name>' "$@"`. Because it lives on
+//! `PATH`, every
 //! `execvp("gh", …)` — from interactive shells, from `npm` postinstalls,
 //! from IDE-spawned subprocesses, from anything — resolves to our shim
 //! first, runs through `secreq`'s consent + injection + masking, and then
@@ -26,6 +27,8 @@ pub const SENTINEL: &str = "secreq-managed-shim";
 /// exists at the target without the sentinel, returns an error rather than
 /// clobbering.
 pub fn install(shim_dir: &Path, wrap_name: &str) -> Result<PathBuf> {
+    validate_wrap_name(wrap_name)?;
+    let exe = secreq_exe()?;
     let path = shim_dir.join(wrap_name);
 
     if path.exists() {
@@ -33,7 +36,7 @@ pub fn install(shim_dir: &Path, wrap_name: &str) -> Result<PathBuf> {
             .with_context(|| format!("could not read existing file at {}", path.display()))?;
         if existing.contains(SENTINEL) {
             // Re-write to refresh the body in case the format changed.
-            fs::write(&path, body(wrap_name))?;
+            fs::write(&path, body(&exe, wrap_name))?;
             make_executable(&path)?;
             return Ok(path);
         }
@@ -48,7 +51,7 @@ pub fn install(shim_dir: &Path, wrap_name: &str) -> Result<PathBuf> {
         fs::create_dir_all(parent)
             .with_context(|| format!("could not create shim dir {}", parent.display()))?;
     }
-    fs::write(&path, body(wrap_name))
+    fs::write(&path, body(&exe, wrap_name))
         .with_context(|| format!("could not write shim to {}", path.display()))?;
     make_executable(&path)?;
     Ok(path)
@@ -98,9 +101,64 @@ pub fn is_managed(shim_dir: &Path, wrap_name: &str) -> bool {
     fs::read_to_string(path).is_ok_and(|body| body.contains(SENTINEL))
 }
 
-fn body(wrap_name: &str) -> String {
+/// POSIX-quote `s` for the shim's `exec` line. Single quotes disable every
+/// expansion `sh` performs; an embedded quote is closed, escaped, reopened.
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// Absolute path to the running `secreq`, baked into every shim body.
+///
+/// A shim that said `exec secreq …` resolved that name through whatever PATH
+/// its caller happened to have. The shim dir wins only until something
+/// prepends to PATH later — direnv, asdf, `node_modules/.bin` — at which
+/// point a `secreq` earlier on PATH intercepts every wrapped command with no
+/// prompt and no audit row. [`crate::commands`]'s `find_real_binary` is
+/// already hardened against this exact shape of hijack; the shim's own lookup
+/// was not.
+fn secreq_exe() -> Result<PathBuf> {
+    let exe =
+        std::env::current_exe().context("could not determine the running secreq's own path")?;
+    // Resolve symlinks so the shim names the binary rather than a launcher
+    // link that could later be repointed.
+    Ok(fs::canonicalize(&exe).unwrap_or(exe))
+}
+
+/// Reject a wrap name that cannot safely be a filename *or* a shell word.
+///
+/// The name reaches the shim three times: as a path segment under
+/// `shim_dir`, inside `#` comment lines, and as an argument on the `exec`
+/// line. A newline ends a comment and starts a command; a `/` escapes the
+/// shim directory. Following `paths.rs`, these are refused rather than
+/// sanitized, so two distinct names can never collapse onto one file.
+fn validate_wrap_name(wrap_name: &str) -> Result<()> {
+    if wrap_name.is_empty() {
+        bail!("a wrap name cannot be empty");
+    }
+    if wrap_name == "." || wrap_name == ".." || wrap_name.contains(['/', '\0', '\n', '\r']) {
+        bail!(
+            "invalid wrap name {wrap_name:?}: a wrap name cannot be `.`, `..`, or contain \
+             `/`, NUL, or a newline"
+        );
+    }
+    // Shimming our own name gives `exec <secreq> x secreq …`, which re-enters
+    // the wrap path on every invocation and leaves no un-shimmed way to undo
+    // itself.
+    if wrap_name == "secreq" {
+        bail!("refusing to shim `secreq` itself: the shim would re-enter secreq on every call");
+    }
+    Ok(())
+}
+
+fn body(exe: &Path, wrap_name: &str) -> String {
+    let exe_q = sh_quote(&exe.display().to_string());
+    let wrap_q = sh_quote(wrap_name);
     format!(
-        "#!/bin/sh\n# {SENTINEL}: wrap={wrap_name}\n# Created by `secreq wrap {wrap_name}`. Removed by `secreq unwrap {wrap_name}`.\n# Do not edit by hand.\nexec secreq x {wrap_name} \"$@\"\n"
+        "#!/bin/sh\n\
+         # {SENTINEL}: wrap={wrap_name}\n\
+         # Created by `secreq wrap {wrap_name}`. Removed by `secreq unwrap {wrap_name}`.\n\
+         # Do not edit by hand.\n\
+         exec {exe_q} x {wrap_q} \"$@\"\n"
     )
 }
 
@@ -123,7 +181,12 @@ mod tests {
         assert_eq!(path, dir.path().join("gh"));
         let body = fs::read_to_string(&path).unwrap();
         assert!(body.contains(SENTINEL));
-        assert!(body.contains("exec secreq x gh"));
+        // The shim names secreq by absolute path, never by bare name.
+        let exe = secreq_exe().unwrap();
+        assert!(
+            body.contains(&format!("exec '{}' x 'gh' \"$@\"", exe.display())),
+            "got: {body}"
+        );
         // Executable bit set.
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o755);
@@ -194,7 +257,7 @@ mod tests {
         let written = reinstall_all(dir.path(), ["gh".to_owned()]).unwrap();
         assert_eq!(written, vec![target.clone()]);
         let body = fs::read_to_string(&target).unwrap();
-        assert!(body.contains("exec secreq x gh"), "got: {body}");
+        assert!(body.contains("x 'gh'"), "got: {body}");
         assert!(!body.contains("exec secreq gh \""), "stale body remained");
     }
 
@@ -207,5 +270,54 @@ mod tests {
         // Overwrite with unowned content.
         fs::write(dir.path().join("gh"), "no sentinel here").unwrap();
         assert!(!is_managed(dir.path(), "gh"));
+    }
+
+    /// A shim that resolved `secreq` through the caller's PATH could be
+    /// hijacked by anything that prepends to PATH later (direnv, asdf,
+    /// `node_modules/.bin`), intercepting every wrapped command with no
+    /// prompt and no audit row.
+    #[test]
+    fn the_shim_names_secreq_by_absolute_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = install(dir.path(), "gh").unwrap();
+        let body = fs::read_to_string(&path).unwrap();
+        let exec_line = body
+            .lines()
+            .find(|l| l.starts_with("exec "))
+            .expect("shim has an exec line");
+        assert!(
+            !exec_line.starts_with("exec secreq"),
+            "bare name would resolve through the caller's PATH: {exec_line}"
+        );
+        assert!(exec_line.contains('/'), "not an absolute path: {exec_line}");
+    }
+
+    /// The name lands in a `#` comment and on the `exec` line. A newline
+    /// ends the comment and starts a command; a `/` escapes the shim dir.
+    #[test]
+    fn install_rejects_a_wrap_name_that_is_not_a_safe_filename_or_shell_word() {
+        let dir = tempfile::tempdir().unwrap();
+        for bad in ["", ".", "..", "a/b", "gh\nrm -rf ~", "gh\rwhoami"] {
+            assert!(
+                install(dir.path(), bad).is_err(),
+                "should have refused {bad:?}"
+            );
+        }
+    }
+
+    /// Shimming our own name yields `exec <secreq> x secreq …`, which
+    /// re-enters the wrap path on every call with no un-shimmed way out.
+    #[test]
+    fn install_refuses_to_shim_secreq_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = install(dir.path(), "secreq").expect_err("must refuse");
+        assert!(format!("{err:#}").contains("re-enter"), "{err:#}");
+    }
+
+    /// A quote in a wrap name must not break out of the exec line.
+    #[test]
+    fn sh_quote_neutralises_an_embedded_single_quote() {
+        assert_eq!(sh_quote("gh"), "'gh'");
+        assert_eq!(sh_quote("it's"), r"'it'\''s'");
     }
 }

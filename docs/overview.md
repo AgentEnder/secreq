@@ -45,7 +45,7 @@ consent**. Nobody else covers all three.
                   │
                   ▼  shell or script invokes `gh repo list`
    ┌─ PATH shim ───────────────────────────────────────────────────────┐
-   │  ~/.secreq/shims/gh ⇒ exec secreq x gh "$@"                       │
+   │  ~/.secreq/shims/gh ⇒ exec '<abs path to secreq>' x 'gh' "$@"     │
    │  covers every execvp() — shells, npm postinstalls, IDEs           │
    └───────────────────────────────────────────────────────────────────┘
                   │

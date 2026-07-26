@@ -198,7 +198,9 @@ enum Command {
 
     /// Run a wrapped binary through secreq: consent → inject secrets → exec
     /// the real binary with output masking. This is what the PATH shims call
-    /// (`exec secreq x <wrap> "$@"`). `x` owns no ordinary flags: everything
+    /// (`exec '<path to secreq>' x '<wrap>' "$@"` — the shim names secreq by
+    /// absolute path so it cannot be hijacked by a `secreq` earlier on the
+    /// caller's PATH). `x` owns no ordinary flags: everything
     /// after the wrap name is forwarded to the binary verbatim (so
     /// `<wrap> --help` reaches the binary, not secreq), and secreq's own
     /// options use the reserved `--sq-` prefix; `secreq x --sq-help` lists

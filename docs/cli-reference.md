@@ -363,7 +363,7 @@ Register a compiled wasm rule module (built with the `secreq-rule` SDK). The dae
 secreq x [--sq-OPTIONS] <WRAP> [ARGS...]
 ```
 
-Run a wrapped binary through secreq: consent → inject secrets → exec the real binary with output masking. This is what the PATH shims call (`exec secreq x <wrap> "$@"`). `x` owns no ordinary flags: everything after the wrap name is forwarded to the binary verbatim (so `<wrap> --help` reaches the binary, not secreq), and secreq's own options use the reserved `--sq-` prefix; `secreq x --sq-help` lists them. Parsed by hand in `run_x`, never by clap; this variant exists so `secreq --help` documents the verb
+Run a wrapped binary through secreq: consent → inject secrets → exec the real binary with output masking. This is what the PATH shims call (`exec '<path to secreq>' x '<wrap>' "$@"` — the shim names secreq by absolute path so it cannot be hijacked by a `secreq` earlier on the caller's PATH). `x` owns no ordinary flags: everything after the wrap name is forwarded to the binary verbatim (so `<wrap> --help` reaches the binary, not secreq), and secreq's own options use the reserved `--sq-` prefix; `secreq x --sq-help` lists them. Parsed by hand in `run_x`, never by clap; this variant exists so `secreq --help` documents the verb
 
 ## `secreq run`
 
