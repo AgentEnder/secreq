@@ -90,22 +90,33 @@ Reports in these areas are especially valuable:
   releasing a ref outside the host-declared scope, or trusting a
   guest-supplied identity as if it were a host caller chain.
 - **SSH agent** — signing without consent, or the resolved private key
-  outliving the single in-process use it is zeroized after.
+  escaping the daemon's encrypted secret cache: reaching plaintext outside
+  the single in-process signing use, or surviving `secreq daemon stop`.
 
 The threat model these boundaries defend is summarised in
 [`docs/overview.md`](./docs/overview.md); the enforcement points are
-`src/daemon/peercred.rs`, `src/provenance.rs`, and `src/masking.rs`.
+`src/daemon/peercred.rs`, `src/provenance.rs`, and `src/mask.rs`.
 
 ### Out of scope
 
 - The security of the underlying secret stores themselves (1Password,
   macOS Keychain, `pass`, LastPass) and their CLIs — report those to
   their vendors.
-- Attacks that require an already-compromised local user account. `secreq`
-  is scoped to your user; an attacker who is already you (same UID, same
-  session) is outside the boundary it can defend.
+- Reading an injected secret out of a live process. Once a value reaches a
+  wrapped process's environment, any same-UID process can read it
+  (`/proc/<pid>/environ` on Linux, `KERN_PROCARGS2` on macOS), as can root.
+  Environment variables are the delivery channel, and this is a property of
+  that channel.
 - Findings that a value you deliberately opted out of masking with
   `--sq-raw` was not masked.
+
+**Same-UID is not a blanket exclusion.** The bullet above covers the
+credential after release, not the decision to release it. Telling same-UID
+processes apart is the job of the consent prompt, the caller chain, the
+approvals cache and the rules engine, so a report that a local process can
+fool any of them is in scope. "A script running as you obtained a secret it
+should have been prompted for" is a vulnerability. "A script running as you
+read the token out of `gh`'s environment while it ran" is not.
 
 ## Safe harbor
 
