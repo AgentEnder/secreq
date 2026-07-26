@@ -785,11 +785,21 @@ pub fn evaluate(rules: &[Rule], modules: &RuleModules, ctx: &EvalCtx) -> Evaluat
 /// requested secret is inside it. Empty set = guard disabled (see
 /// [`Rule::trained_secrets`]).
 fn trained_secrets_allow(rule: &Rule, ctx: &EvalCtx) -> bool {
-    rule.trained_secrets.is_empty()
-        || ctx
-            .secrets
-            .iter()
-            .all(|n| rule.trained_secrets.contains(*n))
+    if rule.trained_secrets.is_empty() {
+        return true;
+    }
+    // `.all()` over an empty iterator is vacuously true, so an ask declaring
+    // no subject would satisfy *every* rule's snapshot — the opposite of what
+    // a guard means. Callers mint a subject for each ask kind that resolves
+    // nothing (`ssh:<key_id>`, `wrap:<name>`), so this should be unreachable;
+    // it is here so the next ask kind fails closed on the day someone adds
+    // one and forgets, rather than silently consulting every rule.
+    if ctx.secrets.is_empty() {
+        return false;
+    }
+    ctx.secrets
+        .iter()
+        .all(|n| rule.trained_secrets.contains(*n))
 }
 
 /// Does the declarative match clause `m` match `ctx`? Pure predicate —

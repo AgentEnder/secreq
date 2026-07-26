@@ -1446,6 +1446,22 @@ impl State {
     /// then takes the interactive path, whose decision is audited as
     /// usual.
     pub fn evaluate_rules_for_ask(&self, ask: &Ask) -> Option<RuleHit> {
+        // A scoped-agent ask never reaches the ruleset. Both design docs say
+        // so already, but they say it about the *call sites* — and this
+        // method has no way to refuse one, so the guarantee held only while
+        // nobody added a third caller. `handle_ask` is that third caller: a
+        // guest ask arrives over the ordinary consent socket and lands here
+        // like any other.
+        //
+        // Enforced rather than assumed, because a guest is the principal
+        // least suited to minting silent approvals. Every clause a rule could
+        // match on is absent or unverifiable here: `callers` is empty by
+        // construction, `cwd` is in another kernel, and the only rich input
+        // is a string the guest chose. The host-declared scope is the
+        // principal on this path, and the prompt is where it gets decided.
+        if ask.agent.is_some() {
+            return None;
+        }
         if self.rules.is_empty() {
             return None;
         }
@@ -1468,8 +1484,23 @@ impl State {
         // `Ask::secrets` drives provider resolution, so a synthetic
         // entry there would send the daemon looking for a secret that
         // does not exist.
-        let ssh_subject = ask.ssh.as_ref().map(|s| format!("ssh:{}", s.key_id));
-        let requested: Vec<&str> = match &ssh_subject {
+        // A **gate-only wrap** has no `env` entries, so it declares no
+        // secrets either — it exists to put consent in front of a binary that
+        // holds its own credentials (`op` is the shipped example). That ask
+        // hits the same vacuous-`.all()` hole the SSH subject was minted to
+        // close, and the fix landed only on the SSH branch. Name the wrap
+        // itself, so `--secret wrap:op` scopes a rule to it and a rule
+        // trained on anything else stops being consulted.
+        let subject = ask
+            .ssh
+            .as_ref()
+            .map(|s| format!("ssh:{}", s.key_id))
+            .or_else(|| {
+                ask.secrets
+                    .is_empty()
+                    .then(|| format!("wrap:{}", ask.dedupe_key.wrap))
+            });
+        let requested: Vec<&str> = match &subject {
             Some(subject) => vec![subject.as_str()],
             None => ask.secrets.iter().map(|s| s.name.as_str()).collect(),
         };
@@ -4427,5 +4458,111 @@ mod tests {
                 "the manager window must never be asked to exit on queue drain"
             );
         }
+    }
+
+    /// A **gate-only wrap** (no `env` entries) declares no secrets, so the
+    /// trained-secrets guard used to run `.all()` over an empty list, come
+    /// back vacuously true, and consult every rule. The shipped example is
+    /// `op`: a rule the user scoped to `NPM_TOKEN` would silently authorize
+    /// arbitrary 1Password vault reads.
+    #[test]
+    fn trained_secrets_guard_blocks_a_gate_only_ask() {
+        let mut gate_only = ask_with_secret("op", &["op", "item", "get", "x"], "IGNORED");
+        gate_only.secrets.clear();
+
+        let mut state = State::new();
+        state.rules = vec![Rule {
+            id: "01".to_owned(),
+            name: "npm publish guard".to_owned(),
+            enabled: true,
+            decide: Some(RuleDecision::Approve),
+            r#match: Some(crate::rules::RuleMatch {
+                wrap: "op".to_owned(),
+                argv: None,
+                ancestor: None,
+                cwd: None,
+            }),
+            wasm: None,
+            trained_secrets: ["NPM_TOKEN".to_owned()].into_iter().collect(),
+            deny_message: None,
+            created_at_unix: 0,
+        }];
+
+        assert!(
+            state.evaluate_rules_for_ask(&gate_only).is_none(),
+            "a rule trained on NPM_TOKEN must not fire for a gate-only `op` ask"
+        );
+    }
+
+    /// The subject a gate-only ask presents is `wrap:<name>`, so a rule can
+    /// still be scoped to one deliberately.
+    #[test]
+    fn a_gate_only_ask_can_be_scoped_with_a_wrap_subject() {
+        let mut gate_only = ask_with_secret("op", &["op", "item", "get", "x"], "IGNORED");
+        gate_only.secrets.clear();
+
+        let mut state = State::new();
+        state.rules = vec![Rule {
+            id: "01".to_owned(),
+            name: "op reads".to_owned(),
+            enabled: true,
+            decide: Some(RuleDecision::Approve),
+            r#match: Some(crate::rules::RuleMatch {
+                wrap: "op".to_owned(),
+                argv: None,
+                ancestor: None,
+                cwd: None,
+            }),
+            wasm: None,
+            trained_secrets: ["wrap:op".to_owned()].into_iter().collect(),
+            deny_message: None,
+            created_at_unix: 0,
+        }];
+
+        let hit = state
+            .evaluate_rules_for_ask(&gate_only)
+            .expect("a rule trained on `wrap:op` should fire");
+        assert_eq!(hit.decide, RuleDecision::Approve);
+    }
+
+    /// A guest ask carries no host-verifiable provenance, so it must not be
+    /// decided by a rule at all — only by the prompt. Both design docs assert
+    /// this about the call sites; `handle_ask` is a call site that does not
+    /// honour it, so the refusal lives here.
+    #[test]
+    fn a_scoped_agent_ask_never_reaches_the_ruleset() {
+        let mut agent_ask = ask_with_secret("agent:sandbox", &["agent-resolve"], "IGNORED");
+        agent_ask.secrets.clear();
+        agent_ask.callers.clear();
+        agent_ask.cwd = String::new();
+        agent_ask.agent = Some(super::super::proto::AgentAskInfo {
+            scope: "sandbox".to_owned(),
+            reference: "secret://op/Prod/aws/root_key".to_owned(),
+            guest_chain: None,
+        });
+
+        let mut state = State::new();
+        // An unscoped rule: the broadest thing a user can register.
+        state.rules = vec![Rule {
+            id: "01".to_owned(),
+            name: "approve everything".to_owned(),
+            enabled: true,
+            decide: Some(RuleDecision::Approve),
+            r#match: Some(crate::rules::RuleMatch {
+                wrap: "agent:sandbox".to_owned(),
+                argv: None,
+                ancestor: None,
+                cwd: None,
+            }),
+            wasm: None,
+            trained_secrets: Default::default(),
+            deny_message: None,
+            created_at_unix: 0,
+        }];
+
+        assert!(
+            state.evaluate_rules_for_ask(&agent_ask).is_none(),
+            "a guest ask must be decided by the prompt, never by a rule"
+        );
     }
 }
