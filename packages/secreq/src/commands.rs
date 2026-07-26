@@ -461,6 +461,12 @@ fn prompt_and_store_unresolved(
             // The provider CLI couldn't run at all (not installed, etc.): that's
             // no evidence the locator is empty, so don't prompt. The resolution
             // step surfaces the real error.
+            //
+            // Empty like the `Found` arm above, but for the opposite reason —
+            // one skips because the secret is already there, this one because
+            // we learned nothing. Merging them would file two different
+            // silences under one explanation.
+            #[allow(clippy::match_same_arms)]
             Err(_) => {}
         }
     }
@@ -816,7 +822,10 @@ pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Re
     };
     let shim_dir_input = prompt::read_with_default(
         "Where should secreq drop PATH shims?",
-        &suggested.display().to_string(),
+        // `~/…`, matching how the PATH note below renders the same
+        // directory. `expand_tilde` on the answer makes this round-trip, so
+        // accepting the default is identical to typing the full path.
+        &crate::daemon::ui::abbreviate_home(&suggested.display().to_string()),
     )?;
     let shim_dir = expand_tilde(&shim_dir_input);
 
@@ -832,22 +841,22 @@ pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Re
     let home = dirs::home_dir().context("could not determine $HOME")?;
     match path_setup::plan(&home, shell.clone(), &shim_dir) {
         Ok(plan) if plan.already_configured => {
-            cliclack::log::success(format!(
+            cliclack::log::success(crate::term::wrap_log_text(&format!(
                 "PATH already configured via {}; nothing to add.",
-                plan.config_file.display()
-            ))?;
+                crate::daemon::ui::abbreviate_home(&plan.config_file.display().to_string())
+            )))?;
             // Even when we're already-configured, hint about stale blocks
             // sitting in non-canonical files (e.g. a pre-pivot .zshenv).
             let stale = path_setup::find_stale_blocks(&home, &shell, &plan.config_file);
             if !stale.is_empty() {
                 let list = stale
                     .iter()
-                    .map(|p| p.display().to_string())
+                    .map(|p| crate::daemon::ui::abbreviate_home(&p.display().to_string()))
                     .collect::<Vec<_>>()
                     .join(", ");
-                cliclack::log::warning(format!(
+                cliclack::log::warning(crate::term::wrap_log_text(&format!(
                     "Found leftover secreq PATH blocks in: {list}. They're harmless but you can remove them by hand for tidiness."
-                ))?;
+                )))?;
             }
         }
         Ok(plan) => {
@@ -855,27 +864,42 @@ pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Re
             // are on PATH but via a non-canonical file (e.g. .zshenv from
             // before the homebrew-shadowing fix). The diagnostic differs.
             let already_on_path = path_setup::path_includes(&shim_dir);
+            // Display paths as `~/…`. A real `$HOME` is long enough on its own
+            // to push these lines past a terminal, and the note body must stay
+            // narrow enough that nothing has to wrap mid-path.
+            let shim_display = crate::daemon::ui::abbreviate_home(&shim_dir.display().to_string());
+            let config_display =
+                crate::daemon::ui::abbreviate_home(&plan.config_file.display().to_string());
             let preamble = if already_on_path {
                 format!(
-                    "{} is on PATH already, but the secreq block isn't in {}. \
-                     That usually means it's in an earlier-loaded file (e.g. .zshenv) \
-                     where later prepends like `brew shellenv` can shadow our shim. \
-                     I can append a fresh block to {} so we win on PATH:",
-                    shim_dir.display(),
-                    plan.config_file.display(),
-                    plan.config_file.display(),
+                    "{shim_display} is on PATH already, but the secreq block isn't in \
+                     {config_display}. That usually means it's in an earlier-loaded file \
+                     (e.g. .zshenv) where later prepends like `brew shellenv` can shadow \
+                     our shim. I can append a fresh block to {config_display} so we win \
+                     on PATH:",
                 )
             } else {
                 format!(
-                    "{} isn't on PATH. I can append this to {} ({:?}):",
-                    shim_dir.display(),
-                    plan.config_file.display(),
-                    shell
+                    "{shim_display} isn't on PATH. I can append this to \
+                     {config_display} ({shell:?}):",
                 )
             };
-            cliclack::note(preamble, &plan.block)?;
+            // The preamble interpolates two paths and, in the `already_on_path`
+            // branch, runs to ~250 characters — far past any terminal. It must
+            // go in the *body* (wrapped) under a fixed-width title, never as
+            // the title itself: cliclack sizes the box to its longest line, so
+            // a title nobody bounded is a box nobody can read. See
+            // `term::wrap_note_text`.
+            cliclack::note(
+                "Add secreq to your PATH",
+                format!(
+                    "{}\n\n{}",
+                    crate::term::wrap_note_text(&preamble),
+                    plan.block
+                ),
+            )?;
             if let Some(caveat) = &plan.caveat {
-                cliclack::log::warning(caveat)?;
+                cliclack::log::warning(crate::term::wrap_log_text(caveat))?;
             }
             let stale = path_setup::find_stale_blocks(&home, &shell, &plan.config_file);
             if !stale.is_empty() {
@@ -884,23 +908,19 @@ pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Re
                     .map(|p| p.display().to_string())
                     .collect::<Vec<_>>()
                     .join(", ");
-                cliclack::log::warning(format!(
-                    "Found leftover secreq PATH blocks in: {list}. The new one in {} will win on PATH, but you may want to remove the old blocks by hand for tidiness.",
-                    plan.config_file.display()
-                ))?;
+                cliclack::log::warning(crate::term::wrap_log_text(&format!(
+                    "Found leftover secreq PATH blocks in: {list}. The new one in {config_display} will win on PATH, but you may want to remove the old blocks by hand for tidiness.",
+                )))?;
             }
             if prompt::confirm_default_yes("Append it?")? {
                 path_setup::apply(&plan)?;
-                cliclack::log::success(format!(
-                    "wrote {}. Open a new terminal (or `source {}`) to pick it up.",
-                    plan.config_file.display(),
-                    plan.config_file.display()
-                ))?;
+                cliclack::log::success(crate::term::wrap_log_text(&format!(
+                    "wrote {config_display}. Open a new terminal (or `source {config_display}`) to pick it up.",
+                )))?;
             } else {
-                cliclack::log::info(format!(
-                    "skipped. Add {} to PATH yourself before running `secreq wrap`.",
-                    shim_dir.display()
-                ))?;
+                cliclack::log::info(crate::term::wrap_log_text(&format!(
+                    "skipped. Add {shim_display} to PATH yourself before running `secreq wrap`.",
+                )))?;
             }
         }
         Err(err) => {
@@ -951,10 +971,10 @@ pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Re
         }
     }
 
-    cliclack::outro(format!(
-        "Wrote {}.  Next: `secreq wrap <binary>`, e.g. `secreq wrap gh`.",
-        config_path.display()
-    ))?;
+    cliclack::outro(crate::term::wrap_log_text(&format!(
+        "Wrote {}. Next: `secreq wrap <binary>`, e.g. `secreq wrap gh`.",
+        crate::daemon::ui::abbreviate_home(&config_path.display().to_string())
+    )))?;
     Ok(0)
 }
 
@@ -1148,27 +1168,26 @@ fn ssh_setup_wiring_step(
     }
 
     // Pick the method: explicit `--method`, else an interactive select.
-    let method = match method {
-        Some(m) => m,
-        None => {
-            let choice: String = cliclack::select("How should SSH find the secreq agent?")
-                .item(
-                    "ssh-config".to_owned(),
-                    "Modify ~/.ssh/config (IdentityAgent)",
-                    "a Host * stanza pointing at the agent socket",
-                )
-                .item(
-                    "shell-rc".to_owned(),
-                    "Modify your shell rc (SSH_AUTH_SOCK)",
-                    "export SSH_AUTH_SOCK for new shells",
-                )
-                .interact()
-                .context("interactive selection failed (need a real terminal)")?;
-            if choice == "shell-rc" {
-                ssh_setup::Method::ShellRc
-            } else {
-                ssh_setup::Method::SshConfig
-            }
+    let method = if let Some(m) = method {
+        m
+    } else {
+        let choice: String = cliclack::select("How should SSH find the secreq agent?")
+            .item(
+                "ssh-config".to_owned(),
+                "Modify ~/.ssh/config (IdentityAgent)",
+                "a Host * stanza pointing at the agent socket",
+            )
+            .item(
+                "shell-rc".to_owned(),
+                "Modify your shell rc (SSH_AUTH_SOCK)",
+                "export SSH_AUTH_SOCK for new shells",
+            )
+            .interact()
+            .context("interactive selection failed (need a real terminal)")?;
+        if choice == "shell-rc" {
+            ssh_setup::Method::ShellRc
+        } else {
+            ssh_setup::Method::SshConfig
         }
     };
 
@@ -1185,20 +1204,23 @@ fn ssh_setup_wiring_step(
     }
 
     let plan = ssh_setup::plan(&home, method, shell, &agent_sock)?;
+    // Every message below names this file, so abbreviate `$HOME` once. A
+    // note or log line sized by the reader's home directory is the bug
+    // brain task #295 was about.
+    let config_display =
+        crate::daemon::ui::abbreviate_home(&plan.config_file.display().to_string());
     if plan.already_configured {
-        cliclack::log::success(format!(
-            "{} already wires the secreq SSH agent; nothing to do.",
-            plan.config_file.display()
-        ))?;
+        cliclack::log::success(crate::term::wrap_log_text(&format!(
+            "{config_display} already wires the secreq SSH agent; nothing to do."
+        )))?;
         return Ok(());
     }
 
     if plan.updates_existing {
-        cliclack::log::warning(format!(
-            "{} already has a secreq SSH-agent block, but it points at a different \
-             socket than the agent now uses. I'll update it in place.",
-            plan.config_file.display()
-        ))?;
+        cliclack::log::warning(crate::term::wrap_log_text(&format!(
+            "{config_display} already has a secreq SSH-agent block, but it points at a \
+             different socket than the agent now uses. I'll update it in place."
+        )))?;
     }
     let verb = if plan.updates_existing {
         "update"
@@ -1206,11 +1228,15 @@ fn ssh_setup_wiring_step(
         "write"
     };
     cliclack::note(
-        format!("I'll {verb} this in {}:", plan.config_file.display()),
-        &plan.block,
+        format!("I'll {verb} your SSH config"),
+        format!(
+            "{}\n\n{}",
+            crate::term::wrap_note_text(&format!("In {config_display}:")),
+            plan.block
+        ),
     )?;
     if let Some(caveat) = &plan.caveat {
-        cliclack::log::warning(caveat)?;
+        cliclack::log::warning(crate::term::wrap_log_text(caveat))?;
     }
 
     let proceed = assume_yes || prompt::confirm_default_yes(&format!("{verb} it?"))?;
@@ -1220,13 +1246,15 @@ fn ssh_setup_wiring_step(
     }
 
     ssh_setup::apply(&plan)?;
-    cliclack::log::success(format!("wrote {}.", plan.config_file.display()))?;
-    cliclack::log::info(
+    cliclack::log::success(crate::term::wrap_log_text(&format!(
+        "wrote {config_display}."
+    )))?;
+    cliclack::log::info(crate::term::wrap_log_text(
         "secreq's daemon must be running to serve keys — step 2 (or `secreq daemon install`) sets it to start at login. New shells / SSH sessions pick up the socket; restart your shell or run `exec $SHELL`.",
-    )?;
-    cliclack::log::info(
+    ))?;
+    cliclack::log::info(crate::term::wrap_log_text(
         "Each identity's `private_key` reference must resolve to an OpenSSH private key, e.g. `op read \"op://Vault/My Key/private key\"`.",
-    )?;
+    ))?;
     Ok(())
 }
 
@@ -1318,14 +1346,13 @@ fn ssh_add_core(args: SshAddArgs, config_path: Option<&Path>) -> Result<()> {
     };
 
     // Fill any still-missing public key via an interactive prompt.
-    let public_key = match public_key {
-        Some(pk) => pk,
-        None => {
-            if non_interactive {
-                bail!("no public key supplied");
-            }
-            prompt::ssh_public_key()?
+    let public_key = if let Some(pk) = public_key {
+        pk
+    } else {
+        if non_interactive {
+            bail!("no public key supplied");
         }
+        prompt::ssh_public_key()?
     };
 
     let identity = wraps::SshIdentity {
@@ -1338,7 +1365,10 @@ fn ssh_add_core(args: SshAddArgs, config_path: Option<&Path>) -> Result<()> {
     write_config(&config_path, &config)?;
 
     println!("Added SSH identity `{name}`.");
-    println!("  config: {}", config_path.display());
+    println!(
+        "  config: {}",
+        crate::daemon::ui::abbreviate_home(&config_path.display().to_string())
+    );
     println!(
         "  Ensure the private_key reference resolves to an OpenSSH private key, e.g. `op read \"op://Vault/My Key/private key\"`."
     );
@@ -1444,16 +1474,17 @@ fn print_self_test_result(name: &str, result: &Result<crate::ssh_selftest::SelfT
 /// warning. The caller's exit status is unaffected either way.
 fn offer_self_test(key_id: &str, config_path: Option<&Path>) {
     let identity = match load_config_or_default(config_path) {
-        Ok(config) => match config.ssh.get(key_id).cloned() {
-            Some(identity) => identity,
-            None => {
+        Ok(config) => {
+            if let Some(identity) = config.ssh.get(key_id).cloned() {
+                identity
+            } else {
                 // The identity we just wrote is somehow gone — warn, don't fail.
                 let _ = cliclack::log::warning(format!(
                     "couldn't find `{key_id}` in the config to self-test; skipping."
                 ));
                 return;
             }
-        },
+        }
         Err(err) => {
             let _ =
                 cliclack::log::warning(format!("couldn't read the config to self-test: {err:#}"));
@@ -1549,20 +1580,18 @@ fn op_assisted_identity(want_public_key: bool) -> Result<Option<OpIdentity>> {
     for (idx, item) in items.iter().enumerate() {
         select = select.item(idx, item.title.as_str(), item.vault.as_str());
     }
-    let chosen = match select.interact() {
-        Ok(idx) => &items[idx],
-        Err(_) => {
-            cliclack::log::info("No selection made; entering the reference manually.").ok();
-            return Ok(None);
-        }
+    let chosen = if let Ok(idx) = select.interact() {
+        &items[idx]
+    } else {
+        cliclack::log::info("No selection made; entering the reference manually.").ok();
+        return Ok(None);
     };
 
-    let private_key = match Reference::parse(&format!(
+    let Some(private_key) = Reference::parse(&format!(
         "secret://op/{}/{}/private key",
         chosen.vault, chosen.title
-    )) {
-        Some(reference) => reference,
-        None => return Ok(None),
+    )) else {
+        return Ok(None);
     };
 
     let public_key = if want_public_key {
@@ -1735,8 +1764,8 @@ pub fn wrap(args: WrapArgs, config_path: Option<&Path>) -> Result<i32> {
     };
     let summary = format!(
         "config: {}\n  shim: {}",
-        config_path.display(),
-        shim_path.display()
+        crate::daemon::ui::abbreviate_home(&config_path.display().to_string()),
+        crate::daemon::ui::abbreviate_home(&shim_path.display().to_string())
     );
     if interactive {
         cliclack::outro(format!("Wrapped `{}`{kind}.\n  {summary}", args.binary))?;
@@ -2034,10 +2063,10 @@ pub fn rules_add_wasm(
         .with_context(|| format!("wasm module not readable: {}", file.display()))?;
     let name = match name {
         Some(n) => n.to_owned(),
-        None => module_path
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "wasm rule".to_owned()),
+        None => module_path.file_stem().map_or_else(
+            || "wasm rule".to_owned(),
+            |s| s.to_string_lossy().into_owned(),
+        ),
     };
     let trained: std::collections::BTreeSet<String> = secrets.iter().cloned().collect();
     let rule = daemon_client::add_wasm_rule(&name, &module_path, trained, all_secrets)
@@ -2129,15 +2158,12 @@ pub fn daemon_stop(force: bool) -> Result<i32> {
         }
         return Ok(0);
     }
-    match daemon_client::stop_daemon().context("could not stop the consent daemon")? {
-        true => {
-            eprintln!("secreq: daemon stopped (approvals cache cleared).");
-            Ok(0)
-        }
-        false => {
-            eprintln!("secreq: no daemon was running (approvals cache already clear).");
-            Ok(0)
-        }
+    if daemon_client::stop_daemon().context("could not stop the consent daemon")? {
+        eprintln!("secreq: daemon stopped (approvals cache cleared).");
+        Ok(0)
+    } else {
+        eprintln!("secreq: no daemon was running (approvals cache already clear).");
+        Ok(0)
     }
 }
 
@@ -2277,11 +2303,15 @@ fn daemon_install_core(undo: bool, assume_yes: bool) -> Result<()> {
 
     cliclack::intro("secreq daemon install")?;
     cliclack::note(
+        "I'll install a login service",
         format!(
-            "I'll write this login service to {}:",
-            plan.service_file.display()
+            "{}\n\n{}",
+            crate::term::wrap_note_text(&format!(
+                "Writing to {}:",
+                crate::daemon::ui::abbreviate_home(&plan.service_file.display().to_string())
+            )),
+            plan.contents
         ),
-        &plan.contents,
     )?;
     if plan.already_installed {
         cliclack::log::info(
@@ -2712,8 +2742,8 @@ pub(crate) fn build_ask(
         providers,
         dedupe_key: proto::DedupeKey {
             wrap: spec.dedupe_wrap,
-            ppid: parent.map(|p| p.pid).unwrap_or(0),
-            parent_start_time: parent.map(|p| p.start_time).unwrap_or(0),
+            ppid: parent.map_or(0, |p| p.pid),
+            parent_start_time: parent.map_or(0, |p| p.start_time),
         },
         // Wrap / run asks are never SSH sign asks; only the in-process SSH
         // agent path sets this.
@@ -2834,7 +2864,7 @@ pub(crate) fn resolve_refs_client_side(
             provider: reference.provider.clone(),
             locator: reference.locator.clone(),
             group: None,
-            reason: reason.map(|s| s.to_owned()),
+            reason: reason.map(std::borrow::ToOwned::to_owned),
             description: None,
             default: None,
             source: Source::Eager,
