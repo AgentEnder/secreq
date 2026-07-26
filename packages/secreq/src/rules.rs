@@ -368,6 +368,172 @@ pub struct WasmRefusal {
     pub reason: String,
 }
 
+/// Which clause of a [`RuleMatch`] a [`PatternRefusal`] came from.
+/// `wrap` is absent on purpose: it is an exact string, never a glob, and
+/// so has nothing to refuse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PatternField {
+    Argv,
+    Ancestor,
+    Cwd,
+}
+
+impl PatternField {
+    /// The field's name as it is spelled in the rules file — which is
+    /// the only name the operator has for it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PatternField::Argv => "argv",
+            PatternField::Ancestor => "ancestor",
+            PatternField::Cwd => "cwd",
+        }
+    }
+}
+
+/// One match pattern that would not compile as a glob, retained so the
+/// refusal is visible where the rule is: `rules list`/`show` and the UI
+/// badge render from this, exactly as they do from [`WasmRefusal`].
+///
+/// Value-free by construction — it names a rule, a field and the
+/// operator's own pattern text, never a secret.
+///
+/// One entry **per broken clause**, not per rule: a rule with a typo in
+/// both `argv` and `cwd` has two things wrong with it and a reader
+/// fixing one should still see the other.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PatternRefusal {
+    /// Id of the rule carrying it (the rule stays in the ruleset).
+    pub rule_id: String,
+    pub field: PatternField,
+    /// The pattern's source text, verbatim.
+    pub pattern: String,
+    /// Operator-facing explanation: the glob parser's complaint plus
+    /// what the rule now does instead. See [`pattern_refusals`].
+    pub reason: String,
+}
+
+impl PatternRefusal {
+    /// Short human label for compact display (`rules list`, UI badge),
+    /// in the same register as [`WasmRefusalCategory::label`].
+    pub fn label(&self) -> String {
+        format!("bad {} glob", self.field.as_str())
+    }
+}
+
+/// Every refused pattern across `rules`, in rule order and then clause
+/// order.
+///
+/// A pure function of the ruleset, and deliberately not stored anywhere:
+/// unlike a [`WasmRefusal`], which depends on bytes on disk that can
+/// change under a rule that did not, a pattern refusal depends on
+/// nothing but the rule's own text. Recomputing it is cheaper than the
+/// bookkeeping that would keep a cached copy honest across
+/// add/update/delete.
+pub fn pattern_refusals(rules: &[Rule]) -> Vec<PatternRefusal> {
+    let mut out = Vec::new();
+    for rule in rules {
+        let RuleBody::Declarative { r#match, decide } = &rule.body else {
+            // A wasm rule has no match clause; its module decides.
+            continue;
+        };
+        for (field, pattern) in [
+            (PatternField::Argv, r#match.argv.as_ref()),
+            (PatternField::Ancestor, r#match.ancestor.as_ref()),
+            (PatternField::Cwd, r#match.cwd.as_ref()),
+        ] {
+            let Some(pattern) = pattern else { continue };
+            let Some(err) = pattern.invalid_reason() else {
+                continue;
+            };
+            // The consequence is not the same for the two decisions, and
+            // the operator is the one who has to act on the difference.
+            let consequence = match decide.decision() {
+                RuleDecision::Deny => {
+                    "this rule cannot be evaluated, so every ask it might have \
+                     denied now goes to the consent prompt instead of being \
+                     released by another rule's approve"
+                }
+                RuleDecision::Approve => {
+                    "this rule never fires; asks it was meant to approve prompt \
+                     as they did before it was written"
+                }
+            };
+            out.push(PatternRefusal {
+                rule_id: rule.id.clone(),
+                field,
+                pattern: pattern.as_str().to_owned(),
+                reason: format!(
+                    "rule `{}` (id {}): the `{}` pattern `{}` is not a valid glob \
+                     ({err}) — {consequence}",
+                    rule.name,
+                    rule.id,
+                    field.as_str(),
+                    pattern.as_str(),
+                ),
+            });
+        }
+    }
+    out
+}
+
+/// Every reason a rule in the current ruleset cannot fire as written.
+///
+/// The two kinds travel together because every consumer wants both:
+/// `rules list`, `rules show`, the `RulesList` reply, the wire snapshot
+/// and the Rules-tab badge each ask one question — "is there anything
+/// wrong with this rule?" — and answering it from two parallel slices is
+/// how one of them ends up unrendered.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RuleRefusals {
+    /// Wasm rules refused at load time (missing module, sha256
+    /// mismatch, sandbox rejection).
+    #[serde(default)]
+    pub wasm: Vec<WasmRefusal>,
+    /// Match patterns that would not compile as globs.
+    #[serde(default)]
+    pub patterns: Vec<PatternRefusal>,
+}
+
+impl RuleRefusals {
+    /// Everything recorded against one rule, as `(label, reason)` pairs
+    /// ready for a badge. A declarative rule can only produce pattern
+    /// refusals and a wasm rule only a wasm refusal, so in practice this
+    /// yields one kind or the other — but the caller should not have to
+    /// know that to render it.
+    pub fn for_rule(&self, rule_id: &str) -> Vec<(String, &str)> {
+        self.wasm
+            .iter()
+            .filter(|r| r.rule_id == rule_id)
+            .map(|r| (r.category.label().to_owned(), r.reason.as_str()))
+            .chain(
+                self.patterns
+                    .iter()
+                    .filter(|r| r.rule_id == rule_id)
+                    .map(|r| (r.label(), r.reason.as_str())),
+            )
+            .collect()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.wasm.is_empty() && self.patterns.is_empty()
+    }
+}
+
+/// The ruleset as a reader sees it: the rules themselves plus every
+/// refusal recorded against them.
+///
+/// Named because it is the reply to `rules list` and the two halves are
+/// not interchangeable — a bare `(Vec<Rule>, Vec<WasmRefusal>)` return
+/// says nothing about which is which, and it grew a third member the
+/// moment patterns could be refused too.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RuleListing {
+    pub rules: Vec<Rule>,
+    #[serde(default)]
+    pub refusals: RuleRefusals,
+}
+
 /// Error from [`load_rule_module`]: the anyhow chain plus the coarse
 /// [`WasmRefusalCategory`] the refusal surfaces under. Converts into
 /// `anyhow::Error` (dropping the category) for mutation paths that
@@ -495,7 +661,13 @@ pub struct RuleMatch {
 /// ancestor. Globs use [`glob::Pattern`] semantics regardless of which
 /// field they're matched against.
 ///
-/// Serializes as the raw source string.
+/// A wildcard string [`glob::Pattern`] refuses is neither: it is
+/// [refused](PatternRefusal), matches nothing, and is reported. See
+/// [`Pattern::parse`].
+///
+/// Serializes as the raw source string, refused or not — `save_rules`
+/// rewrites the whole file on every mutation, and a pattern secreq could
+/// not read is the last thing it should silently rewrite.
 #[derive(Debug, Clone)]
 pub struct Pattern {
     raw: String,
@@ -506,17 +678,37 @@ pub struct Pattern {
 enum PatternKind {
     Literal,
     Glob(glob::Pattern),
+    /// The source text used wildcard syntax and `glob` would not compile
+    /// it. Carries the parser's message so the refusal can quote it.
+    Invalid(String),
 }
 
 impl Pattern {
-    /// Parse a pattern string. A bad glob falls back to a literal —
-    /// we never reject a rule purely because its glob didn't compile.
+    /// Parse a pattern string. A string with no wildcard char is a
+    /// literal; one `glob` accepts is a glob; one `glob` **rejects** is
+    /// refused and matches nothing.
+    ///
+    /// This used to re-read a broken glob as a literal, on the grounds
+    /// that "rule too narrow" is the safe failure. That is true of an
+    /// approve and false of a deny, which is the whole problem: an
+    /// operator's `deny` on `gh api /repos/*/actions/secrets*[` became a
+    /// literal matching a command nobody runs, so the deny covered
+    /// nothing, a broader approve carried the ask, and the rule still
+    /// read correct in the file. Nothing said a word.
+    ///
+    /// Refusing is not merely louder, it is also *narrower in the same
+    /// direction the fallback already was*: a literal built from glob
+    /// syntax matches essentially nothing anyway. What changes is that
+    /// the nothing is now recorded ([`pattern_refusals`], the Rules tab
+    /// badge) and that a refused **deny** takes the ask to the human
+    /// rather than leaving it to a competing approve — see
+    /// [`evaluate`].
     pub fn parse(raw: impl Into<String>) -> Pattern {
         let raw = raw.into();
         let kind = if has_wildcards(&raw) {
             match glob::Pattern::new(&raw) {
                 Ok(g) => PatternKind::Glob(g),
-                Err(_) => PatternKind::Literal,
+                Err(err) => PatternKind::Invalid(err.to_string()),
             }
         } else {
             PatternKind::Literal
@@ -529,6 +721,22 @@ impl Pattern {
         &self.raw
     }
 
+    /// The glob parser's complaint, when this pattern was refused;
+    /// `None` for a pattern that compiled (or never needed to).
+    pub fn invalid_reason(&self) -> Option<&str> {
+        match &self.kind {
+            PatternKind::Invalid(err) => Some(err),
+            PatternKind::Literal | PatternKind::Glob(_) => None,
+        }
+    }
+
+    /// Whether this pattern can be consulted at all. A `true` here is
+    /// what turns a rule's clause from a predicate into an unknown; see
+    /// [`ClauseOutcome`].
+    pub fn is_invalid(&self) -> bool {
+        self.invalid_reason().is_some()
+    }
+
     /// Match for the argv field. Literal = prefix; glob = full pattern
     /// match.
     ///
@@ -539,6 +747,7 @@ impl Pattern {
         match &self.kind {
             PatternKind::Literal => s.starts_with(&self.raw),
             PatternKind::Glob(g) => g.matches(s),
+            PatternKind::Invalid(_) => false,
         }
     }
 
@@ -558,6 +767,7 @@ impl Pattern {
     pub fn matches_path_prefix(&self, s: &str) -> bool {
         match &self.kind {
             PatternKind::Glob(g) => g.matches(s),
+            PatternKind::Invalid(_) => false,
             PatternKind::Literal => {
                 let want = self.raw.strip_suffix('/').unwrap_or(&self.raw);
                 // An empty pattern (or bare "/") constrains nothing beyond
@@ -599,6 +809,7 @@ impl Pattern {
         match &self.kind {
             PatternKind::Literal => s.contains(&self.raw),
             PatternKind::Glob(g) => g.matches(s),
+            PatternKind::Invalid(_) => false,
         }
     }
 }
@@ -699,13 +910,12 @@ pub struct LoadedRules {
     pub mtime: Option<SystemTime>,
     /// Compiled + hash-verified modules for the wasm rules in `rules`.
     pub modules: RuleModules,
-    /// One [`WasmRefusal`] per wasm rule refused at load time (missing
-    /// module file, sha256 mismatch, compile/sandbox rejection). The
-    /// rule itself stays in `rules` — visible to the UI and CLI — but
-    /// has no entry in `modules`, so it can never fire. The caller
-    /// must surface these loudly (the daemon logs each one and retains
-    /// them so list/show/UI render the refusal).
-    pub wasm_refusals: Vec<WasmRefusal>,
+    /// Everything wrong with the rules in `rules`, which stay in the
+    /// list — visible to the UI and CLI — and cannot fire as written.
+    /// A refused wasm rule has no entry in `modules`; a refused pattern
+    /// matches nothing. The caller must surface these loudly (the daemon
+    /// logs each one and passes them on so list/show/UI render them).
+    pub refusals: RuleRefusals,
     /// One entry per rule whose `deny_message` was dropped because the
     /// rule decides `approve`. [`load_rules`] has already warned about
     /// each of these through the daemon log; the list is here so a
@@ -735,11 +945,17 @@ pub struct LoadedRules {
 ///   [`StrayDenyMessage`].
 /// - **Per-rule**: a wasm rule whose *referenced module* fails to load
 ///   (missing file, sha256 mismatch, sandbox rejection) refuses just
-///   that rule, recorded in [`LoadedRules::wasm_refusals`]. A tampered
-///   or stale module is a loud security event, but it must not knock
-///   out the user's other rules — in particular their protective
-///   *deny* rules, which would otherwise stop firing exactly when
-///   something on disk is being tampered with.
+///   that rule, recorded in [`RuleRefusals::wasm`]. A tampered or stale
+///   module is a loud security event, but it must not knock out the
+///   user's other rules — in particular their protective *deny* rules,
+///   which would otherwise stop firing exactly when something on disk
+///   is being tampered with.
+/// - **Per-clause**: a match pattern that will not compile as a glob
+///   refuses that clause, recorded in [`RuleRefusals::patterns`]. Same
+///   reasoning one level down — a typo in one rule's `argv` is not a
+///   reason to stop consulting the rest of the file. What it *is* a
+///   reason to do is take the ask to the human when the typo is on a
+///   deny; see [`evaluate`].
 pub fn load_rules(path: &Path) -> Result<LoadedRules> {
     let meta = match std::fs::metadata(path) {
         Ok(m) => m,
@@ -795,11 +1011,15 @@ pub fn load_rules(path: &Path) -> Result<LoadedRules> {
             }),
         }
     }
+    let refusals = RuleRefusals {
+        patterns: pattern_refusals(&rules),
+        wasm: wasm_refusals,
+    };
     Ok(LoadedRules {
         rules,
         mtime,
         modules,
-        wasm_refusals,
+        refusals,
         stray_deny_messages,
     })
 }
@@ -985,6 +1205,18 @@ struct Candidate<'r> {
 /// - `None` if nothing matches. The daemon falls through to the
 ///   interactive prompt.
 ///
+/// Declarative semantics within the pass:
+///
+/// - A clause that cannot be consulted — a match pattern that would not
+///   compile as a glob — is not a clause that failed. On a **deny** it
+///   mandates the prompt ([`Evaluation::mandated_prompt`]), because the
+///   alternative is that the operator's typo lets another rule's approve
+///   carry an ask their deny was written to stop. On an **approve** it
+///   simply drops the rule, which is where a broken approve already
+///   fails: closed.
+/// - The mandate is only reached when every *other* clause on the rule
+///   was consulted and matched. See [`clause_outcome`].
+///
 /// Wasm semantics within the pass:
 ///
 /// - The trained-secrets guard applies **before** the module runs — a
@@ -1068,19 +1300,42 @@ pub fn evaluate(rules: &[Rule], modules: &RuleModules, ctx: &EvalCtx) -> Evaluat
                     }
                 }
             }
-            RuleBody::Declarative { r#match, decide } => {
-                if !match_clause_matches(r#match, ctx) {
+            RuleBody::Declarative { r#match, decide } => match clause_outcome(r#match, ctx) {
+                ClauseOutcome::NoMatch => continue,
+                // A pattern that would not compile is not a narrower
+                // rule — it is a rule whose question nobody got to ask.
+                // The two decisions want opposite treatment, and the
+                // split is the whole point rather than an oversight:
+                ClauseOutcome::Unconsultable => {
+                    match decide.decision() {
+                        // A deny the operator wrote and secreq cannot
+                        // evaluate must not leave a competing approve
+                        // holding the ask — the same fail-open a refused
+                        // wasm module opens, and closed the same way.
+                        RuleDecision::Deny => mandate(
+                            rule,
+                            "a deny rule's pattern is not a valid glob, so the \
+                             ruleset is incomplete"
+                                .to_owned(),
+                        ),
+                        // An approve that cannot be evaluated already
+                        // fails in the safe direction: it approves
+                        // nothing. Mandating a prompt here would turn one
+                        // typo into a prompt on every ask the rule's wrap
+                        // covers, buying no safety at all.
+                        RuleDecision::Approve => {}
+                    }
                     continue;
                 }
-                Candidate {
+                ClauseOutcome::Match => Candidate {
                     rule,
                     decide: decide.decision(),
                     // No "…only if this is a deny" guard: an approve has
                     // no message to guard against carrying.
                     deny_message: decide.deny_message().map(str::to_owned),
                     specificity: specificity(r#match),
-                }
-            }
+                },
+            },
         };
         let slot = match candidate.decide {
             RuleDecision::Deny => &mut best_deny,
@@ -1139,28 +1394,63 @@ fn trained_secrets_allow(rule: &Rule, ctx: &EvalCtx) -> bool {
         .all(|n| rule.trained_secrets.contains(*n))
 }
 
-/// Does the declarative match clause `m` match `ctx`? Pure predicate —
-/// no I/O, no allocation beyond what the patterns themselves do.
-fn match_clause_matches(m: &RuleMatch, ctx: &EvalCtx) -> bool {
+/// What a declarative rule's match clause says about one ask. Three
+/// states rather than a bool, because a [refused pattern](PatternRefusal)
+/// makes "does this rule match?" a question with no answer, and the two
+/// ways of not matching call for different handling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClauseOutcome {
+    /// Every clause was consulted, and every one matched.
+    Match,
+    /// At least one clause definitively did not match. The rule does not
+    /// apply to this ask and nothing further is owed.
+    NoMatch,
+    /// Nothing definitively excluded the ask, but at least one clause
+    /// carried a pattern that would not compile. Whether the rule
+    /// matches is unknown — not false.
+    Unconsultable,
+}
+
+/// Evaluate the declarative match clause `m` against `ctx`. Pure — no
+/// I/O, no allocation beyond what the patterns themselves do.
+///
+/// A definite `NoMatch` beats an unknown, which is just how `AND` works:
+/// a rule scoped to `cwd: /home/x/oss` does not apply to an ask from
+/// `/home/x/elsewhere` however broken its `argv` is. That precision is
+/// what keeps one typo from mandating a prompt on asks the rule never
+/// covered.
+fn clause_outcome(m: &RuleMatch, ctx: &EvalCtx) -> ClauseOutcome {
+    // `wrap` is exact, never a glob, so it can always be consulted.
     if m.wrap != ctx.wrap {
-        return false;
+        return ClauseOutcome::NoMatch;
     }
+    let mut unconsultable = false;
     if let Some(p) = &m.argv {
-        if !p.matches_prefix(ctx.joined_argv) {
-            return false;
+        if p.is_invalid() {
+            unconsultable = true;
+        } else if !p.matches_prefix(ctx.joined_argv) {
+            return ClauseOutcome::NoMatch;
         }
     }
     if let Some(p) = &m.ancestor {
-        if !ctx.callers.iter().any(|c| p.matches_ancestor(c)) {
-            return false;
+        if p.is_invalid() {
+            unconsultable = true;
+        } else if !ctx.callers.iter().any(|c| p.matches_ancestor(c)) {
+            return ClauseOutcome::NoMatch;
         }
     }
     if let Some(p) = &m.cwd {
-        if !p.matches_path_prefix(ctx.cwd) {
-            return false;
+        if p.is_invalid() {
+            unconsultable = true;
+        } else if !p.matches_path_prefix(ctx.cwd) {
+            return ClauseOutcome::NoMatch;
         }
     }
-    true
+    if unconsultable {
+        ClauseOutcome::Unconsultable
+    } else {
+        ClauseOutcome::Match
+    }
 }
 
 /// Does `a` beat `b` for "most specific" ranking? Higher specificity
@@ -1328,14 +1618,285 @@ mod tests {
     }
 
     #[test]
-    fn malformed_glob_falls_back_to_literal() {
+    fn a_malformed_glob_matches_nothing_rather_than_posing_as_a_literal() {
         // `[` opens a char class; no closing `]` makes this a bad glob.
-        // Rather than rejecting the rule entirely we fall back to a
-        // literal — the worst case is "rule too narrow," which is the
-        // safer failure mode for an unparseable security policy.
+        // The old behaviour re-read it as the literal `foo[bar`, which
+        // matched a string nobody wrote a rule for and — far worse — read
+        // as a working rule in the file. It now matches nothing at all, and
+        // says why.
         let p = Pattern::parse("foo[bar");
-        assert!(p.matches_prefix("foo[bar baz"));
+        assert!(!p.matches_prefix("foo[bar baz"));
         assert!(!p.matches_prefix("foo bar"));
+        assert!(!p.matches_path_prefix("foo[bar/x"));
+        assert!(!p.matches_substring("a foo[bar b"));
+        assert!(
+            p.invalid_reason().is_some(),
+            "the glob error is kept, not discarded"
+        );
+        // The source text still round-trips: `save_rules` rewrites the whole
+        // file on every mutation, and a refused pattern must come back out
+        // of that byte-for-byte rather than being helpfully corrected.
+        assert_eq!(p.as_str(), "foo[bar");
+    }
+
+    #[test]
+    fn a_wildcardless_pattern_is_a_literal_not_a_refusal() {
+        let p = Pattern::parse("gh api");
+        assert_eq!(p.invalid_reason(), None);
+        assert!(p.matches_prefix("gh api --get /x"));
+    }
+
+    // ── Refused patterns ──────────────────────────────────────────────
+
+    #[test]
+    fn a_malformed_deny_glob_does_not_let_a_competing_approve_win() {
+        // The repro. An operator writes a deny they believe covers the
+        // GitHub secrets endpoints, and fat-fingers the glob. Under the
+        // literal fallback the deny quietly covered nothing and the broad
+        // approve released the ask with no prompt and no warning.
+        let deny = mk_rule(
+            "01",
+            "never touch repo secrets",
+            RuleDecision::Deny,
+            match_for("gh", Some("gh api /repos/*/actions/secrets*["), None, None),
+            &[],
+        );
+        let approve = mk_rule(
+            "02",
+            "gh is fine",
+            RuleDecision::Approve,
+            match_for("gh", None, None, None),
+            &[],
+        );
+        let c = ctx(
+            "gh",
+            "gh api /repos/me/x/actions/secrets",
+            &[],
+            "/home/x",
+            &["GITHUB_TOKEN"],
+        );
+        let ev = evaluate(&[deny, approve], &RuleModules::new(), &c);
+        assert_eq!(ev.hit, None, "the approve must not carry this ask");
+        let mandate = ev.mandated_prompt.expect("the human decides instead");
+        assert_eq!(mandate.rule_id, "01");
+        assert!(
+            mandate.reason.contains("glob"),
+            "reason: {}",
+            mandate.reason
+        );
+    }
+
+    #[test]
+    fn a_malformed_approve_glob_fails_closed_without_mandating_a_prompt() {
+        // The other half of the asymmetry. A broken approve already fails
+        // in the safe direction — it approves nothing — so suppressing every
+        // other rule over it would turn one typo into a prompt storm.
+        let approve = mk_rule(
+            "01",
+            "typo",
+            RuleDecision::Approve,
+            match_for("gh", Some("gh api /repos/*["), None, None),
+            &[],
+        );
+        let other = mk_rule(
+            "02",
+            "narrower approve",
+            RuleDecision::Approve,
+            match_for("gh", Some("gh api"), None, None),
+            &[],
+        );
+        let c = ctx(
+            "gh",
+            "gh api /repos/me/x",
+            &[],
+            "/home/x",
+            &["GITHUB_TOKEN"],
+        );
+        let ev = evaluate(&[approve, other], &RuleModules::new(), &c);
+        assert_eq!(ev.mandated_prompt, None);
+        assert_eq!(
+            ev.hit.expect("the intact approve still fires").rule_id,
+            "02"
+        );
+    }
+
+    #[test]
+    fn a_deny_whose_other_clause_rules_the_ask_out_mandates_nothing() {
+        // Precision: an unconsultable clause only matters when nothing else
+        // on the rule already excludes the ask. `wrap` is exact, so a deny
+        // scoped to another wrap is not "incomplete" here — it is
+        // inapplicable, and prompting on it would be noise.
+        let deny = mk_rule(
+            "01",
+            "aws only",
+            RuleDecision::Deny,
+            match_for("aws", Some("aws s3 *["), None, None),
+            &[],
+        );
+        let approve = mk_rule(
+            "02",
+            "gh is fine",
+            RuleDecision::Approve,
+            match_for("gh", None, None, None),
+            &[],
+        );
+        let c = ctx("gh", "gh api /x", &[], "/home/x", &["GITHUB_TOKEN"]);
+        let ev = evaluate(&[deny, approve], &RuleModules::new(), &c);
+        assert_eq!(ev.mandated_prompt, None);
+        assert_eq!(ev.hit.expect("the approve still fires").rule_id, "02");
+    }
+
+    #[test]
+    fn a_deny_ruled_out_by_an_intact_sibling_clause_mandates_nothing() {
+        // Same, one level finer: the broken `argv` sits beside a `cwd` that
+        // definitively does not match. AND with a definite false is false,
+        // whatever the unknown says.
+        let deny = mk_rule(
+            "01",
+            "only in one checkout",
+            RuleDecision::Deny,
+            match_for("gh", Some("gh api *["), None, Some("/home/x/oss")),
+            &[],
+        );
+        let approve = mk_rule(
+            "02",
+            "gh is fine",
+            RuleDecision::Approve,
+            match_for("gh", None, None, None),
+            &[],
+        );
+        let c = ctx(
+            "gh",
+            "gh api /x",
+            &[],
+            "/home/x/elsewhere",
+            &["GITHUB_TOKEN"],
+        );
+        let ev = evaluate(&[deny, approve], &RuleModules::new(), &c);
+        assert_eq!(ev.mandated_prompt, None);
+        assert_eq!(ev.hit.expect("the approve still fires").rule_id, "02");
+    }
+
+    #[test]
+    fn a_deny_still_outranks_a_mandate_from_another_broken_deny() {
+        let broken = mk_rule(
+            "01",
+            "broken deny",
+            RuleDecision::Deny,
+            match_for("gh", Some("gh *["), None, None),
+            &[],
+        );
+        let intact = mk_rule(
+            "02",
+            "intact deny",
+            RuleDecision::Deny,
+            match_for("gh", Some("gh api"), None, None),
+            &[],
+        );
+        let c = ctx("gh", "gh api /x", &[], "/home/x", &["GITHUB_TOKEN"]);
+        let ev = evaluate(&[broken, intact], &RuleModules::new(), &c);
+        assert_eq!(ev.mandated_prompt, None, "a block beats a dialog");
+        let hit = ev.hit.expect("the intact deny blocks");
+        assert_eq!(hit.rule_id, "02");
+        assert_eq!(hit.decide, RuleDecision::Deny);
+    }
+
+    #[test]
+    fn a_disabled_rule_with_a_broken_glob_mandates_nothing() {
+        let deny = Rule {
+            enabled: false,
+            ..mk_rule(
+                "01",
+                "off",
+                RuleDecision::Deny,
+                match_for("gh", Some("gh *["), None, None),
+                &[],
+            )
+        };
+        let c = ctx("gh", "gh api /x", &[], "/home/x", &["GITHUB_TOKEN"]);
+        let ev = evaluate(&[deny], &RuleModules::new(), &c);
+        assert_eq!(ev.mandated_prompt, None);
+        assert_eq!(ev.hit, None);
+    }
+
+    #[test]
+    fn a_refusal_names_the_rule_the_field_and_the_pattern() {
+        let rules = vec![
+            mk_rule(
+                "01",
+                "never touch repo secrets",
+                RuleDecision::Deny,
+                match_for("gh", Some("gh api /repos/*/secrets*["), None, None),
+                &[],
+            ),
+            mk_rule(
+                "02",
+                "fine",
+                RuleDecision::Approve,
+                match_for("gh", Some("gh api"), None, None),
+                &[],
+            ),
+        ];
+        let refusals = pattern_refusals(&rules);
+        assert_eq!(refusals.len(), 1, "{refusals:?}");
+        let r = &refusals[0];
+        assert_eq!(r.rule_id, "01");
+        assert_eq!(r.field, PatternField::Argv);
+        assert_eq!(r.pattern, "gh api /repos/*/secrets*[");
+        assert!(
+            r.reason.contains("never touch repo secrets"),
+            "reason: {}",
+            r.reason
+        );
+        assert!(r.reason.contains("argv"), "reason: {}", r.reason);
+    }
+
+    #[test]
+    fn a_refusal_says_which_way_the_rule_now_fails() {
+        // The consequence differs by decision, so the operator-facing text
+        // has to as well: a refused deny sends every ask it covered to the
+        // prompt, a refused approve simply stops approving.
+        let deny = pattern_refusals(&[mk_rule(
+            "01",
+            "d",
+            RuleDecision::Deny,
+            match_for("gh", Some("gh *["), None, None),
+            &[],
+        )]);
+        let approve = pattern_refusals(&[mk_rule(
+            "02",
+            "a",
+            RuleDecision::Approve,
+            match_for("gh", Some("gh *["), None, None),
+            &[],
+        )]);
+        assert!(deny[0].reason.contains("prompt"), "{}", deny[0].reason);
+        assert_ne!(deny[0].reason, approve[0].reason);
+    }
+
+    #[test]
+    fn every_broken_clause_on_a_rule_is_refused_separately() {
+        let refusals = pattern_refusals(&[mk_rule(
+            "01",
+            "three typos",
+            RuleDecision::Deny,
+            match_for("gh", Some("a*["), Some("b*["), Some("c*[")),
+            &[],
+        )]);
+        let fields: Vec<_> = refusals.iter().map(|r| r.field).collect();
+        assert_eq!(
+            fields,
+            vec![
+                PatternField::Argv,
+                PatternField::Ancestor,
+                PatternField::Cwd
+            ]
+        );
+    }
+
+    #[test]
+    fn a_wasm_rule_has_no_patterns_to_refuse() {
+        assert!(pattern_refusals(&[mk_wasm_rule("01", "w", &[])]).is_empty());
     }
 
     // ── Rule matching (whole-rule predicate) ──────────────────────────
@@ -2063,9 +2624,9 @@ mod tests {
         let loaded = load_with_module(rule.clone(), "mod.wasm", APPROVE_IF);
         assert_eq!(loaded.rules, vec![rule]);
         assert!(
-            loaded.wasm_refusals.is_empty(),
+            loaded.refusals.wasm.is_empty(),
             "{:?}",
-            loaded.wasm_refusals
+            loaded.refusals.wasm
         );
         assert!(loaded.modules.contains_key("01"));
         // And the loaded module actually evaluates.
@@ -2099,9 +2660,9 @@ mod tests {
         );
         let loaded = load_with_module(rule, "mod.wasm", APPROVE_IF);
         assert!(
-            loaded.wasm_refusals.is_empty(),
+            loaded.refusals.wasm.is_empty(),
             "{:?}",
-            loaded.wasm_refusals
+            loaded.refusals.wasm
         );
         assert!(loaded.modules.contains_key("01"));
     }
@@ -2134,8 +2695,8 @@ mod tests {
         let loaded = load_rules(&path).expect("per-rule refusal is not a load error");
         assert_eq!(loaded.rules.len(), 2);
         assert!(loaded.modules.is_empty());
-        assert_eq!(loaded.wasm_refusals.len(), 1);
-        let refusal = &loaded.wasm_refusals[0];
+        assert_eq!(loaded.refusals.wasm.len(), 1);
+        let refusal = &loaded.refusals.wasm[0];
         assert_eq!(refusal.rule_id, "01");
         assert_eq!(refusal.category, WasmRefusalCategory::Sha256Mismatch);
         let msg = &refusal.reason;
@@ -2165,8 +2726,8 @@ mod tests {
         );
         save_rules(&path, &[rule]).expect("save");
         let loaded = load_rules(&path).expect("load");
-        assert_eq!(loaded.wasm_refusals.len(), 1);
-        let refusal = &loaded.wasm_refusals[0];
+        assert_eq!(loaded.refusals.wasm.len(), 1);
+        let refusal = &loaded.refusals.wasm[0];
         assert_eq!(refusal.rule_id, "01");
         assert_eq!(refusal.category, WasmRefusalCategory::MissingModule);
         let msg = &refusal.reason;

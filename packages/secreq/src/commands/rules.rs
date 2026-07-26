@@ -14,8 +14,8 @@ use crate::daemon::client as daemon_client;
 /// `secreq rules` (with no subcommand or with `list`): one-line table
 /// of every configured rule.
 pub fn rules_list() -> Result<i32> {
-    let (rules, refusals) =
-        daemon_client::list_rules().context("could not reach the consent daemon")?;
+    let listing = daemon_client::list_rules().context("could not reach the consent daemon")?;
+    let (rules, refusals) = (&listing.rules, &listing.refusals);
     if rules.is_empty() {
         println!("no auto-rules configured");
         println!("(create one from the Rules tab in `secreq view`)");
@@ -25,17 +25,18 @@ pub fn rules_list() -> Result<i32> {
         "{:<24}  {:<8}  {:<8}  {:<16}  name",
         "id", "decide", "enabled", "wrap"
     );
-    for r in &rules {
-        println!("{}", rule_list_line(r, &refusals));
+    for r in rules {
+        println!("{}", rule_list_line(r, refusals));
     }
     Ok(0)
 }
 
-/// One `rules list` row. A wasm rule refused at the daemon's last
-/// rules load gets a trailing `[REFUSED: <category>]` marker — without
-/// it, a tampered or missing module renders as a normal enabled rule
-/// that mysteriously never fires.
-fn rule_list_line(r: &crate::rules::Rule, refusals: &[crate::rules::WasmRefusal]) -> String {
+/// One `rules list` row. A rule with anything refused against it —
+/// a wasm module that would not load, a match pattern that would not
+/// compile — gets a trailing `[REFUSED: <what>]` marker. Without it,
+/// a tampered module or a fat-fingered glob renders as a normal enabled
+/// rule that mysteriously never fires.
+fn rule_list_line(r: &crate::rules::Rule, refusals: &crate::rules::RuleRefusals) -> String {
     let enabled = if r.enabled { "yes" } else { "no" };
     // A wasm rule has no static decision — the module returns one
     // per ask — and no match clause to take a wrap from.
@@ -49,12 +50,16 @@ fn rule_list_line(r: &crate::rules::Rule, refusals: &[crate::rules::WasmRefusal]
         ),
         crate::rules::RuleBody::Wasm(_) => ("wasm", "(wasm)"),
     };
-    let refused = refusals
-        .iter()
-        .find(|refusal| refusal.rule_id == r.id)
-        .map_or(String::new(), |refusal| {
-            format!("  [REFUSED: {}]", refusal.category.label())
-        });
+    let labels: Vec<_> = refusals
+        .for_rule(&r.id)
+        .into_iter()
+        .map(|(label, _)| label)
+        .collect();
+    let refused = if labels.is_empty() {
+        String::new()
+    } else {
+        format!("  [REFUSED: {}]", labels.join(", "))
+    };
     format!(
         "{:<24}  {:<8}  {:<8}  {:<16}  {}{}",
         r.id, decide, enabled, wrap, r.name, refused
@@ -64,17 +69,16 @@ fn rule_list_line(r: &crate::rules::Rule, refusals: &[crate::rules::WasmRefusal]
 /// `secreq rules show <target>` — verbose dump of one rule. `target`
 /// matches by id first, then by exact name.
 pub fn rules_show(target: &str) -> Result<i32> {
-    let (rules, refusals) =
-        daemon_client::list_rules().context("could not reach the consent daemon")?;
-    let rule = find_rule(&rules, target)?;
-    print!("{}", rule_show_text(rule, &refusals));
+    let listing = daemon_client::list_rules().context("could not reach the consent daemon")?;
+    let rule = find_rule(&listing.rules, target)?;
+    print!("{}", rule_show_text(rule, &listing.refusals));
     Ok(0)
 }
 
 /// The full `rules show` body. Split from [`rules_show`] so the
 /// rendering — in particular the wasm module-status line — is unit
 /// testable without a daemon.
-fn rule_show_text(rule: &crate::rules::Rule, refusals: &[crate::rules::WasmRefusal]) -> String {
+fn rule_show_text(rule: &crate::rules::Rule, refusals: &crate::rules::RuleRefusals) -> String {
     use std::fmt::Write;
     let mut out = String::new();
     let _ = writeln!(out, "id:             {}", rule.id);
@@ -111,7 +115,11 @@ fn rule_show_text(rule: &crate::rules::Rule, refusals: &[crate::rules::WasmRefus
             // module (sha256 mismatch, missing file, sandbox rejection)
             // can never fire, and the full reason names files and hashes
             // — never secret values.
-            match refusals.iter().find(|refusal| refusal.rule_id == rule.id) {
+            match refusals
+                .wasm
+                .iter()
+                .find(|refusal| refusal.rule_id == rule.id)
+            {
                 Some(refusal) => {
                     let _ = writeln!(
                         out,
@@ -134,6 +142,19 @@ fn rule_show_text(rule: &crate::rules::Rule, refusals: &[crate::rules::WasmRefus
             out,
             "trained on:     (none — module is consulted for every ask)"
         );
+    }
+    // A refused pattern only happens on a declarative rule, and it is
+    // the one thing on this dump that changes what the rule *does*
+    // rather than describing it — so it is spelled out, not implied by
+    // the pattern line above reading back as the operator wrote it.
+    for refusal in refusals
+        .patterns
+        .iter()
+        .filter(|refusal| refusal.rule_id == rule.id)
+    {
+        let key = format!("{} status:", refusal.field.as_str());
+        let _ = writeln!(out, "{key:<16}REFUSED — not a valid glob");
+        let _ = writeln!(out, "refusal reason: {}", refusal.reason);
     }
     if let Some(msg) = deny_message {
         let _ = writeln!(out, "deny message:   {msg}");
@@ -206,7 +227,9 @@ pub fn rules_add_wasm(
 /// `secreq rules enable|disable <target>`. Idempotent — flipping a
 /// bit that's already in the requested state succeeds silently.
 pub fn rules_set_enabled(target: &str, enabled: bool) -> Result<i32> {
-    let (rules, _) = daemon_client::list_rules().context("could not reach the consent daemon")?;
+    let rules = daemon_client::list_rules()
+        .context("could not reach the consent daemon")?
+        .rules;
     let rule = find_rule(&rules, target)?;
     let id = rule.id.clone();
     daemon_client::set_rule_enabled(&id, enabled)
@@ -222,7 +245,9 @@ pub fn rules_set_enabled(target: &str, enabled: bool) -> Result<i32> {
 
 /// `secreq rules rm <target>`.
 pub fn rules_rm(target: &str) -> Result<i32> {
-    let (rules, _) = daemon_client::list_rules().context("could not reach the consent daemon")?;
+    let rules = daemon_client::list_rules()
+        .context("could not reach the consent daemon")?
+        .rules;
     let rule = find_rule(&rules, target)?;
     let id = rule.id.clone();
     let name = rule.name.clone();
@@ -273,11 +298,42 @@ mod tests {
         }
     }
 
-    fn refusal_fixture() -> crate::rules::WasmRefusal {
-        crate::rules::WasmRefusal {
-            rule_id: "wasm01".to_owned(),
-            category: crate::rules::WasmRefusalCategory::Sha256Mismatch,
-            reason: "sha256 mismatch for wasm rule `cursor gh reads` (id wasm01)".to_owned(),
+    fn no_refusals() -> crate::rules::RuleRefusals {
+        crate::rules::RuleRefusals::default()
+    }
+
+    fn refusal_fixture() -> crate::rules::RuleRefusals {
+        crate::rules::RuleRefusals {
+            wasm: vec![crate::rules::WasmRefusal {
+                rule_id: "wasm01".to_owned(),
+                category: crate::rules::WasmRefusalCategory::Sha256Mismatch,
+                reason: "sha256 mismatch for wasm rule `cursor gh reads` (id wasm01)".to_owned(),
+            }],
+            patterns: Vec::new(),
+        }
+    }
+
+    /// A declarative deny whose `argv` glob does not compile — the rule
+    /// an operator believes covers a family of commands and which, until
+    /// this was refused, covered nothing.
+    fn bad_glob_rule_fixture() -> crate::rules::Rule {
+        crate::rules::Rule {
+            id: "decl01".to_owned(),
+            name: "never touch repo secrets".to_owned(),
+            enabled: true,
+            trained_secrets: Default::default(),
+            created_at_unix: 0,
+            body: crate::rules::RuleBody::Declarative {
+                r#match: crate::rules::RuleMatch {
+                    wrap: "gh".to_owned(),
+                    argv: Some(crate::rules::Pattern::parse(
+                        "gh api /repos/*/actions/secrets*[",
+                    )),
+                    ancestor: None,
+                    cwd: None,
+                },
+                decide: crate::rules::RuleDecision::Deny.into(),
+            },
         }
     }
 
@@ -285,18 +341,18 @@ mod tests {
     fn rule_list_line_marks_a_refused_rule() {
         let rule = wasm_rule_fixture();
         // Healthy: no marker.
-        let line = rule_list_line(&rule, &[]);
+        let line = rule_list_line(&rule, &no_refusals());
         assert!(line.contains("cursor gh reads"), "{line}");
         assert!(!line.contains("REFUSED"), "{line}");
         // Refused: compact marker with the reason category.
-        let line = rule_list_line(&rule, &[refusal_fixture()]);
+        let line = rule_list_line(&rule, &refusal_fixture());
         assert!(line.contains("[REFUSED: sha256 mismatch]"), "{line}");
     }
 
     #[test]
     fn rule_show_text_renders_module_path_sha_and_integrity() {
         let rule = wasm_rule_fixture();
-        let ok = rule_show_text(&rule, &[]);
+        let ok = rule_show_text(&rule, &no_refusals());
         assert!(ok.contains("wasm module:    rules/wasm01.wasm"), "{ok}");
         assert!(
             ok.contains(&format!("wasm sha256:    {}", "ab".repeat(32))),
@@ -304,7 +360,7 @@ mod tests {
         );
         assert!(ok.contains("wasm status:    ok"), "{ok}");
 
-        let refused = rule_show_text(&rule, &[refusal_fixture()]);
+        let refused = rule_show_text(&rule, &refusal_fixture());
         assert!(
             refused.contains("wasm status:    REFUSED (sha256 mismatch)"),
             "{refused}"
@@ -320,10 +376,47 @@ mod tests {
     fn rule_show_text_calls_out_an_unscoped_wasm_rule() {
         let mut rule = wasm_rule_fixture();
         rule.trained_secrets.clear();
-        let out = rule_show_text(&rule, &[]);
+        let out = rule_show_text(&rule, &no_refusals());
         assert!(
             out.contains("trained on:     (none — module is consulted for every ask)"),
             "{out}"
+        );
+    }
+
+    #[test]
+    fn rule_list_line_marks_a_rule_whose_glob_would_not_compile() {
+        let rule = bad_glob_rule_fixture();
+        let refusals = crate::rules::RuleRefusals {
+            wasm: Vec::new(),
+            patterns: crate::rules::pattern_refusals(std::slice::from_ref(&rule)),
+        };
+        let line = rule_list_line(&rule, &refusals);
+        assert!(line.contains("[REFUSED: bad argv glob]"), "{line}");
+        // And a healthy declarative rule is not marked.
+        assert!(
+            !rule_list_line(&rule, &no_refusals()).contains("REFUSED"),
+            "an unrefused rule carries no marker"
+        );
+    }
+
+    #[test]
+    fn rule_show_text_spells_out_a_refused_pattern_and_what_it_costs() {
+        let rule = bad_glob_rule_fixture();
+        let refusals = crate::rules::RuleRefusals {
+            wasm: Vec::new(),
+            patterns: crate::rules::pattern_refusals(std::slice::from_ref(&rule)),
+        };
+        let out = rule_show_text(&rule, &refusals);
+        // The pattern still reads back exactly as it was written…
+        assert!(
+            out.contains("argv match:     gh api /repos/*/actions/secrets*["),
+            "{out}"
+        );
+        // …so the status line is the only thing that says it is dead.
+        assert!(out.contains("argv status:    REFUSED"), "{out}");
+        assert!(
+            out.contains("goes to the consent prompt"),
+            "a refused deny says where its asks go now: {out}"
         );
     }
 

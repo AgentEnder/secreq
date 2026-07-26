@@ -17,7 +17,7 @@
 use eframe::egui;
 
 use crate::recommendations::{self, Suggestion};
-use crate::rules::{Rule, WasmRefusal};
+use crate::rules::{Rule, RuleRefusals};
 
 use super::theme::{OsFlavor, Theme};
 use super::ui::{
@@ -199,7 +199,7 @@ pub fn render_manager_panel(
     ctx: &egui::Context,
     ui: &mut egui::Ui,
     rules: &[Rule],
-    wasm_refusals: &[WasmRefusal],
+    refusals: &RuleRefusals,
     viewer_mode: bool,
     state: &mut ManagerWindowState,
     rule_actions_out: &mut Vec<RuleAction>,
@@ -235,7 +235,7 @@ pub fn render_manager_panel(
         .inner_margin(body_inset)
         .show(ui, |ui| match state.view {
             ManagerView::Rules => {
-                render_rules_body(ui, rules, wasm_refusals, state, rule_actions_out);
+                render_rules_body(ui, rules, refusals, state, rule_actions_out);
             }
             ManagerView::Audit => render_audit_page(
                 ctx,
@@ -255,7 +255,7 @@ pub fn render_manager_panel(
 fn render_rules_body(
     ui: &mut egui::Ui,
     rules: &[Rule],
-    wasm_refusals: &[WasmRefusal],
+    refusals: &RuleRefusals,
     state: &mut ManagerWindowState,
     rule_actions_out: &mut Vec<RuleAction>,
 ) {
@@ -286,7 +286,7 @@ fn render_rules_body(
     render_rules_page(
         ui,
         &rule_rows,
-        wasm_refusals,
+        refusals,
         &visible,
         &mut rules_ui,
         rule_actions_out,

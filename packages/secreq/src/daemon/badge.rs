@@ -210,7 +210,7 @@ fn spawn_reader(
                     | DaemonMsg::WindowOpened { .. }
                     | DaemonMsg::Decision { .. }
                     | DaemonMsg::Err { .. }
-                    | DaemonMsg::RulesList { .. }
+                    | DaemonMsg::RulesList(_)
                     | DaemonMsg::RuleAdded { .. }
                     | DaemonMsg::AutoDenyToast { .. } => {}
                 }

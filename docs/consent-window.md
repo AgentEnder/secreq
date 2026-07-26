@@ -152,6 +152,19 @@ Deny rules win over approve rules, and the most specific approve wins ties.
 For decisions pattern matching can't express, see
 [wasm-rules](./wasm-rules.md).
 
+A pattern containing `*`, `?` or `[` is a glob. One that does not parse as
+a glob is refused: the rule keeps the text you typed, matches nothing, and
+is badged here. `rules list` marks the row `[REFUSED: bad argv glob]` and
+`rules show` prints the reason.
+
+::shot{id=45-rules-pattern-refused}
+
+Which way a refused rule fails depends on what it decides. A refused
+approve approves nothing, so asks it covered reach you as they did before
+you wrote it. A refused **deny** is the one that would otherwise go wrong:
+rather than let another rule's approve carry an ask your deny was written
+to stop, secreq asks you.
+
 ### Audit
 
 Every decision, newest first: what asked, what it wanted, where from, and

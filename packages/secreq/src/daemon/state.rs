@@ -559,17 +559,28 @@ impl<T: SubscriberExtra> SubscriberGroup<T> {
     }
 }
 
-/// Surface every per-rule wasm refusal from a rules load in the daemon
-/// log. Loud by design: a refused rule (sha256 mismatch, missing or
-/// uncompilable module) silently not firing would be indistinguishable
-/// from a rule that decided to pass.
-fn log_wasm_load_errors(refusals: &[rules::WasmRefusal]) {
-    for refusal in refusals {
+/// Surface every per-rule refusal from a rules load in the daemon log.
+/// Loud by design, and for the same reason on both halves: a rule that
+/// silently stops firing — because its module hash moved, or because its
+/// glob has a typo — is indistinguishable from a rule that decided not
+/// to match.
+fn log_rule_refusals(refusals: &rules::RuleRefusals) {
+    for refusal in &refusals.wasm {
         super::log::log_at(
             "state",
             format_args!(
                 "WARN: refusing wasm rule ({}): {} — this rule will not fire",
                 refusal.category.label(),
+                refusal.reason
+            ),
+        );
+    }
+    for refusal in &refusals.patterns {
+        super::log::log_at(
+            "state",
+            format_args!(
+                "WARN: refusing pattern ({}): {}",
+                refusal.label(),
                 refusal.reason
             ),
         );
@@ -592,10 +603,10 @@ impl State {
         let mut state = State::new();
         match rules::load_rules(&rules_path) {
             Ok(loaded) => {
-                log_wasm_load_errors(&loaded.wasm_refusals);
+                log_rule_refusals(&loaded.refusals);
                 state.rules = loaded.rules;
                 state.rule_modules = loaded.modules;
-                state.wasm_refusals = loaded.wasm_refusals;
+                state.wasm_refusals = loaded.refusals.wasm;
                 state.rules_loaded_at = loaded.mtime;
             }
             Err(err) => {
@@ -1016,7 +1027,7 @@ impl State {
             queue,
             viewer_mode: self.viewer_mode,
             rules: self.rules.clone(),
-            wasm_refusals: self.wasm_refusals.clone(),
+            refusals: self.refusals_snapshot(),
         }
     }
 
@@ -1498,12 +1509,21 @@ impl State {
         self.rules.clone()
     }
 
-    /// Wasm rules refused at the last rules load, cloned for the
-    /// caller. Rides the `RulesList` reply and the wire snapshot so
-    /// list/show/UI can render a refused rule as refused instead of
-    /// as a normal enabled rule that never fires.
-    pub fn wasm_refusals_snapshot(&self) -> Vec<rules::WasmRefusal> {
-        self.wasm_refusals.clone()
+    /// Everything wrong with the current ruleset, for the caller. Rides
+    /// the `RulesList` reply and the wire snapshot so list/show/UI can
+    /// render a refused rule as refused instead of as a normal enabled
+    /// rule that never fires.
+    ///
+    /// The wasm half is the stored one — it depends on bytes on disk,
+    /// which can move under a rule that did not, so it is recorded when
+    /// the module is read. The pattern half is recomputed from
+    /// `self.rules` on every call: it is a pure function of the rule
+    /// text, so a cached copy could only ever be a way to be wrong.
+    pub fn refusals_snapshot(&self) -> rules::RuleRefusals {
+        rules::RuleRefusals {
+            wasm: self.wasm_refusals.clone(),
+            patterns: rules::pattern_refusals(&self.rules),
+        }
     }
 
     /// Reload the auto-rules file if its `mtime` has advanced since
@@ -1542,10 +1562,10 @@ impl State {
         );
         match rules::load_rules(&path) {
             Ok(loaded) => {
-                log_wasm_load_errors(&loaded.wasm_refusals);
+                log_rule_refusals(&loaded.refusals);
                 self.rules = loaded.rules;
                 self.rule_modules = loaded.modules;
-                self.wasm_refusals = loaded.wasm_refusals;
+                self.wasm_refusals = loaded.refusals.wasm;
                 self.rules_loaded_at = loaded.mtime;
                 // Push the new ruleset to any attached consent window so
                 // the Rules tab UI reflects the edit immediately.
@@ -4329,7 +4349,7 @@ mod tests {
         // The rule pins the store content by hash.
         let wasm = rule.wasm().expect("wasm rule");
         assert_eq!(wasm.sha256, crate::rules::sha256_hex(APPROVE_IF_BYTES));
-        assert!(state.wasm_refusals_snapshot().is_empty());
+        assert!(state.refusals_snapshot().is_empty());
 
         // Fires in this daemon…
         let hit = state
@@ -4341,7 +4361,7 @@ mod tests {
         // …and in a fresh daemon loading the persisted rules file.
         let reloaded = State::with_rules_path(path);
         assert_eq!(reloaded.rules_snapshot(), vec![rule.clone()]);
-        assert!(reloaded.wasm_refusals_snapshot().is_empty());
+        assert!(reloaded.refusals_snapshot().is_empty());
         let hit = reloaded
             .evaluate_rules_for_ask(&cursor_ask())
             .expect("must fire after reload");
@@ -4426,25 +4446,25 @@ mod tests {
 
         // A fresh load (daemon restart / mtime reload) refuses the rule.
         let mut state = State::with_rules_path(path);
-        let refusals = state.wasm_refusals_snapshot();
-        assert_eq!(refusals.len(), 1);
-        assert_eq!(refusals[0].rule_id, rule.id);
+        let refusals = state.refusals_snapshot();
+        assert_eq!(refusals.wasm.len(), 1);
+        assert_eq!(refusals.wasm[0].rule_id, rule.id);
         assert_eq!(
-            refusals[0].category,
+            refusals.wasm[0].category,
             crate::rules::WasmRefusalCategory::Sha256Mismatch
         );
-        assert!(refusals[0].reason.contains("sha256 mismatch"));
+        assert!(refusals.wasm[0].reason.contains("sha256 mismatch"));
         // The rule is still listed (visible to list/show/UI)…
         assert_eq!(state.rules_snapshot(), vec![rule.clone()]);
         // …the wire snapshot carries the refusal for the UI badge…
-        assert_eq!(state.snapshot_for_wire().wasm_refusals, refusals);
+        assert_eq!(state.snapshot_for_wire().refusals, refusals);
         // …but it can never fire.
         assert!(state.evaluate_rules_for_ask(&cursor_ask()).is_none());
 
         // Deleting the refused rule clears the refusal and the stored
         // module file.
         state.delete_rule(&rule.id).expect("delete");
-        assert!(state.wasm_refusals_snapshot().is_empty());
+        assert!(state.refusals_snapshot().is_empty());
         assert!(!store.exists(), "delete must remove the stored module");
     }
 
@@ -4566,7 +4586,7 @@ mod tests {
 
         // Fresh load refuses the rule (recorded sha no longer matches).
         let mut state = State::with_rules_path(path);
-        assert_eq!(state.wasm_refusals_snapshot().len(), 1);
+        assert_eq!(state.refusals_snapshot().wasm.len(), 1);
         assert!(!state.rule_modules.contains_key(&rule.id));
 
         // Update the rule to pin the module that's actually on disk.
@@ -4574,7 +4594,7 @@ mod tests {
         repin(&mut healed, crate::rules::sha256_hex(ALWAYS_PASS));
         state.update_rule(healed.clone()).expect("heal");
         assert!(
-            state.wasm_refusals_snapshot().is_empty(),
+            state.refusals_snapshot().is_empty(),
             "a successful update must clear the stale refusal"
         );
         assert!(state.rule_modules.contains_key(&rule.id));

@@ -65,7 +65,7 @@ use secreq::daemon::ui::{AutoDenyToastView, RuleAction, RuleSort};
 use secreq::recommendations::SuggestionSort;
 use secreq::rule_scaffold::Editor;
 use secreq::rules::{
-    Pattern, Rule, RuleBody, RuleDecision, RuleMatch, StaticDecision, WasmRefusal,
+    Pattern, Rule, RuleBody, RuleDecision, RuleMatch, RuleRefusals, StaticDecision, WasmRefusal,
     WasmRefusalCategory, WasmRule,
 };
 
@@ -1114,11 +1114,13 @@ type ManagerStateSetup<'a> = Box<dyn Fn(&mut ManagerWindowState) + 'a>;
 struct ManagerExtras<'a> {
     /// Rules to pass to `render_manager_panel` (the Rules view content).
     rules: Vec<Rule>,
-    /// Modules the daemon refused at its last rules load. Empty for
-    /// almost every fixture — a refusal is the abnormal state, and it is
-    /// the one the docs most need a picture of, because a refused rule
-    /// looks exactly like a working one everywhere except here.
-    wasm_refusals: Vec<WasmRefusal>,
+    /// Everything the daemon refused about those rules at its last
+    /// load — an unloadable wasm module, a pattern that is not a valid
+    /// glob. Empty for almost every fixture: a refusal is the abnormal
+    /// state, and it is the one the docs most need a picture of, because
+    /// a refused rule looks exactly like a working one everywhere except
+    /// here.
+    refusals: RuleRefusals,
     /// Wire viewer-mode flag: `secreq view` sets it, and a fresh
     /// manager state rising-edges onto the Audit view when it's set.
     viewer_mode: bool,
@@ -1141,7 +1143,7 @@ fn render_manager_fixture(
 
     let ManagerExtras {
         rules,
-        wasm_refusals,
+        refusals,
         viewer_mode,
         window_state,
     } = extras;
@@ -1167,7 +1169,7 @@ fn render_manager_fixture(
                     &ctx,
                     ui,
                     &rules,
-                    &wasm_refusals,
+                    &refusals,
                     viewer_mode,
                     ws,
                     &mut rule_actions,
@@ -2691,14 +2693,17 @@ fn rules_tab_wasm_refused() {
         ),
     ];
 
-    let refusals = vec![WasmRefusal {
-        rule_id: "5b2d9f1c32e4".to_owned(),
-        category: WasmRefusalCategory::Sha256Mismatch,
-        reason: "module `rules/5b2d9f1c32e4.wasm` hashes to \
-                 7d4a…c19f, not the pinned 1f2e…b1c0 — it changed on disk \
-                 since it was registered"
-            .to_owned(),
-    }];
+    let refusals = RuleRefusals {
+        wasm: vec![WasmRefusal {
+            rule_id: "5b2d9f1c32e4".to_owned(),
+            category: WasmRefusalCategory::Sha256Mismatch,
+            reason: "module `rules/5b2d9f1c32e4.wasm` hashes to \
+                     7d4a…c19f, not the pinned 1f2e…b1c0 — it changed on disk \
+                     since it was registered"
+                .to_owned(),
+        }],
+        patterns: Vec::new(),
+    };
 
     let audit = (0..6)
         .map(|i| audit_auto_fire(60 * (i + 1), "4a1c8e0b21d3", "approve+auto"))
@@ -2715,7 +2720,68 @@ fn rules_tab_wasm_refused() {
         audit,
         ManagerExtras {
             rules,
-            wasm_refusals: refusals,
+            refusals,
+            window_state: Some(Box::new(
+                secreq::daemon::manager_ui::ManagerWindowState::focus_rules_view,
+            )),
+            ..ManagerExtras::default()
+        },
+    );
+}
+
+/// A declarative deny whose `argv` glob does not compile.
+///
+/// The sibling of `rules_tab_wasm_refused`, and needed for the same reason
+/// one step further in: this rule was authored entirely inside secreq, has
+/// no module, no hash and nothing on disk to tamper with, and still cannot
+/// fire. The pattern line reads back exactly as the operator typed it —
+/// that is the trap — so the badge is the only thing on the row that says
+/// so.
+///
+/// The pair is deliberate and is the substance of the fixture. The approve
+/// above carries the *same* typo, and the two rows are badged identically
+/// while meaning opposite things: a refused approve simply stops approving,
+/// a refused deny sends every ask it covered to this window instead of
+/// letting the approve carry it. The hover text is where that difference
+/// lives, which is why both rows are here rather than one.
+#[test]
+fn rules_tab_pattern_refused() {
+    let rules = vec![
+        sample_rule(
+            "6c3e0a2b43f5",
+            "Cursor reads via gh",
+            RuleDecision::Approve,
+            // `[` opens a character class that is never closed.
+            Some("gh api --get /repos/*/pulls*["),
+        ),
+        sample_rule(
+            "7d4f1b3c54a6",
+            "Block repo secret writes",
+            RuleDecision::Deny,
+            Some("gh api /repos/*/actions/secrets*["),
+        ),
+    ];
+    // Both rules are refused, so neither has ever fired; the usage
+    // footnote reading "No auto-fires yet" on both is itself part of what
+    // the picture shows.
+    let refusals = RuleRefusals {
+        wasm: Vec::new(),
+        patterns: secreq::rules::pattern_refusals(&rules),
+    };
+    assert_eq!(refusals.patterns.len(), 2, "both globs must be refused");
+
+    render_manager_fixture(
+        Shot::new("45-rules-pattern-refused").caption(
+            "A match pattern that is not a valid glob is refused rather than \
+             quietly reread as plain text. secreq badges the rule here and the \
+             rule never matches. That matters most on a <b>deny</b>: rather than \
+             let another rule's approve carry an ask your deny was written to \
+             stop, secreq asks you.",
+        ),
+        Vec::new(),
+        ManagerExtras {
+            rules,
+            refusals,
             window_state: Some(Box::new(
                 secreq::daemon::manager_ui::ManagerWindowState::focus_rules_view,
             )),

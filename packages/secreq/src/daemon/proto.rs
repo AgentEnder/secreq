@@ -29,7 +29,7 @@ use crate::provenance::{ProcessIdentity, SignAnchorKind};
 use std::collections::BTreeSet;
 
 use crate::consent::Decision;
-use crate::rules::{Rule, WasmRefusal};
+use crate::rules::{Rule, RuleListing, RuleRefusals};
 
 /// Which manager view a window should open on. Carried on the wire when
 /// the prompt's "Open Manager…" affordance is clicked
@@ -907,16 +907,15 @@ pub enum DaemonMsg {
     ConsentExitPlease,
 
     /// Reply to [`ClientMsg::ListRules`]. Carries the current ruleset
-    /// plus every wasm rule refused at the last rules load (sha256
-    /// mismatch, missing module, sandbox rejection) — refused rules
-    /// stay in `rules` but can never fire, and list/show render the
-    /// refusal so it's visible outside the daemon log.
-    /// `#[serde(default)]` keeps older daemons decodable.
-    RulesList {
-        rules: Vec<Rule>,
-        #[serde(default)]
-        wasm_refusals: Vec<WasmRefusal>,
-    },
+    /// plus every refusal recorded against it — a wasm module that would
+    /// not load, a match pattern that would not compile. A refused rule
+    /// stays in `rules` but cannot fire as written, and list/show render
+    /// the refusal so it's visible outside the daemon log.
+    ///
+    /// A newtype around [`RuleListing`] rather than loose fields: the
+    /// two halves are not interchangeable, and the client used to hand
+    /// them back as an unnamed tuple.
+    RulesList(RuleListing),
     /// Reply to [`ClientMsg::AddWasmRule`]: the rule as registered
     /// (with its minted id, stored module path, and recorded sha256)
     /// so the CLI can print what was created. Boxed so this one-shot
@@ -978,7 +977,7 @@ impl std::fmt::Debug for DaemonMsg {
             DaemonMsg::Err { message } => f.debug_struct("Err").field("message", message).finish(),
             DaemonMsg::ConsentUpdate { .. } => f.write_str("ConsentUpdate { .. }"),
             DaemonMsg::ConsentExitPlease => f.write_str("ConsentExitPlease"),
-            DaemonMsg::RulesList { .. } => f.write_str("RulesList { .. }"),
+            DaemonMsg::RulesList(_) => f.write_str("RulesList { .. }"),
             DaemonMsg::RuleAdded { rule } => {
                 f.debug_struct("RuleAdded").field("rule", rule).finish()
             }
@@ -1011,10 +1010,11 @@ pub struct WireSnapshot {
     /// `#[serde(default)]` for back-compat with older daemons.
     #[serde(default)]
     pub rules: Vec<Rule>,
-    /// Wasm rules refused at the last rules load, so the manager's
-    /// Rules tab can badge them. `#[serde(default)]` for back-compat.
+    /// Everything refused about those rules — an unloadable wasm module,
+    /// a pattern that is not a valid glob — so the manager's Rules tab
+    /// can badge them. `#[serde(default)]` for back-compat.
     #[serde(default)]
-    pub wasm_refusals: Vec<WasmRefusal>,
+    pub refusals: RuleRefusals,
 }
 
 /// Lifecycle state of a row the consent window renders.

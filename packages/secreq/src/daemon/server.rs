@@ -763,10 +763,10 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
         },
         ClientMsg::ListRules => {
             let guard = state.lock().expect("state mutex");
-            DaemonMsg::RulesList {
+            DaemonMsg::RulesList(crate::rules::RuleListing {
                 rules: guard.rules_snapshot(),
-                wasm_refusals: guard.wasm_refusals_snapshot(),
-            }
+                refusals: guard.refusals_snapshot(),
+            })
         }
         // `secreq rules add-wasm`. The wire carries the module's
         // (absolute) path, not its bytes — same-user, same-machine, so
@@ -869,7 +869,7 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
         DaemonMsg::Err { .. } => "Err",
         DaemonMsg::ConsentUpdate { .. } => "ConsentUpdate",
         DaemonMsg::ConsentExitPlease => "ConsentExitPlease",
-        DaemonMsg::RulesList { .. } => "RulesList",
+        DaemonMsg::RulesList(_) => "RulesList",
         DaemonMsg::RuleAdded { .. } => "RuleAdded",
         DaemonMsg::AutoDenyToast { .. } => "AutoDenyToast",
     };
@@ -1781,12 +1781,9 @@ mod tests {
         );
 
         match handle_message(ClientMsg::ListRules, state.clone()) {
-            DaemonMsg::RulesList {
-                rules,
-                wasm_refusals,
-            } => {
-                assert_eq!(rules, vec![rule.clone()]);
-                assert!(wasm_refusals.is_empty(), "{wasm_refusals:?}");
+            DaemonMsg::RulesList(listing) => {
+                assert_eq!(listing.rules, vec![rule.clone()]);
+                assert!(listing.refusals.is_empty(), "{:?}", listing.refusals);
             }
             other => panic!("expected RulesList, got {other:?}"),
         }
