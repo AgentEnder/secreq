@@ -132,6 +132,37 @@ fn test_fallback_root() -> PathBuf {
 /// Pure core of [`secreq_root`], split out so it's testable without
 /// `set_var` — which is process-global and races across threads in the same
 /// test binary.
+///
+/// **A symlinked root is accepted, and used as the user spelled it.** Pointing
+/// `~/.secreq` at an encrypted volume is a reasonable thing to want, so this
+/// neither refuses one nor resolves it through `fs::canonicalize`. Resolving
+/// was tried and is worse on every axis that matters:
+///
+/// - It does not close a check-to-use window. `canonicalize` hands back a
+///   *string*; every later `open` re-walks each component from `/` and
+///   re-follows whatever symlink is there at that moment. Closing that window
+///   means holding a directory fd and going through `openat` with
+///   `O_NOFOLLOW`, which is a different shape of module than this one.
+/// - It makes two secreq processes *more* likely to disagree, not less. As it
+///   stands every process re-follows the link on every open, so they all track
+///   the same current target. Pinning at startup gives a daemon launched
+///   before a repoint and a wrap launched after it two different roots — the
+///   split-brain `audit.log` that refusing a relative root exists to prevent.
+/// - It rewrites every path secreq *prints* and *writes down*. On macOS
+///   `/var/folders/…` becomes `/private/var/folders/…`; and because
+///   [`under_home`] then no longer matches, a user who symlinked `~/.secreq`
+///   onto a volume gets that volume's absolute path baked into their
+///   `~/.ssh/config` `IdentityAgent` line and their shell rc — stale the
+///   moment they repoint the link, which is the reason they made it one.
+/// - It is skipped exactly when the root is most interesting. `canonicalize`
+///   requires the path to exist, so a first run — the one that is about to
+///   *create* the root — falls back to the literal path regardless.
+///
+/// An attacker who can plant or swap `~/.secreq` can already write `$HOME`,
+/// and so can replace the target's contents, the shell rc, or a shim on
+/// `$PATH`. What secreq does defend is the mode of what it creates
+/// ([`ensure_private_dir`], `atomic::replace`), which holds wherever the root
+/// resolves to.
 fn root_from(override_env: Option<OsString>, home: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(raw) = override_env {
         if !raw.is_empty() {
@@ -382,6 +413,27 @@ mod tests {
                 .to_string();
             assert!(err.contains("absolute"), "{raw:?} accepted, or: {err}");
         }
+    }
+
+    /// The policy boundary next to [`a_relative_secreq_home_is_refused`]: a
+    /// symlinked root is taken **as spelled**, neither refused nor resolved.
+    /// See the note on [`root_from`] for why; this test is here so that
+    /// "resolve it, surely" fails loudly rather than landing as a tidy-up.
+    #[test]
+    fn a_symlinked_secreq_home_is_taken_as_spelled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("real");
+        std::fs::create_dir(&target).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let root = root_from(Some(link.clone().into_os_string()), None).unwrap();
+        assert_eq!(
+            root, link,
+            "a symlinked root must be used as the user spelled it — resolving \
+             it rewrites every path secreq prints and bakes the link's current \
+             target into ~/.ssh/config and the shell rc"
+        );
     }
 
     #[test]
