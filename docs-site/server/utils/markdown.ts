@@ -9,6 +9,7 @@ import remarkParse from 'remark-parse';
 import remarkRehype from 'remark-rehype';
 import { unified } from 'unified';
 import { DOC_SLUGS } from '../../docs.nav';
+import { flowHtml } from '../../flow-markup';
 import { shotHtml } from '../../shot-markup';
 import { termHtml } from '../../term-markup';
 import { applyBaseUrl } from '../../utils/base-url';
@@ -52,7 +53,7 @@ function rehypeTableCols() {
         if (child.tagName === 'tr' && colCount === 0) {
           colCount =
             child.children?.filter(
-              (c) => c.type === 'element' && (c.tagName === 'th' || c.tagName === 'td')
+              (c) => c.type === 'element' && (c.tagName === 'th' || c.tagName === 'td'),
             ).length ?? 0;
         }
       });
@@ -114,7 +115,7 @@ export function resolveDocHref(href: string): string {
     if (!DOC_SLUGS.includes(slug)) {
       throw new Error(
         `[docs-site] "${href}" points at a doc the nav manifest does not publish. ` +
-          `Add "${slug}" to docs.nav.ts, or link it on GitHub with a "../docs/" path.`
+          `Add "${slug}" to docs.nav.ts, or link it on GitHub with a "../docs/" path.`,
       );
     }
     return applyBaseUrl(`/docs/${slug}`) + hash;
@@ -233,10 +234,56 @@ function remarkTerm() {
 }
 
 /**
+ * Remark plugin: turn `::flow{term=run-gh}` into the recording *and* the
+ * consent window it blocked on, choreographed against each other.
+ *
+ * The two halves of that moment are recorded by two harnesses that know
+ * nothing about each other, and this is the seam between them:
+ *
+ *   ::flow{term=run-gh}
+ *   ::flow{term=run-gh caption="Optional override"}
+ *
+ * The `term` attribute is the only one an author supplies, and there is
+ * deliberately no way to name the window. Which fixture rises, and when, is
+ * recorded in the transcript's own `gui` markers — repeating it here would
+ * be a second place for it to be wrong, and the only one no test checks.
+ *
+ * A recording with no markers throws, as does one whose markers do not pair
+ * up; see `flow-markup.ts` for why each of those is worth stopping a build
+ * over.
+ */
+function remarkFlow() {
+  return (tree: DirectiveNode) => {
+    walkNodes(tree, (node) => {
+      const isDirective =
+        node.type === 'leafDirective' ||
+        node.type === 'containerDirective' ||
+        node.type === 'textDirective';
+      if (!isDirective || node.name !== 'flow') return;
+
+      const term = node.attributes?.term;
+      if (!term) {
+        throw new Error(
+          '[docs-site] ::flow directive is missing a transcript — use ::flow{term=…}',
+        );
+      }
+
+      const caption = node.attributes?.caption ?? undefined;
+      const html = flowHtml(term, caption === undefined ? {} : { caption });
+
+      node.type = 'html';
+      (node as { value?: string }).value = html;
+      node.children = [];
+      node.attributes = {};
+    });
+  };
+}
+
+/**
  * Convert a Markdown string to syntax-highlighted HTML.
  *
  * Pipeline: remarkParse -> remarkGfm -> remarkDirective -> remarkShot
- *   -> remarkTerm -> remarkRehype -> rehypeRaw -> rehypeSlug
+ *   -> remarkTerm -> remarkFlow -> remarkRehype -> rehypeRaw -> rehypeSlug
  *   -> rehypeDocLinks -> rehypeGithubAlerts -> @shikijs/rehype
  *   -> rehypeTableCols -> rehypeStringify
  */
@@ -247,6 +294,7 @@ export async function renderMarkdown(md: string): Promise<string> {
     .use(remarkDirective)
     .use(remarkShot)
     .use(remarkTerm)
+    .use(remarkFlow)
     .use(remarkRehype, { allowDangerousHtml: true })
     .use(rehypeRaw)
     .use(rehypeSlug)

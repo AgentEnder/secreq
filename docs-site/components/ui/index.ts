@@ -9,5 +9,7 @@ export { Term } from './Term';
 // Side-effect imports: register the custom elements, so the screenshots and
 // sessions that markdown injects as raw HTML are upgraded too. There is no
 // hydrate call to make — importing the definitions is the integration.
+import './secreq-flow';
 import './secreq-shot';
 import './secreq-terminal';
+import './secreq-window';

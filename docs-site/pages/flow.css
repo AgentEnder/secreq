@@ -1,0 +1,484 @@
+/* ════════════════════════════════════════════════════════════════════
+   THE FLOW — a recorded session and the window it blocked on
+
+   `::flow{term=run-gh}` puts a `::term` and a `::shot` on one stage and
+   lets the recording's own `gui` markers drive them: the command runs,
+   the terminal stops on its wait indicator, the consent window rises,
+   it is decided, the terminal carries on.
+
+   Four decisions the rest of this file is downstream of.
+
+   **The window's place is not reserved.** It used to be: the stage was
+   laid out once at the window's full extent and the window opened inside
+   that box, so the page could never move. What that bought was 318px of
+   empty figure under a 173px terminal, permanently, for the sake of two
+   moments per playback — and the figure spends almost all of its life at
+   rest, in front of a reader who has no idea what the hole is for. So the
+   reserve is gone and the shell under the terminal opens from a
+   `0fr -> 1fr` grid row, which is the hero's mechanism exactly
+   (`.icept-ask-shell` in `interception.css`) and needs nobody to measure
+   the window. The page reflows twice per playback; that is affordable
+   only because `<secreq-flow>` guarantees at most one flow on the page is
+   ever moving, and because a flow that leaves the viewport stands down and
+   gives its height back where nobody is looking.
+
+   **There are two surfaces here and there is nothing behind them.** An
+   earlier version painted the stage as a *desktop* — a well, an inset
+   hairline — on the theory that a reserved half-screen with nothing in it
+   reads as an image that failed to load, and that a desktop with a
+   terminal on it and space below is not a broken image but a place a
+   window is about to land. That theory does not survive looking at it.
+   The terminal is frosted glass and the desktop was a flat panel a shade
+   away from it, so what a reader saw was not a terminal standing on a
+   desk: it was one slab with a transcript printed on its top half, and a
+   consent window that appeared to be printed on it too. The two objects in
+   this figure are a terminal and a window, and a surface drawn behind both
+   of them makes the pair read as one. So there is no stage now — the
+   terminal's own glass and the window's own chrome and lift are what
+   separate them, exactly as they do everywhere else on the site, and what
+   the window lands on is the page.
+
+   **The window lands on the terminal, and never on the transcript.** Not
+   below it in a second row with a gap: a consent window on a real desktop
+   comes down on top of whatever you were looking at. What bounds the
+   overlap is not taste, it is the rest state. The base composition — no
+   JavaScript, or reduced motion — is the finished session with the window
+   standing over it permanently, and a figure that answers "what did the
+   command print?" with three lines behind a dialog is a figure that has
+   stopped being documentation for the readers least able to do anything
+   about it. So `--flow-overlap` is the panel's own bottom edge and
+   nothing else.
+
+   Measuring it from the *bottom* of the terminal is the whole reason this
+   number no longer has to be maintained. The old reserve was measured
+   from the top, so it had to clear the tallest frame's last line and a
+   recording that printed one more row would have hidden it. Every frame
+   stacks in one grid cell (`terminal.css`), so the panel's bottom edge is
+   where the tallest frame ends, whatever that frame is.
+
+   **A person takes the decision, and you watch them take it.** The
+   pointer comes over while the command hangs, waits with its tip on
+   Approve for however long the recording waits, and presses at the
+   instant the recording says the window went away. Where Approve *is*
+   is measured, never written down: `<secreq-window>` finds the label in
+   the captured geometry and `<secreq-flow>` writes the answer into
+   `--flow-press-x` / `--flow-press-y`. It has to be measured — the
+   button is bottom-right on macOS, bottom-left on Windows and half an
+   action bar on GNOME, so one hard-coded offset would be wrong on four
+   of the six desktops this site renders for.
+
+   THE BASE RULES ARE THE WINDOW STANDING, AT FULL STRENGTH, AND NO
+   POINTER. Everything else lives inside `secreq-flow:defined` and
+   `prefers-reduced-motion: no-preference`, so the two readers who never
+   see the choreography — no JavaScript, and asked-for stillness — get a
+   complete composition: the finished transcript and the published
+   screenshot of the window, exactly as the guides show them separately.
+   ════════════════════════════════════════════════════════════════════ */
+
+.flow {
+  margin: 2.25rem 0;
+}
+
+/* ── The stage ──
+   Nothing is painted here. Two rows: the terminal, and the shell the
+   window opens in.
+
+   `--flow-overlap` is how far the window's top edge comes over the
+   terminal's bottom edge — the panel's bottom padding and its border, and
+   nothing more. `--flow-shadow` is the room the window's `drop-shadow`
+   needs outside its own box (`0 8px 22px`, so it reaches furthest
+   sideways and down); the clip below would shear it without this. */
+.flow-stage {
+  --flow-overlap: 0.75rem;
+  --flow-shadow: 1.5rem;
+
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Both halves arrive as the figures `::term` and `::shot` emit, margins
+   and all. Inside a flow those margins are the stage's job. */
+/* `min-width: 0` because these are grid items, whose automatic minimum
+   size is their min-content width — and a terminal's min-content width is
+   80 columns of monospace, which on a phone is wider than the phone. The
+   `overflow-x: auto` inside `.term-body` is what a recording scrolls in;
+   without this the whole page scrolls instead. */
+.flow-term,
+.flow-shell {
+  min-width: 0;
+}
+/* `position: relative` for the gate below, which hangs off this box's own
+   bottom edge.
+
+   The negative margin is what pulls the window up onto the terminal, and
+   it is paid for by the shell's `min-height` — see there. It carries the
+   shadow room as well as the overlap, because the clip's top padding sits
+   between the shell's edge and the window's, and every pixel of it is
+   space the window is *not* standing in. */
+.flow-term {
+  width: 100%;
+  position: relative;
+  margin-bottom: calc(-1 * (var(--flow-overlap) + var(--flow-shadow)));
+}
+.flow-term secreq-terminal,
+.flow-window secreq-window {
+  display: block;
+}
+/* Three classes deep for the screenshot, and not by accident: prose
+   declares `.prose-content .shot { margin: 2em 0 }`, which ties on
+   specificity with anything two classes long and then wins on source
+   order — `tailwind.css` imports this file at the top and states its own
+   rules a thousand lines further down. The symptom was 61px of stage
+   height nothing was standing in. */
+.flow-stage .term,
+.flow-stage .flow-window .shot {
+  margin: 0;
+  max-width: 100%;
+}
+
+/* ── The shell ──
+   The row that opens, and the one box in this figure whose height is a
+   thing that changes. `1fr` in the base rules, so the window is standing
+   in it before anything has run; the choreography at the foot of this
+   file is what collapses it to `0fr`.
+
+   `min-height` is the terminal's bottom edge given back. The shell is
+   pulled up into the terminal by the overlap plus the shadow room — that
+   is `.flow-term`'s negative margin — and this is exactly that much
+   height, unconditionally, so a *collapsed* figure ends where the
+   terminal ends. No void, and none of the reserve that used to be one.
+
+   It also buys the first `--flow-overlap` of the window's arrival for
+   free: `min-height` does not add to a shell taller than it, so as the
+   row grows the figure does not move at all until the window has cleared
+   the terminal's bottom edge. The window lands on the terminal before it
+   asks the page for anything. */
+.flow-shell {
+  display: grid;
+  grid-template-rows: 1fr;
+  min-height: calc(var(--flow-overlap) + var(--flow-shadow));
+}
+
+/* Clipping is what makes the collapsed row actually collapse — and the
+   padding is what stops it shearing the window's drop shadow, exactly as
+   `.icept-ask-clip` does in the hero.
+
+   Only the bottom is given back with a negative margin. The other three
+   stay, for two different reasons.
+
+   The **top** is one, and that is what keeps the shut state clean: a grid
+   item stretched to a zero-height track still stands its padding up (its
+   border box is whatever its negative margins demand), so with no negative
+   top margin the strip left showing above a shut shell is the padding —
+   empty — rather than the top of a title bar.
+
+   The **sides** are the other two, because a negative side margin is a
+   box wider than the column, and on a phone the column is the screen: it
+   measured four pixels of horizontal page scroll at 390px wide. So the
+   side room comes out of the window instead. `.flow-window` is capped at
+   22rem and the column is wider than that on any desktop, so nothing
+   moves there; on a narrow screen the window gives up 3rem of width and
+   keeps its shadow, which is the right trade for something that is meant
+   to read as a small floating object anyway. */
+.flow-clip {
+  min-height: 0;
+  overflow: hidden;
+  padding: var(--flow-shadow);
+  margin-bottom: calc(-1 * var(--flow-shadow));
+}
+
+/* ── The window ──
+   Narrower than the terminal and centred on it, because a consent window
+   is a small floating thing and one blown to the full width of the
+   column stops reading as one. The cap is in `rem` rather than a
+   percentage so it stays the same object as the column narrows, and
+   falls back to the column only when the column is smaller than it.
+
+   This is the innermost of the three boxes and the only one that is
+   exactly the window: `.shot` carries no border, no padding and — with
+   the flow's caption hoisted out — one child, so the figure's height is
+   the render's height and, once `<secreq-window>` has swapped the PNG for
+   the scene, the scene's. That is what lets the pointer be positioned in
+   plain percentages of it, and it is why the pointer hangs off this box
+   and not off the shell, whose height is whatever the animation is in the
+   middle of. */
+.flow-window {
+  position: relative;
+  width: min(100%, 22rem);
+  margin-inline: auto;
+}
+
+/* ── The gate ──
+   The hairline that catches the command, borrowed from the hero. It lives
+   on the terminal's own bottom edge, which is exactly where the
+   interception happens: the command got this far and no further. The
+   window lands across the middle of it, so what stays visible is the two
+   ends running out from under the window — the seam continuing behind the
+   thing that made it. Painted only while the window is up. */
+.flow-term::after {
+  content: '';
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  bottom: -1px;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--sq-accent) 22%,
+    var(--sq-accent) 78%,
+    transparent
+  );
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ── The pointer ──
+   Absent until the choreography can run it. `display: none` in the base
+   rules is what keeps a reader with no JavaScript, or one who asked for
+   stillness, from being shown a mouse cursor frozen over a button
+   nothing is ever going to press.
+
+   Positioned by two custom properties the flow writes from what
+   `<secreq-window>` measured. The fallbacks are the middle of the
+   window, and are never used: `[data-aimed]` gates every rule that
+   makes either of these visible, and the flow only sets it once a real
+   control has been located. They are here so that a mistake shows up in
+   the middle of the figure rather than in its top-left corner. */
+.flow-cursor,
+.flow-tap {
+  display: none;
+  position: absolute;
+  left: var(--flow-press-x, 50%);
+  top: var(--flow-press-y, 50%);
+  pointer-events: none;
+}
+
+.flow-cursor {
+  /* The arrow's tip is a couple of points in from its own corner, so the
+     box is nudged back by that much to put the tip — not the box — on
+     the coordinate that was measured. */
+  margin: -2px 0 0 -2px;
+  color: var(--sq-text);
+  line-height: 0;
+  /* The dip is a press, so it has to happen *at* the tip. Scaling about
+     the centre would slide the tip off the button as it shrank. */
+  transform-origin: 2px 2px;
+  filter: drop-shadow(0 2px 4px rgb(0 0 0 / 0.35));
+}
+
+/* The ring the press throws off. A ring rather than the hero's button
+   flash, and for a reason worth writing down: the hero owns its button
+   and can light it up, while this one is a shape in a captured window
+   whose bounds differ per chrome — GNOME paints no button box at all.
+   A ring centred on the point that was measured is the one gesture that
+   reads the same on all six desktops. */
+.flow-tap {
+  width: 34px;
+  height: 34px;
+  margin: -17px 0 0 -17px;
+  border-radius: 50%;
+  border: 2px solid var(--sq-accent);
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   THE CHOREOGRAPHY
+
+   `secreq-flow:defined` is the gate for every rule below. Until the
+   element's definition lands there is nobody to raise the window, so
+   until then the window has to be standing — that instant covers a
+   reader with JavaScript disabled and every reader's first paint alike,
+   without either being a special case anyone has to remember.
+
+   The beats are not written here. They are the recording's: the window
+   opens on a `gui` marker, the pointer presses on the next one, and the
+   wait between them is however long the real command took. Nothing in
+   this file names a delay that has to stay in step with a transcript.
+   ════════════════════════════════════════════════════════════════════ */
+
+@media (prefers-reduced-motion: no-preference) {
+  /* At rest: not on the desktop at all, and taking up none of the page.
+
+     One `0fr` row does both, which is the point — there is no second
+     mechanism keeping the window out of sight while the row keeps its
+     place, because the row does not keep its place any more. The reveal
+     and the reflow are the same animation, so they cannot get out of
+     step, and the figure at rest is exactly as tall as the terminal.
+
+     `1fr` in the base rules and `0fr` here means the shut state is the
+     one nobody sees by accident: an element that has not upgraded, or a
+     reader who asked for stillness, gets the window standing. */
+  secreq-flow:defined .flow-shell {
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 0.34s cubic-bezier(0.4, 0, 1, 1);
+  }
+  /* Shut in one frame, because the reader has scrolled past and the figure
+     is above the viewport: there is nobody to play the collapse to, and
+     `<secreq-flow>` is taking the released height off the scroll offset in
+     the same frame it is released. An animation here would be 340ms of the
+     page sliding under a reader who is looking somewhere else entirely. */
+  secreq-flow:defined[data-shut='now'] .flow-shell,
+  secreq-flow:defined[data-shut='now'] .flow-window .shot {
+    transition: none;
+  }
+
+  /* A shut shell still has a box — the clip's padding is the room the
+     window's shadow needs, and it reaches a few pixels past the bottom of
+     the figure. An invisible window sitting in it would take a click, a
+     drag or a text selection meant for the paragraph below, so a shell
+     with nothing standing in it stops being a target at all. Scoped to
+     this block on purpose: where the window is permanently standing —
+     no JavaScript, reduced motion — it is a figure a reader can select
+     and open, exactly as `::shot` is everywhere else. */
+  secreq-flow:defined:not([data-up]) .flow-shell {
+    pointer-events: none;
+  }
+  /* The window itself rises into the opening and falls back out of it,
+     one layer in from the row so that it moves *within* the reveal
+     rather than dragging the reveal along with it — which is the
+     difference between a window arriving and a band of window sliding. */
+  secreq-flow:defined .flow-window .shot {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.985);
+    transition:
+      opacity 0.28s cubic-bezier(0.4, 0, 1, 1),
+      transform 0.34s cubic-bezier(0.4, 0, 1, 1);
+  }
+
+  /* Up. The overshooting ease is the difference between a window that
+     appears and one that is *put* in front of you. */
+  secreq-flow:defined[data-up='true'] .flow-shell {
+    grid-template-rows: 1fr;
+    transition: grid-template-rows 0.46s cubic-bezier(0.2, 0.8, 0.3, 1);
+  }
+  secreq-flow:defined[data-up='true'] .flow-window .shot {
+    opacity: 1;
+    transform: none;
+    transition:
+      opacity 0.3s ease-out,
+      transform 0.46s cubic-bezier(0.2, 0.8, 0.3, 1);
+  }
+
+  /* Down *because it was pressed*: the close waits out the pointer
+     entirely, so the button goes in, the hand lifts away, and only then
+     does the page start moving. That order is not a flourish. The
+     pointer lives inside the row now — there is no reserved space left
+     for it to withdraw into — so a close that overlapped its exit would
+     cut the arrow in half rather than let it leave. The delay is
+     `flow-press`'s own length; the two are one gesture and have to be
+     retimed together. */
+  secreq-flow:defined[data-pressed='true'] .flow-shell,
+  secreq-flow:defined[data-pressed='true'] .flow-window .shot {
+    transition-delay: 0.36s;
+  }
+
+  /* ── The pointer's two acts ──
+     Reach ends where press begins — tip on the button, untransformed —
+     so the swap between the two animations, which happens the moment the
+     recording says the window went away, is seamless. */
+  secreq-flow:defined[data-aimed][data-up='true'] .flow-cursor {
+    display: block;
+    animation: flow-reach 0.8s cubic-bezier(0.3, 0, 0.2, 1) 0.35s both;
+  }
+  secreq-flow:defined[data-aimed][data-pressed='true'] .flow-cursor {
+    display: block;
+    animation: flow-press 0.42s cubic-bezier(0.3, 0, 0.2, 1) both;
+  }
+  secreq-flow:defined[data-aimed][data-pressed='true'] .flow-tap {
+    display: block;
+    animation: flow-tap 0.36s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  }
+
+  /* The terminal loses its colour while the request is held — the
+     command is suspended, not running. Same reading as `icept-hold` in
+     the hero, and the same reason: a terminal that looks live while a
+     window asks about it is a terminal that looks like it ignored the
+     question. */
+  secreq-flow:defined .flow-term secreq-terminal {
+    display: block;
+    transition: filter 0.4s ease;
+  }
+  secreq-flow:defined[data-up='true'] .flow-term secreq-terminal {
+    filter: saturate(0.3) brightness(0.88);
+  }
+  :root[data-theme='light'] secreq-flow:defined[data-up='true'] .flow-term secreq-terminal {
+    filter: saturate(0.3) brightness(0.97);
+  }
+
+  secreq-flow:defined .flow-term::after {
+    transition: opacity 0.3s ease;
+  }
+  secreq-flow:defined[data-up='true'] .flow-term::after {
+    opacity: 1;
+  }
+}
+
+/* Comes in from below-right — the way a hand on a trackpad does — and
+   settles on the button while the command is still hanging. It ends
+   resting, not withdrawing: whatever the recording does next, the
+   pointer is on Approve waiting for the person to make up their mind. */
+@keyframes flow-reach {
+  0% {
+    opacity: 0;
+    transform: translate(26px, 32px);
+  }
+  32% {
+    opacity: 1;
+    transform: translate(12px, 15px);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+}
+
+/* The dip, then the hand leaving. The press is over in a tenth of a
+   second — a click is not a gesture — and the withdrawal has to be over
+   before the shell starts closing, because the pointer is inside the
+   shell: the hand leaves the button, and *then* the window and the page
+   move. Hence the 85% stop with nothing after it. It is not a pause, it
+   is the margin that keeps the last frame of the withdrawal from being
+   an arrow cut off at the clip's edge. */
+@keyframes flow-press {
+  0% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+  22% {
+    opacity: 1;
+    transform: translate(0, 0) scale(0.76);
+  }
+  46% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+  85% {
+    opacity: 0;
+    transform: translate(8px, 12px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(8px, 12px) scale(1);
+  }
+}
+
+@keyframes flow-tap {
+  0% {
+    opacity: 0.85;
+    transform: scale(0.3);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.5);
+  }
+}
+
+.flow > figcaption {
+  margin-top: 0.85rem;
+  font-size: 0.8rem;
+  line-height: 1.55;
+  color: var(--sq-text-3);
+}
+.flow > figcaption code {
+  font-size: 0.95em;
+}
