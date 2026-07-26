@@ -597,8 +597,7 @@ pub fn new_rule_id() -> String {
 pub fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs())
 }
 
 // ── Evaluation ────────────────────────────────────────────────────────────
@@ -832,7 +831,7 @@ fn beats(a: &Candidate, b: &Candidate) -> bool {
 
 fn specificity(m: &RuleMatch) -> u32 {
     // The wrap field is always present, so it doesn't differentiate.
-    m.argv.is_some() as u32 + m.ancestor.is_some() as u32 + m.cwd.is_some() as u32
+    u32::from(m.argv.is_some()) + u32::from(m.ancestor.is_some()) + u32::from(m.cwd.is_some())
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────

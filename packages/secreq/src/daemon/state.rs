@@ -1896,8 +1896,7 @@ pub fn approval_scope_for(approvals: &[ApprovalEntry], ask: &Ask) -> Option<Appr
 fn now_unix_secs() -> u64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// Merge `incoming` into the union `rep`, deduped by `(name, provider,
@@ -2476,8 +2475,8 @@ mod tests {
     fn mk_ask(wrap: &str, callers: Vec<(u32, u64)>) -> Ask {
         let dedupe_key = DedupeKey {
             wrap: wrap.to_owned(),
-            ppid: callers.first().map(|c| c.0).unwrap_or(0),
-            parent_start_time: callers.first().map(|c| c.1).unwrap_or(0),
+            ppid: callers.first().map_or(0, |c| c.0),
+            parent_start_time: callers.first().map_or(0, |c| c.1),
         };
         Ask {
             command: vec![wrap.to_owned()],

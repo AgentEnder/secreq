@@ -193,7 +193,7 @@ pub fn suggest(entries: &[AuditEntry], rules: &[Rule], now_unix: u64) -> Vec<Sug
     let mut suggestions: Vec<Suggestion> = clusters
         .into_iter()
         .filter(|c| c.count >= MIN_CLUSTER_SIZE)
-        .filter_map(|c| c.into_suggestion())
+        .filter_map(Cluster::into_suggestion)
         .filter(|s| !redundant_with_existing_rules(s, rules))
         .collect();
 
@@ -386,8 +386,8 @@ fn merge_argv_samples(samples: &[String]) -> Option<String> {
         .iter()
         .map(|s| s.split_whitespace().collect())
         .collect();
-    let min_len = tokenised.iter().map(|t| t.len()).min().unwrap_or(0);
-    let max_len = tokenised.iter().map(|t| t.len()).max().unwrap_or(0);
+    let min_len = tokenised.iter().map(Vec::len).min().unwrap_or(0);
+    let max_len = tokenised.iter().map(Vec::len).max().unwrap_or(0);
 
     let mut out_tokens: Vec<String> = Vec::new();
     let mut stopped_on_divergence = false;
@@ -436,7 +436,7 @@ fn merge_token_column(samples: &[&str]) -> String {
         return samples[0].to_owned();
     }
     let sub_lists: Vec<Vec<&str>> = samples.iter().map(|s| s.split('/').collect()).collect();
-    let lens: Vec<usize> = sub_lists.iter().map(|s| s.len()).collect();
+    let lens: Vec<usize> = sub_lists.iter().map(Vec::len).collect();
     let min_len = *lens.iter().min().unwrap_or(&0);
     let max_len = *lens.iter().max().unwrap_or(&0);
     if min_len <= 1 || min_len != max_len {
@@ -1219,7 +1219,10 @@ mod tests {
     #[test]
     fn common_path_prefix_survives_a_divergence_inside_a_utf8_sequence() {
         // `é` = C3 A9, `ê` = C3 AA — they diverge on the *second* byte.
-        assert_eq!(common_path_prefix("/Users/me/né", "/Users/me/nê"), "/Users/me");
+        assert_eq!(
+            common_path_prefix("/Users/me/né", "/Users/me/nê"),
+            "/Users/me"
+        );
     }
 
     /// A cwd constraint must name a real directory. `~/proj-alpha` and

@@ -1083,10 +1083,7 @@ fn handle_ask_connection(
     state: SharedState,
 ) -> Result<()> {
     if let Err(err) = adopt_peer_provenance(&mut ask, &stream) {
-        super::log::log_at(
-            "server",
-            format_args!("← ClientMsg::Ask refused: {err:#}"),
-        );
+        super::log::log_at("server", format_args!("← ClientMsg::Ask refused: {err:#}"));
         let mut writer = stream;
         return write_reply(
             &mut writer,
@@ -1790,7 +1787,10 @@ mod tests {
             "the forged frame survived into the chain: {:?}",
             ask.callers.iter().map(|c| c.pid).collect::<Vec<_>>()
         );
-        assert!(!ask.callers.is_empty(), "the real chain should be populated");
+        assert!(
+            !ask.callers.is_empty(),
+            "the real chain should be populated"
+        );
         assert_ne!(ask.cwd, "/somewhere/the/attacker/named");
     }
 
@@ -1809,10 +1809,7 @@ mod tests {
         // It agrees with the chain the daemon just walked, which is how the
         // client derives it too.
         assert_eq!(ask.dedupe_key.ppid, ask.callers[0].pid);
-        assert_eq!(
-            ask.dedupe_key.parent_start_time,
-            ask.callers[0].start_time
-        );
+        assert_eq!(ask.dedupe_key.parent_start_time, ask.callers[0].start_time);
         // The wrap half is config, not provenance, and is left alone.
         assert_eq!(ask.dedupe_key.wrap, "gh");
     }
@@ -1828,7 +1825,10 @@ mod tests {
 
         adopt_peer_provenance(&mut ask, &server_conn).expect("provenance");
 
-        assert_eq!(ask.dedupe_key.ppid, FORGED_PID, "session identity preserved");
+        assert_eq!(
+            ask.dedupe_key.ppid, FORGED_PID,
+            "session identity preserved"
+        );
         assert_eq!(ask.dedupe_key.parent_start_time, 12345);
         assert!(!ask.callers.iter().any(|c| c.pid == FORGED_PID));
     }
@@ -1851,7 +1851,10 @@ mod tests {
 
         adopt_peer_provenance(&mut ask, &server_conn).expect("provenance");
 
-        assert!(ask.callers.is_empty(), "a guest ask must not gain a host chain");
+        assert!(
+            ask.callers.is_empty(),
+            "a guest ask must not gain a host chain"
+        );
         assert!(ask.cwd.is_empty());
         assert_eq!(ask.dedupe_key.ppid, FORGED_PID);
     }
