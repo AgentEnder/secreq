@@ -152,17 +152,22 @@ oxipng = { version = "10.1.1", default-features = false, features = ["parallel"]
 #                       the invariant, which reads better than a silent `?`.
 #   unwrap_used       — near-clean in `src` but pervasive in the inline test
 #                       modules, where a panic *is* the assertion.
-#   indexing_slicing  — not three hits, as this line used to claim: 53, across
-#                       18 files, most of them in inline test modules or
-#                       indexes into a map the line above just inserted into.
-#                       Crate-wide it would be 39 rewrites that buy nothing,
-#                       because the value is concentrated entirely in the code
-#                       parsing untrusted bytes — and that code carries its own
-#                       `#![deny(clippy::indexing_slicing)]` at module level
-#                       (`daemon/ssh_proto.rs`), which is where a ratchet
-#                       actually earns its keep. Prefer another module-level
-#                       deny over flipping this on.
 #   pedantic          — 615 warnings, overwhelmingly cast and doc nits.
+#
+# `indexing_slicing` is NOT in the table yet, and is the one entry here that is
+# waiting rather than declined. It sat out because it was all-or-nothing at 213
+# hits; 141 of those were inline tests, now settled once by
+# `allow-indexing-slicing-in-tests` in the workspace `clippy.toml`, and the
+# production half is down to five sites — all in `daemon/state.rs` and
+# `daemon/ui.rs`, all provably safe (a `position()` result reused two lines
+# later; a binary search's own `mid`/`lo`; a map key inserted in the same
+# function). Rewrite those five and add:
+#
+#   indexing_slicing = "deny"
+#
+# at which point `daemon/ssh_proto.rs`'s module-level deny becomes redundant and
+# should go — the point of moving it here is that the *next* untrusted-input
+# parser is covered without anyone remembering to ask.
 [lints.clippy]
 # CLAUDE.md forbids TODOs in shipped code. This is that rule, enforced.
 todo = "deny"
