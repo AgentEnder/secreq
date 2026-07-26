@@ -1634,17 +1634,18 @@ mod tests {
             id: "abc123".to_owned(),
             name: "test rule".to_owned(),
             enabled: true,
-            decide: Some(RuleDecision::Approve),
-            r#match: Some(RuleMatch {
-                wrap: "gh".to_owned(),
-                argv: Some(Pattern::parse("gh api")),
-                ancestor: None,
-                cwd: None,
-            }),
-            wasm: None,
             trained_secrets: BTreeSet::new(),
-            deny_message: None,
             created_at_unix: 0,
+            body: crate::rules::RuleBody::Declarative {
+                r#match: RuleMatch {
+                    wrap: "gh".to_owned(),
+                    argv: Some(Pattern::parse("gh api")),
+                    ancestor: None,
+                    cwd: None,
+                },
+                decide: RuleDecision::Approve,
+                deny_message: None,
+            },
         };
 
         apply_streaming_rule_msg(&state, ClientMsg::AddRule { rule: rule.clone() });
@@ -1718,7 +1719,7 @@ mod tests {
         };
         assert_eq!(rule.trained_secrets, trained);
         assert_eq!(
-            rule.wasm.as_ref().expect("wasm").sha256,
+            rule.wasm().expect("wasm").sha256,
             crate::rules::sha256_hex(APPROVE_IF)
         );
 
@@ -1753,17 +1754,18 @@ mod tests {
             id: "to-delete".to_owned(),
             name: "to delete".to_owned(),
             enabled: true,
-            decide: Some(RuleDecision::Deny),
-            r#match: Some(RuleMatch {
-                wrap: "gh".to_owned(),
-                argv: None,
-                ancestor: None,
-                cwd: None,
-            }),
-            wasm: None,
             trained_secrets: BTreeSet::new(),
-            deny_message: Some("blocked".to_owned()),
             created_at_unix: 0,
+            body: crate::rules::RuleBody::Declarative {
+                r#match: RuleMatch {
+                    wrap: "gh".to_owned(),
+                    argv: None,
+                    ancestor: None,
+                    cwd: None,
+                },
+                decide: RuleDecision::Deny,
+                deny_message: Some("blocked".to_owned()),
+            },
         };
         apply_streaming_rule_msg(&state, ClientMsg::AddRule { rule });
 

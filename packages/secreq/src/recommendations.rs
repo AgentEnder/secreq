@@ -509,12 +509,13 @@ mod tests {
             id: id.to_owned(),
             name: id.to_owned(),
             enabled: true,
-            decide: Some(decide),
-            r#match: Some(m),
-            wasm: None,
             trained_secrets: BTreeSet::new(),
-            deny_message: None,
             created_at_unix: 0,
+            body: crate::rules::RuleBody::Declarative {
+                r#match: m,
+                decide,
+                deny_message: None,
+            },
         }
     }
 

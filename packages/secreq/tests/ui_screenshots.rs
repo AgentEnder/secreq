@@ -65,7 +65,7 @@ use secreq::daemon::ui::{AutoDenyToastView, RuleAction, RuleSort};
 use secreq::recommendations::SuggestionSort;
 use secreq::rule_scaffold::Editor;
 use secreq::rules::{
-    Pattern, Rule, RuleDecision, RuleMatch, WasmRefusal, WasmRefusalCategory, WasmRule,
+    Pattern, Rule, RuleBody, RuleDecision, RuleMatch, WasmRefusal, WasmRefusalCategory, WasmRule,
 };
 
 /// Where the regenerated PNGs land. Relative to the package root,
@@ -2124,21 +2124,22 @@ fn sample_rule(id: &str, name: &str, decide: RuleDecision, argv: Option<&str>) -
         id: id.to_owned(),
         name: name.to_owned(),
         enabled: true,
-        decide: Some(decide),
-        r#match: Some(RuleMatch {
-            wrap: "gh".to_owned(),
-            argv: argv.map(Pattern::parse),
-            ancestor: Some(Pattern::parse("Cursor.app")),
-            cwd: None,
-        }),
-        wasm: None,
         trained_secrets: ["GITHUB_TOKEN".to_owned()].into_iter().collect(),
-        deny_message: if decide == RuleDecision::Deny {
-            Some("Destructive gh operations are policy-denied.".to_owned())
-        } else {
-            None
-        },
         created_at_unix: 0,
+        body: RuleBody::Declarative {
+            r#match: RuleMatch {
+                wrap: "gh".to_owned(),
+                argv: argv.map(Pattern::parse),
+                ancestor: Some(Pattern::parse("Cursor.app")),
+                cwd: None,
+            },
+            decide,
+            deny_message: if decide == RuleDecision::Deny {
+                Some("Destructive gh operations are policy-denied.".to_owned())
+            } else {
+                None
+            },
+        },
     }
 }
 
@@ -2238,15 +2239,12 @@ fn rules_tab_wasm_refused() {
         id: id.to_owned(),
         name: name.to_owned(),
         enabled: true,
-        decide: None,
-        r#match: None,
-        wasm: Some(WasmRule {
+        trained_secrets: ["NPM_TOKEN".to_owned()].into_iter().collect(),
+        created_at_unix: 0,
+        body: RuleBody::Wasm(WasmRule {
             path: format!("rules/{id}.wasm"),
             sha256: sha.to_owned(),
         }),
-        trained_secrets: ["NPM_TOKEN".to_owned()].into_iter().collect(),
-        deny_message: None,
-        created_at_unix: 0,
     };
 
     let rules = vec![

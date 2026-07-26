@@ -27,7 +27,7 @@ use crate::audit::{self, AuditCaller, AuditEntry};
 use crate::consent::Decision;
 use crate::recommendations::{Suggestion, SuggestionDecision, SuggestionSort};
 use crate::rule_scaffold::{self, Editor};
-use crate::rules::{Pattern, Rule, RuleDecision, RuleMatch};
+use crate::rules::{Pattern, Rule, RuleBody, RuleDecision, RuleMatch};
 
 use super::manager_ui::ManagerView;
 use super::proto::DedupeKey;
@@ -211,22 +211,29 @@ impl RuleDraft {
     /// Seed the form from an existing **declarative** rule. Wasm rules
     /// never reach this — the list hides their Edit button (the form
     /// only edits match clauses; saving one over a wasm rule would
-    /// silently rewrite it as declarative) — so a `None` match/decide
-    /// just falls back to the blank defaults.
+    /// silently rewrite it as declarative) — so one seeds a blank form
+    /// rather than a half-populated one.
     pub(crate) fn from_rule(rule: &Rule) -> RuleDraft {
         let pattern_str =
             |p: Option<&Pattern>| p.map(|p| p.as_str().to_owned()).unwrap_or_default();
-        let m = rule.r#match.as_ref();
+        let RuleBody::Declarative {
+            r#match,
+            decide,
+            deny_message,
+        } = &rule.body
+        else {
+            return RuleDraft::fresh();
+        };
         RuleDraft {
             id: Some(rule.id.clone()),
             name: rule.name.clone(),
             enabled: rule.enabled,
-            decide: rule.decide.map(Into::into).unwrap_or_default(),
-            wrap: m.map(|m| m.wrap.clone()).unwrap_or_default(),
-            argv: pattern_str(m.and_then(|m| m.argv.as_ref())),
-            ancestor: pattern_str(m.and_then(|m| m.ancestor.as_ref())),
-            cwd: pattern_str(m.and_then(|m| m.cwd.as_ref())),
-            deny_message: rule.deny_message.clone().unwrap_or_default(),
+            decide: (*decide).into(),
+            wrap: r#match.wrap.clone(),
+            argv: pattern_str(r#match.argv.as_ref()),
+            ancestor: pattern_str(r#match.ancestor.as_ref()),
+            cwd: pattern_str(r#match.cwd.as_ref()),
+            deny_message: deny_message.clone().unwrap_or_default(),
             trained_secrets: rule.trained_secrets.clone(),
         }
     }
@@ -267,19 +274,20 @@ impl RuleDraft {
             id,
             name: name.to_owned(),
             enabled: self.enabled,
-            decide: Some(self.decide.into()),
-            r#match: Some(RuleMatch {
-                wrap: wrap.to_owned(),
-                argv: optional_pattern(&self.argv),
-                ancestor: optional_pattern(&self.ancestor),
-                cwd: optional_pattern(&self.cwd),
-            }),
+            trained_secrets: self.trained_secrets,
+            created_at_unix: created_at,
             // The form authors declarative rules only; wasm rules are
             // registered via the CLI.
-            wasm: None,
-            trained_secrets: self.trained_secrets,
-            deny_message,
-            created_at_unix: created_at,
+            body: RuleBody::Declarative {
+                r#match: RuleMatch {
+                    wrap: wrap.to_owned(),
+                    argv: optional_pattern(&self.argv),
+                    ancestor: optional_pattern(&self.ancestor),
+                    cwd: optional_pattern(&self.cwd),
+                },
+                decide: self.decide.into(),
+                deny_message,
+            },
         })
     }
 }
@@ -1617,10 +1625,16 @@ fn render_rules_row(
                 // disabled rule fades the pill to a neutral grey chip
                 // so the live semantic colour is reserved for rules
                 // that can actually fire.
-                let (pill_fg, pill_text) = match rule.decide {
-                    Some(RuleDecision::Approve) => (th.ok, "approve"),
-                    Some(RuleDecision::Deny) => (th.danger, "deny"),
-                    None => (th.dim, "wasm"),
+                let (pill_fg, pill_text) = match &rule.body {
+                    RuleBody::Declarative {
+                        decide: RuleDecision::Approve,
+                        ..
+                    } => (th.ok, "approve"),
+                    RuleBody::Declarative {
+                        decide: RuleDecision::Deny,
+                        ..
+                    } => (th.danger, "deny"),
+                    RuleBody::Wasm(_) => (th.dim, "wasm"),
                 };
                 let pill_bg = soft_fill(pill_fg);
                 if rule.enabled {
@@ -1661,7 +1675,7 @@ fn render_rules_row(
                     // offering it for a wasm rule would let a Save
                     // silently rewrite the rule as declarative. Wasm
                     // rules are re-registered via the CLI instead.
-                    if rule.wasm.is_none() && ui.button("Edit").clicked() {
+                    if !rule.is_wasm() && ui.button("Edit").clicked() {
                         *draft = Some(RuleDraft::from_rule(rule));
                     }
                 });
@@ -1707,9 +1721,9 @@ fn render_rules_row(
 /// Skips empty match fields; collapses to "wrap: gh" when nothing
 /// else is constrained. A wasm rule summarizes as its module path.
 fn rule_summary_line(rule: &Rule) -> String {
-    let Some(m) = &rule.r#match else {
-        let path = rule.wasm.as_ref().map_or("?", |w| w.path.as_str());
-        return format!("wasm: '{path}'");
+    let m = match &rule.body {
+        RuleBody::Wasm(wasm) => return format!("wasm: '{}'", wasm.path),
+        RuleBody::Declarative { r#match, .. } => r#match,
     };
     let mut parts = vec![format!("wrap: {}", m.wrap)];
     if let Some(p) = &m.argv {
@@ -3041,17 +3055,18 @@ mod tests {
             id: id.to_owned(),
             name: name.to_owned(),
             enabled: true,
-            decide: Some(RuleDecision::Approve),
-            r#match: Some(RuleMatch {
-                wrap: "gh".to_owned(),
-                argv: None,
-                ancestor: None,
-                cwd: None,
-            }),
-            wasm: None,
             trained_secrets: std::collections::BTreeSet::new(),
-            deny_message: None,
             created_at_unix: 0,
+            body: RuleBody::Declarative {
+                r#match: RuleMatch {
+                    wrap: "gh".to_owned(),
+                    argv: None,
+                    ancestor: None,
+                    cwd: None,
+                },
+                decide: RuleDecision::Approve,
+                deny_message: None,
+            },
         }
     }
 

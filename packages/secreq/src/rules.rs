@@ -43,19 +43,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::wasm_rules::{Decision as WasmDecision, RuleModule};
 
-/// One persisted rule. Comes in exactly two shapes, enforced by
-/// [`Rule::validate_shape`] at every load and mutation:
+/// One persisted rule: the fields every rule carries, plus a [`RuleBody`]
+/// holding the half that differs between the two kinds.
 ///
-/// - **Declarative**: `decide` + `match` present, `wasm` absent. The
-///   static `decide` field is the rule's decision whenever the match
-///   clause fires.
-/// - **Wasm**: `wasm` present; `decide`, `match`, and `deny_message`
-///   absent. The decision is whatever the compiled module *returns*
-///   at evaluation time (approve / pass / deny-with-reason), so a
-///   static `decide` or `deny_message` would be dead weight at best
-///   and misleading at worst — we reject them loudly rather than
-///   silently ignoring them.
+/// The declarative-XOR-wasm shape is the *type*, not a runtime check —
+/// there is no way to hold a rule that is both, or neither. The file on
+/// disk still has to be checked, and it is: `Rule` deserializes through
+/// [`RuleWire`], so a malformed rule is rejected once, at the parse, with
+/// an error naming the rule and the offending field.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(try_from = "RuleWire", into = "RuleWire")]
 pub struct Rule {
     /// Stable identifier. Generated once on creation, never mutated.
     /// Surfaces in the audit log so users can trace which rule fired.
@@ -65,36 +62,185 @@ pub struct Rule {
     /// `false` ⇒ rule is in the file but the evaluator skips it. Used
     /// for "pause this rule without losing the configuration."
     pub enabled: bool,
-    /// Static decision — declarative rules only. `None` for wasm rules,
-    /// whose decision is the module's return value.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decide: Option<RuleDecision>,
-    #[serde(rename = "match", default, skip_serializing_if = "Option::is_none")]
-    pub r#match: Option<RuleMatch>,
-    /// The wasm alternative to `decide` + `match`: a compiled rule
-    /// module evaluated in the sandbox of [`crate::wasm_rules`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wasm: Option<WasmRule>,
     /// Env var names the rule was created against. The evaluator
     /// refuses to fire if the live ask requests any name outside this
     /// set — the trained-secrets guard. **Empty set means the guard
     /// is disabled**, which is the legitimate behavior for hand-edited
     /// rules where the user has explicitly opted out. UI-created rules
     /// always populate it.
-    #[serde(default)]
     pub trained_secrets: BTreeSet<String>,
-    /// Message shown to the user on auto-deny. Only meaningful when
-    /// `decide == Deny`; forbidden on wasm rules (the module returns
-    /// its own reason). The wrap client prints it to stderr; the
-    /// consent window renders it in a toast row. Skipped when absent
-    /// so saved rules validate against the schema (which types it as a
-    /// string, and forbids the key entirely on wasm rules).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub deny_message: Option<String>,
     /// Seconds since the Unix epoch at creation time. Informational
     /// (lets the UI show "created 3 days ago").
-    #[serde(default)]
     pub created_at_unix: u64,
+    /// What decides this rule: a match clause carrying a static
+    /// decision, or a compiled module.
+    pub body: RuleBody,
+}
+
+/// The two rule kinds, and the fields that belong to each.
+///
+/// - **Declarative**: a match clause plus the static decision it carries.
+/// - **Wasm**: a compiled rule module evaluated in the sandbox of
+///   [`crate::wasm_rules`]. The decision is whatever the module *returns*
+///   at evaluation time (approve / pass / deny-with-reason), so a static
+///   `decide` or `deny_message` would be dead weight at best and
+///   misleading at worst — the deserializer rejects them loudly rather
+///   than silently ignoring them.
+// `Declarative` is ~290 bytes to `Wasm`'s 48, which trips
+// `large_enum_variant`. Boxing the match clause is not the win it looks
+// like: the flat `Rule` this replaced carried the same `RuleMatch` inline
+// *and* the wasm reference beside it, so every rule is smaller now than it
+// was, and the ruleset is a `Vec` of tens of entries loaded once per daemon
+// start. An allocation per declarative rule buys nothing measurable and
+// costs a `Box::new` at every construction site.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum RuleBody {
+    Declarative {
+        r#match: RuleMatch,
+        /// The rule's decision whenever the match clause fires.
+        decide: RuleDecision,
+        /// Message shown to the user on auto-deny — the wrap client
+        /// prints it to stderr, the consent window renders it in a toast
+        /// row. Only consulted when `decide == Deny`; an approve rule may
+        /// carry one, because files on disk do and refusing to load them
+        /// would be a format change rather than a type cleanup.
+        deny_message: Option<String>,
+    },
+    Wasm(WasmRule),
+}
+
+impl Rule {
+    /// Does this rule's decision come from a compiled module?
+    pub fn is_wasm(&self) -> bool {
+        matches!(self.body, RuleBody::Wasm(_))
+    }
+
+    /// The module reference, for a wasm rule.
+    pub fn wasm(&self) -> Option<&WasmRule> {
+        match &self.body {
+            RuleBody::Wasm(wasm) => Some(wasm),
+            RuleBody::Declarative { .. } => None,
+        }
+    }
+}
+
+/// The on-disk / on-the-wire shape of a [`Rule`]: the flat object with
+/// four optional fields that users hand-edit in `auto-rules.json5`.
+///
+/// This exists so `Rule` can be a sum type *and* leave the file format
+/// exactly where it is. The two obvious alternatives both move it.
+/// `#[serde(flatten)]` writes the flattened keys last, shuffling
+/// `decide`/`match` past `created_at_unix` in every file the daemon
+/// rewrites — and it rewrites the whole file on every mutation.
+/// `#[serde(untagged)]` matches the first variant that fits and **drops
+/// the leftover keys**, so a wasm rule carrying `decide: "deny"` would
+/// load as "whatever the module returns" where today it is a loud error;
+/// `deny_unknown_fields` cannot be combined with `flatten` to rescue it.
+///
+/// Field order here is the written key order — see
+/// `a_rule_is_written_in_this_key_order`.
+#[derive(Serialize, Deserialize)]
+struct RuleWire {
+    id: String,
+    name: String,
+    enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    decide: Option<RuleDecision>,
+    #[serde(rename = "match", default, skip_serializing_if = "Option::is_none")]
+    r#match: Option<RuleMatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    wasm: Option<WasmRule>,
+    #[serde(default)]
+    trained_secrets: BTreeSet<String>,
+    /// Skipped when absent so saved rules validate against the schema
+    /// (which types it as a string, and forbids the key entirely on wasm
+    /// rules).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    deny_message: Option<String>,
+    #[serde(default)]
+    created_at_unix: u64,
+}
+
+impl TryFrom<RuleWire> for Rule {
+    type Error = anyhow::Error;
+
+    /// Enforce declarative-XOR-wasm once, where the untrusted bytes come
+    /// in. Every rejection names the rule and the field that made it
+    /// wrong, because the reader is whoever hand-edited the file.
+    fn try_from(wire: RuleWire) -> Result<Rule> {
+        let label = format!("rule `{}` (id {})", wire.name, wire.id);
+        let body = match (wire.wasm, wire.r#match) {
+            (Some(_), Some(_)) => bail!(
+                "{label} has both a `match` clause and a `wasm` module — a rule \
+                 is either declarative (`decide` + `match`) or wasm (`wasm` \
+                 alone); split it into two rules"
+            ),
+            (None, None) => bail!(
+                "{label} has neither a `match` clause nor a `wasm` module — a \
+                 rule must be declarative (`decide` + `match`) or wasm (`wasm`)"
+            ),
+            (Some(wasm), None) => {
+                if wire.decide.is_some() {
+                    bail!(
+                        "{label} is a wasm rule but sets `decide` — a wasm rule's \
+                         decision is whatever its module returns at evaluation \
+                         time; remove `decide`"
+                    );
+                }
+                if wire.deny_message.is_some() {
+                    bail!(
+                        "{label} is a wasm rule but sets `deny_message` — a wasm \
+                         deny carries the reason returned by the module; remove \
+                         `deny_message`"
+                    );
+                }
+                RuleBody::Wasm(wasm)
+            }
+            (None, Some(r#match)) => {
+                let Some(decide) = wire.decide else {
+                    bail!("{label} has a `match` clause but no `decide` (approve or deny)");
+                };
+                RuleBody::Declarative {
+                    r#match,
+                    decide,
+                    deny_message: wire.deny_message,
+                }
+            }
+        };
+        Ok(Rule {
+            id: wire.id,
+            name: wire.name,
+            enabled: wire.enabled,
+            trained_secrets: wire.trained_secrets,
+            created_at_unix: wire.created_at_unix,
+            body,
+        })
+    }
+}
+
+impl From<Rule> for RuleWire {
+    fn from(rule: Rule) -> RuleWire {
+        let (decide, r#match, wasm, deny_message) = match rule.body {
+            RuleBody::Declarative {
+                r#match,
+                decide,
+                deny_message,
+            } => (Some(decide), Some(r#match), None, deny_message),
+            RuleBody::Wasm(wasm) => (None, None, Some(wasm), None),
+        };
+        RuleWire {
+            id: rule.id,
+            name: rule.name,
+            enabled: rule.enabled,
+            decide,
+            r#match,
+            wasm,
+            trained_secrets: rule.trained_secrets,
+            deny_message,
+            created_at_unix: rule.created_at_unix,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,49 +264,6 @@ pub struct WasmRule {
     /// refuses this rule (it can never fire) with a loud error naming
     /// the rule and path.
     pub sha256: String,
-}
-
-impl Rule {
-    /// Enforce the declarative-XOR-wasm shape (see the type-level doc).
-    /// Called by [`load_rules`] for every parsed rule and by the
-    /// daemon's rule-mutation paths, so an invalid shape can neither be
-    /// loaded from disk nor inserted over IPC.
-    pub fn validate_shape(&self) -> Result<()> {
-        let label = format!("rule `{}` (id {})", self.name, self.id);
-        match (&self.wasm, &self.r#match) {
-            (Some(_), Some(_)) => bail!(
-                "{label} has both a `match` clause and a `wasm` module — a rule \
-                 is either declarative (`decide` + `match`) or wasm (`wasm` \
-                 alone); split it into two rules"
-            ),
-            (None, None) => bail!(
-                "{label} has neither a `match` clause nor a `wasm` module — a \
-                 rule must be declarative (`decide` + `match`) or wasm (`wasm`)"
-            ),
-            (Some(_), None) => {
-                if self.decide.is_some() {
-                    bail!(
-                        "{label} is a wasm rule but sets `decide` — a wasm rule's \
-                         decision is whatever its module returns at evaluation \
-                         time; remove `decide`"
-                    );
-                }
-                if self.deny_message.is_some() {
-                    bail!(
-                        "{label} is a wasm rule but sets `deny_message` — a wasm \
-                         deny carries the reason returned by the module; remove \
-                         `deny_message`"
-                    );
-                }
-            }
-            (None, Some(_)) => {
-                if self.decide.is_none() {
-                    bail!("{label} has a `match` clause but no `decide` (approve or deny)");
-                }
-            }
-        }
-        Ok(())
-    }
 }
 
 /// Why a wasm rule was refused, coarse enough for a one-word list
@@ -244,7 +347,7 @@ pub fn load_rule_module(
     rule: &Rule,
     rules_dir: &Path,
 ) -> Result<Option<RuleModule>, WasmLoadError> {
-    let Some(wasm) = &rule.wasm else {
+    let RuleBody::Wasm(wasm) = &rule.body else {
         return Ok(None);
     };
     let path = rules_dir.join(&wasm.path);
@@ -513,7 +616,9 @@ pub struct LoadedRules {
 ///   invalid (both `match` and `wasm`, neither, a wasm rule with
 ///   `decide`/`deny_message`) errors the whole load — the file was
 ///   authored wrong, same class as a syntax error, and the daemon's
-///   existing "warn + empty ruleset" contract applies.
+///   existing "warn + empty ruleset" contract applies. Both are
+///   literally the same error now: the shape check lives in
+///   `TryFrom<RuleWire> for Rule`, so it runs inside the parse.
 /// - **Per-rule**: a wasm rule whose *referenced module* fails to load
 ///   (missing file, sha256 mismatch, sandbox rejection) refuses just
 ///   that rule, recorded in [`LoadedRules::wasm_refusals`]. A tampered
@@ -537,10 +642,6 @@ pub fn load_rules(path: &Path) -> Result<LoadedRules> {
         .with_context(|| format!("read auto-rules file: {}", path.display()))?;
     let parsed: RulesFile = json5::from_str(&text)
         .with_context(|| format!("parse auto-rules file: {}", path.display()))?;
-    for rule in &parsed.rules {
-        rule.validate_shape()
-            .with_context(|| format!("invalid rule in {}", path.display()))?;
-    }
     // Relative wasm paths anchor at the rules file's directory.
     let rules_dir = path.parent().unwrap_or(Path::new(""));
     let mut modules = RuleModules::new();
@@ -778,74 +879,76 @@ pub fn evaluate(rules: &[Rule], modules: &RuleModules, ctx: &EvalCtx) -> Evaluat
         if !rule.enabled || !trained_secrets_allow(rule, ctx) {
             continue;
         }
-        let candidate = if rule.wasm.is_some() {
-            let Some(module) = modules.get(&rule.id) else {
-                // Refused at load time (sha256 mismatch, missing file).
-                // "Cannot be consulted" is not "passed": this rule may have
-                // been the deny protecting the ask, and letting a surviving
-                // approve carry it means tampering with one module both
-                // disables the guard and leaves the guarded thing enabled.
-                // Fall through to the human instead.
-                mandate(
-                    rule,
-                    "a rule module could not be loaded, so the ruleset is incomplete".to_owned(),
-                );
-                continue;
-            };
-            match module.evaluate(ctx) {
-                Ok(WasmDecision::Pass) => continue,
-                Ok(WasmDecision::Approve) => Candidate {
-                    rule,
-                    decide: RuleDecision::Approve,
-                    deny_message: None,
-                    specificity: WASM_DECISION_SPECIFICITY,
-                },
-                Ok(WasmDecision::Deny(reason)) => Candidate {
-                    rule,
-                    decide: RuleDecision::Deny,
-                    deny_message: Some(reason),
-                    specificity: WASM_DECISION_SPECIFICITY,
-                },
-                Ok(WasmDecision::Prompt(reason)) => {
-                    // Not a candidate: `Prompt` produces no hit, it removes
-                    // the option of one. A deny still outranks it.
-                    mandate(rule, reason);
-                    continue;
-                }
-                Err(err) => {
-                    // Same reasoning as a refused module: a rule that trapped
-                    // is a rule whose opinion we do not have.
-                    wasm_failures.push(WasmFailure {
-                        rule_id: rule.id.clone(),
-                        rule_name: rule.name.clone(),
-                        error: format!("{err:#}"),
-                    });
+        let candidate = match &rule.body {
+            RuleBody::Wasm(_) => {
+                let Some(module) = modules.get(&rule.id) else {
+                    // Refused at load time (sha256 mismatch, missing file).
+                    // "Cannot be consulted" is not "passed": this rule may have
+                    // been the deny protecting the ask, and letting a surviving
+                    // approve carry it means tampering with one module both
+                    // disables the guard and leaves the guarded thing enabled.
+                    // Fall through to the human instead.
                     mandate(
                         rule,
-                        "a rule module errored, so the ruleset is incomplete".to_owned(),
+                        "a rule module could not be loaded, so the ruleset is incomplete"
+                            .to_owned(),
                     );
                     continue;
+                };
+                match module.evaluate(ctx) {
+                    Ok(WasmDecision::Pass) => continue,
+                    Ok(WasmDecision::Approve) => Candidate {
+                        rule,
+                        decide: RuleDecision::Approve,
+                        deny_message: None,
+                        specificity: WASM_DECISION_SPECIFICITY,
+                    },
+                    Ok(WasmDecision::Deny(reason)) => Candidate {
+                        rule,
+                        decide: RuleDecision::Deny,
+                        deny_message: Some(reason),
+                        specificity: WASM_DECISION_SPECIFICITY,
+                    },
+                    Ok(WasmDecision::Prompt(reason)) => {
+                        // Not a candidate: `Prompt` produces no hit, it removes
+                        // the option of one. A deny still outranks it.
+                        mandate(rule, reason);
+                        continue;
+                    }
+                    Err(err) => {
+                        // Same reasoning as a refused module: a rule that trapped
+                        // is a rule whose opinion we do not have.
+                        wasm_failures.push(WasmFailure {
+                            rule_id: rule.id.clone(),
+                            rule_name: rule.name.clone(),
+                            error: format!("{err:#}"),
+                        });
+                        mandate(
+                            rule,
+                            "a rule module errored, so the ruleset is incomplete".to_owned(),
+                        );
+                        continue;
+                    }
                 }
             }
-        } else {
-            // Shape invariant: a non-wasm rule has `match` + `decide`.
-            // Defensively skip rather than panic if a caller bypassed
-            // `validate_shape`.
-            let (Some(m), Some(decide)) = (&rule.r#match, rule.decide) else {
-                continue;
-            };
-            if !match_clause_matches(m, ctx) {
-                continue;
-            }
-            Candidate {
-                rule,
+            RuleBody::Declarative {
+                r#match,
                 decide,
-                deny_message: if decide == RuleDecision::Deny {
-                    rule.deny_message.clone()
-                } else {
-                    None
-                },
-                specificity: specificity(m),
+                deny_message,
+            } => {
+                if !match_clause_matches(r#match, ctx) {
+                    continue;
+                }
+                Candidate {
+                    rule,
+                    decide: *decide,
+                    deny_message: if *decide == RuleDecision::Deny {
+                        deny_message.clone()
+                    } else {
+                        None
+                    },
+                    specificity: specificity(r#match),
+                }
             }
         };
         let slot = match candidate.decide {
@@ -966,12 +1069,13 @@ mod tests {
             id: rule_id(id),
             name: name.to_owned(),
             enabled: true,
-            decide: Some(decide),
-            r#match: Some(m),
-            wasm: None,
             trained_secrets: trained.iter().map(|s| (*s).to_owned()).collect(),
-            deny_message: None,
             created_at_unix: 0,
+            body: RuleBody::Declarative {
+                r#match: m,
+                decide,
+                deny_message: None,
+            },
         }
     }
 
@@ -983,16 +1087,31 @@ mod tests {
             id: rule_id(id),
             name: name.to_owned(),
             enabled: true,
-            decide: None,
-            r#match: None,
-            wasm: Some(WasmRule {
+            trained_secrets: trained.iter().map(|s| (*s).to_owned()).collect(),
+            created_at_unix: 0,
+            body: RuleBody::Wasm(WasmRule {
                 path: format!("{id}.wasm"),
                 sha256: "unverified-in-eval-tests".to_owned(),
             }),
-            trained_secrets: trained.iter().map(|s| (*s).to_owned()).collect(),
-            deny_message: None,
-            created_at_unix: 0,
         }
+    }
+
+    /// Set (or clear) a declarative rule's `deny_message` in place.
+    /// Panics on a wasm rule, which cannot carry one.
+    fn set_deny_message(rule: &mut Rule, msg: Option<&str>) {
+        let RuleBody::Declarative { deny_message, .. } = &mut rule.body else {
+            panic!("not a declarative rule");
+        };
+        *deny_message = msg.map(str::to_owned);
+    }
+
+    /// Replace a rule's module reference in place. Panics on a
+    /// declarative rule.
+    fn set_wasm(rule: &mut Rule, wasm: WasmRule) {
+        let RuleBody::Wasm(slot) = &mut rule.body else {
+            panic!("not a wasm rule");
+        };
+        *slot = wasm;
     }
 
     fn modules_for(entries: &[(&str, &[u8])]) -> RuleModules {
@@ -1341,7 +1460,7 @@ mod tests {
             match_for("gh", Some("gh repo delete *"), None, None),
             &["GITHUB_TOKEN"],
         );
-        deny.deny_message = Some("Use the UI instead.".into());
+        set_deny_message(&mut deny, Some("Use the UI instead."));
         let c = ctx("gh", "gh repo delete me/x", &[], "/x", &["GITHUB_TOKEN"]);
         let hit = eval(&[deny], &c).expect("should deny");
         assert_eq!(hit.deny_message.as_deref(), Some("Use the UI instead."));
@@ -1419,8 +1538,13 @@ mod tests {
         let r = &loaded.rules[0];
         assert_eq!(r.id, "01");
         assert!(r.enabled);
-        assert_eq!(r.decide, Some(RuleDecision::Approve));
-        let m = r.r#match.as_ref().expect("declarative rule has a match");
+        let RuleBody::Declarative {
+            r#match: m, decide, ..
+        } = &r.body
+        else {
+            panic!("declarative rule");
+        };
+        assert_eq!(*decide, RuleDecision::Approve);
         assert_eq!(m.wrap, "gh");
         assert_eq!(
             m.argv.as_ref().map(Pattern::as_str),
@@ -1698,58 +1822,65 @@ mod tests {
 
     // ── Rule shape: declarative XOR wasm ──────────────────────────────
 
+    // The shape is now the type — [`RuleBody`] cannot hold both kinds
+    // or neither — so what is left to check is the *bytes*. These run
+    // against the deserializer, which is the only door a hand-edited
+    // file or an IPC message has into a [`Rule`], and they pin the
+    // message each rejection gives its reader.
+
+    /// Deserialize one rule object, expecting rejection, and return the
+    /// message.
+    fn reject(rule: serde_json::Value) -> String {
+        serde_json::from_value::<Rule>(rule)
+            .expect_err("must reject")
+            .to_string()
+    }
+
     #[test]
     fn shape_rejects_both_match_and_wasm() {
-        let mut r = mk_rule(
-            "01",
-            "confused",
-            RuleDecision::Approve,
-            match_for("gh", None, None, None),
-            &[],
-        );
-        r.wasm = Some(WasmRule {
-            path: "01.wasm".to_owned(),
-            sha256: "00".to_owned(),
-        });
-        let err = r.validate_shape().expect_err("must reject").to_string();
+        let err = reject(serde_json::json!({
+            "id": "01", "name": "confused", "enabled": true,
+            "decide": "approve",
+            "match": { "wrap": "gh" },
+            "wasm": { "path": "01.wasm", "sha256": "00" },
+        }));
         assert!(err.contains("both") && err.contains("confused"), "{err}");
     }
 
     #[test]
     fn shape_rejects_neither_match_nor_wasm() {
-        let mut r = mk_wasm_rule("01", "empty", &[]);
-        r.wasm = None;
-        let err = r.validate_shape().expect_err("must reject").to_string();
+        let err = reject(serde_json::json!({
+            "id": "01", "name": "empty", "enabled": true,
+        }));
         assert!(err.contains("neither"), "{err}");
     }
 
     #[test]
     fn shape_rejects_static_decide_on_a_wasm_rule() {
-        let mut r = mk_wasm_rule("01", "w", &[]);
-        r.decide = Some(RuleDecision::Approve);
-        let err = r.validate_shape().expect_err("must reject").to_string();
+        let err = reject(serde_json::json!({
+            "id": "01", "name": "w", "enabled": true,
+            "decide": "approve",
+            "wasm": { "path": "01.wasm", "sha256": "00" },
+        }));
         assert!(err.contains("decide"), "{err}");
     }
 
     #[test]
     fn shape_rejects_static_deny_message_on_a_wasm_rule() {
-        let mut r = mk_wasm_rule("01", "w", &[]);
-        r.deny_message = Some("static".to_owned());
-        let err = r.validate_shape().expect_err("must reject").to_string();
+        let err = reject(serde_json::json!({
+            "id": "01", "name": "w", "enabled": true,
+            "deny_message": "static",
+            "wasm": { "path": "01.wasm", "sha256": "00" },
+        }));
         assert!(err.contains("deny_message"), "{err}");
     }
 
     #[test]
     fn declarative_rule_without_decide_is_rejected() {
-        let mut r = mk_rule(
-            "01",
-            "no decide",
-            RuleDecision::Approve,
-            match_for("gh", None, None, None),
-            &[],
-        );
-        r.decide = None;
-        let err = r.validate_shape().expect_err("must reject").to_string();
+        let err = reject(serde_json::json!({
+            "id": "01", "name": "no decide", "enabled": true,
+            "match": { "wrap": "gh" },
+        }));
         assert!(err.contains("decide"), "{err}");
     }
 
@@ -1788,10 +1919,13 @@ mod tests {
     #[test]
     fn load_compiles_and_verifies_a_wasm_rule_end_to_end() {
         let mut rule = mk_wasm_rule("01", "wasm approve", &["GITHUB_TOKEN"]);
-        rule.wasm = Some(WasmRule {
-            path: "mod.wasm".to_owned(),
-            sha256: sha256_hex(APPROVE_IF),
-        });
+        set_wasm(
+            &mut rule,
+            WasmRule {
+                path: "mod.wasm".to_owned(),
+                sha256: sha256_hex(APPROVE_IF),
+            },
+        );
         let loaded = load_with_module(rule.clone(), "mod.wasm", APPROVE_IF);
         assert_eq!(loaded.rules, vec![rule]);
         assert!(
@@ -1822,10 +1956,13 @@ mod tests {
     #[test]
     fn sha256_is_case_insensitive() {
         let mut rule = mk_wasm_rule("01", "wasm approve", &[]);
-        rule.wasm = Some(WasmRule {
-            path: "mod.wasm".to_owned(),
-            sha256: sha256_hex(APPROVE_IF).to_uppercase(),
-        });
+        set_wasm(
+            &mut rule,
+            WasmRule {
+                path: "mod.wasm".to_owned(),
+                sha256: sha256_hex(APPROVE_IF).to_uppercase(),
+            },
+        );
         let loaded = load_with_module(rule, "mod.wasm", APPROVE_IF);
         assert!(
             loaded.wasm_refusals.is_empty(),
@@ -1845,10 +1982,13 @@ mod tests {
         let path = dir.path().join("auto-rules.json5");
         std::fs::write(dir.path().join("mod.wasm"), APPROVE_IF).expect("write module");
         let mut tampered = mk_wasm_rule("01", "tampered", &[]);
-        tampered.wasm = Some(WasmRule {
-            path: "mod.wasm".to_owned(),
-            sha256: sha256_hex(b"different bytes entirely"),
-        });
+        set_wasm(
+            &mut tampered,
+            WasmRule {
+                path: "mod.wasm".to_owned(),
+                sha256: sha256_hex(b"different bytes entirely"),
+            },
+        );
         let deny = mk_rule(
             "02",
             "block deletes",
@@ -1882,10 +2022,13 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("auto-rules.json5");
         let mut rule = mk_wasm_rule("01", "gone", &[]);
-        rule.wasm = Some(WasmRule {
-            path: "nonexistent.wasm".to_owned(),
-            sha256: sha256_hex(APPROVE_IF),
-        });
+        set_wasm(
+            &mut rule,
+            WasmRule {
+                path: "nonexistent.wasm".to_owned(),
+                sha256: sha256_hex(APPROVE_IF),
+            },
+        );
         save_rules(&path, &[rule]).expect("save");
         let loaded = load_rules(&path).expect("load");
         assert_eq!(loaded.wasm_refusals.len(), 1);
@@ -1949,7 +2092,7 @@ mod tests {
             ),
             &["GITHUB_TOKEN", "GITHUB_REPO_TOKEN"],
         );
-        rule.deny_message = Some("Use the UI instead.".to_owned());
+        set_deny_message(&mut rule, Some("Use the UI instead."));
         rule.created_at_unix = 1_700_000_000;
         assert_eq!(
             serde_json::to_value(&rule).expect("serialize"),
@@ -2036,7 +2179,7 @@ mod tests {
             match_for("gh", None, None, None),
             &["GITHUB_TOKEN"],
         );
-        rule.deny_message = Some("no".to_owned());
+        set_deny_message(&mut rule, Some("no"));
         let text = serde_json::to_string_pretty(&rule).expect("serialize");
         let keys: Vec<&str> = text
             .lines()
@@ -2117,25 +2260,28 @@ mod tests {
 
         // And the fields the user wrote are the fields we hold.
         let declarative = &first.rules[0];
-        assert_eq!(declarative.decide, Some(RuleDecision::Approve));
         assert_eq!(declarative.created_at_unix, 1_700_000_000);
-        assert!(declarative.wasm.is_none());
+        let RuleBody::Declarative { decide, .. } = &declarative.body else {
+            panic!("rule 01 is declarative");
+        };
+        assert_eq!(*decide, RuleDecision::Approve);
         let deny = &first.rules[1];
         assert!(!deny.enabled);
-        assert_eq!(deny.deny_message.as_deref(), Some("Use the UI instead."));
+        let RuleBody::Declarative {
+            r#match,
+            deny_message,
+            ..
+        } = &deny.body
+        else {
+            panic!("rule 02 is declarative");
+        };
+        assert_eq!(deny_message.as_deref(), Some("Use the UI instead."));
         assert_eq!(
-            deny.r#match
-                .as_ref()
-                .and_then(|m| m.cwd.as_ref())
-                .map(Pattern::as_str),
+            r#match.cwd.as_ref().map(Pattern::as_str),
             Some("/Users/me/oss")
         );
         let wasm = &first.rules[2];
-        assert!(wasm.decide.is_none() && wasm.r#match.is_none());
-        assert_eq!(
-            wasm.wasm.as_ref().map(|w| w.path.as_str()),
-            Some("rules/03.wasm")
-        );
+        assert_eq!(wasm.wasm().map(|w| w.path.as_str()), Some("rules/03.wasm"));
     }
 
     #[test]

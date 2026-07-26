@@ -39,12 +39,18 @@ fn rule_list_line(r: &crate::rules::Rule, refusals: &[crate::rules::WasmRefusal]
     let enabled = if r.enabled { "yes" } else { "no" };
     // A wasm rule has no static decision — the module returns one
     // per ask — and no match clause to take a wrap from.
-    let decide = match r.decide {
-        Some(crate::rules::RuleDecision::Approve) => "approve",
-        Some(crate::rules::RuleDecision::Deny) => "deny",
-        None => "wasm",
+    let (decide, wrap) = match &r.body {
+        crate::rules::RuleBody::Declarative {
+            r#match, decide, ..
+        } => (
+            match decide {
+                crate::rules::RuleDecision::Approve => "approve",
+                crate::rules::RuleDecision::Deny => "deny",
+            },
+            r#match.wrap.as_str(),
+        ),
+        crate::rules::RuleBody::Wasm(_) => ("wasm", "(wasm)"),
     };
-    let wrap = r.r#match.as_ref().map_or("(wasm)", |m| m.wrap.as_str());
     let refused = refusals
         .iter()
         .find(|refusal| refusal.rule_id == r.id)
@@ -76,58 +82,66 @@ fn rule_show_text(rule: &crate::rules::Rule, refusals: &[crate::rules::WasmRefus
     let _ = writeln!(out, "id:             {}", rule.id);
     let _ = writeln!(out, "name:           {}", rule.name);
     let _ = writeln!(out, "enabled:        {}", rule.enabled);
-    let _ = writeln!(
-        out,
-        "decide:         {}",
-        match rule.decide {
-            Some(crate::rules::RuleDecision::Approve) => "approve",
-            Some(crate::rules::RuleDecision::Deny) => "deny",
-            None => "wasm (module decides per ask)",
-        }
-    );
-    if let Some(m) = &rule.r#match {
-        let _ = writeln!(out, "wrap:           {}", m.wrap);
-        if let Some(p) = &m.argv {
-            let _ = writeln!(out, "argv match:     {}", p.as_str());
-        }
-        if let Some(p) = &m.ancestor {
-            let _ = writeln!(out, "ancestor match: {}", p.as_str());
-        }
-        if let Some(p) = &m.cwd {
-            let _ = writeln!(out, "cwd match:      {}", p.as_str());
-        }
-    }
-    if let Some(w) = &rule.wasm {
-        let _ = writeln!(out, "wasm module:    {}", w.path);
-        let _ = writeln!(out, "wasm sha256:    {}", w.sha256);
-        // Integrity as of the daemon's last rules load: a refused
-        // module (sha256 mismatch, missing file, sandbox rejection)
-        // can never fire, and the full reason names files and hashes
-        // — never secret values.
-        match refusals.iter().find(|refusal| refusal.rule_id == rule.id) {
-            Some(refusal) => {
-                let _ = writeln!(
-                    out,
-                    "wasm status:    REFUSED ({}) — this rule can never fire",
-                    refusal.category.label()
-                );
-                let _ = writeln!(out, "refusal reason: {}", refusal.reason);
+    let mut deny_message = None;
+    match &rule.body {
+        crate::rules::RuleBody::Declarative {
+            r#match,
+            decide,
+            deny_message: msg,
+        } => {
+            let _ = writeln!(
+                out,
+                "decide:         {}",
+                match decide {
+                    crate::rules::RuleDecision::Approve => "approve",
+                    crate::rules::RuleDecision::Deny => "deny",
+                }
+            );
+            let _ = writeln!(out, "wrap:           {}", r#match.wrap);
+            if let Some(p) = &r#match.argv {
+                let _ = writeln!(out, "argv match:     {}", p.as_str());
             }
-            None => {
-                let _ = writeln!(out, "wasm status:    ok (module loaded and hash-verified)");
+            if let Some(p) = &r#match.ancestor {
+                let _ = writeln!(out, "ancestor match: {}", p.as_str());
+            }
+            if let Some(p) = &r#match.cwd {
+                let _ = writeln!(out, "cwd match:      {}", p.as_str());
+            }
+            deny_message = msg.as_deref();
+        }
+        crate::rules::RuleBody::Wasm(w) => {
+            let _ = writeln!(out, "decide:         wasm (module decides per ask)");
+            let _ = writeln!(out, "wasm module:    {}", w.path);
+            let _ = writeln!(out, "wasm sha256:    {}", w.sha256);
+            // Integrity as of the daemon's last rules load: a refused
+            // module (sha256 mismatch, missing file, sandbox rejection)
+            // can never fire, and the full reason names files and hashes
+            // — never secret values.
+            match refusals.iter().find(|refusal| refusal.rule_id == rule.id) {
+                Some(refusal) => {
+                    let _ = writeln!(
+                        out,
+                        "wasm status:    REFUSED ({}) — this rule can never fire",
+                        refusal.category.label()
+                    );
+                    let _ = writeln!(out, "refusal reason: {}", refusal.reason);
+                }
+                None => {
+                    let _ = writeln!(out, "wasm status:    ok (module loaded and hash-verified)");
+                }
             }
         }
     }
     if !rule.trained_secrets.is_empty() {
         let names: Vec<_> = rule.trained_secrets.iter().cloned().collect();
         let _ = writeln!(out, "trained on:     {}", names.join(", "));
-    } else if rule.wasm.is_some() {
+    } else if rule.is_wasm() {
         let _ = writeln!(
             out,
             "trained on:     (none — module is consulted for every ask)"
         );
     }
-    if let Some(msg) = &rule.deny_message {
+    if let Some(msg) = deny_message {
         let _ = writeln!(out, "deny message:   {msg}");
     }
     if rule.created_at_unix > 0 {
@@ -181,8 +195,7 @@ pub fn rules_add_wasm(
     let rule = daemon_client::add_wasm_rule(&name, &module_path, trained, all_secrets)
         .context("could not register the wasm rule via the daemon")?;
     let wasm = rule
-        .wasm
-        .as_ref()
+        .wasm()
         .context("daemon registered a wasm rule without a wasm reference")?;
     println!("registered wasm rule '{}' ({})", rule.name, rule.id);
     println!("module stored:  {}", wasm.path);
@@ -257,15 +270,12 @@ mod tests {
             id: "wasm01".to_owned(),
             name: "cursor gh reads".to_owned(),
             enabled: true,
-            decide: None,
-            r#match: None,
-            wasm: Some(crate::rules::WasmRule {
+            trained_secrets: ["GITHUB_TOKEN".to_owned()].into_iter().collect(),
+            created_at_unix: 0,
+            body: crate::rules::RuleBody::Wasm(crate::rules::WasmRule {
                 path: "rules/wasm01.wasm".to_owned(),
                 sha256: "ab".repeat(32),
             }),
-            trained_secrets: ["GITHUB_TOKEN".to_owned()].into_iter().collect(),
-            deny_message: None,
-            created_at_unix: 0,
         }
     }
 

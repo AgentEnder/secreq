@@ -1642,10 +1642,12 @@ impl State {
 
     /// Insert a new rule, persist, and refresh `rules_loaded_at` so
     /// the freshness check doesn't trigger on our own write. Returns
-    /// an error if the id collides with an existing rule, the shape is
-    /// invalid, or (for a wasm rule) the module fails to load/verify —
-    /// a broken module refuses the mutation loudly rather than
-    /// admitting a rule that could never fire.
+    /// an error if the id collides with an existing rule, or (for a
+    /// wasm rule) the module fails to load/verify — a broken module
+    /// refuses the mutation loudly rather than admitting a rule that
+    /// could never fire. The declarative-XOR-wasm shape needs no check
+    /// here: [`Rule`] cannot hold an invalid one, and the IPC decode
+    /// rejects a malformed rule before it reaches this door.
     ///
     /// This is the `AddRule` (raw IPC / UI) door, so it also enforces
     /// the empty-snapshot guard on wasm rules: an empty
@@ -1654,8 +1656,7 @@ impl State {
     /// --all-secrets` (whose path enters through [`State::admit_rule`]
     /// after enforcing it) — both doors carry the same lock.
     pub fn add_rule(&mut self, rule: Rule) -> Result<()> {
-        rule.validate_shape()?;
-        if rule.wasm.is_some() && rule.trained_secrets.is_empty() {
+        if rule.is_wasm() && rule.trained_secrets.is_empty() {
             anyhow::bail!(
                 "refusing wasm rule `{}` with an empty trained-secrets snapshot: \
                  the module would be consulted for every ask across every wrap, \
@@ -1675,7 +1676,6 @@ impl State {
     /// rule that never reached disk must not stay fireable in memory
     /// until restart.
     fn admit_rule(&mut self, rule: Rule) -> Result<()> {
-        rule.validate_shape()?;
         if self.rules.iter().any(|r| r.id == rule.id) {
             anyhow::bail!("rule with id `{}` already exists", rule.id);
         }
@@ -1696,7 +1696,6 @@ impl State {
     /// refusal state are all restored — an update that never reached
     /// disk must not change what can fire in memory.
     pub fn update_rule(&mut self, rule: Rule) -> Result<()> {
-        rule.validate_shape()?;
         let Some(pos) = self.rules.iter().position(|r| r.id == rule.id) else {
             anyhow::bail!("no rule with id `{}`", rule.id);
         };
@@ -1757,7 +1756,7 @@ impl State {
     /// are logged, not returned — the rule is already gone from the
     /// ruleset, which is the part that matters.
     fn remove_stored_module(&self, rule: &Rule) {
-        let Some(wasm) = &rule.wasm else {
+        let Some(wasm) = rule.wasm() else {
             return;
         };
         let Ok(canonical) = crate::paths::rule_wasm_path(&rule.id) else {
@@ -1902,15 +1901,12 @@ impl State {
             id,
             name: name.to_owned(),
             enabled: true,
-            decide: None,
-            r#match: None,
-            wasm: Some(crate::rules::WasmRule {
+            trained_secrets,
+            created_at_unix: rules::now_unix(),
+            body: crate::rules::RuleBody::Wasm(crate::rules::WasmRule {
                 path: recorded_path,
                 sha256: rules::sha256_hex(module_bytes),
             }),
-            trained_secrets,
-            deny_message: None,
-            created_at_unix: rules::now_unix(),
         };
         // `admit_rule`, not `add_rule`: the empty-snapshot opt-in was
         // already enforced above, with the flag to prove it.
@@ -3033,24 +3029,25 @@ mod tests {
 
     // ── Auto-rules path ───────────────────────────────────────────────
 
-    use crate::rules::{Rule, RuleDecision, RuleMatch};
+    use crate::rules::{Rule, RuleBody, RuleDecision, RuleMatch};
 
     fn mk_rule(id: &str, wrap: &str, decide: RuleDecision, argv: Option<&str>) -> Rule {
         Rule {
             id: id.to_owned(),
             name: id.to_owned(),
             enabled: true,
-            decide: Some(decide),
-            r#match: Some(RuleMatch {
-                wrap: wrap.to_owned(),
-                argv: argv.map(crate::rules::Pattern::parse),
-                ancestor: None,
-                cwd: None,
-            }),
-            wasm: None,
             trained_secrets: ["GITHUB_TOKEN".to_owned()].into_iter().collect(),
-            deny_message: None,
             created_at_unix: 0,
+            body: RuleBody::Declarative {
+                r#match: RuleMatch {
+                    wrap: wrap.to_owned(),
+                    argv: argv.map(crate::rules::Pattern::parse),
+                    ancestor: None,
+                    cwd: None,
+                },
+                decide,
+                deny_message: None,
+            },
         }
     }
 
@@ -3941,16 +3938,22 @@ mod tests {
             id: id.to_owned(),
             name: "wasm approve".to_owned(),
             enabled: true,
-            decide: None,
-            r#match: None,
-            wasm: Some(crate::rules::WasmRule {
+            trained_secrets: ["GITHUB_TOKEN".to_owned()].into_iter().collect(),
+            created_at_unix: 0,
+            body: RuleBody::Wasm(crate::rules::WasmRule {
                 path: format!("{id}.wasm"),
                 sha256: crate::rules::sha256_hex(APPROVE_IF),
             }),
-            trained_secrets: ["GITHUB_TOKEN".to_owned()].into_iter().collect(),
-            deny_message: None,
-            created_at_unix: 0,
         }
+    }
+
+    /// Repin a wasm rule's recorded module hash. Panics on a
+    /// declarative rule, which has no module to pin.
+    fn repin(rule: &mut Rule, sha256: String) {
+        let RuleBody::Wasm(wasm) = &mut rule.body else {
+            panic!("not a wasm rule");
+        };
+        wasm.sha256 = sha256;
     }
 
     fn cursor_ask() -> Ask {
@@ -3995,25 +3998,18 @@ mod tests {
         let path = dir.path().join("auto-rules.json5");
         let mut state = State::with_rules_path(path);
         let mut rule = wasm_rule_with_module(dir.path(), "wasm01");
-        rule.wasm.as_mut().expect("wasm rule").sha256 = crate::rules::sha256_hex(b"not the module");
+        repin(&mut rule, crate::rules::sha256_hex(b"not the module"));
         let err = format!("{:#}", state.add_rule(rule).expect_err("must refuse"));
         assert!(err.contains("sha256 mismatch"), "{err}");
         assert!(state.rules.is_empty(), "refused rule must not be admitted");
     }
 
-    #[test]
-    fn add_rule_rejects_an_invalid_shape() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
-        let mut state = State::with_rules_path(path);
-        let mut rule = mk_rule("01", "gh", RuleDecision::Approve, None);
-        rule.wasm = Some(crate::rules::WasmRule {
-            path: "01.wasm".to_owned(),
-            sha256: "00".to_owned(),
-        });
-        let err = format!("{:#}", state.add_rule(rule).expect_err("must refuse"));
-        assert!(err.contains("both"), "{err}");
-    }
+    // There is no `add_rule_rejects_an_invalid_shape` any more: a rule
+    // that is both declarative and wasm cannot be built, so the test
+    // could only be written by constructing one, which no longer
+    // compiles. The file- and wire-level version of the same guard is
+    // `rules::tests::shape_rejects_both_match_and_wasm`, which comes in
+    // through the deserializer — the door untrusted input uses.
 
     #[test]
     fn update_rule_to_declarative_drops_the_stale_module() {
@@ -4108,7 +4104,7 @@ mod tests {
             APPROVE_IF_BYTES
         );
         // The rule pins the store content by hash.
-        let wasm = rule.wasm.as_ref().expect("wasm rule");
+        let wasm = rule.wasm().expect("wasm rule");
         assert_eq!(wasm.sha256, crate::rules::sha256_hex(APPROVE_IF_BYTES));
         assert!(state.wasm_refusals_snapshot().is_empty());
 
@@ -4352,7 +4348,7 @@ mod tests {
 
         // Update the rule to pin the module that's actually on disk.
         let mut healed = rule.clone();
-        healed.wasm.as_mut().expect("wasm").sha256 = crate::rules::sha256_hex(ALWAYS_PASS);
+        repin(&mut healed, crate::rules::sha256_hex(ALWAYS_PASS));
         state.update_rule(healed.clone()).expect("heal");
         assert!(
             state.wasm_refusals_snapshot().is_empty(),
@@ -4664,17 +4660,18 @@ mod tests {
             id: "01".to_owned(),
             name: "npm publish guard".to_owned(),
             enabled: true,
-            decide: Some(RuleDecision::Approve),
-            r#match: Some(crate::rules::RuleMatch {
-                wrap: "op".to_owned(),
-                argv: None,
-                ancestor: None,
-                cwd: None,
-            }),
-            wasm: None,
             trained_secrets: ["NPM_TOKEN".to_owned()].into_iter().collect(),
-            deny_message: None,
             created_at_unix: 0,
+            body: RuleBody::Declarative {
+                r#match: crate::rules::RuleMatch {
+                    wrap: "op".to_owned(),
+                    argv: None,
+                    ancestor: None,
+                    cwd: None,
+                },
+                decide: RuleDecision::Approve,
+                deny_message: None,
+            },
         }];
 
         assert!(
@@ -4695,17 +4692,18 @@ mod tests {
             id: "01".to_owned(),
             name: "op reads".to_owned(),
             enabled: true,
-            decide: Some(RuleDecision::Approve),
-            r#match: Some(crate::rules::RuleMatch {
-                wrap: "op".to_owned(),
-                argv: None,
-                ancestor: None,
-                cwd: None,
-            }),
-            wasm: None,
             trained_secrets: ["wrap:op".to_owned()].into_iter().collect(),
-            deny_message: None,
             created_at_unix: 0,
+            body: RuleBody::Declarative {
+                r#match: crate::rules::RuleMatch {
+                    wrap: "op".to_owned(),
+                    argv: None,
+                    ancestor: None,
+                    cwd: None,
+                },
+                decide: RuleDecision::Approve,
+                deny_message: None,
+            },
         }];
 
         let hit = state
@@ -4733,17 +4731,18 @@ mod tests {
             id: "01".to_owned(),
             name: "approve everything".to_owned(),
             enabled: true,
-            decide: Some(RuleDecision::Approve),
-            r#match: Some(crate::rules::RuleMatch {
-                wrap: "agent:sandbox".to_owned(),
-                argv: None,
-                ancestor: None,
-                cwd: None,
-            }),
-            wasm: None,
             trained_secrets: Default::default(),
-            deny_message: None,
             created_at_unix: 0,
+            body: RuleBody::Declarative {
+                r#match: crate::rules::RuleMatch {
+                    wrap: "agent:sandbox".to_owned(),
+                    argv: None,
+                    ancestor: None,
+                    cwd: None,
+                },
+                decide: RuleDecision::Approve,
+                deny_message: None,
+            },
         }];
 
         assert!(
