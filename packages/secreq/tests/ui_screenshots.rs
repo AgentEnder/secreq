@@ -225,13 +225,14 @@ fn submit(
     state: &SharedState,
     wrap: &str,
     command: Vec<&str>,
-    callers: Vec<Caller>,
+    callers: impl Into<Chain>,
     secrets: Vec<SecretAsk>,
 ) -> mpsc::Receiver<secreq::daemon::state::WaiterReply> {
+    let Chain { frames, truncated } = callers.into();
     let dedupe_key = DedupeKey {
         wrap: wrap.to_owned(),
-        ppid: callers.first().map_or(0, |c| c.pid),
-        parent_start_time: callers.first().map_or(0, |c| c.start_time),
+        ppid: frames.first().map_or(0, |c| c.pid),
+        parent_start_time: frames.first().map_or(0, |c| c.start_time),
         subject_digest: None,
     };
     let ask = Ask {
@@ -239,8 +240,8 @@ fn submit(
         dedupe_key,
         subject: AskSubject::Wrap(WrapSubject {
             cwd: "~/repos/acme".to_owned(),
-            callers,
-            callers_truncated: false,
+            callers: frames,
+            callers_truncated: truncated,
             secrets,
             providers: HashMap::new(),
             allow_remember: true,
@@ -251,6 +252,38 @@ fn submit(
     let (tx, rx) = mpsc::channel();
     state.lock().unwrap().submit_ask(ask, tx);
     rx
+}
+
+/// A caller chain as an ask carries it: the frames, plus whether the walk
+/// that produced them reached the top of the ancestry.
+///
+/// Mirrors `provenance::CallerChain`, and exists so a fixture that cares can
+/// say `Chain::clipped(…)` while the fifteen that don't keep passing a bare
+/// `vec![…]` — the `From` impl below reads a plain vec as a whole ancestry,
+/// which is what every fixture predating the flag meant.
+struct Chain {
+    frames: Vec<Caller>,
+    truncated: bool,
+}
+
+impl Chain {
+    /// A chain the walk abandoned at its ceiling: real ancestors exist above
+    /// the outermost frame here and were never read.
+    fn clipped(frames: Vec<Caller>) -> Self {
+        Chain {
+            frames,
+            truncated: true,
+        }
+    }
+}
+
+impl From<Vec<Caller>> for Chain {
+    fn from(frames: Vec<Caller>) -> Self {
+        Chain {
+            frames,
+            truncated: false,
+        }
+    }
 }
 
 /// Submit a `secreq run` ask. Mirrors `submit` but pins the dedupe
@@ -1267,9 +1300,9 @@ fn ssh_session_anchor_pending() {
                 // The peer's cwd was unreadable — the process had already
                 // exited by the time the daemon looked. A real state on this
                 // path, and the only fixture that shows it: the well omits
-                // the `IN` row rather than heading a blank one. It also buys
-                // back the height this deeper tree costs, which keeps the
-                // session row — the point of the fixture — in frame.
+                // the `IN` row rather than heading a blank one. It was also
+                // load-bearing for height until the grants moved into the
+                // pinned band; it is now here on its own merits.
                 "",
                 vec![git, nvim, tmux],
             )]
@@ -1317,6 +1350,106 @@ fn deep_caller_chain_pending() {
                 vec!["npm", "publish"],
                 callers,
                 vec![secret("NPM_TOKEN", "op", "op://Dev/npm/token")],
+            )]
+        },
+    );
+}
+
+#[test]
+fn walk_truncated_chain_pending() {
+    // The same 16 frames as `30-deep-caller-chain`, but this time the walk
+    // stopped *because* it hit its ceiling rather than because it ran out of
+    // ancestors — so the outermost frame here is not the origin, it is
+    // wherever secreq quit looking.
+    //
+    // The fixture exists for the top row: `… more above`. The two elisions in
+    // the tree say different things and the difference is the whole point.
+    // `… 10 more` counts frames the tree holds and hides; `… more above`
+    // stands in for frames nothing ever read, which is why it carries no
+    // number. Without it, the outermost frame the walk happened to stop on
+    // draws exactly like a real root — and a caller that puts sixteen
+    // processes between itself and the terminal chooses which one that is.
+    render_prompt_fixture(
+        Shot::new("31-walk-truncated-chain").caption(
+            "secreq stops walking the process tree after 16 frames. When it does, the \
+             prompt says so — <code>… more above</code> means the ancestry continues \
+             past the top row and was not read, so the process shown there is where \
+             the walk stopped, not where the request came from.",
+        ),
+        vec![],
+        |state| {
+            let mut callers = vec![
+                caller(9440, "sh", 1_700_004_000),
+                caller(9438, "postinstall.js", 1_700_003_900),
+                caller(9430, "node", 1_700_003_800),
+                caller(9425, "pnpm", 1_700_003_700),
+                caller(9418, "node", 1_700_003_600),
+                caller(9411, "turbo", 1_700_003_500),
+            ];
+            callers.extend(
+                (0..10).map(|i| caller(9300 - i * 7, "node", 1_700_003_000 - u64::from(i) * 60)),
+            );
+            assert_eq!(callers.len(), 16, "the chain walk's own ceiling");
+            vec![submit(
+                state,
+                "npm",
+                vec!["npm", "publish"],
+                Chain::clipped(callers),
+                vec![secret("NPM_TOKEN", "op", "op://Dev/npm/token")],
+            )]
+        },
+    );
+}
+
+#[test]
+fn ssh_deep_chain_pinned_grants() {
+    // The viewport property, on the ask that has the most to lose from it:
+    // an SSH sign whose caller chain overflows the well.
+    //
+    // Everything the requester supplies — the tree, the argv column, the cwd
+    // — scrolls inside the well. Everything the user needs in order to decide
+    // sits below it in a band the well cannot reach: HISTORY, both TTL
+    // grants, and Approve/Deny. Before that split, a chain this deep pushed
+    // the grant buttons off the bottom of the prompt window, which is a control
+    // handing out thirty minutes of signing that the user never saw.
+    // `29-ssh-session-anchor` had to give up its `IN` row to fit them.
+    render_prompt_fixture(
+        Shot::new("32-ssh-deep-chain-pinned").caption(
+            "Whatever the request brings with it, the decision stays on screen. The \
+             evidence scrolls; <b>HISTORY</b>, the session grants and Approve/Deny do \
+             not — so no caller can make the prompt say less than it appears to by \
+             being deep enough.",
+        ),
+        vec![],
+        |state| {
+            let mut git = caller_exe(9310, "git", 1_700_003_400, "/usr/bin/git");
+            git.command = "git push origin main".to_owned();
+            let mut make = caller_exe(9308, "make", 1_700_003_000, "/usr/bin/make");
+            make.command = "make release".to_owned();
+            let mut turbo = caller_exe(9301, "turbo", 1_700_002_800, "/usr/local/bin/turbo");
+            turbo.command = "turbo run publish".to_owned();
+            let mut nvim = caller_exe(9280, "nvim", 1_700_002_000, "/opt/homebrew/bin/nvim");
+            nvim.command = "nvim src/main.rs".to_owned();
+            let mut tmux = caller_exe(
+                7710,
+                "tmux: server",
+                1_700_000_000,
+                "/opt/homebrew/bin/tmux",
+            );
+            tmux.command = "tmux new-session -s dev".to_owned();
+            let mut callers = vec![git, make, turbo];
+            callers.extend(
+                (0..5).map(|i| caller(9270 - i * 3, "node", 1_700_002_500 - u64::from(i) * 30)),
+            );
+            callers.push(nvim);
+            callers.push(tmux);
+            vec![submit_ssh(
+                state,
+                "github",
+                "SHA256:Nh0Me49Zh9fDw/VYUfq43IJmI1T+XrjiYONPND8GzaM",
+                Some("git pushes to github.com"),
+                "~/repos/acme",
+                callers,
             )]
         },
     );

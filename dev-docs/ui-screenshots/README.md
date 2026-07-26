@@ -19,7 +19,7 @@ Since the "Native Sentinel" redesign the UI is **two windows**, and the
 harness mirrors that split:
 
 - **Prompt** fixtures drive `prompt_ui::render_prompt_panel` at the
-  production prompt size (500×470): one ask at a time, evidence well,
+  production prompt size (500×510): one ask at a time, evidence well,
   per-OS decision row.
 - **Manager** fixtures drive `manager_ui::render_manager_panel` at the
   production manager size (900×600): Rules + Audit behind per-OS header
@@ -65,7 +65,7 @@ third, `variants`, is the layout snapshot described further down:
   "window": "prompt",
   "caption": "The whole idea in one window. <b>Before</b> …",
   "variants": {
-    "macos-dark": { "digest": "…", "size": [500, 470], "shapes": [ … ] },
+    "macos-dark": { "digest": "…", "size": [500, 510], "shapes": [ … ] },
     "macos-light": { … }
   }
 }
@@ -176,11 +176,11 @@ a snapshot blessed in one hour doesn't fail in another.
 | Fixture id | Test fn | What it exercises |
 |---|---|---|
 | `01-empty-all-clear` | `empty_state` | Prompt with no asks: centred app icon + "No pending requests."; the manager link stays reachable in the footer. |
-| `02-single-pending` | `single_pending` | One wrap, one secret: the canonical prompt: header summary, evidence well (SECRET / ASKED BY / IN / HISTORY), macOS footer pair with mnemonic underlines. |
+| `02-single-pending` | `single_pending` | One wrap, one secret: the canonical prompt: header summary, evidence well (SECRET / ASKED BY / IN), the pinned HISTORY block, macOS footer pair with mnemonic underlines. |
 | `03-nested-tree` | `nested_tree` | An ask with a deeper ancestry: the ASKED BY tree shows each ancestor with its argv and pid, the asking leaf in accent. |
 | `04-multi-root` | `multi_root` | Two queued asks from independent roots: the prompt focuses the oldest; the other appears only as "1 more waiting". |
 | `05-folded-run` | `folded_run` | A `gh→gh→gh→gh` self-exec chain: the coalesced ask's chain renders once per distinct process. |
-| `06-pending-denied-last` | `pending_with_deny_history` | HISTORY row when the last audit decision for this wrap+caller was a deny; the line renders in the danger tint. |
+| `06-pending-denied-last` | `pending_with_deny_history` | The pinned HISTORY block when the last audit decision for this wrap+caller was a deny; the line renders in the danger tint. |
 | `12-auto-deny-toast` | `auto_deny_toast_on_pending` | The transient auto-deny banner above the prompt content (rule name + configured deny message). |
 | `21-gate-only-pending` | `gate_only_pending` | A gate-only wrap (no secrets to inject): the well's secret row gives way to the gate-only marker. |
 | `22-pending-arrival-highlight` | `pending_arrival_highlight` | Two asks queued: the focused ask plus the "1 more waiting" queue line (the old tab-badge pulse retired with the tab bar). |
@@ -188,7 +188,9 @@ a snapshot blessed in one hour doesn't fail in another.
 | `24-ssh-sign-pending` | `ssh_sign_pending` | An SSH sign ask: SIGN WITH fingerprint row, `$reason`, caller chain, quiet session-grant buttons (30 min / all keys), Deny/Approve pair. |
 | `29-ssh-session-anchor` | `ssh_session_anchor_pending` | The same sign ask, with the session grants naming what they attach to. `git` runs under `nvim` under a tmux server, so `provenance::select_anchor` resolves past the two ephemeral frames and the grant binds to `tmux: server` — three rows above the command in the header, and not a frame anyone would guess. The "Session: `tmux: server` · 7710" row is the only place the prompt says what "Approve for 30 min" would actually cover, and the pid is there to be matched by eye against the tree above. The frames carry an `exe` (which renders no pixel) because the anchor is chosen on the kernel's record, not on the name a process reported. Also the only fixture with an **empty cwd**: the SSH path reads it off the socket peer and can come back without one, and the well omits the `IN` row rather than heading a blank. |
 | `30-deep-caller-chain` | `deep_caller_chain_pending` | A chain at the walk's own ceiling — `provenance::caller_chain` stops after 16 useful frames, and this is what 16 looks like. Exists for one row: `… 10 more`. The tree keeps the outermost frame and the asking leaf and collapses the middle, with every elided frame on hover. Before this, the prompt drew all 16 as though that were the whole ancestry, leaving the audit view (the surface for *reviewing* a decision) as the only one that admitted to eliding anything. |
-| `34-agent-scope-pending` | `agent_scope_pending` | A guest VM's ask over a scoped agent socket: the header leads with the **sandbox**, because the host-declared scope *is* the principal. The well shows SECRET / SCOPE / HISTORY, and what's absent is the point: no ASKED BY tree and no IN row, because a guest has no host process tree or cwd, and a chain-shaped widget here would imply provenance we cannot verify. This guest claimed nothing, so there is no GUEST SAYS row (contrast fixture 36). The quiet "Scope: Approve for 5 min" action is the TTL grant that anchors an approval to the sandbox; the footer's Approve stays "this request only". See `src/scoped_agent/mod.rs`. |
+| `31-walk-truncated-chain` | `walk_truncated_chain_pending` | The same 16 frames as fixture 30, but the walk stopped **because** it hit its ceiling rather than because it ran out of ancestors. Exists for the top row: `… more above`. The two elisions say different things, and the difference is the fixture — `… 10 more` counts frames the tree holds and hides, while `… more above` stands in for frames nothing ever read, which is why it carries no number. Without it the frame the walk happened to stop on draws exactly like a real root, so a caller with sixteen processes between itself and the terminal picks what the user reads as the origin. |
+| `32-ssh-deep-chain-pinned` | `ssh_deep_chain_pinned_grants` | The viewport property on the ask with most to lose from it: an SSH sign whose caller tree overflows the well. The evidence scrolls; HISTORY, both session grants and Deny/Approve sit in a pinned band the well cannot reach. Before that split, a chain this deep pushed the 30-minute grant buttons off the bottom of the prompt window: a control handing out signing authority that the user never saw. Fixture 29 had to give up its `IN` row to make them fit, which was the bug showing up inside published documentation. Guarded by `prompt_ui`'s `a_hostile_ask_cannot_move_a_decision_control`. |
+| `34-agent-scope-pending` | `agent_scope_pending` | A guest VM's ask over a scoped agent socket: the header leads with the **sandbox**, because the host-declared scope *is* the principal. The well shows SECRET / SCOPE (HISTORY is pinned below it), and what's absent is the point: no ASKED BY tree and no IN row, because a guest has no host process tree or cwd, and a chain-shaped widget here would imply provenance we cannot verify. This guest claimed nothing, so there is no GUEST SAYS row (contrast fixture 36). The quiet "Scope: Approve for 5 min" action is the TTL grant that anchors an approval to the sandbox; the footer's Approve stays "this request only". See `src/scoped_agent/mod.rs`. |
 | `36-agent-guest-chain-pending` | `agent_guest_chain_pending` | The same scoped-agent ask, but the guest volunteered a caller chain. Exists to show the **marker**: GUEST SAYS renders the claim dimmed, with a red "⚠ guest-reported, NOT verifiable" directly beneath it. Read the well top-to-bottom and it tells the truth in order: SECRET and SCOPE are host-declared facts, then, below and explicitly disclaimed, what the guest says about itself. The chain reaches the decision nowhere and the approval cache never (`consent::AgentGrant` has no field for it); it is here for a human to weigh and for the audit log to record as a claim. |
 | `28-prompt-many-secrets` | `prompt_many_secrets` | The `secreq run` 42-vars case: count as headline, secrets grouped by locator prefix (largest group first) in a scroll-capped grid; body scrolls, footer stays pinned. |
 | `run-consent` | `run_consent_card` | A `secreq run` ask: free-form command, ambient-sourced secrets, `allow_remember = false`. |

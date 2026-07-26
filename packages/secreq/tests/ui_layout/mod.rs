@@ -23,7 +23,7 @@
 //! - **Capture in points; never set a pixel scale during the layout pass.**
 //!   The PNGs rasterise at 2x, but `pixels_per_point` is a *rasterisation*
 //!   knob applied to a logical window: setting it to 2.0 here halves the
-//!   logical window (500x470 becomes 250x235), which doesn't merely shrink the
+//!   logical window (a 500x510 prompt becomes 250x255), which doesn't merely shrink the
 //!   capture — the evidence well narrows past its eliding width, the locator
 //!   comes back as `op://Personal…`, and whole rows fall out. The snapshot
 //!   would record truncated text and call it stable.

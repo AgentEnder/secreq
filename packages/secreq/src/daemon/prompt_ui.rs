@@ -135,36 +135,36 @@ pub fn render_prompt_panel(
         bottom: 0,
     };
 
-    // Where the decision row sits is a question about the *window*, and
+    // Where the decision band sits is a question about the *window*, and
     // `ui.max_rect()` cannot answer it: it starts out truthful and then
-    // grows to swallow anything that overflows it, so read after the
-    // footer has drawn it reports 473 for a 470pt window. The viewport
-    // rect is the only thing here that describes the window rather than
-    // what got put in it. (`screen_rect()` is its deprecated spelling.)
+    // grows to swallow anything that overflows it, so read after the band
+    // has drawn it reports a few points more than the window is tall. The
+    // viewport rect is the only thing here that describes the window rather
+    // than what got put in it. (`screen_rect()` is its deprecated spelling.)
     let full = ctx.content_rect();
 
-    // An ask on screen gets a decision row; an empty queue gets the
+    // An ask on screen gets a decision band; an empty queue gets the
     // manager hand-off. Neither is true while the last ask is resolving
-    // out of a queue that still has entries, and then there is no footer
+    // out of a queue that still has entries, and then there is no band
     // at all — so nothing is reserved for one.
-    let show_footer = current.is_some() || snapshot.entries.is_empty();
+    let show_band = current.is_some() || snapshot.entries.is_empty();
 
-    // How tall that row comes out is not knowable before it is laid out,
+    // How tall that band comes out is not knowable before it is laid out,
     // and egui cannot move what it has already laid out. So lay it out
     // twice: once into an invisible, disabled child `Ui` purely to read
     // a height off its `min_rect`, then again for real, anchored to the
     // bottom of the window. The measuring pass emits `Shape::Noop` for
     // every shape and its widgets can neither be hovered nor clicked, so
-    // it costs one extra layout of half a dozen widgets and leaves no
-    // other trace.
+    // it costs one extra layout of a dozen widgets and leaves no other
+    // trace.
     //
     // Three hand-tuned per-OS constants stood here before, and each had
     // drifted from the arm it was meant to describe by a different
     // amount, because each was silently absorbing a different overshoot.
     // A number re-derived every frame from the very code that paints
     // cannot drift from it.
-    let footer_height = if show_footer {
-        measure_footer(ui, &th, current, snapshot, state, full)
+    let band_height = if show_band {
+        measure_decision_band(ui, &th, current, snapshot, state, full)
     } else {
         0.0
     };
@@ -172,10 +172,10 @@ pub fn render_prompt_panel(
     // The body takes the remainder and scrolls when an ask outgrows it
     // (deep ancestries, big secret sets). Both halves are placed by
     // explicit rect rather than by the cursor, so an over-long body
-    // cannot push the decision row off-window no matter what it holds.
-    let split = (full.bottom() - footer_height).max(full.top());
+    // cannot push the decision band off-window no matter what it holds.
+    let split = (full.bottom() - band_height).max(full.top());
     let body_rect = egui::Rect::from_min_max(full.min, egui::pos2(full.right(), split));
-    let footer_rect = egui::Rect::from_min_max(egui::pos2(full.left(), split), full.max);
+    let band_rect = egui::Rect::from_min_max(egui::pos2(full.left(), split), full.max);
 
     ui.scope_builder(egui::UiBuilder::new().max_rect(body_rect), |ui| {
         // The two halves now abut exactly, so the scroll viewport has to
@@ -202,31 +202,15 @@ pub fn render_prompt_panel(
                             render_header(ui, &th, row);
                             ui.add_space(12.0);
                             render_evidence_well(ui, &th, row, state);
-                            // The two non-wrap kinds each offer a TTL grant
-                            // above the footer; a wrap ask's "remember" lives
-                            // in the footer's Approve instead.
-                            if row.status == super::proto::RowStatus::Awaiting {
-                                match &row.representative.subject {
-                                    AskSubject::SshSign(_) => {
-                                        ui.add_space(8.0);
-                                        render_ssh_session_grants(ui, &th, row, actions_out);
-                                    }
-                                    AskSubject::ScopedAgent(_) => {
-                                        ui.add_space(8.0);
-                                        render_agent_session_grant(ui, &th, row, actions_out);
-                                    }
-                                    AskSubject::Wrap(_) => {}
-                                }
-                            }
                         }
                     }
                 });
             });
     });
 
-    if show_footer {
-        ui.scope_builder(egui::UiBuilder::new().max_rect(footer_rect), |ui| {
-            render_footer(ui, &th, current, snapshot, state, actions_out, &mut out);
+    if show_band {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(band_rect), |ui| {
+            render_decision_band(ui, &th, current, snapshot, state, actions_out, &mut out);
         });
     }
 
@@ -373,6 +357,17 @@ fn render_evidence_well(
     let ask = &row.representative;
     well_frame(th).show(ui, |ui| {
         ui.set_width(ui.available_width());
+        // A hairline belongs *between* two rows. Written after each row
+        // instead, the well ends on a rule under nothing — and which row is
+        // last differs by ask kind and by whether a cwd came back, so no
+        // branch here can be the one that remembers to skip it.
+        let mut rows = 0usize;
+        let mut divide = |ui: &mut egui::Ui| {
+            if rows > 0 {
+                well_separator(ui, th);
+            }
+            rows += 1;
+        };
         if let AskSubject::ScopedAgent(agent) = &ask.subject {
             // A guest's request has a different evidence shape from every
             // local ask, and the well says so honestly:
@@ -386,6 +381,7 @@ fn render_evidence_well(
             //   something we did not.
             // - IN (cwd) is dropped for the same reason: the guest's cwd is
             //   in another kernel.
+            divide(ui);
             well_row(ui, th, "SECRET", |ui, th| {
                 ui.add(
                     egui::Label::new(
@@ -397,8 +393,8 @@ fn render_evidence_well(
                     .truncate(),
                 );
             });
-            well_separator(ui, th);
 
+            divide(ui);
             well_row(ui, th, "SCOPE", |ui, th| {
                 ui.vertical(|ui| {
                     ui.add(
@@ -422,17 +418,17 @@ fn render_evidence_well(
                     );
                 });
             });
-            well_separator(ui, th);
 
             // The guest's own story about itself, when it told one. Rendered
             // *below* SCOPE and visibly marked, so the reading order is
             // "here's what we know, and here's what we've merely been told" —
             // never the reverse.
             if let Some(chain) = &agent.guest_chain {
+                divide(ui);
                 render_guest_chain(ui, th, chain);
-                well_separator(ui, th);
             }
         } else if let AskSubject::SshSign(ssh) = &ask.subject {
+            divide(ui);
             well_row(ui, th, "SIGN WITH", |ui, th| {
                 ui.add(
                     egui::Label::new(
@@ -444,12 +440,11 @@ fn render_evidence_well(
                     .truncate(),
                 );
             });
-            well_separator(ui, th);
         } else {
+            divide(ui);
             well_row(ui, th, &secrets_label(ask.secrets().len()), |ui, th| {
                 render_secrets(ui, th, ask.secrets(), state);
             });
-            well_separator(ui, th);
         }
 
         // ASKED BY / IN are host-process facts. A scoped-agent ask has
@@ -458,10 +453,10 @@ fn render_evidence_well(
         // variant's shape talking: the subject has no field either row could
         // read from.
         if !matches!(ask.subject, AskSubject::ScopedAgent(_)) {
+            divide(ui);
             well_row(ui, th, "ASKED BY", |ui, th| {
                 render_caller_tree(ui, th, row);
             });
-            well_separator(ui, th);
 
             // A cwd we don't have is omitted, not labelled blank. The SSH
             // path reads it off the socket peer and can come back empty
@@ -469,6 +464,7 @@ fn render_evidence_well(
             // dead space reads as a rendering fault rather than as "we
             // could not determine this".
             if !ask.cwd().is_empty() {
+                divide(ui);
                 well_row(ui, th, "IN", |ui, th| {
                     ui.add(
                         egui::Label::new(
@@ -480,36 +476,66 @@ fn render_evidence_well(
                         .truncate(),
                     );
                 });
-                well_separator(ui, th);
             }
         }
+    });
+}
 
-        well_row(ui, th, "HISTORY", |ui, th| {
-            let caller = ask.callers().first().map(|c| super::ui::CallerIdentity {
-                name: c.name.as_str(),
-                exe: c.exe.as_deref(),
-            });
-            let summary = state.audit.summarize(history_wrap(row).as_ref(), caller);
-            let is_agent = matches!(ask.subject, AskSubject::ScopedAgent(_));
-            let (line, color) = if is_agent && summary.is_empty() {
-                // The shared empty-history line says "first request from
-                // this caller". There is no caller on this path — that's
-                // the entire point of the scoped-agent design — so saying
-                // so here would quietly contradict the SCOPE row directly
-                // above it. The scope is what has (or hasn't) asked before.
-                ("first request from this scope".to_owned(), th.dim)
-            } else {
-                format_audit_line(&summary, super::ui::now_unix(), th)
-            };
-            // The prompt's well already sets context; drop the audit
-            // line's "↳ " prefix, which belongs to the old card layout.
-            let line = line.trim_start_matches("↳ ").to_owned();
-            ui.label(
-                egui::RichText::new(line)
-                    .size(th.body_size - 1.0)
-                    .color(color),
-            );
+/// What secreq's own audit log says about this caller — and the one row in
+/// the prompt whose content the requester had no hand in.
+///
+/// It sits in the pinned band rather than in the evidence well, which is the
+/// distinction the well now draws: **the well is what the caller is, the band
+/// is what we know and what you can do about it.** Everything above the split
+/// is attacker-influenced and free to grow; nothing above the split can push
+/// this off the screen.
+///
+/// It used to be the well's last row, under a caller tree and an argv column
+/// with no ceiling between them, so "denied 3 times before" was exactly the
+/// line a deep enough ancestry scrolled away.
+fn render_history_row(
+    ui: &mut egui::Ui,
+    th: &Theme,
+    row: &QueueRow,
+    state: &mut PromptWindowState,
+) {
+    // Its own inset block, in the evidence well's clothing. Left bare it read
+    // as a line that had come adrift from the well above it; the frame says
+    // the opposite and the truer thing — a second, smaller container, holding
+    // what secreq knows rather than what it was told.
+    well_frame(th).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        history_line(ui, th, row, state);
+    });
+}
+
+fn history_line(ui: &mut egui::Ui, th: &Theme, row: &QueueRow, state: &mut PromptWindowState) {
+    let ask = &row.representative;
+    well_row(ui, th, "HISTORY", |ui, th| {
+        let caller = ask.callers().first().map(|c| super::ui::CallerIdentity {
+            name: c.name.as_str(),
+            exe: c.exe.as_deref(),
         });
+        let summary = state.audit.summarize(history_wrap(row).as_ref(), caller);
+        let is_agent = matches!(ask.subject, AskSubject::ScopedAgent(_));
+        let (line, color) = if is_agent && summary.is_empty() {
+            // The shared empty-history line says "first request from this
+            // caller". There is no caller on this path — that's the entire
+            // point of the scoped-agent design — so saying so here would
+            // quietly contradict the SCOPE row in the well. The scope is what
+            // has (or hasn't) asked before.
+            ("first request from this scope".to_owned(), th.dim)
+        } else {
+            format_audit_line(&summary, super::ui::now_unix(), th)
+        };
+        // The prompt already sets context; drop the audit line's "↳ " prefix,
+        // which belongs to the old card layout.
+        let line = line.trim_start_matches("↳ ").to_owned();
+        ui.label(
+            egui::RichText::new(line)
+                .size(th.body_size - 1.0)
+                .color(color),
+        );
     });
 }
 
@@ -781,10 +807,26 @@ fn caller_overflow_summary(hidden: &[Caller]) -> String {
 /// ancestry while `provenance::caller_chain` had already stopped walking at
 /// 16, and the surface the decision is *reviewed* on was the only one that
 /// said so.
+///
+/// Two different things can be missing, and the tree says both in the same
+/// `…` idiom at the position each is missing *from*:
+///
+/// - Frames the **tree** gave up sit in the middle, between the outermost
+///   frame and the leaf, and their count is known.
+/// - Frames the **walk** never read sit above everything, and their count is
+///   not — the walk stopped precisely so it would not have to find out. That
+///   row goes at the top, because without it the outermost frame the walk
+///   happened to stop on is drawn exactly like a real root, and a caller deep
+///   enough inside its own ancestry gets to choose which process the user
+///   reads as the origin.
 fn render_caller_tree(ui: &mut egui::Ui, th: &Theme, row: &QueueRow) {
     let ask = &row.representative;
     let (shown, hidden) = caller_tree_split(ask.callers());
     let mut depth = 0usize;
+    if ask.callers_truncated() {
+        caller_unwalked_row(ui, th, depth);
+        depth += 1;
+    }
     for caller in shown.iter().rev() {
         caller_row(
             ui,
@@ -832,6 +874,46 @@ fn render_caller_tree(ui: &mut egui::Ui, th: &Theme, row: &QueueRow) {
 /// frame it replaced, which is what keeps this an honest summary instead of
 /// a second way to hide something.
 fn caller_overflow_row(ui: &mut egui::Ui, th: &Theme, depth: usize, hidden: &[Caller]) {
+    elision_row(
+        ui,
+        th,
+        depth,
+        &format!("\u{2026} {} more", hidden.len()),
+        &caller_overflow_summary(hidden),
+    );
+}
+
+/// The row standing in for the ancestry above where the walk stopped.
+///
+/// Deliberately **uncounted**. Every other elision in this UI names a number
+/// because it is standing in for frames it holds; this one is standing in for
+/// frames nothing ever read, and printing a number here would be the prompt
+/// asserting something it went out of its way not to learn. `… more above`
+/// is the whole claim: there is ancestry past this row, and secreq did not
+/// look at it.
+///
+/// It draws at depth 0, above the outermost frame, because that is where the
+/// missing frames would have been — the reader's eye lands on it before the
+/// row it would otherwise have read as the origin.
+fn caller_unwalked_row(ui: &mut egui::Ui, th: &Theme, depth: usize) {
+    elision_row(
+        ui,
+        th,
+        depth,
+        "\u{2026} more above",
+        "secreq stops walking the process tree after 16 frames.\n\
+         Whatever launched this is further up and was not read.",
+    );
+}
+
+/// One `…` row of the caller tree: the tree's indent and elbow, then faint
+/// text with an explanatory hover.
+///
+/// Shared by both elisions on purpose. They say different things, but they
+/// are the same *kind* of statement — "the tree is not showing you
+/// everything, here" — and a reader who learns one should not have to learn
+/// a second visual language for the other.
+fn elision_row(ui: &mut egui::Ui, th: &Theme, depth: usize, text: &str, hover: &str) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
         if depth > 0 {
@@ -844,11 +926,11 @@ fn caller_overflow_row(ui: &mut egui::Ui, th: &Theme, depth: usize, hidden: &[Ca
             );
         }
         ui.label(
-            egui::RichText::new(format!("\u{2026} {} more", hidden.len()))
+            egui::RichText::new(text)
                 .size(th.body_size - 2.0)
                 .color(th.faint),
         )
-        .on_hover_text(caller_overflow_summary(hidden));
+        .on_hover_text(hover.to_owned());
     });
 }
 
@@ -919,6 +1001,12 @@ fn caller_row(
 /// A fixed budget rather than "whatever is left" on purpose: the two things
 /// sharing this row are attacker-influenced text and the controls that hand
 /// out a 30-minute signing grant, and the controls are not allowed to move.
+///
+/// "Fixed" has to mean a floor as well as a ceiling. A ceiling alone stops a
+/// long name shoving the buttons right, but the box then *shrinks* to a short
+/// one and drags them left — so which pixel "Approve for 30 min" occupies
+/// still depended on a string the requester picked. See
+/// `a_hostile_ask_cannot_move_a_decision_control`.
 const SESSION_LABEL_WIDTH: f32 = 132.0;
 
 /// The two TTL'd session-grant actions, rendered as quiet secondary
@@ -959,6 +1047,7 @@ fn render_ssh_session_grants(
                     egui::vec2(SESSION_LABEL_WIDTH, row_height),
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
+                        ui.set_min_width(SESSION_LABEL_WIDTH);
                         ui.set_max_width(SESSION_LABEL_WIDTH);
                         ui.add(
                             egui::Label::new(
@@ -1083,25 +1172,79 @@ fn resolving_text(row: &QueueRow) -> &'static str {
     }
 }
 
-/// How tall the decision row will come out, by laying it out and looking.
+/// Everything the user needs in front of them to decide, in a band the
+/// scrolling body cannot reach: what secreq's own log says about this caller,
+/// any TTL'd grant the ask offers, and the decision row itself.
+///
+/// The split this band sits below is the prompt's security boundary, not a
+/// layout preference. Above it is content the requester supplies — argv, a
+/// process tree, a secret set, a cwd — all of it unbounded and all of it free
+/// to scroll. Below it is what the user must read and what they act with, and
+/// **nothing above the split can move anything below it**, because the two
+/// are placed by explicit rect rather than by a shared cursor.
+///
+/// This is the same attack the argv cap in `provenance::sanitize_display`
+/// answers, arriving through a different door: make the prompt say less than
+/// it appears to by pushing the part that matters off-screen. Capping each
+/// lever narrows it one lever at a time; a band the levers cannot reach ends
+/// the shape.
+#[allow(clippy::too_many_arguments)]
+fn render_decision_band(
+    ui: &mut egui::Ui,
+    th: &Theme,
+    current: Option<&QueueRow>,
+    snapshot: &QueueSnapshot,
+    state: &mut PromptWindowState,
+    actions_out: &mut Vec<PendingAction>,
+    out: &mut PromptOutput,
+) {
+    if let Some(row) = current {
+        let margin = egui::Margin {
+            left: INSET_X,
+            right: INSET_X,
+            top: 4,
+            bottom: 0,
+        };
+        egui::Frame::new().inner_margin(margin).show(ui, |ui| {
+            render_history_row(ui, th, row, state);
+            // The two non-wrap kinds each offer a TTL grant above the
+            // decision row; a wrap ask's "remember" lives in that row's
+            // Approve instead.
+            if row.status == super::proto::RowStatus::Awaiting {
+                match &row.representative.subject {
+                    AskSubject::SshSign(_) => {
+                        render_ssh_session_grants(ui, th, row, actions_out);
+                    }
+                    AskSubject::ScopedAgent(_) => {
+                        render_agent_session_grant(ui, th, row, actions_out);
+                    }
+                    AskSubject::Wrap(_) => {}
+                }
+            }
+        });
+    }
+    render_footer(ui, th, current, snapshot, state, actions_out, out);
+}
+
+/// How tall the decision band will come out, by laying it out and looking.
 ///
 /// This is a *sizing pass*, the same device [`egui::Area`] uses to place a
-/// popup whose size it has never seen: the row is drawn into a child `Ui`
-/// built [`egui::UiBuilder::invisible`], which turns every shape the arm
-/// paints into a `Shape::Noop` and disables its widgets, so nothing lands
-/// in the frame's output, nothing hovers and nothing can be clicked. What
-/// survives is the one thing we came for — the `min_rect` the arm's
-/// content grew to, margins included.
+/// popup whose size it has never seen: the band is drawn into a child `Ui`
+/// built [`egui::UiBuilder::invisible`], which turns every shape it paints
+/// into a `Shape::Noop` and disables its widgets, so nothing lands in the
+/// frame's output, nothing hovers and nothing can be clicked. What survives
+/// is the one thing we came for — the `min_rect` the content grew to, margins
+/// included.
 ///
 /// It is laid out against the whole window rather than a guess at the
-/// band, because width is what the arm's content is actually sensitive to
+/// band, because width is what the content is actually sensitive to
 /// (Windows splits the available width between two buttons, GNOME centers
 /// its meta line in it) and an unconstrained height is what lets the
 /// content report its natural one. The decisions and the manager hand-off
 /// go to scratch buffers that are dropped on return: a disabled widget
 /// cannot report a click, and this makes it impossible for one to be
 /// counted twice even if that ever changed.
-fn measure_footer(
+fn measure_decision_band(
     ui: &mut egui::Ui,
     th: &Theme,
     current: Option<&QueueRow>,
@@ -1113,11 +1256,11 @@ fn measure_footer(
     let mut scratch_out = PromptOutput::default();
     let mut probe = ui.new_child(
         egui::UiBuilder::new()
-            .id_salt("prompt-footer-measure")
+            .id_salt("prompt-band-measure")
             .max_rect(full)
             .invisible(),
     );
-    render_footer(
+    render_decision_band(
         &mut probe,
         th,
         current,
@@ -1493,7 +1636,15 @@ fn gnome_response(
 
 /// Kept for future use by the resize sweep fixture; the prompt's
 /// minimum sensible size.
-pub const PROMPT_DEFAULT_SIZE: [f32; 2] = [500.0, 470.0];
+///
+/// The height grew with the pinned decision band. HISTORY used to be the
+/// evidence well's last row and shared the body's scroll with it; now it sits
+/// below the split in a block of its own, so a window of the old height
+/// showed one fewer row of ancestry than it used to. Pinning what the user
+/// decides with is meant to cost the requester's evidence nothing, and a
+/// window that gives back exactly the height the band took is what makes that
+/// true.
+pub const PROMPT_DEFAULT_SIZE: [f32; 2] = [500.0, 510.0];
 
 /// Small helper the child uses to time repaints for "Ns ago" labels.
 pub fn age_label(age: Duration) -> String {
@@ -1580,5 +1731,287 @@ mod tests {
         let mut c = caller(7, "zsh");
         c.command = "zsh".to_owned();
         assert_eq!(caller_overflow_summary(&[c]), "zsh (pid 7)");
+    }
+
+    // ── The viewport property ────────────────────────────────────────────
+    //
+    // *Nothing a caller controls may move a decision control out of the
+    // initial viewport.*
+    //
+    // This is the A4 shape — "make the prompt say less than it appears to" —
+    // and the caller chain is one lever for it among several. Capping the
+    // chain narrows the lever; it does not close the shape, because the argv
+    // column, the secret set and the cwd are all caller-influenced too. What
+    // closes it is structural: the decision controls are laid out in a band
+    // the scrolling body cannot reach.
+    //
+    // The tests below lay the real `render_prompt_panel` out on a plain
+    // `egui::Context` at the production viewport size and compare a benign
+    // ask against the most hostile one the wire admits. If the two agree on
+    // where every control landed, no content between them moved anything.
+
+    use super::super::proto::{
+        Ask, AskSubject, DedupeKey, RowStatus, SecretAsk, SshAnchorInfo, SshAskInfo, SshSubject,
+        WrapSubject,
+    };
+    use super::super::state::{QueueRow, QueueSnapshot};
+
+    /// Every string in the prompt that the user must be able to read *before*
+    /// deciding: the two decisions, the two SSH grants, and the label over
+    /// secreq's own record of what this caller did last time.
+    const DECISION_CONTROLS: &[&str] = &[
+        "Approve",
+        "Deny",
+        "Approve for 30 min",
+        "All keys for 30 min",
+        "HISTORY",
+    ];
+
+    fn ssh_row(callers: Vec<Caller>, truncated: bool, cwd: &str) -> QueueRow {
+        let anchor = callers.last().map(|c| SshAnchorInfo {
+            name: c.name.clone(),
+            pid: c.pid,
+        });
+        let key = DedupeKey {
+            wrap: "ssh:github".to_owned(),
+            ppid: callers.first().map_or(0, |c| c.pid),
+            parent_start_time: 0,
+            subject_digest: None,
+        };
+        QueueRow {
+            key: key.clone(),
+            representative: Ask {
+                command: vec!["ssh-sign github".to_owned()],
+                dedupe_key: key,
+                subject: AskSubject::SshSign(SshSubject {
+                    cwd: cwd.to_owned(),
+                    callers,
+                    callers_truncated: truncated,
+                    info: SshAskInfo {
+                        key_id: "github".to_owned(),
+                        fingerprint: "SHA256:Nh0Me49Zh9fDw/VYUfq43IJmI1T+XrjiYONPND8GzaM"
+                            .to_owned(),
+                        reason: Some("git pushes to github.com".to_owned()),
+                        anchor,
+                    },
+                }),
+            },
+            waiter_count: 1,
+            first_seen: std::time::Instant::now(),
+            status: RowStatus::Awaiting,
+        }
+    }
+
+    fn wrap_row(callers: Vec<Caller>, truncated: bool, secrets: Vec<SecretAsk>) -> QueueRow {
+        let key = DedupeKey {
+            wrap: "npm".to_owned(),
+            ppid: callers.first().map_or(0, |c| c.pid),
+            parent_start_time: 0,
+            subject_digest: None,
+        };
+        QueueRow {
+            key: key.clone(),
+            representative: Ask {
+                command: vec!["npm".to_owned(), "publish".to_owned()],
+                dedupe_key: key,
+                subject: AskSubject::Wrap(WrapSubject {
+                    cwd: "/home/dev/repos/acme".to_owned(),
+                    callers,
+                    callers_truncated: truncated,
+                    secrets,
+                    providers: std::collections::HashMap::new(),
+                    allow_remember: true,
+                    nested_run: false,
+                    ignore_remembered: false,
+                }),
+            },
+            waiter_count: 1,
+            first_seen: std::time::Instant::now(),
+            status: RowStatus::Awaiting,
+        }
+    }
+
+    fn secret(name: &str) -> SecretAsk {
+        SecretAsk {
+            name: name.to_owned(),
+            provider: "op".to_owned(),
+            locator: format!("op://Dev/npm/{name}"),
+            default: None,
+            description: None,
+            reason: None,
+            requested_by: vec![],
+        }
+    }
+
+    /// The worst chain the wire admits: the walk's full 16 frames, each with
+    /// an argv at `provenance::MAX_DISPLAY_CHARS`, and the walk itself
+    /// reporting that it stopped short — so the tree draws both elisions on
+    /// top of six full-width rows.
+    fn hostile_chain() -> Vec<Caller> {
+        (0..16)
+            .map(|i| Caller {
+                pid: 9000 + i,
+                name: "n".repeat(40),
+                command: format!("{} {}", "n".repeat(40), "A".repeat(300)),
+                exe: None,
+                start_time: 0,
+            })
+            .collect()
+    }
+
+    /// Lay the prompt out at the production viewport and return where every
+    /// painted text run landed, keyed by its string.
+    ///
+    /// Keyed by text because that is the only stable name a widget has here:
+    /// egui ids are positional and would change for the very reason this test
+    /// exists. Every string in [`DECISION_CONTROLS`] is unique on the surface.
+    fn control_positions(row: QueueRow) -> std::collections::BTreeMap<String, egui::Pos2> {
+        let size = egui::vec2(PROMPT_DEFAULT_SIZE[0], PROMPT_DEFAULT_SIZE[1]);
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+            ..Default::default()
+        };
+        let snapshot = QueueSnapshot { entries: vec![row] };
+        let mut state = PromptWindowState::new();
+
+        // Twice: egui settles container sizes on the pass after first sight,
+        // and a one-shot capture records the unsettled frame. Same reason the
+        // screenshot harness's layout capture runs two passes.
+        let mut output = None;
+        for _ in 0..2 {
+            output = Some(ctx.run_ui(input.clone(), |ui| {
+                let mut actions = Vec::new();
+                let panel_ctx = ui.ctx().clone();
+                render_prompt_panel(&panel_ctx, ui, &snapshot, None, &mut state, &mut actions);
+            }));
+        }
+
+        let mut found = std::collections::BTreeMap::new();
+        for clipped in &output.expect("two layout passes ran").shapes {
+            collect_text(&clipped.shape, &mut found);
+        }
+        found
+    }
+
+    fn collect_text(shape: &egui::Shape, out: &mut std::collections::BTreeMap<String, egui::Pos2>) {
+        match shape {
+            egui::Shape::Text(text) => {
+                out.insert(text.galley.text().to_owned(), text.pos);
+            }
+            egui::Shape::Vec(inner) => {
+                for s in inner {
+                    collect_text(s, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The property, stated directly: swap the most hostile ask the wire
+    /// admits in for a benign one and every decision control stays exactly
+    /// where it was.
+    ///
+    /// Before the decision band was pinned, a deep chain scrolled `HISTORY`
+    /// and both grant buttons off the bottom of the prompt window — the
+    /// `29-ssh-session-anchor` fixture had to give up its `IN` row to fit
+    /// them, which is the bug demonstrating itself inside published
+    /// documentation.
+    #[test]
+    fn a_hostile_ask_cannot_move_a_decision_control() {
+        let benign = control_positions(ssh_row(
+            vec![caller(7926, "zsh"), caller(8120, "git")],
+            false,
+            "/home/dev/repos/acme",
+        ));
+        let hostile = control_positions(ssh_row(hostile_chain(), true, "/home/dev/repos/acme"));
+
+        for label in DECISION_CONTROLS {
+            let (a, b) = (benign.get(*label), hostile.get(*label));
+            assert!(a.is_some(), "benign prompt painted no {label:?}");
+            assert_eq!(
+                a, b,
+                "{label:?} moved when the caller chain grew: {a:?} → {b:?}"
+            );
+        }
+    }
+
+    /// The same property from the other side: wherever the controls landed,
+    /// they landed *on screen*. Equality alone would be satisfied by two
+    /// prompts that both put Approve below the fold.
+    #[test]
+    fn every_decision_control_lands_inside_the_initial_viewport() {
+        let hostile = control_positions(ssh_row(hostile_chain(), true, "/home/dev/repos/acme"));
+        for label in DECISION_CONTROLS {
+            let pos = hostile.get(*label).unwrap_or_else(|| {
+                panic!("the prompt painted no {label:?} at all");
+            });
+            assert!(
+                pos.y >= 0.0 && pos.y < PROMPT_DEFAULT_SIZE[1],
+                "{label:?} was painted at y={} in a {}pt window",
+                pos.y,
+                PROMPT_DEFAULT_SIZE[1],
+            );
+        }
+    }
+
+    /// The row the walk's ceiling is now allowed to draw. Without it the
+    /// prompt's topmost frame is the frame the walk happened to stop on, drawn
+    /// exactly like a real root — so a caller sixteen deep in its own ancestry
+    /// picks which process the user reads as the origin.
+    #[test]
+    fn a_walk_that_stopped_short_says_so_above_the_outermost_frame() {
+        let whole = control_positions(wrap_row(
+            (0..16).map(|i| caller(9000 + i, "node")).collect(),
+            false,
+            vec![secret("NPM_TOKEN")],
+        ));
+        assert!(
+            !whole.contains_key("\u{2026} more above"),
+            "a chain the walk saw all of must not claim there is more"
+        );
+
+        let clipped = control_positions(wrap_row(
+            (0..16).map(|i| caller(9000 + i, "node")).collect(),
+            true,
+            vec![secret("NPM_TOKEN")],
+        ));
+        let pos = clipped
+            .get("\u{2026} more above")
+            .expect("a truncated walk must say so");
+        // Above every frame the tree drew: the missing ancestors would have
+        // been outside the outermost one, and that is where the gap belongs.
+        let topmost_frame = clipped.get("node").expect("the tree drew its frames").y;
+        assert!(
+            pos.y < topmost_frame,
+            "the unwalked row landed at y={} but the tree starts at y={topmost_frame}",
+            pos.y,
+        );
+    }
+
+    /// A wrap ask has no grant buttons, so its whole decision surface is
+    /// `HISTORY` plus the footer — and a big secret set is a second lever on
+    /// the same body. Covered separately because the two ask kinds reserve
+    /// different amounts of band and only one of them has grants to displace.
+    #[test]
+    fn a_wraps_secret_set_cannot_move_a_decision_control_either() {
+        let benign = control_positions(wrap_row(
+            vec![caller(7926, "zsh")],
+            false,
+            vec![secret("NPM_TOKEN")],
+        ));
+        let hostile = control_positions(wrap_row(
+            hostile_chain(),
+            true,
+            (0..40).map(|i| secret(&format!("TOKEN_{i}"))).collect(),
+        ));
+
+        for label in ["Approve", "Deny", "HISTORY"] {
+            assert_eq!(
+                benign.get(label),
+                hostile.get(label),
+                "{label:?} moved when the ask grew"
+            );
+        }
     }
 }
