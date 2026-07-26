@@ -251,10 +251,31 @@ impl GuestChain {
     }
 }
 
-/// One link of a claimed chain: printable characters only, trimmed, capped.
+/// True for a character that renders as nothing, or that reorders what
+/// follows it.
+///
+/// `char::is_control` covers only Unicode category Cc. The bidi overrides and
+/// isolates and the zero-width formatting characters are category Cf, and
+/// they are precisely the ones that make a rendered string differ from the
+/// string that was sent: `U+202E` reverses the text after it, so a guest can
+/// hand the prompt a chain that reads as something other than what it
+/// claimed. The prompt's whole job on that row is showing the reader an
+/// accurate copy of an untrusted string.
+fn is_invisible_or_reordering(c: char) -> bool {
+    c.is_control()
+        || matches!(c,
+            '\u{200B}'..='\u{200F}'   // zero-width space/joiners, LRM, RLM
+            | '\u{202A}'..='\u{202E}' // bidi embeddings and overrides
+            | '\u{2060}'..='\u{2064}' // word joiner, invisible operators
+            | '\u{2066}'..='\u{2069}' // bidi isolates
+            | '\u{FEFF}'              // BOM / zero-width no-break space
+        )
+}
+
+/// One link of a claimed chain: visible characters only, trimmed, capped.
 fn sanitize_link(link: &str) -> String {
     link.chars()
-        .filter(|c| !c.is_control())
+        .filter(|c| !is_invisible_or_reordering(*c))
         .take(MAX_GUEST_CHAIN_LINK_CHARS)
         .collect::<String>()
         .trim()
@@ -1464,6 +1485,29 @@ mod tests {
             !rendered.contains('\n') && !rendered.contains('\r') && !rendered.contains('\x1b'),
             "rendered: {rendered:?}"
         );
+    }
+
+    /// `char::is_control` is Unicode category Cc only. A bidi override is Cf
+    /// and passes it, so `U+202E` used to survive into the prompt and reverse
+    /// the text after it — the row whose one job is showing the reader what
+    /// the guest actually said.
+    #[test]
+    fn bidi_and_zero_width_characters_are_stripped_from_a_claim() {
+        let chain = GuestChain::new(vec![
+            "\u{202E}rekcatta".to_owned(),
+            "pn\u{200B}pm".to_owned(),
+            "np\u{2066}m\u{2069}".to_owned(),
+            "x\u{FEFF}y".to_owned(),
+        ]);
+        let rendered = chain.display().expect("a chain was claimed");
+        for bad in ['\u{202E}', '\u{200B}', '\u{2066}', '\u{2069}', '\u{FEFF}'] {
+            assert!(
+                !rendered.contains(bad),
+                "{bad:?} survived into: {rendered:?}"
+            );
+        }
+        // The visible characters are kept, so the row still says something.
+        assert!(rendered.contains("rekcatta") && rendered.contains("pnpm"));
     }
 
     /// A guest can put ~64 KiB in a frame. A prompt it can flood is a prompt
