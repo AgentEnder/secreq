@@ -3,34 +3,30 @@ $ secreq init
 ┌  secreq init — first-time setup
 │
 ◇  Where should secreq drop PATH shims?
-│  /Users/you/.secreq/shims
+│  ~/.secreq/shims
 │
-◇  /Users/you/.secreq/shims isn't on PATH. I can append this to /Users/you/.zshr
-c (Zsh): ──╮
+◇  Add secreq to your PATH ──────────────────────────────────────────────╮
+│                                                                        │
+│  ~/.secreq/shims isn't on PATH. I can append this to ~/.zshrc (Zsh):   │
+│                                                                        │
+│  # >>> secreq managed PATH (do not edit by hand) >>>                   │
+│  export PATH="$HOME/.secreq/shims:$PATH"                               │
+│  # <<< secreq managed PATH <<<                                         │
+├────────────────────────────────────────────────────────────────────────╯
 │
-           │
-│  # >>> secreq managed PATH (do not edit by hand) >>>
-           │
-│  export PATH="/Users/you/.secreq/shims:$PATH"
-           │
-│  # <<< secreq managed PATH <<<
-           │
-├───────────────────────────────────────────────────────────────────────────────
-───────────╯
-│
-▲  zsh note: writing to .zshrc (which runs after .zprofile, where homebrew lives
-) so our prepend wins on PATH. Non-interactive zsh launched externally (ssh non-
-login, cron) doesn't read .zshrc — children of your interactive shell inherit PA
-TH from it though, so npm postinstalls and the like still see the shim.
+▲  zsh note: writing to .zshrc (which runs after .zprofile, where homebrew
+│  lives) so our prepend wins on PATH. Non-interactive zsh launched externally
+│  (ssh non-login, cron) doesn't read .zshrc — children of your interactive
+│  shell inherit PATH from it though, so npm postinstalls and the like still
+│  see the shim.
 │
 ◇  Append it?
 │  Yes
 │
-◆  wrote /Users/you/.zshrc. Open a new terminal (or `source /Users/you/.zshrc`)
-to pick it up.
+◆  wrote ~/.zshrc. Open a new terminal (or `source ~/.zshrc`) to pick it up.
 │
 ◇  Also set up secreq as your SSH agent?
 │  No
 │
-└  Wrote /Users/you/.secreq/wraps.json5.  Next: `secreq wrap <binary>`, e.g. `se
-creq wrap gh`.
+└  Wrote ~/.secreq/wraps.json5. Next: `secreq wrap <binary>`, e.g. `secreq
+wrap gh`.

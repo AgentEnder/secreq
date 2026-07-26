@@ -1,0 +1,84 @@
+{
+  "caption": "The day after setup. <code>gh</code> is a shim, so the command stops and waits while secreq asks you — and the moment you approve, the real <code>gh</code> runs with the token already in its environment. Nothing was exported, and nothing stayed behind.",
+  "cols": 80,
+  "command": "gh repo list",
+  "id": "run-gh",
+  "steps": [
+    {
+      "action": "show",
+      "id": "02-single-pending",
+      "kind": "gui"
+    },
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "t": "⠋ secreq: waiting for approval of `gh` — approve in the popup window"
+          }
+        ]
+      ]
+    },
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "t": "⠙ secreq: waiting for approval of `gh` — approve in the popup window"
+          }
+        ]
+      ]
+    },
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "t": "⠹ secreq: waiting for approval of `gh` — approve in the popup window"
+          }
+        ]
+      ]
+    },
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "t": "⠸ secreq: waiting for approval of `gh` — approve in the popup window"
+          }
+        ]
+      ]
+    },
+    {
+      "action": "hide",
+      "id": "02-single-pending",
+      "kind": "gui"
+    },
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "t": "Showing 3 of 3 repositories in @you"
+          }
+        ],
+        [],
+        [
+          {
+            "t": "you/secreq      consent for secrets on your machine  public   1h"
+          }
+        ],
+        [
+          {
+            "t": "you/dotfiles    shell, editor, and all the rest      private  3d"
+          }
+        ],
+        [
+          {
+            "t": "you/notes       a wiki that is really just files     private  2w"
+          }
+        ]
+      ]
+    }
+  ]
+}

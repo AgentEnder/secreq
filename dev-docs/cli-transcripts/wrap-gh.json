@@ -1614,12 +1614,12 @@
         ],
         [
           {
-            "t": "  config: /Users/you/.secreq/wraps.json5"
+            "t": "  config: ~/.secreq/wraps.json5"
           }
         ],
         [
           {
-            "t": "  shim: /Users/you/.secreq/shims/gh"
+            "t": "  shim: ~/.secreq/shims/gh"
           }
         ]
       ]

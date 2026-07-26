@@ -1,0 +1,7 @@
+$ gh repo list
+
+Showing 3 of 3 repositories in @you
+
+you/secreq      consent for secrets on your machine  public   1h
+you/dotfiles    shell, editor, and all the rest      private  3d
+you/notes       a wiki that is really just files     private  2w

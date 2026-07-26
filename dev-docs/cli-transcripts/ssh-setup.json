@@ -420,11 +420,44 @@
             "t": "◇"
           },
           {
-            "t": "  I'll write this in /Users/you/.ssh/config: "
+            "t": "  I'll write your SSH config "
           },
           {
             "f": "8",
-            "t": "────────────────╮"
+            "t": "────────────────────────────────╮"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "                                                             "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "In ~/.ssh/config:"
+          },
+          {
+            "t": "                                          "
+          },
+          {
+            "f": "8",
+            "t": "│"
           }
         ],
         [
@@ -490,10 +523,10 @@
           },
           {
             "s": 2,
-            "t": "    IdentityAgent \"/Users/you/.secreq/run/agent.sock\""
+            "t": "    IdentityAgent \"~/.secreq/run/agent.sock\""
           },
           {
-            "t": "      "
+            "t": "               "
           },
           {
             "f": "8",
@@ -538,12 +571,16 @@
             "t": "▲"
           },
           {
-            "t": "  ssh uses the first IdentityAgent it finds for a host, which is why this block"
+            "t": "  ssh uses the first IdentityAgent it finds for a host, which is why this"
           }
         ],
         [
           {
-            "t": " is prepended above your existing ~/.ssh/config."
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  block is prepended above your existing ~/.ssh/config."
           }
         ],
         [
@@ -708,11 +745,44 @@
             "t": "◇"
           },
           {
-            "t": "  I'll write this in /Users/you/.ssh/config: "
+            "t": "  I'll write your SSH config "
           },
           {
             "f": "8",
-            "t": "────────────────╮"
+            "t": "────────────────────────────────╮"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "                                                             "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "In ~/.ssh/config:"
+          },
+          {
+            "t": "                                          "
+          },
+          {
+            "f": "8",
+            "t": "│"
           }
         ],
         [
@@ -778,10 +848,10 @@
           },
           {
             "s": 2,
-            "t": "    IdentityAgent \"/Users/you/.secreq/run/agent.sock\""
+            "t": "    IdentityAgent \"~/.secreq/run/agent.sock\""
           },
           {
-            "t": "      "
+            "t": "               "
           },
           {
             "f": "8",
@@ -826,12 +896,16 @@
             "t": "▲"
           },
           {
-            "t": "  ssh uses the first IdentityAgent it finds for a host, which is why this block"
+            "t": "  ssh uses the first IdentityAgent it finds for a host, which is why this"
           }
         ],
         [
           {
-            "t": " is prepended above your existing ~/.ssh/config."
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  block is prepended above your existing ~/.ssh/config."
           }
         ],
         [
@@ -874,7 +948,7 @@
             "t": "◆"
           },
           {
-            "t": "  wrote /Users/you/.ssh/config."
+            "t": "  wrote ~/.ssh/config."
           }
         ],
         [
@@ -889,17 +963,25 @@
             "t": "●"
           },
           {
-            "t": "  secreq's daemon must be running to serve keys — step 2 (or `secreq daemon ins"
+            "t": "  secreq's daemon must be running to serve keys — step 2 (or `secreq daemon"
           }
         ],
         [
           {
-            "t": "tall`) sets it to start at login. New shells / SSH sessions pick up the socket;"
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  install`) sets it to start at login. New shells / SSH sessions pick up the"
           }
         ],
         [
           {
-            "t": "restart your shell or run `exec $SHELL`."
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  socket; restart your shell or run `exec $SHELL`."
           }
         ],
         [
@@ -914,12 +996,16 @@
             "t": "●"
           },
           {
-            "t": "  Each identity's `private_key` reference must resolve to an OpenSSH private ke"
+            "t": "  Each identity's `private_key` reference must resolve to an OpenSSH private"
           }
         ],
         [
           {
-            "t": "y, e.g. `op read \"op://Vault/My Key/private key\"`."
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  key, e.g. `op read \"op://Vault/My Key/private key\"`."
           }
         ],
         [
@@ -1084,11 +1170,44 @@
             "t": "◇"
           },
           {
-            "t": "  I'll write this in /Users/you/.ssh/config: "
+            "t": "  I'll write your SSH config "
           },
           {
             "f": "8",
-            "t": "────────────────╮"
+            "t": "────────────────────────────────╮"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "                                                             "
+          },
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  "
+          },
+          {
+            "s": 2,
+            "t": "In ~/.ssh/config:"
+          },
+          {
+            "t": "                                          "
+          },
+          {
+            "f": "8",
+            "t": "│"
           }
         ],
         [
@@ -1154,10 +1273,10 @@
           },
           {
             "s": 2,
-            "t": "    IdentityAgent \"/Users/you/.secreq/run/agent.sock\""
+            "t": "    IdentityAgent \"~/.secreq/run/agent.sock\""
           },
           {
-            "t": "      "
+            "t": "               "
           },
           {
             "f": "8",
@@ -1202,12 +1321,16 @@
             "t": "▲"
           },
           {
-            "t": "  ssh uses the first IdentityAgent it finds for a host, which is why this block"
+            "t": "  ssh uses the first IdentityAgent it finds for a host, which is why this"
           }
         ],
         [
           {
-            "t": " is prepended above your existing ~/.ssh/config."
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  block is prepended above your existing ~/.ssh/config."
           }
         ],
         [
@@ -1250,7 +1373,7 @@
             "t": "◆"
           },
           {
-            "t": "  wrote /Users/you/.ssh/config."
+            "t": "  wrote ~/.ssh/config."
           }
         ],
         [
@@ -1265,17 +1388,25 @@
             "t": "●"
           },
           {
-            "t": "  secreq's daemon must be running to serve keys — step 2 (or `secreq daemon ins"
+            "t": "  secreq's daemon must be running to serve keys — step 2 (or `secreq daemon"
           }
         ],
         [
           {
-            "t": "tall`) sets it to start at login. New shells / SSH sessions pick up the socket;"
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  install`) sets it to start at login. New shells / SSH sessions pick up the"
           }
         ],
         [
           {
-            "t": "restart your shell or run `exec $SHELL`."
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  socket; restart your shell or run `exec $SHELL`."
           }
         ],
         [
@@ -1290,12 +1421,16 @@
             "t": "●"
           },
           {
-            "t": "  Each identity's `private_key` reference must resolve to an OpenSSH private ke"
+            "t": "  Each identity's `private_key` reference must resolve to an OpenSSH private"
           }
         ],
         [
           {
-            "t": "y, e.g. `op read \"op://Vault/My Key/private key\"`."
+            "f": "8",
+            "t": "│"
+          },
+          {
+            "t": "  key, e.g. `op read \"op://Vault/My Key/private key\"`."
           }
         ],
         [

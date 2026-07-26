@@ -23,5 +23,5 @@ $ secreq wrap gh
 │  GitHub API access
 │
 └  Wrapped `gh`.
-  config: /Users/you/.secreq/wraps.json5
-  shim: /Users/you/.secreq/shims/gh
+  config: ~/.secreq/wraps.json5
+  shim: ~/.secreq/shims/gh

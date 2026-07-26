@@ -11,28 +11,30 @@ $ secreq ssh setup
 ◇  How should SSH find the secreq agent?
 │  Modify ~/.ssh/config (IdentityAgent)
 │
-◇  I'll write this in /Users/you/.ssh/config: ────────────────╮
+◇  I'll write your SSH config ────────────────────────────────╮
+│                                                             │
+│  In ~/.ssh/config:                                          │
 │                                                             │
 │  # >>> secreq managed SSH agent (do not edit by hand) >>>   │
 │  Host *                                                     │
-│      IdentityAgent "/Users/you/.secreq/run/agent.sock"      │
+│      IdentityAgent "~/.secreq/run/agent.sock"               │
 │  # <<< secreq managed SSH agent <<<                         │
 ├─────────────────────────────────────────────────────────────╯
 │
-▲  ssh uses the first IdentityAgent it finds for a host, which is why this block
- is prepended above your existing ~/.ssh/config.
+▲  ssh uses the first IdentityAgent it finds for a host, which is why this
+│  block is prepended above your existing ~/.ssh/config.
 │
 ◇  write it?
 │  Yes
 │
-◆  wrote /Users/you/.ssh/config.
+◆  wrote ~/.ssh/config.
 │
-●  secreq's daemon must be running to serve keys — step 2 (or `secreq daemon ins
-tall`) sets it to start at login. New shells / SSH sessions pick up the socket;
-restart your shell or run `exec $SHELL`.
+●  secreq's daemon must be running to serve keys — step 2 (or `secreq daemon
+│  install`) sets it to start at login. New shells / SSH sessions pick up the
+│  socket; restart your shell or run `exec $SHELL`.
 │
-●  Each identity's `private_key` reference must resolve to an OpenSSH private ke
-y, e.g. `op read "op://Vault/My Key/private key"`.
+●  Each identity's `private_key` reference must resolve to an OpenSSH private
+│  key, e.g. `op read "op://Vault/My Key/private key"`.
 │
 ◇  Test that the agent can sign now?
 │  No
