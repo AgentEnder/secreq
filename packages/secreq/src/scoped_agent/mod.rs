@@ -749,7 +749,7 @@ pub fn handle_request(
 /// guest's claim marked as such, and **never the value**.
 ///
 /// The scoped agent is a *client* of the consent daemon, like the wrap
-/// client in `commands.rs` — so it writes its own rows, and this adds no new
+/// client in `commands/run.rs` — so it writes its own rows, and this adds no new
 /// exception to `CLAUDE.md`'s "the daemon never writes audit rows" rule.
 ///
 /// Audit-write failure is non-fatal, mirroring every other audit site: a

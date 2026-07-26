@@ -758,7 +758,7 @@ fn resolve_and_sign(
 ///
 /// An audit-write failure is non-fatal to the sign — we log it and move on,
 /// mirroring the wrap client, which treats `audit::append` errors as
-/// non-fatal (`commands.rs` ignores the `Result`). Failing a sign over an
+/// non-fatal (`commands/run.rs` ignores the `Result`). Failing a sign over an
 /// audit-log write error would be a worse outcome than a missing row.
 fn audit_sign(
     identity: &PreparedIdentity,

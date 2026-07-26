@@ -444,7 +444,7 @@ pub fn badge_clear_color() -> [f32; 4] {
 // ── Audit history cache ──────────────────────────────────────────────────
 //
 // The daemon never writes the audit log (clients do, post-decision in
-// `commands.rs`), so the cache is a pure read. We poll on mtime to pick up
+// `commands/run.rs`), so the cache is a pure read. We poll on mtime to pick up
 // entries from sibling client processes between paints — cheaper than a
 // full reparse, and good enough since "history" is only consulted while
 // the window is visible.
