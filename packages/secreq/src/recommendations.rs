@@ -766,7 +766,13 @@ mod tests {
             ),
         ];
         let s = &suggest(&entries, &[], now)[0];
-        assert_eq!(s.cwd.as_deref(), Some("/Users/x/repos/"));
+        // No trailing slash: the prefix is built segment-wise, so it always
+        // ends at a directory boundary already. The slash used to be
+        // load-bearing — it was the only thing stopping the byte prefix
+        // `/Users/x/repos` from also matching `/Users/x/repository` — but
+        // `Pattern::matches_path_prefix` now enforces that structurally, and
+        // treats the two spellings identically.
+        assert_eq!(s.cwd.as_deref(), Some("/Users/x/repos"));
     }
 
     // ── trained_secrets union ───────────────────────────────────

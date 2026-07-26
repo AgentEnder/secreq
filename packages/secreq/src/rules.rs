@@ -310,7 +310,11 @@ pub fn load_rule_module(
 ///   what's reflected in `name` and `command`. Literal = substring;
 ///   glob = full pattern.
 /// - `cwd`: the requesting process's working directory,
-///   `ask.cwd`. Literal = prefix; glob = full pattern.
+///   `ask.cwd`. Literal = **path-segment-aware** prefix (`/Users/me/oss`
+///   matches `/Users/me/oss` and `/Users/me/oss/repo`, but **not**
+///   `/Users/me/ossuary`); a trailing `/` on the pattern is optional. Glob =
+///   full pattern. Unlike `argv`, which prefixes raw bytes, a path prefix that
+///   stops mid-segment names no directory and would silently widen the rule.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RuleMatch {
     pub wrap: String,
@@ -363,12 +367,47 @@ impl Pattern {
         &self.raw
     }
 
-    /// Match for argv / cwd fields. Literal = prefix; glob = full
-    /// pattern match.
+    /// Match for the argv field. Literal = prefix; glob = full pattern
+    /// match.
+    ///
+    /// Raw byte prefixing is correct here and deliberate: `gh api` should
+    /// match `gh api --get /repos/x`, and argv has no segment structure to
+    /// respect. Paths do — see [`Pattern::matches_path_prefix`].
     pub fn matches_prefix(&self, s: &str) -> bool {
         match &self.kind {
             PatternKind::Literal => s.starts_with(&self.raw),
             PatternKind::Glob(g) => g.matches(s),
+        }
+    }
+
+    /// Match for the `cwd` field. Literal = **path-segment-aware** prefix;
+    /// glob = full pattern match.
+    ///
+    /// A literal here must match whole path segments. Plain `starts_with`
+    /// would let `cwd: "/Users/me/oss"` match `/Users/me/ossuary` and
+    /// `/Users/me/oss-scratch` — directories the user never named, matched by
+    /// a rule they believed was scoped to one checkout. So a literal matches
+    /// only when it covers `s` exactly or stops on a `/` boundary.
+    ///
+    /// A trailing `/` on the pattern is tolerated so a hand-written
+    /// `~/oss/` and `~/oss` mean the same thing; without this they would
+    /// differ, and the one that reads as "more explicitly a directory" would
+    /// be the one that failed to match the directory itself.
+    pub fn matches_path_prefix(&self, s: &str) -> bool {
+        match &self.kind {
+            PatternKind::Glob(g) => g.matches(s),
+            PatternKind::Literal => {
+                let want = self.raw.strip_suffix('/').unwrap_or(&self.raw);
+                // An empty pattern (or bare "/") constrains nothing beyond
+                // "is a path", which every cwd is.
+                if want.is_empty() {
+                    return true;
+                }
+                let Some(rest) = s.strip_prefix(want) else {
+                    return false;
+                };
+                rest.is_empty() || rest.starts_with('/')
+            }
         }
     }
 
@@ -775,7 +814,7 @@ fn match_clause_matches(m: &RuleMatch, ctx: &EvalCtx) -> bool {
         }
     }
     if let Some(p) = &m.cwd {
-        if !p.matches_prefix(ctx.cwd) {
+        if !p.matches_path_prefix(ctx.cwd) {
             return false;
         }
     }
@@ -1697,5 +1736,39 @@ mod tests {
             ids.insert(new_rule_id());
         }
         assert_eq!(ids.len(), 1000);
+    }
+
+    /// A literal `cwd` must match whole path segments. Plain `starts_with`
+    /// let a rule the user scoped to one checkout also fire from any sibling
+    /// directory sharing that name as a byte prefix.
+    #[test]
+    fn literal_cwd_matches_whole_segments_only() {
+        let p = Pattern::parse("/Users/me/oss");
+        assert!(p.matches_path_prefix("/Users/me/oss"));
+        assert!(p.matches_path_prefix("/Users/me/oss/repo"));
+        assert!(!p.matches_path_prefix("/Users/me/ossuary"));
+        assert!(!p.matches_path_prefix("/Users/me/oss-scratch"));
+        assert!(!p.matches_path_prefix("/Users/me/other"));
+    }
+
+    /// `~/oss/` and `~/oss` must mean the same thing — otherwise the spelling
+    /// that reads as "explicitly a directory" is the one that fails to match
+    /// the directory itself.
+    #[test]
+    fn a_trailing_slash_on_a_cwd_pattern_is_optional() {
+        let with = Pattern::parse("/Users/me/oss/");
+        assert!(with.matches_path_prefix("/Users/me/oss"));
+        assert!(with.matches_path_prefix("/Users/me/oss/repo"));
+        assert!(!with.matches_path_prefix("/Users/me/ossuary"));
+    }
+
+    /// argv keeps raw-prefix semantics: `gh api` must still match
+    /// `gh api --get /repos/x`, which has no segment structure to respect.
+    #[test]
+    fn argv_prefix_stays_byte_wise() {
+        let p = Pattern::parse("gh api");
+        assert!(p.matches_prefix("gh api --get /repos/x"));
+        assert!(p.matches_prefix("gh api"));
+        assert!(!p.matches_prefix("gh pr list"));
     }
 }
