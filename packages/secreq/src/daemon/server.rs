@@ -944,8 +944,11 @@ fn handle_ask(ask: Ask, state: SharedState) -> AskDisposition {
         let guard = state.lock().expect("state mutex");
         let cache = guard.secret_cache_arc();
         let in_flight = guard.in_flight_arc();
+        // Checked under the lock: the answer depends on what this session was
+        // consented for, which lives in `State`, not in the value cache.
+        let may_skip = guard.nested_run_may_skip_window(&ask);
         drop(guard);
-        if super::state::nested_run_fully_cached(&ask, &cache) {
+        if may_skip {
             let reply = resolve_approved_with_pending(
                 &ask,
                 crate::consent::Decision::ApproveCached,
@@ -1019,15 +1022,6 @@ fn handle_ask(ask: Ask, state: SharedState) -> AskDisposition {
 /// killed before the user decides closes its socket — we notice the EOF and
 /// withdraw the ask (reaping the card + writing an `abandoned` audit row)
 /// instead of leaving it orphaned in the queue.
-/// The `dedupe_key.wrap` a `secreq run` ask carries. Its
-/// `(ppid, parent_start_time)` is a *session* identity — the outer run's pid
-/// plus a random nonce, propagated to descendants through
-/// [`crate::RUN_SESSION_ENV`] — not a process identity, so
-/// [`adopt_peer_provenance`] leaves it alone. Nothing keys the approvals
-/// cache on it: `run` asks set `allow_remember: false`, so no `ApprovalEntry`
-/// with this wrap is ever stored, and a lookup needs an entry to hit.
-const RUN_SESSION_WRAP: &str = "run";
-
 /// Replace the client-supplied provenance on `ask` with a chain the daemon
 /// walks itself from the socket peer.
 ///
@@ -1066,7 +1060,17 @@ fn adopt_peer_provenance(ask: &mut Ask, stream: &UnixStream) -> Result<()> {
     // The dedupe key's process half keys the approvals cache, so a forged one
     // is a cache-scope escape, not just a display lie. Re-derive it from the
     // same walk that produced the chain.
-    if ask.dedupe_key.wrap != RUN_SESSION_WRAP {
+    //
+    // A `run` ask is the exception: its `(ppid, parent_start_time)` is a
+    // *session* identity — the outer run's pid plus a random nonce, shared
+    // across the tree — not a process identity, and re-deriving it per
+    // process would dissolve the session into one entry per nested run.
+    // Nothing keys the approvals cache on it (`run` sets
+    // `allow_remember: false`, so no `ApprovalEntry` under that wrap is ever
+    // stored, and a lookup needs an entry to hit), and what a session may be
+    // served without prompting is bounded separately by
+    // `State::nested_run_may_skip_window`.
+    if ask.dedupe_key.wrap != super::state::RUN_SESSION_WRAP {
         ask.dedupe_key.ppid = parent.pid;
         ask.dedupe_key.parent_start_time = parent.start_time;
     }
@@ -1834,7 +1838,7 @@ mod tests {
     #[test]
     fn a_run_session_dedupe_key_survives_but_its_chain_does_not() {
         let (server_conn, _client) = connected_pair();
-        let mut ask = forged_ask(RUN_SESSION_WRAP);
+        let mut ask = forged_ask(super::super::state::RUN_SESSION_WRAP);
 
         adopt_peer_provenance(&mut ask, &server_conn).expect("provenance");
 

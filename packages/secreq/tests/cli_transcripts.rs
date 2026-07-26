@@ -137,6 +137,17 @@ enum Step {
     },
     /// Text the user typed, and the cell it landed in.
     Type { text: String, row: u16, col: u16 },
+    /// Text the user pasted, and the cell it landed in.
+    ///
+    /// Indistinguishable from [`Step::Type`] to the pty — a paste is bytes
+    /// arriving quickly — so the distinction has to be recorded rather than
+    /// inferred. It is worth recording because the two are different acts to
+    /// a reader. Nobody types a secret reference: 1Password's "Copy Secret
+    /// Reference" puts `op://Vault/Item/field` on the clipboard and you paste
+    /// it, which is the flow [`provider::normalize_pasted_locator`] exists to
+    /// accept. A recording that types the locator out character by character
+    /// demonstrates a way of working the tool does not expect.
+    Paste { text: String, row: u16, col: u16 },
     /// A bare keypress that moved the session on.
     Key { key: String },
     /// The consent window rose or fell here, and the screenshot fixture
@@ -538,6 +549,30 @@ impl Recorder {
             )
         });
         self.steps.push(Step::Type {
+            text: text.to_owned(),
+            row,
+            col,
+        });
+        self.enter()
+    }
+
+    /// Paste text into the prompt on screen, then submit it.
+    ///
+    /// The same write and the same echo-hunt as [`Recorder::type_line`]; a
+    /// paste reaches a pty as bytes like anything else, and the only thing
+    /// separating the two is which one the reader is meant to picture
+    /// themselves doing. See [`Step::Paste`].
+    fn paste_line(&mut self, text: &str) -> &mut Self {
+        self.run.write_bytes(text.as_bytes());
+        self.run.wait_until_settled(SETTLE, STEP_TIMEOUT);
+        let echoed = self.run.screen();
+        let (row, col) = find_on_screen(&echoed, text).unwrap_or_else(|| {
+            panic!(
+                "pasted {text:?} never appeared on screen; screen was:\n{}",
+                echoed.contents()
+            )
+        });
+        self.steps.push(Step::Paste {
             text: text.to_owned(),
             row,
             col,
@@ -1233,8 +1268,13 @@ fn wrap_interactive_inject_secrets() {
         .select_item("op");
     rec.expect("Environment variable name")
         .type_line("GITHUB_TOKEN");
+    // The native reference, pasted, because that is what "Copy Secret
+    // Reference" puts on the clipboard and what `normalize_pasted_locator`
+    // is written to peel. Recording the bare `Personal/GitHub/credential`
+    // showed a reader hand-retyping the interesting part of a string they
+    // already have, and quietly implied the `op://` form would be rejected.
     rec.expect("Locator")
-        .type_line("Personal/GitHub/credential");
+        .paste_line("op://Personal/GitHub/credential");
     rec.expect("Locator resolves").hold(900);
     rec.expect("Add another env var?").enter();
     rec.expect("Reason (shown in consent prompt)")

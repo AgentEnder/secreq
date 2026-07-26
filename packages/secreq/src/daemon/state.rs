@@ -13,7 +13,7 @@
 //! receiver; the UI thread sends through the sender when the user decides
 //! (or when resolution fails after approval).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -123,6 +123,31 @@ struct PendingEntry {
     representative: Ask,
     /// When resolution began — drives the card's "Ns ago" label.
     since: Instant,
+}
+
+/// The fixed `dedupe_key.wrap` every `secreq run` ask carries.
+///
+/// A run ask's `(ppid, parent_start_time)` is a *session* identity — the
+/// outer run's pid plus a random nonce, propagated to descendants through
+/// [`crate::RUN_SESSION_ENV`] — not a process identity.
+pub(super) const RUN_SESSION_WRAP: &str = "run";
+
+/// Which `run` session an ask belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) struct RunSession {
+    pid: u32,
+    nonce: u64,
+}
+
+impl RunSession {
+    /// `Some` when `ask` is a `run` ask, which is the only kind whose dedupe
+    /// key carries a session rather than a process.
+    fn of(ask: &Ask) -> Option<RunSession> {
+        (ask.dedupe_key.wrap == RUN_SESSION_WRAP).then_some(RunSession {
+            pid: ask.dedupe_key.ppid,
+            nonce: ask.dedupe_key.parent_start_time,
+        })
+    }
 }
 
 /// Daemon state. Wrap in `Arc<Mutex<_>>` for sharing.
@@ -273,6 +298,22 @@ pub struct State {
     /// Monotonic source of [`WaiterId`]s. Independent of the subscriber
     /// counters so the id spaces stay grep-distinguishable.
     waiter_next_id: u64,
+    /// What each `run` session has actually been consented for, keyed by
+    /// session and holding `(provider, locator)` pairs.
+    ///
+    /// The nested-run window skip used to be "is it nested, and is the value
+    /// in the cache" — and [`CacheKey`] holds no session, while every run ask
+    /// shares the fixed wrap `"run"`. So one global namespace answered for
+    /// every session that ever ran: a value cached by a 9am deploy satisfied
+    /// a nested ask in an unrelated 10am shell, silently, because both were
+    /// "run". The secret cache has no TTL and the daemon does not idle-exit
+    /// while the SSH agent is on, so the window was machine uptime.
+    ///
+    /// The cache stays global — it is a *value* cache, and re-resolving costs
+    /// a biometric, which is the property it exists for. This records the
+    /// *authorization* separately, so "a secret crosses the consent boundary
+    /// once per run session" is true per session rather than per daemon.
+    run_session_releases: HashMap<RunSession, HashSet<(String, String)>>,
 }
 
 impl Default for State {
@@ -307,6 +348,7 @@ impl Default for State {
             wasm_refusals: Vec::new(),
             rules_loaded_at: None,
             waiter_next_id: 1,
+            run_session_releases: HashMap::new(),
         }
     }
 }
@@ -1123,6 +1165,18 @@ impl State {
             };
             if !self.approvals.contains(&new) {
                 self.approvals.push(new);
+            }
+        }
+
+        // Remember what *this* session was consented for, so a later nested
+        // ask in the same tree can skip the window and one in a different
+        // tree cannot.
+        if decision.approved() {
+            if let Some(session) = RunSession::of(&entry.representative) {
+                let released = self.run_session_releases.entry(session).or_default();
+                for secret in &entry.representative.secrets {
+                    released.insert((secret.provider.clone(), secret.locator.clone()));
+                }
             }
         }
 
@@ -2016,16 +2070,65 @@ pub(super) fn ask_fully_cached(ask: &Ask, cache: &Arc<Mutex<SecretCache>>) -> bo
     })
 }
 
-/// Should a nested `run` be served straight from the secret cache without
-/// showing the consent window? True **only** when the ask is marked
-/// `nested_run` (an inner `run` that detected an ancestor run's session
-/// marker) **and** every value is already cached, so resolution invokes
-/// no provider. An unnested run (`nested_run == false`) or any uncached
-/// secret returns false → the ask prompts. This is the sole window-skip
-/// for `run`: gating it on nesting guarantees a fresh top-level run
-/// always prompts, no matter how warm the cache is.
-pub(super) fn nested_run_fully_cached(ask: &Ask, cache: &Arc<Mutex<SecretCache>>) -> bool {
-    ask.nested_run && ask_fully_cached(ask, cache)
+impl State {
+    /// May this nested `run` ask be served without showing the window?
+    ///
+    /// Three conditions, and the third is the one that used to be missing:
+    ///
+    /// 1. The client says it is nested (it saw an ancestor run's marker).
+    /// 2. Every value is already cached, so resolving invokes no provider.
+    /// 3. **This session** was consented for every one of those refs.
+    ///
+    /// Without (3) the skip asked only "is the value somewhere in the global
+    /// run cache", which a different session's approval satisfies. A build
+    /// step inside a shell consented for `API_KEY` could pull `PROD_TOKEN`
+    /// out of a deploy that ran an hour earlier, with no prompt and no
+    /// window, and the audit row read `approve+cached`.
+    /// Test hook: record `ask`'s refs as consented under its session, the way
+    /// an approval in `resolve` would.
+    #[cfg(test)]
+    pub(super) fn record_run_release_for_test(&mut self, ask: &Ask) {
+        if let Some(session) = RunSession::of(ask) {
+            let released = self.run_session_releases.entry(session).or_default();
+            for secret in &ask.secrets {
+                released.insert((secret.provider.clone(), secret.locator.clone()));
+            }
+        }
+    }
+
+    /// Test hook: warm the value cache for every ref in `ask`.
+    #[cfg(test)]
+    pub(super) fn put_cached_for_test(&mut self, ask: &Ask, value: &str) {
+        let mut guard = self.secret_cache.lock().expect("secret cache mutex");
+        for secret in &ask.secrets {
+            guard.put(
+                CacheKey {
+                    wrap: ask.dedupe_key.wrap.clone(),
+                    provider: secret.provider.clone(),
+                    locator: secret.locator.clone(),
+                },
+                value,
+            );
+        }
+    }
+
+    pub fn nested_run_may_skip_window(&self, ask: &Ask) -> bool {
+        if !ask.nested_run {
+            return false;
+        }
+        let Some(session) = RunSession::of(ask) else {
+            return false;
+        };
+        let Some(released) = self.run_session_releases.get(&session) else {
+            // Nothing consented under this session yet: the first ask in a
+            // tree always faces the window, however warm the cache is.
+            return false;
+        };
+        let all_released = ask.secrets.iter().all(|s| {
+            released.contains(&(s.provider.clone(), s.locator.clone()))
+        });
+        all_released && ask_fully_cached(ask, &self.secret_cache)
+    }
 }
 
 /// Run [`resolve::resolve_all`], logging its wall-clock cost to
@@ -3132,24 +3235,19 @@ mod tests {
 
     #[test]
     fn nested_run_skips_window_only_when_nested_and_fully_cached() {
-        // The value the ask needs, cached under (wrap="run", fake, x) —
-        // the key `ask_with_secret` produces.
-        let cache = Arc::new(Mutex::new(SecretCache::new()));
-        cache.lock().unwrap().put(
-            CacheKey {
-                wrap: "run".to_owned(),
-                provider: "fake".to_owned(),
-                locator: "x".to_owned(),
-            },
-            "cached-value",
-        );
+        // A session consented for the ask's ref, with the value cached — the
+        // state a nested run legitimately skips the window from.
+        let mut state = State::new();
+        let seed = ask_with_secret("run", &["run", "cmd"], "TOKEN");
+        state.record_run_release_for_test(&seed);
+        state.put_cached_for_test(&seed, "cached-value");
 
         // Unnested run, even fully cached → must NOT skip. This is the
         // load-bearing invariant: a top-level run always prompts.
         let mut unnested = ask_with_secret("run", &["run", "cmd"], "TOKEN");
         unnested.nested_run = false;
         assert!(
-            !nested_run_fully_cached(&unnested, &cache),
+            !state.nested_run_may_skip_window(&unnested),
             "an unnested run must always prompt, even when fully cached"
         );
 
@@ -3157,7 +3255,7 @@ mod tests {
         let mut nested = ask_with_secret("run", &["run", "cmd"], "TOKEN");
         nested.nested_run = true;
         assert!(
-            nested_run_fully_cached(&nested, &cache),
+            state.nested_run_may_skip_window(&nested),
             "a nested, fully-cached run should resolve without prompting"
         );
 
@@ -3177,7 +3275,7 @@ mod tests {
                 requested_by: vec![],
             });
         assert!(
-            !nested_run_fully_cached(&nested_uncached, &cache),
+            !state.nested_run_may_skip_window(&nested_uncached),
             "a nested run with any uncached secret must still prompt"
         );
     }
@@ -4584,5 +4682,72 @@ mod tests {
             state.evaluate_rules_for_ask(&agent_ask).is_none(),
             "a guest ask must be decided by the prompt, never by a rule"
         );
+    }
+
+    /// Build a nested `run` ask belonging to session `(pid, nonce)`.
+    fn nested_run_ask(pid: u32, nonce: u64, provider: &str, locator: &str) -> Ask {
+        let mut ask = ask_with_secret("run", &["./whatever"], "TOKEN");
+        ask.nested_run = true;
+        ask.dedupe_key = DedupeKey {
+            wrap: RUN_SESSION_WRAP.to_owned(),
+            ppid: pid,
+            parent_start_time: nonce,
+            subject_digest: None,
+        };
+        ask.secrets[0].provider = provider.to_owned();
+        ask.secrets[0].locator = locator.to_owned();
+        ask
+    }
+
+    /// The heart of the fix. `CacheKey` holds no session and every run ask
+    /// shares the wrap `"run"`, so one global namespace answered for every
+    /// session that ever ran: a value cached by a 9am deploy satisfied a
+    /// nested ask in an unrelated 10am shell, with no prompt and no window.
+    #[test]
+    fn a_nested_run_cannot_ride_another_sessions_approval() {
+        let mut state = State::new();
+
+        // Session A is consented for the deploy token, and it is cached.
+        let session_a = nested_run_ask(100, 1, "op", "Prod/deploy/token");
+        state.record_run_release_for_test(&session_a);
+        state.put_cached_for_test(&session_a, "value");
+
+        // Session B never asked for it. Same ref, same warm cache.
+        let session_b = nested_run_ask(200, 2, "op", "Prod/deploy/token");
+        assert!(
+            !state.nested_run_may_skip_window(&session_b),
+            "session B must face the window for a ref only session A approved"
+        );
+
+        // Session A itself still skips: that is the feature.
+        assert!(state.nested_run_may_skip_window(&session_a));
+    }
+
+    /// A ref this session was never consented for does not ride the session's
+    /// other approvals either.
+    #[test]
+    fn a_nested_run_cannot_ride_its_own_sessions_other_secret() {
+        let mut state = State::new();
+        let approved = nested_run_ask(100, 1, "op", "Dev/api/key");
+        state.record_run_release_for_test(&approved);
+        state.put_cached_for_test(&approved, "value");
+
+        let other = nested_run_ask(100, 1, "op", "Prod/deploy/token");
+        state.put_cached_for_test(&other, "value");
+        assert!(
+            !state.nested_run_may_skip_window(&other),
+            "a different ref in the same session still needs consent"
+        );
+    }
+
+    /// A top-level run never carries the marker, so it always prompts.
+    #[test]
+    fn an_unnested_run_never_skips_the_window() {
+        let mut state = State::new();
+        let mut ask = nested_run_ask(100, 1, "op", "Dev/api/key");
+        state.record_run_release_for_test(&ask);
+        state.put_cached_for_test(&ask, "value");
+        ask.nested_run = false;
+        assert!(!state.nested_run_may_skip_window(&ask));
     }
 }

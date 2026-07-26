@@ -338,8 +338,12 @@ fn handle_sign(
         );
         return ssh_proto::encode_failure();
     };
-    let anchor_pid = anchor.pid;
-    let anchor_start_time = anchor.start_time;
+    // The consent layer identifies a session by the pair, not by the frame,
+    // so convert once here rather than passing two loose integers down.
+    let anchor = SshAnchor {
+        pid: anchor.pid,
+        start_time: anchor.start_time,
+    };
 
     // The production daemon always supplies state; the listing-only test
     // path doesn't. With no state there is no consent machinery, so fail
@@ -358,8 +362,7 @@ fn handle_sign(
     let decision = match decide_sign(
         state,
         identity,
-        anchor_pid,
-        anchor_start_time,
+        anchor,
         &chain,
         &cwd,
         data,
@@ -399,10 +402,7 @@ fn handle_sign(
             .expect("state mutex")
             .remember_ssh_grant(SshGrant {
                 scope,
-                anchor: SshAnchor {
-                    pid: anchor_pid,
-                    start_time: anchor_start_time,
-                },
+                anchor,
                 expires_at,
             });
     }
@@ -458,8 +458,7 @@ fn handle_sign(
 fn decide_sign(
     state: &SharedState,
     identity: &PreparedIdentity,
-    anchor_pid: u32,
-    anchor_start_time: u64,
+    anchor: crate::consent::SshAnchor,
     chain: &[crate::provenance::Caller],
     cwd: &str,
     data: &[u8],
@@ -469,7 +468,7 @@ fn decide_sign(
     // works headless.
     {
         let mut guard = state.lock().expect("state mutex");
-        if guard.has_ssh_grant(&identity.key_id, anchor_pid, anchor_start_time) {
+        if guard.has_ssh_grant(&identity.key_id, anchor.pid, anchor.start_time) {
             // The audit row for a grant hit is written at the sign outcome
             // (with `decision = ApproveCached`), alongside the approve/deny
             // rows — one audit-write site, fed the decision this returns.
@@ -484,7 +483,7 @@ fn decide_sign(
     // every request), so reload hand-edits here too before evaluating. Lock is
     // held only for the reload + evaluation; we drop it before returning.
     {
-        let ask = sign_ask(identity, anchor_pid, anchor_start_time, chain, cwd, data);
+        let ask = sign_ask(identity, anchor, chain, cwd, data);
         let mut guard = state.lock().expect("state mutex");
         guard.reload_rules_if_changed();
         if let Some(hit) = guard.evaluate_rules_for_ask(&ask) {
@@ -507,8 +506,7 @@ fn decide_sign(
     decide_sign_on_miss(
         state,
         identity,
-        anchor_pid,
-        anchor_start_time,
+        anchor,
         chain,
         cwd,
         data,
@@ -528,8 +526,7 @@ fn decide_sign(
 fn decide_sign_on_miss(
     state: &SharedState,
     identity: &PreparedIdentity,
-    anchor_pid: u32,
-    anchor_start_time: u64,
+    anchor: crate::consent::SshAnchor,
     chain: &[crate::provenance::Caller],
     cwd: &str,
     data: &[u8],
@@ -553,7 +550,7 @@ fn decide_sign_on_miss(
     // Miss → enqueue an Ask and park on the reply channel. Build the Ask so
     // the consent UI and the audit row have the identity, the caller chain,
     // and the anchor scope to render.
-    let ask = sign_ask(identity, anchor_pid, anchor_start_time, chain, cwd, data);
+    let ask = sign_ask(identity, anchor, chain, cwd, data);
     let (tx, rx) = mpsc::channel();
     {
         let mut guard = state.lock().expect("state mutex");
@@ -614,8 +611,7 @@ fn grant_scope_for(decision: Decision, key_id: &str) -> Option<SshGrantScope> {
 /// queue entry.
 fn sign_ask(
     identity: &PreparedIdentity,
-    anchor_pid: u32,
-    anchor_start_time: u64,
+    anchor: crate::consent::SshAnchor,
     chain: &[crate::provenance::Caller],
     cwd: &str,
     data: &[u8],
@@ -638,8 +634,8 @@ fn sign_ask(
         providers: std::collections::HashMap::new(),
         dedupe_key: DedupeKey {
             wrap,
-            ppid: anchor_pid,
-            parent_start_time: anchor_start_time,
+            ppid: anchor.pid,
+            parent_start_time: anchor.start_time,
             // What this ask authorizes is `data`, and `data` appears nowhere
             // else in the key. Without this, two signs for the same key from
             // the same anchor coalesce into one card and one Approve signs
@@ -850,8 +846,10 @@ mod tests {
         let decision = decide_sign_on_miss(
             &state,
             &identity,
-            /* anchor_pid */ 4242,
-            /* anchor_start_time */ 1,
+            SshAnchor {
+                pid: 4242,
+                start_time: 1,
+            },
             &chain,
             /* cwd */ "/home/dev/repos/acme",
             /* data */ b"challenge",
@@ -941,8 +939,10 @@ mod tests {
         let decision = decide_sign(
             &state,
             &identity,
-            /* anchor_pid */ 4242,
-            /* start */ 1,
+            SshAnchor {
+                pid: 4242,
+                start_time: 1,
+            },
             &chain,
             /* cwd */ "/home/dev/repos/acme",
             /* data */ b"challenge",
@@ -979,7 +979,14 @@ mod tests {
         let identity = test_identity("github");
         let chain: Vec<crate::provenance::Caller> = Vec::new();
 
-        let decision = decide_sign(&state, &identity, 4242, 1, &chain, "/home/dev/repos/acme", b"challenge");
+        let decision = decide_sign(
+            &state,
+            &identity,
+            SshAnchor { pid: 4242, start_time: 1 },
+            &chain,
+            "/home/dev/repos/acme",
+            b"challenge",
+        );
 
         assert_eq!(decision, Some(Decision::DenyAuto));
         assert!(
@@ -1073,8 +1080,8 @@ mod tests {
         let identity = test_identity("github");
         let chain: Vec<crate::provenance::Caller> = Vec::new();
 
-        let a = sign_ask(&identity, 4242, 1, &chain, "/repo", b"challenge-one");
-        let b = sign_ask(&identity, 4242, 1, &chain, "/repo", b"challenge-two");
+        let a = sign_ask(&identity, SshAnchor { pid: 4242, start_time: 1 }, &chain, "/repo", b"challenge-one");
+        let b = sign_ask(&identity, SshAnchor { pid: 4242, start_time: 1 }, &chain, "/repo", b"challenge-two");
 
         assert_ne!(
             a.dedupe_key, b.dedupe_key,
@@ -1092,8 +1099,8 @@ mod tests {
         let identity = test_identity("github");
         let chain: Vec<crate::provenance::Caller> = Vec::new();
 
-        let a = sign_ask(&identity, 4242, 1, &chain, "/repo", b"same-challenge");
-        let b = sign_ask(&identity, 4242, 1, &chain, "/repo", b"same-challenge");
+        let a = sign_ask(&identity, SshAnchor { pid: 4242, start_time: 1 }, &chain, "/repo", b"same-challenge");
+        let b = sign_ask(&identity, SshAnchor { pid: 4242, start_time: 1 }, &chain, "/repo", b"same-challenge");
 
         assert_eq!(a.dedupe_key, b.dedupe_key);
     }
@@ -1104,7 +1111,7 @@ mod tests {
     fn the_payload_digest_stays_out_of_the_rule_facing_wrap() {
         let identity = test_identity("github");
         let chain: Vec<crate::provenance::Caller> = Vec::new();
-        let ask = sign_ask(&identity, 4242, 1, &chain, "/repo", b"challenge");
+        let ask = sign_ask(&identity, SshAnchor { pid: 4242, start_time: 1 }, &chain, "/repo", b"challenge");
         assert_eq!(ask.dedupe_key.wrap, format!("ssh:{}", identity.key_id));
     }
 }
