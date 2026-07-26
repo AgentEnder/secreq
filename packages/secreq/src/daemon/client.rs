@@ -64,9 +64,17 @@ pub struct ConsentOutcome {
     pub rule_id: Option<String>,
     pub rule_name: Option<String>,
     pub deny_message: Option<String>,
+    /// On a scoped-agent ask, which local process the daemon saw naming the
+    /// scope — carried back so the agent (a *client*, which writes its own
+    /// audit rows) can record the kernel's answer rather than a description of
+    /// itself. `NotRead` on every other path, including the fail-closed denies
+    /// below, which never reach a daemon.
+    pub declared_by: crate::audit::ScopeDeclarant,
 }
 
 impl ConsentOutcome {
+    /// The fail-closed local deny: no daemon was dialled, no window was shown,
+    /// nothing read a peer.
     pub fn deny() -> ConsentOutcome {
         ConsentOutcome {
             decision: Decision::Deny,
@@ -74,6 +82,7 @@ impl ConsentOutcome {
             rule_id: None,
             rule_name: None,
             deny_message: None,
+            declared_by: crate::audit::ScopeDeclarant::NotRead,
         }
     }
 }
@@ -112,12 +121,17 @@ pub fn request_consent(ask: Ask, show_indicator: bool) -> Result<ConsentOutcome>
             rule_id,
             rule_name,
             deny_message,
+            declared_by,
         } => Ok(ConsentOutcome {
             decision,
             secrets,
             rule_id,
             rule_name,
             deny_message,
+            // Absent on every ask that declared no scope. A scoped-agent ask
+            // always gets an answer, so `NotRead` here means the reply carried
+            // nothing to record, not that the daemon declined to look.
+            declared_by: declared_by.unwrap_or(crate::audit::ScopeDeclarant::NotRead),
         }),
         DaemonMsg::Err { message } => {
             bail!("daemon could not resolve secrets: {message}")

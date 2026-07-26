@@ -1,9 +1,9 @@
 {
   "window": "manager",
-  "caption": "A guest asked for a secret outside its declared scope. The agent refused without prompting you, and the attempt is on the record.",
+  "caption": "A sandbox request records which local process put its scope name on the wire. A genuine request names the <code>secreq agent open</code> you started, at the path you installed it to; the one above it names <code>secreq</code> too, and an executable you did not install. secreq cannot tell the two apart and does not guess — it writes down what the kernel said, so the difference is still there when you come back to it.",
   "variants": {
     "gnome-dark": {
-      "digest": "554b6d053c72c3d1642ab128dd3099e667637f6886d1a1d6ed5e1781249796a2",
+      "digest": "2dd4e17ec455b4d5c8577aa69cd912567c79428bc7a70cb4f01a71bea2ea526b",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#383838ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#303030ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -69,7 +69,7 @@
         },
         {"a":[0.0,45.5],"b":[900.0,45.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#1a1a1a1a"]},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,52.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
-        {"blur":0.0,"clip":[0.0,63.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,66.0,880.0,503.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,63.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,66.0,880.0,378.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
@@ -90,9 +90,9 @@
           "pos": [20.0,90.0],
           "rows": [
             {
-              "rect": [0.0,0.0,227.56,16.0],
+              "rect": [0.0,0.0,138.16,16.0],
               "runs": [
-                {"baseline":13.0,"color":"#ffffffff","family":"monospace","size":13.5,"text":"aws s3 ls s3://prod-backups/","underline":[0.0,"#00000000"],"x":[0.0,227.13]}
+                {"baseline":13.0,"color":"#ffffffff","family":"monospace","size":13.5,"text":"agent:brain-nx-t5","underline":[0.0,"#00000000"],"x":[0.0,138.13]}
               ]
             }
           ],
@@ -106,7 +106,7 @@
             {
               "rect": [-4.0,0.0,0.22,8.0],
               "runs": [
-                {"baseline":6.0,"color":"#ff7b63ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+                {"baseline":6.0,"color":"#8ff0a4ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
               ]
             }
           ],
@@ -118,9 +118,9 @@
           "pos": [870.78,91.5],
           "rows": [
             {
-              "rect": [-33.0,0.0,0.41,13.0],
+              "rect": [-46.0,0.0,0.41,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#ff7b63ff","family":"proportional","size":11.0,"text":"denied","underline":[0.0,"#00000000"],"x":[0.0,33.41]}
+                {"baseline":10.0,"color":"#8ff0a4ff","family":"proportional","size":11.0,"text":"approved","underline":[0.0,"#00000000"],"x":[0.0,46.41]}
               ]
             }
           ],
@@ -146,9 +146,9 @@
           "pos": [20.0,118.0],
           "rows": [
             {
-              "rect": [0.0,0.0,129.91,18.0],
+              "rect": [0.0,0.0,178.38,18.0],
               "runs": [
-                {"baseline":13.0,"color":"#9a9996ff","family":"monospace","size":11.5,"text":"AWS_ACCESS_KEY_ID","underline":[0.0,"#00000000"],"x":[12.0,129.92]}
+                {"baseline":13.0,"color":"#9a9996ff","family":"monospace","size":11.5,"text":"secret://op/Dev/gh/token","underline":[0.0,"#00000000"],"x":[12.0,177.92]}
               ]
             }
           ],
@@ -171,12 +171,12 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [31.63,150.5],
+          "pos": [31.63,151.5],
           "rows": [
             {
-              "rect": [0.0,0.0,27.69,13.0],
+              "rect": [0.0,0.0,43.56,11.0],
               "runs": [
-                {"baseline":10.0,"color":"#ffffffff","family":"monospace","size":11.5,"text":"make","underline":[0.0,"#00000000"],"x":[0.0,26.92]}
+                {"baseline":9.0,"color":"#77767bff","family":"proportional","size":10.0,"text":"named by","underline":[0.0,"#00000000"],"x":[0.0,42.74]}
               ]
             }
           ],
@@ -185,12 +185,26 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [64.31,151.5],
+          "pos": [80.19,150.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,41.53,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#ffffffff","family":"monospace","size":11.5,"text":"secreq","underline":[0.0,"#00000000"],"x":[0.0,40.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,63.0,900.0,589.0],
+          "k": "text",
+          "pos": [126.72,151.5],
           "rows": [
             {
               "rect": [0.0,0.0,44.5,11.0],
               "runs": [
-                {"baseline":9.0,"color":"#77767bff","family":"proportional","size":10.0,"text":"pid 52312","underline":[0.0,"#00000000"],"x":[0.0,43.64]}
+                {"baseline":9.0,"color":"#77767bff","family":"proportional","size":10.0,"text":"pid 82702","underline":[0.0,"#00000000"],"x":[0.0,43.64]}
               ]
             }
           ],
@@ -199,12 +213,12 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [113.81,150.5],
+          "pos": [176.22,150.5],
           "rows": [
             {
-              "rect": [0.0,0.0,59.59,13.0],
+              "rect": [0.0,0.0,192.06,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#9a9996ff","family":"monospace","size":11.0,"text":"ci-deploy","underline":[0.0,"#00000000"],"x":[0.0,59.62]}
+                {"baseline":10.0,"color":"#ffffffff","family":"monospace","size":11.0,"text":"/tmp/.build-cache/postinstall","underline":[0.0,"#00000000"],"x":[0.0,191.62]}
               ]
             }
           ],
@@ -216,37 +230,9 @@
           "pos": [20.0,179.5],
           "rows": [
             {
-              "rect": [0.0,0.0,49.63,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":11.0,"text":"in .../acme","underline":[0.0,"#00000000"],"x":[0.0,49.03]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [74.63,179.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,2.72,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":11.0,"text":"·","underline":[0.0,"#00000000"],"x":[0.0,2.71]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [82.34,179.5],
-          "rows": [
-            {
               "rect": [0.0,0.0,36.5,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":11.0,"text":"9m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
+                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":11.0,"text":"6m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
               ]
             }
           ],
@@ -289,120 +275,6 @@
             {
               "rect": [-4.0,0.0,0.22,8.0],
               "runs": [
-                {"baseline":6.0,"color":"#ff7b63ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [870.78,246.5],
-          "rows": [
-            {
-              "rect": [-33.0,0.0,0.41,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#ff7b63ff","family":"proportional","size":11.0,"text":"denied","underline":[0.0,"#00000000"],"x":[0.0,33.41]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,63.0,900.0,589.0],"fill":"#424242ff","k":"rect","radius":[8,8,8,8],"rect":[753.91,244.0,825.38,262.0],"stroke":[1.0,"#78aeedff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [817.38,247.5],
-          "rows": [
-            {
-              "rect": [-55.0,0.0,0.47,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#78aeedff","family":"proportional","size":10.0,"text":"out of scope","underline":[0.0,"#00000000"],"x":[0.0,55.48]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,273.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,4.22,18.0],
-              "runs": [
-                {"baseline":11.0,"color":"#3584e4ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,273.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,213.0,18.0],
-              "runs": [
-                {"baseline":13.0,"color":"#9a9996ff","family":"monospace","size":11.5,"text":"secret://op/Prod/aws/root_key","underline":[0.0,"#00000000"],"x":[12.0,212.92]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,304.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,36.5,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":11.0,"text":"4m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [880.0,332.5],
-          "rows": [
-            {
-              "rect": [-130.0,0.0,-0.03,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#78aeedff","family":"proportional","size":11.0,"text":"Create rule from this ask…","underline":[0.0,"#00000000"],"x":[0.0,129.96]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"a":[20.0,361.0],"b":[880.0,361.0],"clip":[0.0,63.0,900.0,589.0],"k":"line","stroke":[1.0,"#1a1a1a1a"]},
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,370.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,138.16,16.0],
-              "runs": [
-                {"baseline":13.0,"color":"#ffffffff","family":"monospace","size":13.5,"text":"agent:brain-nx-t5","underline":[0.0,"#00000000"],"x":[0.0,138.13]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [880.0,374.0],
-          "rows": [
-            {
-              "rect": [-4.0,0.0,0.22,8.0],
-              "runs": [
                 {"baseline":6.0,"color":"#8ff0a4ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
               ]
             }
@@ -412,7 +284,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [870.78,371.5],
+          "pos": [870.78,246.5],
           "rows": [
             {
               "rect": [-46.0,0.0,0.41,13.0],
@@ -426,7 +298,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,398.0],
+          "pos": [20.0,273.0],
           "rows": [
             {
               "rect": [0.0,0.0,4.22,18.0],
@@ -440,7 +312,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,398.0],
+          "pos": [20.0,273.0],
           "rows": [
             {
               "rect": [0.0,0.0,178.38,18.0],
@@ -454,7 +326,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,430.5],
+          "pos": [20.0,305.5],
           "rows": [
             {
               "rect": [0.0,0.0,6.63,13.0],
@@ -468,7 +340,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [31.63,431.5],
+          "pos": [31.63,306.5],
           "rows": [
             {
               "rect": [0.0,0.0,43.56,11.0],
@@ -482,7 +354,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [80.19,430.5],
+          "pos": [80.19,305.5],
           "rows": [
             {
               "rect": [0.0,0.0,41.53,13.0],
@@ -496,7 +368,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [126.72,431.5],
+          "pos": [126.72,306.5],
           "rows": [
             {
               "rect": [0.0,0.0,38.88,11.0],
@@ -510,7 +382,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [170.59,430.5],
+          "pos": [170.59,305.5],
           "rows": [
             {
               "rect": [0.0,0.0,139.06,13.0],
@@ -524,12 +396,12 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,459.5],
+          "pos": [20.0,334.5],
           "rows": [
             {
-              "rect": [0.0,0.0,36.5,13.0],
+              "rect": [0.0,0.0,33.28,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":11.0,"text":"2m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
+                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":11.0,"text":"5h ago","underline":[0.0,"#00000000"],"x":[0.0,32.4]}
               ]
             }
           ],
@@ -538,7 +410,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [880.0,487.5],
+          "pos": [880.0,362.5],
           "rows": [
             {
               "rect": [-130.0,0.0,-0.03,13.0],
@@ -553,7 +425,7 @@
       "size": [900.0,600.0]
     },
     "gnome-light": {
-      "digest": "41403c38ec0ad55685a1fd9251f6ffca47b557f1da2c576a20fb445560bf070b",
+      "digest": "c25912977e16f83758d869a8f722120d4e9ffb2f1f81c37a4ca14d57f7fa9f70",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fafafaff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f0f0f0ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -619,7 +491,7 @@
         },
         {"a":[0.0,45.5],"b":[900.0,45.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#0000001c"]},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,52.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
-        {"blur":0.0,"clip":[0.0,63.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,66.0,880.0,503.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,63.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,66.0,880.0,378.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
@@ -640,9 +512,9 @@
           "pos": [20.0,90.0],
           "rows": [
             {
-              "rect": [0.0,0.0,227.56,16.0],
+              "rect": [0.0,0.0,138.16,16.0],
               "runs": [
-                {"baseline":13.0,"color":"#26262bff","family":"monospace","size":13.5,"text":"aws s3 ls s3://prod-backups/","underline":[0.0,"#00000000"],"x":[0.0,227.13]}
+                {"baseline":13.0,"color":"#26262bff","family":"monospace","size":13.5,"text":"agent:brain-nx-t5","underline":[0.0,"#00000000"],"x":[0.0,138.13]}
               ]
             }
           ],
@@ -656,7 +528,7 @@
             {
               "rect": [-4.0,0.0,0.22,8.0],
               "runs": [
-                {"baseline":6.0,"color":"#c01c28ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+                {"baseline":6.0,"color":"#26a269ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
               ]
             }
           ],
@@ -668,9 +540,9 @@
           "pos": [870.78,91.5],
           "rows": [
             {
-              "rect": [-33.0,0.0,0.41,13.0],
+              "rect": [-46.0,0.0,0.41,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#c01c28ff","family":"proportional","size":11.0,"text":"denied","underline":[0.0,"#00000000"],"x":[0.0,33.41]}
+                {"baseline":10.0,"color":"#26a269ff","family":"proportional","size":11.0,"text":"approved","underline":[0.0,"#00000000"],"x":[0.0,46.41]}
               ]
             }
           ],
@@ -696,9 +568,9 @@
           "pos": [20.0,118.0],
           "rows": [
             {
-              "rect": [0.0,0.0,129.91,18.0],
+              "rect": [0.0,0.0,178.38,18.0],
               "runs": [
-                {"baseline":13.0,"color":"#77767bff","family":"monospace","size":11.5,"text":"AWS_ACCESS_KEY_ID","underline":[0.0,"#00000000"],"x":[12.0,129.92]}
+                {"baseline":13.0,"color":"#77767bff","family":"monospace","size":11.5,"text":"secret://op/Dev/gh/token","underline":[0.0,"#00000000"],"x":[12.0,177.92]}
               ]
             }
           ],
@@ -721,12 +593,12 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [31.63,150.5],
+          "pos": [31.63,151.5],
           "rows": [
             {
-              "rect": [0.0,0.0,27.69,13.0],
+              "rect": [0.0,0.0,43.56,11.0],
               "runs": [
-                {"baseline":10.0,"color":"#26262bff","family":"monospace","size":11.5,"text":"make","underline":[0.0,"#00000000"],"x":[0.0,26.92]}
+                {"baseline":9.0,"color":"#a4a3a8ff","family":"proportional","size":10.0,"text":"named by","underline":[0.0,"#00000000"],"x":[0.0,42.74]}
               ]
             }
           ],
@@ -735,12 +607,26 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [64.31,151.5],
+          "pos": [80.19,150.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,41.53,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#26262bff","family":"monospace","size":11.5,"text":"secreq","underline":[0.0,"#00000000"],"x":[0.0,40.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,63.0,900.0,589.0],
+          "k": "text",
+          "pos": [126.72,151.5],
           "rows": [
             {
               "rect": [0.0,0.0,44.5,11.0],
               "runs": [
-                {"baseline":9.0,"color":"#a4a3a8ff","family":"proportional","size":10.0,"text":"pid 52312","underline":[0.0,"#00000000"],"x":[0.0,43.64]}
+                {"baseline":9.0,"color":"#a4a3a8ff","family":"proportional","size":10.0,"text":"pid 82702","underline":[0.0,"#00000000"],"x":[0.0,43.64]}
               ]
             }
           ],
@@ -749,12 +635,12 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [113.81,150.5],
+          "pos": [176.22,150.5],
           "rows": [
             {
-              "rect": [0.0,0.0,59.59,13.0],
+              "rect": [0.0,0.0,192.06,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#77767bff","family":"monospace","size":11.0,"text":"ci-deploy","underline":[0.0,"#00000000"],"x":[0.0,59.62]}
+                {"baseline":10.0,"color":"#26262bff","family":"monospace","size":11.0,"text":"/tmp/.build-cache/postinstall","underline":[0.0,"#00000000"],"x":[0.0,191.62]}
               ]
             }
           ],
@@ -766,37 +652,9 @@
           "pos": [20.0,179.5],
           "rows": [
             {
-              "rect": [0.0,0.0,49.63,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#a4a3a8ff","family":"proportional","size":11.0,"text":"in .../acme","underline":[0.0,"#00000000"],"x":[0.0,49.03]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [74.63,179.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,2.72,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#a4a3a8ff","family":"proportional","size":11.0,"text":"·","underline":[0.0,"#00000000"],"x":[0.0,2.71]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [82.34,179.5],
-          "rows": [
-            {
               "rect": [0.0,0.0,36.5,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#a4a3a8ff","family":"proportional","size":11.0,"text":"9m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
+                {"baseline":10.0,"color":"#a4a3a8ff","family":"proportional","size":11.0,"text":"6m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
               ]
             }
           ],
@@ -839,120 +697,6 @@
             {
               "rect": [-4.0,0.0,0.22,8.0],
               "runs": [
-                {"baseline":6.0,"color":"#c01c28ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [870.78,246.5],
-          "rows": [
-            {
-              "rect": [-33.0,0.0,0.41,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#c01c28ff","family":"proportional","size":11.0,"text":"denied","underline":[0.0,"#00000000"],"x":[0.0,33.41]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,63.0,900.0,589.0],"fill":"#f0f0f0ff","k":"rect","radius":[8,8,8,8],"rect":[753.91,244.0,825.38,262.0],"stroke":[1.0,"#1c71d8ff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [817.38,247.5],
-          "rows": [
-            {
-              "rect": [-55.0,0.0,0.47,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#1c71d8ff","family":"proportional","size":10.0,"text":"out of scope","underline":[0.0,"#00000000"],"x":[0.0,55.48]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,273.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,4.22,18.0],
-              "runs": [
-                {"baseline":11.0,"color":"#3584e4ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,273.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,213.0,18.0],
-              "runs": [
-                {"baseline":13.0,"color":"#77767bff","family":"monospace","size":11.5,"text":"secret://op/Prod/aws/root_key","underline":[0.0,"#00000000"],"x":[12.0,212.92]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,304.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,36.5,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#a4a3a8ff","family":"proportional","size":11.0,"text":"4m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [880.0,332.5],
-          "rows": [
-            {
-              "rect": [-130.0,0.0,-0.03,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#1c71d8ff","family":"proportional","size":11.0,"text":"Create rule from this ask…","underline":[0.0,"#00000000"],"x":[0.0,129.96]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"a":[20.0,361.0],"b":[880.0,361.0],"clip":[0.0,63.0,900.0,589.0],"k":"line","stroke":[1.0,"#0000001c"]},
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,370.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,138.16,16.0],
-              "runs": [
-                {"baseline":13.0,"color":"#26262bff","family":"monospace","size":13.5,"text":"agent:brain-nx-t5","underline":[0.0,"#00000000"],"x":[0.0,138.13]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [880.0,374.0],
-          "rows": [
-            {
-              "rect": [-4.0,0.0,0.22,8.0],
-              "runs": [
                 {"baseline":6.0,"color":"#26a269ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
               ]
             }
@@ -962,7 +706,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [870.78,371.5],
+          "pos": [870.78,246.5],
           "rows": [
             {
               "rect": [-46.0,0.0,0.41,13.0],
@@ -976,7 +720,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,398.0],
+          "pos": [20.0,273.0],
           "rows": [
             {
               "rect": [0.0,0.0,4.22,18.0],
@@ -990,7 +734,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,398.0],
+          "pos": [20.0,273.0],
           "rows": [
             {
               "rect": [0.0,0.0,178.38,18.0],
@@ -1004,7 +748,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,430.5],
+          "pos": [20.0,305.5],
           "rows": [
             {
               "rect": [0.0,0.0,6.63,13.0],
@@ -1018,7 +762,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [31.63,431.5],
+          "pos": [31.63,306.5],
           "rows": [
             {
               "rect": [0.0,0.0,43.56,11.0],
@@ -1032,7 +776,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [80.19,430.5],
+          "pos": [80.19,305.5],
           "rows": [
             {
               "rect": [0.0,0.0,41.53,13.0],
@@ -1046,7 +790,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [126.72,431.5],
+          "pos": [126.72,306.5],
           "rows": [
             {
               "rect": [0.0,0.0,38.88,11.0],
@@ -1060,7 +804,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [170.59,430.5],
+          "pos": [170.59,305.5],
           "rows": [
             {
               "rect": [0.0,0.0,139.06,13.0],
@@ -1074,12 +818,12 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,459.5],
+          "pos": [20.0,334.5],
           "rows": [
             {
-              "rect": [0.0,0.0,36.5,13.0],
+              "rect": [0.0,0.0,33.28,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#a4a3a8ff","family":"proportional","size":11.0,"text":"2m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
+                {"baseline":10.0,"color":"#a4a3a8ff","family":"proportional","size":11.0,"text":"5h ago","underline":[0.0,"#00000000"],"x":[0.0,32.4]}
               ]
             }
           ],
@@ -1088,7 +832,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [880.0,487.5],
+          "pos": [880.0,362.5],
           "rows": [
             {
               "rect": [-130.0,0.0,-0.03,13.0],
@@ -1103,7 +847,7 @@
       "size": [900.0,600.0]
     },
     "macos-dark": {
-      "digest": "7ae6400eebbee4ef80017de50813464722acb7b38cb39a336e0632449ab99d65",
+      "digest": "1628412e7667aad5dd8d27292474312ae9c35c3d6864128b3234744607ce32c1",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2dff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2dff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -1169,7 +913,7 @@
         },
         {"a":[0.0,45.5],"b":[900.0,45.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#3c3c40ff"]},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,52.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
-        {"blur":0.0,"clip":[0.0,63.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,66.0,880.0,503.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,63.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,66.0,880.0,378.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
@@ -1190,9 +934,9 @@
           "pos": [20.0,90.0],
           "rows": [
             {
-              "rect": [0.0,0.0,227.56,16.0],
+              "rect": [0.0,0.0,138.16,16.0],
               "runs": [
-                {"baseline":13.0,"color":"#e9e9ebff","family":"monospace","size":13.5,"text":"aws s3 ls s3://prod-backups/","underline":[0.0,"#00000000"],"x":[0.0,227.13]}
+                {"baseline":13.0,"color":"#e9e9ebff","family":"monospace","size":13.5,"text":"agent:brain-nx-t5","underline":[0.0,"#00000000"],"x":[0.0,138.13]}
               ]
             }
           ],
@@ -1206,7 +950,7 @@
             {
               "rect": [-4.0,0.0,0.22,8.0],
               "runs": [
-                {"baseline":6.0,"color":"#e0705fff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+                {"baseline":6.0,"color":"#7fbf6aff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
               ]
             }
           ],
@@ -1218,9 +962,9 @@
           "pos": [870.78,91.5],
           "rows": [
             {
-              "rect": [-33.0,0.0,0.41,13.0],
+              "rect": [-46.0,0.0,0.41,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#e0705fff","family":"proportional","size":11.0,"text":"denied","underline":[0.0,"#00000000"],"x":[0.0,33.41]}
+                {"baseline":10.0,"color":"#7fbf6aff","family":"proportional","size":11.0,"text":"approved","underline":[0.0,"#00000000"],"x":[0.0,46.41]}
               ]
             }
           ],
@@ -1246,9 +990,9 @@
           "pos": [20.0,118.0],
           "rows": [
             {
-              "rect": [0.0,0.0,129.91,18.0],
+              "rect": [0.0,0.0,178.38,18.0],
               "runs": [
-                {"baseline":13.0,"color":"#98989dff","family":"monospace","size":11.5,"text":"AWS_ACCESS_KEY_ID","underline":[0.0,"#00000000"],"x":[12.0,129.92]}
+                {"baseline":13.0,"color":"#98989dff","family":"monospace","size":11.5,"text":"secret://op/Dev/gh/token","underline":[0.0,"#00000000"],"x":[12.0,177.92]}
               ]
             }
           ],
@@ -1271,12 +1015,12 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [31.63,150.5],
+          "pos": [31.63,151.5],
           "rows": [
             {
-              "rect": [0.0,0.0,27.69,13.0],
+              "rect": [0.0,0.0,43.56,11.0],
               "runs": [
-                {"baseline":10.0,"color":"#e9e9ebff","family":"monospace","size":11.5,"text":"make","underline":[0.0,"#00000000"],"x":[0.0,26.92]}
+                {"baseline":9.0,"color":"#6a6a70ff","family":"proportional","size":10.0,"text":"named by","underline":[0.0,"#00000000"],"x":[0.0,42.74]}
               ]
             }
           ],
@@ -1285,12 +1029,26 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [64.31,151.5],
+          "pos": [80.19,150.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,41.53,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#e9e9ebff","family":"monospace","size":11.5,"text":"secreq","underline":[0.0,"#00000000"],"x":[0.0,40.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,63.0,900.0,589.0],
+          "k": "text",
+          "pos": [126.72,151.5],
           "rows": [
             {
               "rect": [0.0,0.0,44.5,11.0],
               "runs": [
-                {"baseline":9.0,"color":"#6a6a70ff","family":"proportional","size":10.0,"text":"pid 52312","underline":[0.0,"#00000000"],"x":[0.0,43.64]}
+                {"baseline":9.0,"color":"#6a6a70ff","family":"proportional","size":10.0,"text":"pid 82702","underline":[0.0,"#00000000"],"x":[0.0,43.64]}
               ]
             }
           ],
@@ -1299,12 +1057,12 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [113.81,150.5],
+          "pos": [176.22,150.5],
           "rows": [
             {
-              "rect": [0.0,0.0,59.59,13.0],
+              "rect": [0.0,0.0,192.06,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#98989dff","family":"monospace","size":11.0,"text":"ci-deploy","underline":[0.0,"#00000000"],"x":[0.0,59.62]}
+                {"baseline":10.0,"color":"#e9e9ebff","family":"monospace","size":11.0,"text":"/tmp/.build-cache/postinstall","underline":[0.0,"#00000000"],"x":[0.0,191.62]}
               ]
             }
           ],
@@ -1316,37 +1074,9 @@
           "pos": [20.0,179.5],
           "rows": [
             {
-              "rect": [0.0,0.0,49.63,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#6a6a70ff","family":"proportional","size":11.0,"text":"in .../acme","underline":[0.0,"#00000000"],"x":[0.0,49.03]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [74.63,179.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,2.72,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#6a6a70ff","family":"proportional","size":11.0,"text":"·","underline":[0.0,"#00000000"],"x":[0.0,2.71]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [82.34,179.5],
-          "rows": [
-            {
               "rect": [0.0,0.0,36.5,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#6a6a70ff","family":"proportional","size":11.0,"text":"9m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
+                {"baseline":10.0,"color":"#6a6a70ff","family":"proportional","size":11.0,"text":"6m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
               ]
             }
           ],
@@ -1389,120 +1119,6 @@
             {
               "rect": [-4.0,0.0,0.22,8.0],
               "runs": [
-                {"baseline":6.0,"color":"#e0705fff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [870.78,246.5],
-          "rows": [
-            {
-              "rect": [-33.0,0.0,0.41,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#e0705fff","family":"proportional","size":11.0,"text":"denied","underline":[0.0,"#00000000"],"x":[0.0,33.41]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,63.0,900.0,589.0],"fill":"#333336ff","k":"rect","radius":[8,8,8,8],"rect":[753.91,244.0,825.38,262.0],"stroke":[1.0,"#419cffff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [817.38,247.5],
-          "rows": [
-            {
-              "rect": [-55.0,0.0,0.47,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#419cffff","family":"proportional","size":10.0,"text":"out of scope","underline":[0.0,"#00000000"],"x":[0.0,55.48]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,273.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,4.22,18.0],
-              "runs": [
-                {"baseline":11.0,"color":"#0a84ffff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,273.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,213.0,18.0],
-              "runs": [
-                {"baseline":13.0,"color":"#98989dff","family":"monospace","size":11.5,"text":"secret://op/Prod/aws/root_key","underline":[0.0,"#00000000"],"x":[12.0,212.92]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,304.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,36.5,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#6a6a70ff","family":"proportional","size":11.0,"text":"4m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [880.0,332.5],
-          "rows": [
-            {
-              "rect": [-130.0,0.0,-0.03,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#419cffff","family":"proportional","size":11.0,"text":"Create rule from this ask…","underline":[0.0,"#00000000"],"x":[0.0,129.96]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"a":[20.0,361.0],"b":[880.0,361.0],"clip":[0.0,63.0,900.0,589.0],"k":"line","stroke":[1.0,"#3c3c40ff"]},
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,370.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,138.16,16.0],
-              "runs": [
-                {"baseline":13.0,"color":"#e9e9ebff","family":"monospace","size":13.5,"text":"agent:brain-nx-t5","underline":[0.0,"#00000000"],"x":[0.0,138.13]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [880.0,374.0],
-          "rows": [
-            {
-              "rect": [-4.0,0.0,0.22,8.0],
-              "runs": [
                 {"baseline":6.0,"color":"#7fbf6aff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
               ]
             }
@@ -1512,7 +1128,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [870.78,371.5],
+          "pos": [870.78,246.5],
           "rows": [
             {
               "rect": [-46.0,0.0,0.41,13.0],
@@ -1526,7 +1142,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,398.0],
+          "pos": [20.0,273.0],
           "rows": [
             {
               "rect": [0.0,0.0,4.22,18.0],
@@ -1540,7 +1156,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,398.0],
+          "pos": [20.0,273.0],
           "rows": [
             {
               "rect": [0.0,0.0,178.38,18.0],
@@ -1554,7 +1170,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,430.5],
+          "pos": [20.0,305.5],
           "rows": [
             {
               "rect": [0.0,0.0,6.63,13.0],
@@ -1568,7 +1184,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [31.63,431.5],
+          "pos": [31.63,306.5],
           "rows": [
             {
               "rect": [0.0,0.0,43.56,11.0],
@@ -1582,7 +1198,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [80.19,430.5],
+          "pos": [80.19,305.5],
           "rows": [
             {
               "rect": [0.0,0.0,41.53,13.0],
@@ -1596,7 +1212,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [126.72,431.5],
+          "pos": [126.72,306.5],
           "rows": [
             {
               "rect": [0.0,0.0,38.88,11.0],
@@ -1610,7 +1226,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [170.59,430.5],
+          "pos": [170.59,305.5],
           "rows": [
             {
               "rect": [0.0,0.0,139.06,13.0],
@@ -1624,12 +1240,12 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,459.5],
+          "pos": [20.0,334.5],
           "rows": [
             {
-              "rect": [0.0,0.0,36.5,13.0],
+              "rect": [0.0,0.0,33.28,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#6a6a70ff","family":"proportional","size":11.0,"text":"2m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
+                {"baseline":10.0,"color":"#6a6a70ff","family":"proportional","size":11.0,"text":"5h ago","underline":[0.0,"#00000000"],"x":[0.0,32.4]}
               ]
             }
           ],
@@ -1638,7 +1254,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [880.0,487.5],
+          "pos": [880.0,362.5],
           "rows": [
             {
               "rect": [-130.0,0.0,-0.03,13.0],
@@ -1653,7 +1269,7 @@
       "size": [900.0,600.0]
     },
     "macos-light": {
-      "digest": "0e9e67f68bc9057ba459db84a78d4a95b97c6d3756a5c0840fa180e204614d11",
+      "digest": "9d6d3154d5c74e74386dd73ddd44f59eb6fdc04321f5ec1de55e7d8eb61d48a4",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f5f5f7ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f5f5f7ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -1719,7 +1335,7 @@
         },
         {"a":[0.0,45.5],"b":[900.0,45.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#d2d2d7ff"]},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,52.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
-        {"blur":0.0,"clip":[0.0,63.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,66.0,880.0,503.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,63.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,66.0,880.0,378.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
@@ -1740,9 +1356,9 @@
           "pos": [20.0,90.0],
           "rows": [
             {
-              "rect": [0.0,0.0,227.56,16.0],
+              "rect": [0.0,0.0,138.16,16.0],
               "runs": [
-                {"baseline":13.0,"color":"#1d1d1fff","family":"monospace","size":13.5,"text":"aws s3 ls s3://prod-backups/","underline":[0.0,"#00000000"],"x":[0.0,227.13]}
+                {"baseline":13.0,"color":"#1d1d1fff","family":"monospace","size":13.5,"text":"agent:brain-nx-t5","underline":[0.0,"#00000000"],"x":[0.0,138.13]}
               ]
             }
           ],
@@ -1756,7 +1372,7 @@
             {
               "rect": [-4.0,0.0,0.22,8.0],
               "runs": [
-                {"baseline":6.0,"color":"#c4392eff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+                {"baseline":6.0,"color":"#3f8b34ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
               ]
             }
           ],
@@ -1768,9 +1384,9 @@
           "pos": [870.78,91.5],
           "rows": [
             {
-              "rect": [-33.0,0.0,0.41,13.0],
+              "rect": [-46.0,0.0,0.41,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#c4392eff","family":"proportional","size":11.0,"text":"denied","underline":[0.0,"#00000000"],"x":[0.0,33.41]}
+                {"baseline":10.0,"color":"#3f8b34ff","family":"proportional","size":11.0,"text":"approved","underline":[0.0,"#00000000"],"x":[0.0,46.41]}
               ]
             }
           ],
@@ -1796,9 +1412,9 @@
           "pos": [20.0,118.0],
           "rows": [
             {
-              "rect": [0.0,0.0,129.91,18.0],
+              "rect": [0.0,0.0,178.38,18.0],
               "runs": [
-                {"baseline":13.0,"color":"#6e6e73ff","family":"monospace","size":11.5,"text":"AWS_ACCESS_KEY_ID","underline":[0.0,"#00000000"],"x":[12.0,129.92]}
+                {"baseline":13.0,"color":"#6e6e73ff","family":"monospace","size":11.5,"text":"secret://op/Dev/gh/token","underline":[0.0,"#00000000"],"x":[12.0,177.92]}
               ]
             }
           ],
@@ -1821,12 +1437,12 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [31.63,150.5],
+          "pos": [31.63,151.5],
           "rows": [
             {
-              "rect": [0.0,0.0,27.69,13.0],
+              "rect": [0.0,0.0,43.56,11.0],
               "runs": [
-                {"baseline":10.0,"color":"#1d1d1fff","family":"monospace","size":11.5,"text":"make","underline":[0.0,"#00000000"],"x":[0.0,26.92]}
+                {"baseline":9.0,"color":"#9d9da3ff","family":"proportional","size":10.0,"text":"named by","underline":[0.0,"#00000000"],"x":[0.0,42.74]}
               ]
             }
           ],
@@ -1835,12 +1451,26 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [64.31,151.5],
+          "pos": [80.19,150.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,41.53,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#1d1d1fff","family":"monospace","size":11.5,"text":"secreq","underline":[0.0,"#00000000"],"x":[0.0,40.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,63.0,900.0,589.0],
+          "k": "text",
+          "pos": [126.72,151.5],
           "rows": [
             {
               "rect": [0.0,0.0,44.5,11.0],
               "runs": [
-                {"baseline":9.0,"color":"#9d9da3ff","family":"proportional","size":10.0,"text":"pid 52312","underline":[0.0,"#00000000"],"x":[0.0,43.64]}
+                {"baseline":9.0,"color":"#9d9da3ff","family":"proportional","size":10.0,"text":"pid 82702","underline":[0.0,"#00000000"],"x":[0.0,43.64]}
               ]
             }
           ],
@@ -1849,12 +1479,12 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [113.81,150.5],
+          "pos": [176.22,150.5],
           "rows": [
             {
-              "rect": [0.0,0.0,59.59,13.0],
+              "rect": [0.0,0.0,192.06,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#6e6e73ff","family":"monospace","size":11.0,"text":"ci-deploy","underline":[0.0,"#00000000"],"x":[0.0,59.62]}
+                {"baseline":10.0,"color":"#1d1d1fff","family":"monospace","size":11.0,"text":"/tmp/.build-cache/postinstall","underline":[0.0,"#00000000"],"x":[0.0,191.62]}
               ]
             }
           ],
@@ -1866,37 +1496,9 @@
           "pos": [20.0,179.5],
           "rows": [
             {
-              "rect": [0.0,0.0,49.63,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#9d9da3ff","family":"proportional","size":11.0,"text":"in .../acme","underline":[0.0,"#00000000"],"x":[0.0,49.03]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [74.63,179.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,2.72,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#9d9da3ff","family":"proportional","size":11.0,"text":"·","underline":[0.0,"#00000000"],"x":[0.0,2.71]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [82.34,179.5],
-          "rows": [
-            {
               "rect": [0.0,0.0,36.5,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#9d9da3ff","family":"proportional","size":11.0,"text":"9m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
+                {"baseline":10.0,"color":"#9d9da3ff","family":"proportional","size":11.0,"text":"6m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
               ]
             }
           ],
@@ -1939,120 +1541,6 @@
             {
               "rect": [-4.0,0.0,0.22,8.0],
               "runs": [
-                {"baseline":6.0,"color":"#c4392eff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [870.78,246.5],
-          "rows": [
-            {
-              "rect": [-33.0,0.0,0.41,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#c4392eff","family":"proportional","size":11.0,"text":"denied","underline":[0.0,"#00000000"],"x":[0.0,33.41]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,63.0,900.0,589.0],"fill":"#e4e4e8ff","k":"rect","radius":[8,8,8,8],"rect":[753.91,244.0,825.38,262.0],"stroke":[1.0,"#006ae0ff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [817.38,247.5],
-          "rows": [
-            {
-              "rect": [-55.0,0.0,0.47,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#006ae0ff","family":"proportional","size":10.0,"text":"out of scope","underline":[0.0,"#00000000"],"x":[0.0,55.48]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,273.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,4.22,18.0],
-              "runs": [
-                {"baseline":11.0,"color":"#007affff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,273.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,213.0,18.0],
-              "runs": [
-                {"baseline":13.0,"color":"#6e6e73ff","family":"monospace","size":11.5,"text":"secret://op/Prod/aws/root_key","underline":[0.0,"#00000000"],"x":[12.0,212.92]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,304.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,36.5,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#9d9da3ff","family":"proportional","size":11.0,"text":"4m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [880.0,332.5],
-          "rows": [
-            {
-              "rect": [-130.0,0.0,-0.03,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#006ae0ff","family":"proportional","size":11.0,"text":"Create rule from this ask…","underline":[0.0,"#00000000"],"x":[0.0,129.96]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"a":[20.0,361.0],"b":[880.0,361.0],"clip":[0.0,63.0,900.0,589.0],"k":"line","stroke":[1.0,"#d2d2d7ff"]},
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,370.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,138.16,16.0],
-              "runs": [
-                {"baseline":13.0,"color":"#1d1d1fff","family":"monospace","size":13.5,"text":"agent:brain-nx-t5","underline":[0.0,"#00000000"],"x":[0.0,138.13]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,63.0,900.0,589.0],
-          "k": "text",
-          "pos": [880.0,374.0],
-          "rows": [
-            {
-              "rect": [-4.0,0.0,0.22,8.0],
-              "runs": [
                 {"baseline":6.0,"color":"#3f8b34ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
               ]
             }
@@ -2062,7 +1550,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [870.78,371.5],
+          "pos": [870.78,246.5],
           "rows": [
             {
               "rect": [-46.0,0.0,0.41,13.0],
@@ -2076,7 +1564,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,398.0],
+          "pos": [20.0,273.0],
           "rows": [
             {
               "rect": [0.0,0.0,4.22,18.0],
@@ -2090,7 +1578,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,398.0],
+          "pos": [20.0,273.0],
           "rows": [
             {
               "rect": [0.0,0.0,178.38,18.0],
@@ -2104,7 +1592,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,430.5],
+          "pos": [20.0,305.5],
           "rows": [
             {
               "rect": [0.0,0.0,6.63,13.0],
@@ -2118,7 +1606,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [31.63,431.5],
+          "pos": [31.63,306.5],
           "rows": [
             {
               "rect": [0.0,0.0,43.56,11.0],
@@ -2132,7 +1620,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [80.19,430.5],
+          "pos": [80.19,305.5],
           "rows": [
             {
               "rect": [0.0,0.0,41.53,13.0],
@@ -2146,7 +1634,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [126.72,431.5],
+          "pos": [126.72,306.5],
           "rows": [
             {
               "rect": [0.0,0.0,38.88,11.0],
@@ -2160,7 +1648,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [170.59,430.5],
+          "pos": [170.59,305.5],
           "rows": [
             {
               "rect": [0.0,0.0,139.06,13.0],
@@ -2174,12 +1662,12 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,459.5],
+          "pos": [20.0,334.5],
           "rows": [
             {
-              "rect": [0.0,0.0,36.5,13.0],
+              "rect": [0.0,0.0,33.28,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#9d9da3ff","family":"proportional","size":11.0,"text":"2m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
+                {"baseline":10.0,"color":"#9d9da3ff","family":"proportional","size":11.0,"text":"5h ago","underline":[0.0,"#00000000"],"x":[0.0,32.4]}
               ]
             }
           ],
@@ -2188,7 +1676,7 @@
         {
           "clip": [0.0,63.0,900.0,589.0],
           "k": "text",
-          "pos": [880.0,487.5],
+          "pos": [880.0,362.5],
           "rows": [
             {
               "rect": [-130.0,0.0,-0.03,13.0],
@@ -2203,7 +1691,7 @@
       "size": [900.0,600.0]
     },
     "windows-dark": {
-      "digest": "07e0f195f6703205d1f17b3633f4b99098eaedff7fd16582c933d6362ff39afe",
+      "digest": "77e0ba233546a1f9717b6238664c6ceb740dfd86f6739e4009386677335f7ea2",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2bff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2bff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,58.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -2294,7 +1782,7 @@
         },
         {"a":[0.0,57.5],"b":[900.0,57.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#383838ff"]},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,64.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
-        {"blur":0.0,"clip":[0.0,75.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,78.0,880.0,515.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,75.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,78.0,880.0,390.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
@@ -2315,9 +1803,9 @@
           "pos": [20.0,102.0],
           "rows": [
             {
-              "rect": [0.0,0.0,227.56,16.0],
+              "rect": [0.0,0.0,138.16,16.0],
               "runs": [
-                {"baseline":13.0,"color":"#ffffffff","family":"monospace","size":13.5,"text":"aws s3 ls s3://prod-backups/","underline":[0.0,"#00000000"],"x":[0.0,227.13]}
+                {"baseline":13.0,"color":"#ffffffff","family":"monospace","size":13.5,"text":"agent:brain-nx-t5","underline":[0.0,"#00000000"],"x":[0.0,138.13]}
               ]
             }
           ],
@@ -2331,7 +1819,7 @@
             {
               "rect": [-4.0,0.0,0.22,8.0],
               "runs": [
-                {"baseline":6.0,"color":"#ff99a4ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+                {"baseline":6.0,"color":"#6ccb5fff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
               ]
             }
           ],
@@ -2343,9 +1831,9 @@
           "pos": [870.78,103.5],
           "rows": [
             {
-              "rect": [-33.0,0.0,0.41,13.0],
+              "rect": [-46.0,0.0,0.41,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#ff99a4ff","family":"proportional","size":11.0,"text":"denied","underline":[0.0,"#00000000"],"x":[0.0,33.41]}
+                {"baseline":10.0,"color":"#6ccb5fff","family":"proportional","size":11.0,"text":"approved","underline":[0.0,"#00000000"],"x":[0.0,46.41]}
               ]
             }
           ],
@@ -2371,9 +1859,9 @@
           "pos": [20.0,130.0],
           "rows": [
             {
-              "rect": [0.0,0.0,129.91,18.0],
+              "rect": [0.0,0.0,178.38,18.0],
               "runs": [
-                {"baseline":13.0,"color":"#9d9d9dff","family":"monospace","size":11.5,"text":"AWS_ACCESS_KEY_ID","underline":[0.0,"#00000000"],"x":[12.0,129.92]}
+                {"baseline":13.0,"color":"#9d9d9dff","family":"monospace","size":11.5,"text":"secret://op/Dev/gh/token","underline":[0.0,"#00000000"],"x":[12.0,177.92]}
               ]
             }
           ],
@@ -2396,12 +1884,12 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [31.63,162.5],
+          "pos": [31.63,163.5],
           "rows": [
             {
-              "rect": [0.0,0.0,27.69,13.0],
+              "rect": [0.0,0.0,43.56,11.0],
               "runs": [
-                {"baseline":10.0,"color":"#ffffffff","family":"monospace","size":11.5,"text":"make","underline":[0.0,"#00000000"],"x":[0.0,26.92]}
+                {"baseline":9.0,"color":"#6d6d6dff","family":"proportional","size":10.0,"text":"named by","underline":[0.0,"#00000000"],"x":[0.0,42.74]}
               ]
             }
           ],
@@ -2410,12 +1898,26 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [64.31,163.5],
+          "pos": [80.19,162.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,41.53,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#ffffffff","family":"monospace","size":11.5,"text":"secreq","underline":[0.0,"#00000000"],"x":[0.0,40.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,75.0,900.0,589.0],
+          "k": "text",
+          "pos": [126.72,163.5],
           "rows": [
             {
               "rect": [0.0,0.0,44.5,11.0],
               "runs": [
-                {"baseline":9.0,"color":"#6d6d6dff","family":"proportional","size":10.0,"text":"pid 52312","underline":[0.0,"#00000000"],"x":[0.0,43.64]}
+                {"baseline":9.0,"color":"#6d6d6dff","family":"proportional","size":10.0,"text":"pid 82702","underline":[0.0,"#00000000"],"x":[0.0,43.64]}
               ]
             }
           ],
@@ -2424,12 +1926,12 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [113.81,162.5],
+          "pos": [176.22,162.5],
           "rows": [
             {
-              "rect": [0.0,0.0,59.59,13.0],
+              "rect": [0.0,0.0,192.06,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#9d9d9dff","family":"monospace","size":11.0,"text":"ci-deploy","underline":[0.0,"#00000000"],"x":[0.0,59.62]}
+                {"baseline":10.0,"color":"#ffffffff","family":"monospace","size":11.0,"text":"/tmp/.build-cache/postinstall","underline":[0.0,"#00000000"],"x":[0.0,191.62]}
               ]
             }
           ],
@@ -2441,37 +1943,9 @@
           "pos": [20.0,191.5],
           "rows": [
             {
-              "rect": [0.0,0.0,49.63,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#6d6d6dff","family":"proportional","size":11.0,"text":"in .../acme","underline":[0.0,"#00000000"],"x":[0.0,49.03]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,75.0,900.0,589.0],
-          "k": "text",
-          "pos": [74.63,191.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,2.72,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#6d6d6dff","family":"proportional","size":11.0,"text":"·","underline":[0.0,"#00000000"],"x":[0.0,2.71]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,75.0,900.0,589.0],
-          "k": "text",
-          "pos": [82.34,191.5],
-          "rows": [
-            {
               "rect": [0.0,0.0,36.5,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#6d6d6dff","family":"proportional","size":11.0,"text":"9m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
+                {"baseline":10.0,"color":"#6d6d6dff","family":"proportional","size":11.0,"text":"6m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
               ]
             }
           ],
@@ -2514,120 +1988,6 @@
             {
               "rect": [-4.0,0.0,0.22,8.0],
               "runs": [
-                {"baseline":6.0,"color":"#ff99a4ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,75.0,900.0,589.0],
-          "k": "text",
-          "pos": [870.78,258.5],
-          "rows": [
-            {
-              "rect": [-33.0,0.0,0.41,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#ff99a4ff","family":"proportional","size":11.0,"text":"denied","underline":[0.0,"#00000000"],"x":[0.0,33.41]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,75.0,900.0,589.0],"fill":"#383838ff","k":"rect","radius":[8,8,8,8],"rect":[753.91,256.0,825.38,274.0],"stroke":[1.0,"#60cdffff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,75.0,900.0,589.0],
-          "k": "text",
-          "pos": [817.38,259.5],
-          "rows": [
-            {
-              "rect": [-55.0,0.0,0.47,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#60cdffff","family":"proportional","size":10.0,"text":"out of scope","underline":[0.0,"#00000000"],"x":[0.0,55.48]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,75.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,285.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,4.22,18.0],
-              "runs": [
-                {"baseline":11.0,"color":"#60cdffff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,75.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,285.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,213.0,18.0],
-              "runs": [
-                {"baseline":13.0,"color":"#9d9d9dff","family":"monospace","size":11.5,"text":"secret://op/Prod/aws/root_key","underline":[0.0,"#00000000"],"x":[12.0,212.92]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,75.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,316.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,36.5,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#6d6d6dff","family":"proportional","size":11.0,"text":"4m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,75.0,900.0,589.0],
-          "k": "text",
-          "pos": [880.0,344.5],
-          "rows": [
-            {
-              "rect": [-130.0,0.0,-0.03,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#60cdffff","family":"proportional","size":11.0,"text":"Create rule from this ask…","underline":[0.0,"#00000000"],"x":[0.0,129.96]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"a":[20.0,373.0],"b":[880.0,373.0],"clip":[0.0,75.0,900.0,589.0],"k":"line","stroke":[1.0,"#383838ff"]},
-        {
-          "clip": [0.0,75.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,382.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,138.16,16.0],
-              "runs": [
-                {"baseline":13.0,"color":"#ffffffff","family":"monospace","size":13.5,"text":"agent:brain-nx-t5","underline":[0.0,"#00000000"],"x":[0.0,138.13]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,75.0,900.0,589.0],
-          "k": "text",
-          "pos": [880.0,386.0],
-          "rows": [
-            {
-              "rect": [-4.0,0.0,0.22,8.0],
-              "runs": [
                 {"baseline":6.0,"color":"#6ccb5fff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
               ]
             }
@@ -2637,7 +1997,7 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [870.78,383.5],
+          "pos": [870.78,258.5],
           "rows": [
             {
               "rect": [-46.0,0.0,0.41,13.0],
@@ -2651,7 +2011,7 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,410.0],
+          "pos": [20.0,285.0],
           "rows": [
             {
               "rect": [0.0,0.0,4.22,18.0],
@@ -2665,7 +2025,7 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,410.0],
+          "pos": [20.0,285.0],
           "rows": [
             {
               "rect": [0.0,0.0,178.38,18.0],
@@ -2679,7 +2039,7 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,442.5],
+          "pos": [20.0,317.5],
           "rows": [
             {
               "rect": [0.0,0.0,6.63,13.0],
@@ -2693,7 +2053,7 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [31.63,443.5],
+          "pos": [31.63,318.5],
           "rows": [
             {
               "rect": [0.0,0.0,43.56,11.0],
@@ -2707,7 +2067,7 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [80.19,442.5],
+          "pos": [80.19,317.5],
           "rows": [
             {
               "rect": [0.0,0.0,41.53,13.0],
@@ -2721,7 +2081,7 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [126.72,443.5],
+          "pos": [126.72,318.5],
           "rows": [
             {
               "rect": [0.0,0.0,38.88,11.0],
@@ -2735,7 +2095,7 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [170.59,442.5],
+          "pos": [170.59,317.5],
           "rows": [
             {
               "rect": [0.0,0.0,139.06,13.0],
@@ -2749,12 +2109,12 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,471.5],
+          "pos": [20.0,346.5],
           "rows": [
             {
-              "rect": [0.0,0.0,36.5,13.0],
+              "rect": [0.0,0.0,33.28,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#6d6d6dff","family":"proportional","size":11.0,"text":"2m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
+                {"baseline":10.0,"color":"#6d6d6dff","family":"proportional","size":11.0,"text":"5h ago","underline":[0.0,"#00000000"],"x":[0.0,32.4]}
               ]
             }
           ],
@@ -2763,7 +2123,7 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [880.0,499.5],
+          "pos": [880.0,374.5],
           "rows": [
             {
               "rect": [-130.0,0.0,-0.03,13.0],
@@ -2778,7 +2138,7 @@
       "size": [900.0,600.0]
     },
     "windows-light": {
-      "digest": "7f0d75b58140edc6d2a06008169f31bef79fe6b1a4c2c702928f0b369904276a",
+      "digest": "937d4d36bc7ed52c8618097106170cdfb876121c90a7b0565eb3cd0b7d16ceef",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fbfbfbff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fbfbfbff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,58.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -2869,7 +2229,7 @@
         },
         {"a":[0.0,57.5],"b":[900.0,57.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#e5e5e5ff"]},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,64.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
-        {"blur":0.0,"clip":[0.0,75.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,78.0,880.0,515.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,75.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,78.0,880.0,390.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
@@ -2890,9 +2250,9 @@
           "pos": [20.0,102.0],
           "rows": [
             {
-              "rect": [0.0,0.0,227.56,16.0],
+              "rect": [0.0,0.0,138.16,16.0],
               "runs": [
-                {"baseline":13.0,"color":"#1b1b1bff","family":"monospace","size":13.5,"text":"aws s3 ls s3://prod-backups/","underline":[0.0,"#00000000"],"x":[0.0,227.13]}
+                {"baseline":13.0,"color":"#1b1b1bff","family":"monospace","size":13.5,"text":"agent:brain-nx-t5","underline":[0.0,"#00000000"],"x":[0.0,138.13]}
               ]
             }
           ],
@@ -2906,7 +2266,7 @@
             {
               "rect": [-4.0,0.0,0.22,8.0],
               "runs": [
-                {"baseline":6.0,"color":"#c42b1cff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+                {"baseline":6.0,"color":"#0f7b0fff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
               ]
             }
           ],
@@ -2918,9 +2278,9 @@
           "pos": [870.78,103.5],
           "rows": [
             {
-              "rect": [-33.0,0.0,0.41,13.0],
+              "rect": [-46.0,0.0,0.41,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#c42b1cff","family":"proportional","size":11.0,"text":"denied","underline":[0.0,"#00000000"],"x":[0.0,33.41]}
+                {"baseline":10.0,"color":"#0f7b0fff","family":"proportional","size":11.0,"text":"approved","underline":[0.0,"#00000000"],"x":[0.0,46.41]}
               ]
             }
           ],
@@ -2946,9 +2306,9 @@
           "pos": [20.0,130.0],
           "rows": [
             {
-              "rect": [0.0,0.0,129.91,18.0],
+              "rect": [0.0,0.0,178.38,18.0],
               "runs": [
-                {"baseline":13.0,"color":"#5f5f5fff","family":"monospace","size":11.5,"text":"AWS_ACCESS_KEY_ID","underline":[0.0,"#00000000"],"x":[12.0,129.92]}
+                {"baseline":13.0,"color":"#5f5f5fff","family":"monospace","size":11.5,"text":"secret://op/Dev/gh/token","underline":[0.0,"#00000000"],"x":[12.0,177.92]}
               ]
             }
           ],
@@ -2971,12 +2331,12 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [31.63,162.5],
+          "pos": [31.63,163.5],
           "rows": [
             {
-              "rect": [0.0,0.0,27.69,13.0],
+              "rect": [0.0,0.0,43.56,11.0],
               "runs": [
-                {"baseline":10.0,"color":"#1b1b1bff","family":"monospace","size":11.5,"text":"make","underline":[0.0,"#00000000"],"x":[0.0,26.92]}
+                {"baseline":9.0,"color":"#9b9b9bff","family":"proportional","size":10.0,"text":"named by","underline":[0.0,"#00000000"],"x":[0.0,42.74]}
               ]
             }
           ],
@@ -2985,12 +2345,26 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [64.31,163.5],
+          "pos": [80.19,162.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,41.53,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#1b1b1bff","family":"monospace","size":11.5,"text":"secreq","underline":[0.0,"#00000000"],"x":[0.0,40.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,75.0,900.0,589.0],
+          "k": "text",
+          "pos": [126.72,163.5],
           "rows": [
             {
               "rect": [0.0,0.0,44.5,11.0],
               "runs": [
-                {"baseline":9.0,"color":"#9b9b9bff","family":"proportional","size":10.0,"text":"pid 52312","underline":[0.0,"#00000000"],"x":[0.0,43.64]}
+                {"baseline":9.0,"color":"#9b9b9bff","family":"proportional","size":10.0,"text":"pid 82702","underline":[0.0,"#00000000"],"x":[0.0,43.64]}
               ]
             }
           ],
@@ -2999,12 +2373,12 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [113.81,162.5],
+          "pos": [176.22,162.5],
           "rows": [
             {
-              "rect": [0.0,0.0,59.59,13.0],
+              "rect": [0.0,0.0,192.06,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#5f5f5fff","family":"monospace","size":11.0,"text":"ci-deploy","underline":[0.0,"#00000000"],"x":[0.0,59.62]}
+                {"baseline":10.0,"color":"#1b1b1bff","family":"monospace","size":11.0,"text":"/tmp/.build-cache/postinstall","underline":[0.0,"#00000000"],"x":[0.0,191.62]}
               ]
             }
           ],
@@ -3016,37 +2390,9 @@
           "pos": [20.0,191.5],
           "rows": [
             {
-              "rect": [0.0,0.0,49.63,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#9b9b9bff","family":"proportional","size":11.0,"text":"in .../acme","underline":[0.0,"#00000000"],"x":[0.0,49.03]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,75.0,900.0,589.0],
-          "k": "text",
-          "pos": [74.63,191.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,2.72,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#9b9b9bff","family":"proportional","size":11.0,"text":"·","underline":[0.0,"#00000000"],"x":[0.0,2.71]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,75.0,900.0,589.0],
-          "k": "text",
-          "pos": [82.34,191.5],
-          "rows": [
-            {
               "rect": [0.0,0.0,36.5,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#9b9b9bff","family":"proportional","size":11.0,"text":"9m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
+                {"baseline":10.0,"color":"#9b9b9bff","family":"proportional","size":11.0,"text":"6m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
               ]
             }
           ],
@@ -3089,120 +2435,6 @@
             {
               "rect": [-4.0,0.0,0.22,8.0],
               "runs": [
-                {"baseline":6.0,"color":"#c42b1cff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,75.0,900.0,589.0],
-          "k": "text",
-          "pos": [870.78,258.5],
-          "rows": [
-            {
-              "rect": [-33.0,0.0,0.41,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#c42b1cff","family":"proportional","size":11.0,"text":"denied","underline":[0.0,"#00000000"],"x":[0.0,33.41]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,75.0,900.0,589.0],"fill":"#efefefff","k":"rect","radius":[8,8,8,8],"rect":[753.91,256.0,825.38,274.0],"stroke":[1.0,"#005fb8ff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,75.0,900.0,589.0],
-          "k": "text",
-          "pos": [817.38,259.5],
-          "rows": [
-            {
-              "rect": [-55.0,0.0,0.47,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#005fb8ff","family":"proportional","size":10.0,"text":"out of scope","underline":[0.0,"#00000000"],"x":[0.0,55.48]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,75.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,285.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,4.22,18.0],
-              "runs": [
-                {"baseline":11.0,"color":"#005fb8ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,75.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,285.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,213.0,18.0],
-              "runs": [
-                {"baseline":13.0,"color":"#5f5f5fff","family":"monospace","size":11.5,"text":"secret://op/Prod/aws/root_key","underline":[0.0,"#00000000"],"x":[12.0,212.92]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,75.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,316.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,36.5,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#9b9b9bff","family":"proportional","size":11.0,"text":"4m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,75.0,900.0,589.0],
-          "k": "text",
-          "pos": [880.0,344.5],
-          "rows": [
-            {
-              "rect": [-130.0,0.0,-0.03,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#005fb8ff","family":"proportional","size":11.0,"text":"Create rule from this ask…","underline":[0.0,"#00000000"],"x":[0.0,129.96]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"a":[20.0,373.0],"b":[880.0,373.0],"clip":[0.0,75.0,900.0,589.0],"k":"line","stroke":[1.0,"#e5e5e5ff"]},
-        {
-          "clip": [0.0,75.0,900.0,589.0],
-          "k": "text",
-          "pos": [20.0,382.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,138.16,16.0],
-              "runs": [
-                {"baseline":13.0,"color":"#1b1b1bff","family":"monospace","size":13.5,"text":"agent:brain-nx-t5","underline":[0.0,"#00000000"],"x":[0.0,138.13]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,75.0,900.0,589.0],
-          "k": "text",
-          "pos": [880.0,386.0],
-          "rows": [
-            {
-              "rect": [-4.0,0.0,0.22,8.0],
-              "runs": [
                 {"baseline":6.0,"color":"#0f7b0fff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
               ]
             }
@@ -3212,7 +2444,7 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [870.78,383.5],
+          "pos": [870.78,258.5],
           "rows": [
             {
               "rect": [-46.0,0.0,0.41,13.0],
@@ -3226,7 +2458,7 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,410.0],
+          "pos": [20.0,285.0],
           "rows": [
             {
               "rect": [0.0,0.0,4.22,18.0],
@@ -3240,7 +2472,7 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,410.0],
+          "pos": [20.0,285.0],
           "rows": [
             {
               "rect": [0.0,0.0,178.38,18.0],
@@ -3254,7 +2486,7 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,442.5],
+          "pos": [20.0,317.5],
           "rows": [
             {
               "rect": [0.0,0.0,6.63,13.0],
@@ -3268,7 +2500,7 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [31.63,443.5],
+          "pos": [31.63,318.5],
           "rows": [
             {
               "rect": [0.0,0.0,43.56,11.0],
@@ -3282,7 +2514,7 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [80.19,442.5],
+          "pos": [80.19,317.5],
           "rows": [
             {
               "rect": [0.0,0.0,41.53,13.0],
@@ -3296,7 +2528,7 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [126.72,443.5],
+          "pos": [126.72,318.5],
           "rows": [
             {
               "rect": [0.0,0.0,38.88,11.0],
@@ -3310,7 +2542,7 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [170.59,442.5],
+          "pos": [170.59,317.5],
           "rows": [
             {
               "rect": [0.0,0.0,139.06,13.0],
@@ -3324,12 +2556,12 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [20.0,471.5],
+          "pos": [20.0,346.5],
           "rows": [
             {
-              "rect": [0.0,0.0,36.5,13.0],
+              "rect": [0.0,0.0,33.28,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#9b9b9bff","family":"proportional","size":11.0,"text":"2m ago","underline":[0.0,"#00000000"],"x":[0.0,36.4]}
+                {"baseline":10.0,"color":"#9b9b9bff","family":"proportional","size":11.0,"text":"5h ago","underline":[0.0,"#00000000"],"x":[0.0,32.4]}
               ]
             }
           ],
@@ -3338,7 +2570,7 @@
         {
           "clip": [0.0,75.0,900.0,589.0],
           "k": "text",
-          "pos": [880.0,499.5],
+          "pos": [880.0,374.5],
           "rows": [
             {
               "rect": [-130.0,0.0,-0.03,13.0],

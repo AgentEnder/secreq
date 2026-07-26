@@ -502,6 +502,7 @@ mod tests {
             rule_id: None,
             fingerprint: None,
             sign_anchor: None,
+            declared_by: None,
             unverified_guest_chain: None,
         }
     }

@@ -108,6 +108,35 @@ pub struct AuditEntry {
     ///   `every_sign_row_this_version_names_its_anchor`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sign_anchor: Option<AuditSignAnchor>,
+    /// The local process the daemon saw on `consent.sock` naming the scope, on
+    /// a scoped-agent row only.
+    ///
+    /// **This is what tells a forged scoped-agent request from a genuine one**
+    /// after the fact. The daemon cannot distinguish them live and does not
+    /// try — both arrive as one `ClientMsg::Ask` on the same socket — so the
+    /// prompt states what it does know: which process spoke. A genuine request
+    /// names the `secreq agent open` the user started, at the path they
+    /// installed it to; a forger names itself, in its own executable. That
+    /// evidence reached the screen and stopped there, so a forgery was visible
+    /// for as long as the prompt was up and anonymous forever after.
+    ///
+    /// **Not the principal, and it must never become one.** The host-declared
+    /// scope stays the gating identity, the grant anchor and this row's `wrap`,
+    /// per the provenance section of
+    /// `brain: areas/secreq/design/2026-07-16-remote-secret-agent.md`. This is a
+    /// fact about a *host* socket — `consent.sock`, per-user, `0600`, never
+    /// forwarded — and says nothing whatever about the guest, which is in
+    /// another kernel behind whatever tunnel the scoped socket runs over.
+    ///
+    /// `None` means one of two things, told apart by `wrap`:
+    ///
+    /// - On a row whose `wrap` does **not** start with `agent:`, no scope was
+    ///   declared, so nothing named one.
+    /// - On an `agent:` row, the row **predates this field**. Distinct from
+    ///   [`ScopeDeclarant::NotRead`], which is a row this version wrote about a
+    ///   release that never reached the daemon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_by: Option<ScopeDeclarant>,
     /// The caller chain a **guest reported about itself** on a scoped-agent
     /// row, already rendered for display (`"node → pnpm → postinstall"`);
     /// `None` on every other row, and on guest rows that claimed nothing.
@@ -142,6 +171,82 @@ pub struct AuditCaller {
     pub command: String,
     /// Absolute path to the executable; see [`crate::daemon::proto::Caller`].
     /// `#[serde(default)]` so rows written before this decode as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exe: Option<String>,
+}
+
+/// Everything the daemon still holds about an ask whose client died before
+/// the user decided, for [`AuditEntry::abandoned`].
+///
+/// The awkward half of this struct is the point: `callers_truncated`,
+/// `sign_anchor` and `declared_by` are each the last surviving copy of
+/// something the daemon observed and the client can no longer be asked about.
+/// A row that dropped one reads, months later, exactly like a row where the
+/// answer was "no".
+pub struct AbandonedAsk<'a> {
+    pub wrap: &'a str,
+    pub args: &'a [String],
+    /// The **requesting** process's working directory, not the daemon's.
+    pub cwd: &'a str,
+    pub callers: &'a [AuditCaller],
+    pub callers_truncated: bool,
+    /// Secret **names** the ask would have released. Never values.
+    pub secret_names: &'a [String],
+    /// `Some` on a sign ask; see [`AuditEntry::sign_anchor`].
+    pub sign_anchor: Option<AuditSignAnchor>,
+    /// `Some` on a scoped-agent ask; see [`AuditEntry::declared_by`].
+    pub declared_by: Option<ScopeDeclarant>,
+}
+
+/// What the host could say about the local process that named a scope, for
+/// [`AuditEntry::declared_by`].
+///
+/// Three answers rather than an `Option<AuditLocalPeer>`, because "nobody
+/// looked" and "we looked and it was gone" are different facts and a log that
+/// spells them the same way is asserting one of them without checking.
+///
+/// It also crosses the daemon socket, on the reply to a scoped-agent ask
+/// (`daemon::proto::DaemonMsg::Decision`). That is the log's vocabulary
+/// travelling rather than a display type being persisted: the scoped agent is
+/// a *client*, so it writes its own audit rows, and the only value in this
+/// field is that the daemon — not the client describing itself — produced it.
+/// A client writing its own pid here would make the row a claim; the point is
+/// that it is the kernel's answer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScopeDeclarant {
+    /// The kernel's answer: the process on the other end of `consent.sock`.
+    Peer(AuditLocalPeer),
+    /// The daemon looked and the process had already exited (between the
+    /// `SO_PEERCRED` call and the lookup). Recorded rather than dropped,
+    /// because a row that looks the same whether or not anything checked is
+    /// the failure this field exists to fix.
+    Gone,
+    /// Nothing read a peer for this row: the release never reached the daemon.
+    /// A ref the scope's own allowlist refused, or one served by the scope's
+    /// cached grant, is decided inside the agent process — the row's
+    /// `decision` (`deny+out-of-scope`, `approve+cached`) says which. The
+    /// prompt that granted the cache entry has its own row, with its own
+    /// declarant.
+    NotRead,
+}
+
+/// A local process as the kernel described it, as an audit row records it.
+///
+/// Mirrors [`crate::daemon::proto::LocalPeer`] for the reason [`AuditCaller`]
+/// mirrors a caller frame: one is drawn on a prompt for a few seconds, the
+/// other is read out of a file months later, and the wire side is free to
+/// gain display fields the log has no business keeping forever.
+///
+/// `name` and `command` are what the process chose for itself; `exe` is what
+/// the kernel loaded. All three are kept because their value is being
+/// adjacent: `secreq` beside `/tmp/.build-cache/postinstall` is a
+/// contradiction nobody has to go looking for.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuditLocalPeer {
+    pub pid: u32,
+    pub name: String,
+    pub command: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exe: Option<String>,
 }
@@ -231,6 +336,8 @@ impl AuditEntry {
             // Not a sign, so there is no anchor — absent for the same reason
             // `fingerprint` is.
             sign_anchor: None,
+            // No scope was declared, so nothing named one.
+            declared_by: None,
             // Local wraps have a real, kernel-sourced `callers`; there is no
             // guest to be claiming anything.
             unverified_guest_chain: None,
@@ -278,6 +385,7 @@ impl AuditEntry {
             rule_id: None,
             fingerprint: Some(fingerprint.to_owned()),
             sign_anchor: Some(AuditSignAnchor::from_runtime(anchor)),
+            declared_by: None,
             unverified_guest_chain: None,
         }
     }
@@ -302,11 +410,19 @@ impl AuditEntry {
     /// fields are kept apart on purpose: one is what the host saw, the other
     /// is what the guest said, and a log that blurs them is worse than a log
     /// that omits the claim entirely.
+    ///
+    /// `declared_by` is the third kind of thing on this row and the only one
+    /// the *daemon* asserted: which local process was on `consent.sock` when
+    /// the prompt went up. It is passed in rather than derived here for the
+    /// reason the field exists at all — a process describing itself is a
+    /// claim, and this row is supposed to carry the kernel's answer, which
+    /// only the daemon has. See [`AuditEntry::declared_by`].
     pub fn agent_resolve(
         scope: &str,
         reference: &str,
         decision: Decision,
         guest_chain: Option<&str>,
+        declared_by: ScopeDeclarant,
     ) -> AuditEntry {
         AuditEntry {
             ts_unix: now_unix(),
@@ -328,6 +444,7 @@ impl AuditEntry {
             fingerprint: None,
             // Nothing was signed, so there is no anchor.
             sign_anchor: None,
+            declared_by: Some(declared_by),
             unverified_guest_chain: guest_chain.map(str::to_owned),
         }
     }
@@ -349,31 +466,31 @@ impl AuditEntry {
     /// walk of the socket peer, and splitting them here is how a row ends up
     /// claiming an ancestry it only has part of.
     ///
-    /// `sign_anchor` is `Some` on exactly the rows a live [`AuditEntry::ssh_sign`]
-    /// would have filled it on: an abandoned sign carries an `ssh:` wrap, and a
-    /// reader must not have to know that "abandoned" is the one kind of `ssh:`
-    /// row where an absent anchor means something other than an old log.
-    pub fn abandoned(
-        wrap: &str,
-        args: &[String],
-        cwd: &str,
-        callers: &[AuditCaller],
-        callers_truncated: bool,
-        secret_names: &[String],
-        sign_anchor: Option<AuditSignAnchor>,
-    ) -> AuditEntry {
+    /// `sign_anchor` and `declared_by` are `Some` on exactly the rows a live
+    /// [`AuditEntry::ssh_sign`] / [`AuditEntry::agent_resolve`] would have
+    /// filled them on. An abandoned sign carries an `ssh:` wrap and an
+    /// abandoned guest request an `agent:` one, and a reader must not have to
+    /// know that "abandoned" is the one kind of row where an absent field
+    /// means something other than an old log.
+    ///
+    /// Takes [`AbandonedAsk`] rather than eight positional arguments: half of
+    /// them are the daemon's last copy of a fact nobody else still holds, and
+    /// at that width a swapped pair is a silent mis-attribution rather than a
+    /// type error.
+    pub fn abandoned(ask: AbandonedAsk<'_>) -> AuditEntry {
         AuditEntry {
             ts_unix: now_unix(),
-            cwd: cwd.to_owned(),
-            wrap: wrap.to_owned(),
-            args: args.to_vec(),
-            callers: callers.to_vec(),
-            callers_truncated: Some(callers_truncated),
-            secrets: secret_names.to_vec(),
+            cwd: ask.cwd.to_owned(),
+            wrap: ask.wrap.to_owned(),
+            args: ask.args.to_vec(),
+            callers: ask.callers.to_vec(),
+            callers_truncated: Some(ask.callers_truncated),
+            secrets: ask.secret_names.to_vec(),
             decision: Decision::Abandoned.as_str().to_owned(),
             rule_id: None,
             fingerprint: None,
-            sign_anchor,
+            sign_anchor: ask.sign_anchor,
+            declared_by: ask.declared_by,
             unverified_guest_chain: None,
         }
     }
@@ -607,6 +724,7 @@ mod tests {
             "secret://op/Dev/gh/token",
             Decision::Approve,
             None,
+            ScopeDeclarant::NotRead,
         );
         let json = serde_json::to_string(&entry).expect("serialize agent-resolve entry");
 
@@ -643,6 +761,7 @@ mod tests {
             "secret://op/Prod/aws/key",
             Decision::DenyOutOfScope,
             None,
+            ScopeDeclarant::NotRead,
         );
         assert_eq!(entry.decision, "deny+out-of-scope");
         assert_ne!(entry.decision, Decision::Deny.as_str());
@@ -659,6 +778,7 @@ mod tests {
             "secret://op/Dev/gh/token",
             Decision::Approve,
             Some("node → pnpm → postinstall"),
+            ScopeDeclarant::NotRead,
         );
 
         assert_eq!(
@@ -687,6 +807,7 @@ mod tests {
             "secret://op/Dev/gh/token",
             Decision::Approve,
             None,
+            ScopeDeclarant::NotRead,
         );
         let json = serde_json::to_string(&entry).expect("serialize");
         assert!(!json.contains("unverified_guest_chain"), "json: {json}");
@@ -722,15 +843,16 @@ mod tests {
                 exe: None,
             },
         ];
-        let entry = AuditEntry::abandoned(
-            "gh",
-            &["pr".to_owned(), "view".to_owned(), "42".to_owned()],
-            "/home/dev/project",
-            &callers,
-            false,
-            &["GITHUB_TOKEN".to_owned()],
-            None,
-        );
+        let entry = AuditEntry::abandoned(AbandonedAsk {
+            wrap: "gh",
+            args: &["pr".to_owned(), "view".to_owned(), "42".to_owned()],
+            cwd: "/home/dev/project",
+            callers: &callers,
+            callers_truncated: false,
+            secret_names: &["GITHUB_TOKEN".to_owned()],
+            sign_anchor: None,
+            declared_by: None,
+        });
         assert_eq!(entry.decision, "abandoned");
         assert_eq!(entry.wrap, "gh");
         assert_eq!(entry.args, vec!["pr", "view", "42"]);
@@ -856,6 +978,162 @@ mod tests {
         );
     }
 
+    fn impostor() -> AuditLocalPeer {
+        AuditLocalPeer {
+            pid: 82702,
+            // The `comm` a forger picks is the convincing half. The exe below
+            // is the one it did not get to choose.
+            name: "secreq".to_owned(),
+            command: "secreq agent open brain-nx-t5".to_owned(),
+            exe: Some("/tmp/.build-cache/postinstall".to_owned()),
+        }
+    }
+
+    /// The finding: a forged scoped-agent request and a genuine one wrote the
+    /// same row. The prompt renders the difference live and the log did not,
+    /// so a forgery was visible only for as long as the window was up.
+    #[test]
+    fn a_forged_scoped_agent_row_names_the_process_that_named_the_scope() {
+        let entry = AuditEntry::agent_resolve(
+            "brain-nx-t5",
+            "secret://op/Dev/gh/token",
+            Decision::Approve,
+            None,
+            ScopeDeclarant::Peer(impostor()),
+        );
+        let ScopeDeclarant::Peer(peer) = entry.declared_by.as_ref().expect("declarant recorded")
+        else {
+            panic!("expected a peer");
+        };
+        assert_eq!(peer.pid, 82702);
+        assert_eq!(
+            peer.exe.as_deref(),
+            Some("/tmp/.build-cache/postinstall"),
+            "the executable is the half the process did not choose, and the \
+             whole reason the row is worth reading"
+        );
+        assert!(
+            entry.callers.is_empty(),
+            "the peer is not provenance and must not be filed as a caller chain"
+        );
+        assert_eq!(
+            entry.wrap, "agent:brain-nx-t5",
+            "the scope stays the principal and the row's label"
+        );
+
+        let json = serde_json::to_string(&entry).expect("serialize");
+        assert!(
+            json.contains("/tmp/.build-cache/postinstall"),
+            "json: {json}"
+        );
+        assert!(json.contains("\"callers\":[]"), "json: {json}");
+    }
+
+    /// Two facts that are not the same fact. A release the scope's allowlist
+    /// refused, or one its cached grant served, never reached the daemon —
+    /// nothing read a peer. That is not the same as a daemon looking and
+    /// finding the process gone, and a log that spells them alike asserts one
+    /// of them without checking.
+    #[test]
+    fn nothing_looked_and_the_peer_was_gone_are_recorded_differently() {
+        let not_read = AuditEntry::agent_resolve(
+            "brain-nx-t5",
+            "secret://op/Prod/aws/key",
+            Decision::DenyOutOfScope,
+            None,
+            ScopeDeclarant::NotRead,
+        );
+        let gone = AuditEntry::agent_resolve(
+            "brain-nx-t5",
+            "secret://op/Dev/gh/token",
+            Decision::Approve,
+            None,
+            ScopeDeclarant::Gone,
+        );
+        assert_eq!(not_read.declared_by, Some(ScopeDeclarant::NotRead));
+        assert_eq!(gone.declared_by, Some(ScopeDeclarant::Gone));
+        assert_ne!(not_read.declared_by, gone.declared_by);
+
+        let json = serde_json::to_string(&not_read).expect("serialize");
+        assert!(
+            json.contains("\"declared_by\":\"not_read\""),
+            "json: {json}"
+        );
+        let json = serde_json::to_string(&gone).expect("serialize");
+        assert!(json.contains("\"declared_by\":\"gone\""), "json: {json}");
+    }
+
+    /// An `agent:` row from before the field reads back as **absent**, which
+    /// the audit view renders as its own state. Absent is not `NotRead`: one
+    /// is "this version never wrote it down", the other is "this version
+    /// wrote down that nothing looked".
+    #[test]
+    fn an_agent_row_written_before_the_field_is_absent_not_not_read() {
+        let json = r#"{"ts_unix":1,"cwd":"","wrap":"agent:brain-nx-t5","args":[],
+                       "callers":[],"callers_truncated":false,
+                       "secrets":["secret://op/a/b"],"decision":"approve"}"#;
+        let parsed: AuditEntry = serde_json::from_str(json).expect("older rows must parse");
+        assert_eq!(parsed.declared_by, None);
+        assert_ne!(parsed.declared_by, Some(ScopeDeclarant::NotRead));
+    }
+
+    /// The invariant that makes an absent field readable: every row this
+    /// version writes with an `agent:` wrap answers the question, so absence
+    /// on such a row means an old log and nothing else.
+    #[test]
+    fn every_scoped_agent_row_this_version_writes_answers_who_named_the_scope() {
+        let agent_rows = [
+            AuditEntry::agent_resolve(
+                "brain-nx-t5",
+                "secret://op/a/b",
+                Decision::Approve,
+                None,
+                ScopeDeclarant::Peer(impostor()),
+            ),
+            AuditEntry::abandoned(AbandonedAsk {
+                wrap: "agent:brain-nx-t5",
+                args: &[],
+                cwd: "",
+                callers: &[],
+                callers_truncated: false,
+                secret_names: &[],
+                sign_anchor: None,
+                declared_by: Some(ScopeDeclarant::Gone),
+            }),
+        ];
+        for row in &agent_rows {
+            assert!(
+                row.wrap.starts_with("agent:"),
+                "this test is only meaningful for scoped-agent rows: {row:?}"
+            );
+            assert!(
+                row.declared_by.is_some(),
+                "constructor left the declarant absent on an agent: row, which a \
+                 reader takes to mean 'written by an older secreq': {row:?}"
+            );
+        }
+
+        // The two that declare no scope leave it off, which is what keeps the
+        // field out of every wrap and sign row in the log.
+        let chain = CallerChain {
+            frames: Vec::new(),
+            truncated: false,
+        };
+        assert!(AuditEntry::new("gh", &[], &chain, &[], Decision::Approve)
+            .declared_by
+            .is_none());
+        assert!(AuditEntry::ssh_sign(
+            "ssh.deploy",
+            "SHA256:x",
+            &chain,
+            &test_anchor(SignAnchorKind::Session, 1, "-zsh"),
+            "/w",
+            Decision::Approve
+        )
+        .declared_by
+        .is_none());
+    }
+
     /// The invariant the audit view's unknown state rests on: every row this
     /// version writes with an `ssh:` wrap names its anchor, so an absent one on
     /// such a row means an old log and nothing else. The two constructors that
@@ -878,15 +1156,16 @@ mod tests {
                 "/w",
                 Decision::Approve,
             ),
-            AuditEntry::abandoned(
-                "ssh:ssh.deploy",
-                &[],
-                "/w",
-                &[],
-                false,
-                &[],
-                Some(AuditSignAnchor::from_runtime(&anchor)),
-            ),
+            AuditEntry::abandoned(AbandonedAsk {
+                wrap: "ssh:ssh.deploy",
+                args: &[],
+                cwd: "/w",
+                callers: &[],
+                callers_truncated: false,
+                secret_names: &[],
+                sign_anchor: Some(AuditSignAnchor::from_runtime(&anchor)),
+                declared_by: None,
+            }),
         ];
         for row in &sign_rows {
             assert!(
@@ -905,11 +1184,15 @@ mod tests {
         assert!(AuditEntry::new("gh", &[], &chain, &[], Decision::Approve)
             .sign_anchor
             .is_none());
-        assert!(
-            AuditEntry::agent_resolve("scope", "secret://op/a/b", Decision::Approve, None)
-                .sign_anchor
-                .is_none()
-        );
+        assert!(AuditEntry::agent_resolve(
+            "scope",
+            "secret://op/a/b",
+            Decision::Approve,
+            None,
+            ScopeDeclarant::NotRead
+        )
+        .sign_anchor
+        .is_none());
     }
 
     /// The invariant the audit view's third state rests on: **every**
@@ -939,8 +1222,23 @@ mod tests {
                 "/w",
                 Decision::Approve,
             ),
-            AuditEntry::agent_resolve("scope", "secret://op/a/b", Decision::Approve, None),
-            AuditEntry::abandoned("gh", &[], "/w", &[], true, &[], None),
+            AuditEntry::agent_resolve(
+                "scope",
+                "secret://op/a/b",
+                Decision::Approve,
+                None,
+                ScopeDeclarant::NotRead,
+            ),
+            AuditEntry::abandoned(AbandonedAsk {
+                wrap: "gh",
+                args: &[],
+                cwd: "/w",
+                callers: &[],
+                callers_truncated: true,
+                secret_names: &[],
+                sign_anchor: None,
+                declared_by: None,
+            }),
         ];
         for row in &rows {
             assert!(

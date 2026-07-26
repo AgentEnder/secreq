@@ -119,7 +119,8 @@ Three shorter rules apply to every socket:
   is resolved fresh and zeroized every time.
 - The socket lives as long as the `agent open` process. Kill it and the
   grants die with it; there is nothing to revoke.
-- Every release is audited: scope, ref, decision. Never the value.
+- Every release is audited: scope, ref, decision, and the local process
+  the daemon saw naming the scope. Never the value.
 
 ## Trust-model note: granularity is downgraded
 

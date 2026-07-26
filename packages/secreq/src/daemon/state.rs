@@ -22,7 +22,7 @@ use std::time::{Duration, Instant, SystemTime};
 use anyhow::{Context, Result};
 use zeroize::Zeroizing;
 
-use crate::audit::{self, AuditCaller, AuditEntry, AuditSignAnchor};
+use crate::audit::{self, AbandonedAsk, AuditCaller, AuditEntry, AuditSignAnchor, ScopeDeclarant};
 use crate::consent::{ApprovalEntry, Decision, SshGrant};
 use crate::manifest::{BatchRetrieve, Manifest, Provider};
 use crate::provenance::ProcessIdentity;
@@ -85,6 +85,11 @@ pub struct Waiter {
     /// is not recoverable from `callers`: the forwarding client is the socket
     /// peer, and the chain starts above it.
     pub sign_anchor: Option<AuditSignAnchor>,
+    /// On a scoped-agent ask, the local process this daemon saw naming the
+    /// scope. Kept for the same reason again: the ask carried the daemon's own
+    /// reading of the socket peer, and once the agent process is gone nothing
+    /// else can be asked who it was.
+    pub declared_by: Option<ScopeDeclarant>,
 }
 
 impl QueueEntry {
@@ -1154,6 +1159,7 @@ impl State {
             callers: ask.callers().to_vec(),
             callers_truncated: ask.callers_truncated(),
             sign_anchor: ask.sign_anchor().map(audit_sign_anchor),
+            declared_by: ask.declared_by(),
         });
         self.show_window();
         self.broadcast_consent_update();
@@ -1354,15 +1360,16 @@ impl State {
             })
             .collect();
         let secret_names: Vec<String> = waiter.requested.iter().map(|s| s.name.clone()).collect();
-        AuditEntry::abandoned(
-            &key.wrap,
+        AuditEntry::abandoned(AbandonedAsk {
+            wrap: &key.wrap,
             args,
-            &waiter.cwd,
-            &callers,
-            waiter.callers_truncated,
-            &secret_names,
-            waiter.sign_anchor.clone(),
-        )
+            cwd: &waiter.cwd,
+            callers: &callers,
+            callers_truncated: waiter.callers_truncated,
+            secret_names: &secret_names,
+            sign_anchor: waiter.sign_anchor.clone(),
+            declared_by: waiter.declared_by.clone(),
+        })
     }
 
     /// Remove a single parked waiter whose client exited before the user
@@ -3333,6 +3340,7 @@ mod tests {
             callers: x_ask.callers().to_vec(),
             callers_truncated: x_ask.callers_truncated(),
             sign_anchor: None,
+            declared_by: None,
         };
         let entry = State::abandoned_audit_entry(&x_ask.dedupe_key, &waiter);
         assert_eq!(entry.wrap, "gh");
@@ -3354,6 +3362,7 @@ mod tests {
             callers: vec![],
             callers_truncated: false,
             sign_anchor: None,
+            declared_by: None,
         };
         let entry2 = State::abandoned_audit_entry(&run_ask.dedupe_key, &waiter2);
         assert_eq!(entry2.wrap, "run");
@@ -3378,6 +3387,7 @@ mod tests {
                 callers: ask.callers().to_vec(),
                 callers_truncated: truncated,
                 sign_anchor: None,
+                declared_by: None,
             };
             let entry = State::abandoned_audit_entry(&ask.dedupe_key, &waiter);
             assert_eq!(entry.callers_truncated, Some(truncated));
@@ -3424,6 +3434,64 @@ mod tests {
             entry.wrap.starts_with("ssh:"),
             "an ssh: row with no anchor reads as one written by an older secreq"
         );
+    }
+
+    /// A guest request whose agent died mid-prompt still writes an `agent:`
+    /// row, and the daemon is the only one left holding the answer to who put
+    /// that scope name on the socket. The client cannot be asked; it is gone,
+    /// and asking it was never the point.
+    #[test]
+    fn an_abandoned_guest_ask_keeps_the_peer_that_named_its_scope() {
+        let mut state = State::new();
+        let mut ask = ask_with_secret("agent:brain-nx-t5", &["agent-resolve"], "unused");
+        ask.subject = AskSubject::ScopedAgent(super::super::proto::AgentAskInfo {
+            scope: "brain-nx-t5".to_owned(),
+            reference: "secret://op/Dev/gh/token".to_owned(),
+            guest_chain: None,
+            declared_by: Some(super::super::proto::LocalPeer {
+                pid: 82702,
+                name: "secreq".to_owned(),
+                command: "secreq agent open brain-nx-t5".to_owned(),
+                exe: Some("/tmp/.build-cache/postinstall".to_owned()),
+            }),
+        });
+        let (tx, _rx) = mpsc::channel();
+        state.submit_ask(ask.clone(), tx);
+        let waiter = &state
+            .queue_entry_for_test(&ask.dedupe_key)
+            .expect("queued")
+            .waiters[0];
+
+        let entry = State::abandoned_audit_entry(&ask.dedupe_key, waiter);
+        let Some(ScopeDeclarant::Peer(peer)) = entry.declared_by.as_ref() else {
+            panic!("expected the daemon's reading, got {:?}", entry.declared_by);
+        };
+        assert_eq!(peer.pid, 82702);
+        assert_eq!(peer.exe.as_deref(), Some("/tmp/.build-cache/postinstall"));
+    }
+
+    /// A peer the daemon could not read is recorded as such, never dropped: a
+    /// row that looks the same whether or not anything checked is the failure
+    /// the field exists to fix.
+    #[test]
+    fn an_abandoned_guest_ask_with_an_unreadable_peer_says_so() {
+        let mut state = State::new();
+        let mut ask = ask_with_secret("agent:brain-nx-t5", &["agent-resolve"], "unused");
+        ask.subject = AskSubject::ScopedAgent(super::super::proto::AgentAskInfo {
+            scope: "brain-nx-t5".to_owned(),
+            reference: "secret://op/Dev/gh/token".to_owned(),
+            guest_chain: None,
+            declared_by: None,
+        });
+        let (tx, _rx) = mpsc::channel();
+        state.submit_ask(ask.clone(), tx);
+        let waiter = &state
+            .queue_entry_for_test(&ask.dedupe_key)
+            .expect("queued")
+            .waiters[0];
+
+        let entry = State::abandoned_audit_entry(&ask.dedupe_key, waiter);
+        assert_eq!(entry.declared_by, Some(ScopeDeclarant::Gone));
     }
 
     /// And the flag has to reach the waiter in the first place — it is read

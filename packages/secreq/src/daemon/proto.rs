@@ -413,6 +413,29 @@ impl Ask {
         }
     }
 
+    /// The local process the daemon saw naming this ask's scope, on a
+    /// scoped-agent ask; `None` on every other kind.
+    ///
+    /// Stamped by `server::adopt_peer_provenance` before anything reads the
+    /// ask, so this is the kernel's answer and not the client's. `Some(Gone)`
+    /// when the peer had already exited — a distinction the audit row keeps,
+    /// because a row that looks the same whether or not anything checked is
+    /// the failure the field exists to fix.
+    pub fn declared_by(&self) -> Option<crate::audit::ScopeDeclarant> {
+        match &self.subject {
+            AskSubject::ScopedAgent(agent) => Some(match &agent.declared_by {
+                Some(peer) => crate::audit::ScopeDeclarant::Peer(crate::audit::AuditLocalPeer {
+                    pid: peer.pid,
+                    name: peer.name.clone(),
+                    command: peer.command.clone(),
+                    exe: peer.exe.clone(),
+                }),
+                None => crate::audit::ScopeDeclarant::Gone,
+            }),
+            AskSubject::Wrap(_) | AskSubject::SshSign(_) => None,
+        }
+    }
+
     /// The frame a sign grant would bind to, on a sign ask; `None` on every
     /// other kind.
     ///
@@ -842,6 +865,16 @@ pub enum DaemonMsg {
         rule_name: Option<String>,
         #[serde(default)]
         deny_message: Option<String>,
+        /// On a scoped-agent ask, the peer the daemon stamped onto
+        /// [`AgentAskInfo::declared_by`]; `None` on every other kind.
+        ///
+        /// Sent back because the scoped agent is a *client* and writes its own
+        /// audit rows, and this is the one thing on such a row that the client
+        /// cannot honestly supply: a process writing its own pid here would
+        /// make the row a claim, where the whole value is that it is the
+        /// kernel's answer. See [`crate::audit::AuditEntry::declared_by`].
+        #[serde(default)]
+        declared_by: Option<crate::audit::ScopeDeclarant>,
     },
     /// Generic acknowledgement (Ping / ConsentWindowDetach / Shutdown).
     Ok,
@@ -924,6 +957,7 @@ impl std::fmt::Debug for DaemonMsg {
                 rule_id,
                 rule_name,
                 deny_message,
+                declared_by,
             } => f
                 .debug_struct("Decision")
                 .field("decision", decision)
@@ -931,6 +965,7 @@ impl std::fmt::Debug for DaemonMsg {
                 .field("rule_id", rule_id)
                 .field("rule_name", rule_name)
                 .field("deny_message", deny_message)
+                .field("declared_by", declared_by)
                 .finish(),
             DaemonMsg::Ok => f.write_str("Ok"),
             DaemonMsg::Hello { build_id } => {
@@ -1034,6 +1069,7 @@ mod debug_redaction_tests {
                 rule_id: None,
                 rule_name: None,
                 deny_message: None,
+                declared_by: None,
             }
         );
 

@@ -993,6 +993,7 @@ fn serve_stub(listener: UnixListener, asked: Sender<()>, approve: Receiver<()>) 
                     rule_id: None,
                     rule_name: None,
                     deny_message: None,
+                    declared_by: None,
                 }
             }
             _ => DaemonMsg::Ok,

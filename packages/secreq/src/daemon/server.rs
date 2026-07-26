@@ -887,10 +887,19 @@ enum AskDisposition {
         key: DedupeKey,
         waiter_id: WaiterId,
         rx: mpsc::Receiver<WaiterReply>,
+        /// Carried through the park so the eventual reply can hand a
+        /// scoped-agent client the peer this daemon read for it — the ask is
+        /// gone into the queue by then, and the client cannot honestly supply
+        /// it. See `proto::Ask::declared_by`.
+        declared_by: Option<crate::audit::ScopeDeclarant>,
     },
 }
 
 fn handle_ask(ask: Ask, state: SharedState) -> AskDisposition {
+    // Read off the ask before it is consumed. `adopt_peer_provenance` has
+    // already stamped it, so this is the kernel's answer about the socket
+    // peer, not anything the client wrote.
+    let declared_by = ask.declared_by();
     // Fast-path: parent-keyed approval cache hit. Take the lock briefly
     // to check authorization, then *release it* before resolving — the
     // provider call (and any biometric prompt) must not hold the state
@@ -912,7 +921,7 @@ fn handle_ask(ask: Ask, state: SharedState) -> AskDisposition {
                 in_flight,
                 &state,
             );
-            return AskDisposition::Resolved(waiter_reply_to_daemon_msg(reply));
+            return AskDisposition::Resolved(waiter_reply_to_daemon_msg(reply, declared_by));
         }
     }
     // Auto-rules path. The mtime-based reload already ran in
@@ -928,7 +937,14 @@ fn handle_ask(ask: Ask, state: SharedState) -> AskDisposition {
             let cache = guard.secret_cache_arc();
             let in_flight = guard.in_flight_arc();
             drop(guard);
-            return AskDisposition::Resolved(handle_rule_hit(ask, hit, cache, in_flight, state));
+            return AskDisposition::Resolved(handle_rule_hit(
+                ask,
+                hit,
+                cache,
+                in_flight,
+                state,
+                declared_by,
+            ));
         }
     }
     // Nested-run fast path: a `run` invoked under an already-consented
@@ -954,7 +970,7 @@ fn handle_ask(ask: Ask, state: SharedState) -> AskDisposition {
                 in_flight,
                 &state,
             );
-            return AskDisposition::Resolved(waiter_reply_to_daemon_msg(reply));
+            return AskDisposition::Resolved(waiter_reply_to_daemon_msg(reply, declared_by));
         }
     }
     // Slow path: enqueue and hand the caller the channel + waiter id so it
@@ -1011,7 +1027,12 @@ fn handle_ask(ask: Ask, state: SharedState) -> AskDisposition {
             format_args!("ensure_badge_window failed: {err:#}"),
         );
     }
-    AskDisposition::Enqueued { key, waiter_id, rx }
+    AskDisposition::Enqueued {
+        key,
+        waiter_id,
+        rx,
+        declared_by,
+    }
 }
 
 /// Drive a one-shot Ask connection. Fast-path resolutions reply straight
@@ -1173,9 +1194,12 @@ fn handle_ask_connection(
             let mut writer = stream;
             write_reply(&mut writer, &reply)
         }
-        AskDisposition::Enqueued { key, waiter_id, rx } => {
-            park_ask_and_watch(reader, stream, state, key, waiter_id, rx)
-        }
+        AskDisposition::Enqueued {
+            key,
+            waiter_id,
+            rx,
+            declared_by,
+        } => park_ask_and_watch(reader, stream, state, key, waiter_id, rx, declared_by),
     }
 }
 
@@ -1189,6 +1213,7 @@ fn park_ask_and_watch(
     key: DedupeKey,
     waiter_id: WaiterId,
     rx: mpsc::Receiver<WaiterReply>,
+    declared_by: Option<crate::audit::ScopeDeclarant>,
 ) -> Result<()> {
     // Reply-writer: delivers the decision when the user acts. If the waiter
     // is withdrawn first (client already gone), its sender is dropped and
@@ -1198,7 +1223,7 @@ fn park_ask_and_watch(
         .spawn(move || {
             let mut writer = stream;
             if let Ok(reply) = rx.recv() {
-                let _ = write_reply(&mut writer, &waiter_reply_to_daemon_msg(reply));
+                let _ = write_reply(&mut writer, &waiter_reply_to_daemon_msg(reply, declared_by));
             }
         })
         .context("spawn ask reply-writer thread")?;
@@ -1323,6 +1348,7 @@ fn handle_rule_hit(
     cache: std::sync::Arc<std::sync::Mutex<super::cache::SecretCache>>,
     in_flight: std::sync::Arc<super::in_flight::InFlightMap>,
     state: SharedState,
+    declared_by: Option<crate::audit::ScopeDeclarant>,
 ) -> DaemonMsg {
     match hit.decide {
         crate::rules::RuleDecision::Deny => {
@@ -1340,6 +1366,7 @@ fn handle_rule_hit(
                 rule_id: Some(hit.rule_id),
                 rule_name: Some(hit.rule_name),
                 deny_message: hit.deny_message,
+                declared_by,
             }
         }
         crate::rules::RuleDecision::Approve => {
@@ -1366,6 +1393,7 @@ fn handle_rule_hit(
                     rule_id: Some(hit.rule_id),
                     rule_name: Some(hit.rule_name),
                     deny_message: None,
+                    declared_by,
                 },
                 WaiterReply::Err { message } => DaemonMsg::Err { message },
             }
@@ -1423,7 +1451,10 @@ fn resolve_approved_with_pending(
     reply
 }
 
-fn waiter_reply_to_daemon_msg(reply: WaiterReply) -> DaemonMsg {
+fn waiter_reply_to_daemon_msg(
+    reply: WaiterReply,
+    declared_by: Option<crate::audit::ScopeDeclarant>,
+) -> DaemonMsg {
     match reply {
         WaiterReply::Decision { decision, secrets } => DaemonMsg::Decision {
             decision,
@@ -1435,6 +1466,7 @@ fn waiter_reply_to_daemon_msg(reply: WaiterReply) -> DaemonMsg {
             rule_id: None,
             rule_name: None,
             deny_message: None,
+            declared_by,
         },
         WaiterReply::Err { message } => DaemonMsg::Err { message },
     }
@@ -1515,6 +1547,7 @@ mod tests {
             rule_id: None,
             rule_name: None,
             deny_message: None,
+            declared_by: None,
         }
     }
 
@@ -1586,7 +1619,7 @@ mod tests {
             let (server_end, client_end) = UnixStream::pair().expect("socketpair");
             drop(client_end);
             let reader = BufReader::new(server_end.try_clone().expect("clone socket"));
-            park_ask_and_watch(reader, server_end, state.clone(), key, waiter_id, rx)
+            park_ask_and_watch(reader, server_end, state.clone(), key, waiter_id, rx, None)
                 .expect("watch returns cleanly on a client hang-up");
 
             // The card is reaped from the requests view...
@@ -2072,6 +2105,31 @@ mod tests {
         assert_eq!(agent.scope, "sandbox");
         assert!(ask.callers().is_empty());
         assert!(ask.cwd().is_empty());
+    }
+
+    /// …and the peer has to survive the *reply*, not just the prompt.
+    ///
+    /// The scoped agent is a client, so it writes its own audit rows — and it
+    /// is the one party that cannot honestly answer "who named this scope",
+    /// because it would be describing itself and a forger describes itself
+    /// just as fluently. So the daemon hands its reading back on the decision
+    /// reply. Without this hop the row is written by the only process with a
+    /// reason to lie about it.
+    #[test]
+    fn the_reply_carries_the_peer_the_daemon_read_so_the_client_can_log_it() {
+        let (server_conn, _client) = connected_pair();
+        let mut ask = forged_agent_ask();
+        adopt_peer_provenance(&mut ask, &server_conn).expect("provenance");
+
+        let Some(crate::audit::ScopeDeclarant::Peer(peer)) = ask.declared_by() else {
+            panic!("the daemon read a peer for this ask");
+        };
+        assert_eq!(peer.pid, std::process::id());
+        assert_ne!(peer.pid, FORGED_PID);
+
+        // A wrap ask declares no scope, so the reply carries nothing to
+        // record — which is what keeps the field off every non-guest row.
+        assert!(forged_ask("gh").declared_by().is_none());
     }
 
     /// `--no-remember` was parsed into `WrapRunOpts` and then read by

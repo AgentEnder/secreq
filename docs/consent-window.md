@@ -179,6 +179,14 @@ the difference.
 
 ::shot{id=43-audit-forwarded-sign}
 
+A sandbox request records the local process that named its scope. secreq
+cannot tell a sandbox agent you started from a process claiming to be one, so
+it writes down what the kernel said and leaves the reading to you: a genuine
+request names the `secreq agent open` you started, at the path you installed
+it to.
+
+::shot{id=44-audit-agent-declared-by}
+
 Search narrows across every field at once and reports how much of the log
 you're looking at. Each term may match a different field, so `gh auth` finds
 the row where both are true.
@@ -216,12 +224,12 @@ jq -c 'select(.decision | startswith("deny"))' ~/.secreq/audit.log
 `secrets` holds **names only, never values**. That is the invariant the
 whole file rests on. `callers_truncated` answers whether `callers` is the
 whole ancestry or only the part the walk reached; rows written before it
-existed omit it, which reads as "unknown" rather than as "complete". Four
+existed omit it, which reads as "unknown" rather than as "complete". Five
 more fields appear only when they apply: `rule_id` on
 auto-decisions, `fingerprint` (of the **public** key) and `sign_anchor` on SSH
-sign rows, and `unverified_guest_chain` for a chain a sandbox guest reported
-about itself. That last one is a claim rather than evidence, so it is kept out
-of `callers` and never read by rule matching.
+sign rows, and `declared_by` plus `unverified_guest_chain` on sandbox rows.
+That last one is a claim rather than evidence, so it is kept out of `callers`
+and never read by rule matching.
 
 `sign_anchor` names the process the signature was granted against, and its
 `kind` is `forwarded_ssh` when the request came through an agent you forwarded
@@ -234,6 +242,26 @@ jq -c 'select(.sign_anchor.kind == "forwarded_ssh")' ~/.secreq/audit.log
 That process is the one the caller chain cannot hold, so on an `ssh:` row
 written before the field existed the answer is absent, which again reads as
 unknown rather than as "local".
+
+`declared_by` names the local process that put a sandbox's scope name on the
+consent socket, as the kernel reported it:
+
+```json
+"declared_by": {
+  "peer": {
+    "pid": 4711,
+    "name": "secreq",
+    "command": "secreq agent open brain-nx-t5",
+    "exe": "/usr/local/bin/secreq"
+  }
+}
+```
+
+`name` is what the process called itself and `exe` is what was loaded, which
+is why both are kept. Two other values appear in its place: `"gone"` when the
+process had exited before the daemon could look it up, and `"not_read"` when
+the release never reached the daemon at all, which is what an
+`approve+cached` or `deny+out-of-scope` row records.
 
 The `decision` values distinguish what you did from what happened without
 you:

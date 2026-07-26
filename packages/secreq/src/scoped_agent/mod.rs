@@ -95,7 +95,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{bail, Context, Result};
 use zeroize::Zeroize;
 
-use crate::audit::{self, AuditEntry};
+use crate::audit::{self, AuditEntry, ScopeDeclarant};
 use crate::consent::{AgentAnchor, AgentGrant, Decision};
 use crate::daemon::proto::{AgentAskInfo, Ask, AskSubject, DedupeKey};
 use crate::manifest::{Manifest, Provider};
@@ -319,17 +319,36 @@ pub trait Gate: Send + Sync {
     /// `Err` means the consent machinery itself was unreachable, which is
     /// distinct from a refusal: the guest is told the request errored rather
     /// than that policy refused it. Either way nothing is released.
+    ///
+    /// Returns [`Consented`] rather than a bare `Decision` because the audit
+    /// row needs one more thing from this round-trip: the local process the
+    /// **daemon** saw naming the scope. This process cannot supply it — it
+    /// would be describing itself, and a forger describes itself just as
+    /// fluently.
     fn consent(
         &self,
         scope: &Scope,
         reference: &Reference,
         guest_chain: &GuestChain,
-    ) -> Result<Decision>;
+    ) -> Result<Consented>;
 
     /// Resolve an **already-approved** ref, fresh. Called on every release,
     /// including one served from [`ScopeApprovals`] — the decision caches,
     /// the value never does.
     fn resolve(&self, scope: &Scope, reference: &Reference) -> Result<SecretValue>;
+}
+
+/// One answer from the host about one guest request.
+///
+/// The decision is what the guest experiences; `declared_by` is what the
+/// **log** gets, and it is here rather than derived later because the daemon
+/// is the only party that ever holds it. A scoped-agent audit row otherwise
+/// records a scope name that any local process could have put on the wire,
+/// which is exactly the forgery the prompt learned to render and the log
+/// could not.
+pub struct Consented {
+    pub decision: Decision,
+    pub declared_by: ScopeDeclarant,
 }
 
 /// The clock [`ScopeApprovals`] expires grants against.
@@ -482,7 +501,7 @@ impl Gate for DaemonGate {
         scope: &Scope,
         reference: &Reference,
         guest_chain: &GuestChain,
-    ) -> Result<Decision> {
+    ) -> Result<Consented> {
         let ask = agent_ask(scope, reference, guest_chain);
         // `show_indicator = false`: the wait indicator writes to the
         // *host's* stderr, which for a long-lived `agent open` is a log,
@@ -493,7 +512,12 @@ impl Gate for DaemonGate {
         // daemon-side failure, and a guest must not get a secret out of one.
         let outcome =
             crate::daemon::client::request_consent(ask, false).context("consent request failed")?;
-        Ok(outcome.decision)
+        Ok(Consented {
+            decision: outcome.decision,
+            // Whatever the daemon read off `consent.sock`, unexamined. The
+            // one field on this row we deliberately did not compute.
+            declared_by: outcome.declared_by,
+        })
     }
 
     fn resolve(&self, _scope: &Scope, reference: &Reference) -> Result<SecretValue> {
@@ -653,7 +677,16 @@ pub fn handle_request(
             // compromised guest naming a friendly-looking chain must get
             // exactly as far as an honest one, which is nowhere.
             if !scope.allows(&reference) {
-                audit_release(scope, &reference, Decision::DenyOutOfScope, &guest_chain);
+                // `NotRead`, and it is the honest answer: the allowlist
+                // refused this before any daemon was dialled, so nothing read
+                // a peer for this row.
+                audit_release(
+                    scope,
+                    &reference,
+                    Decision::DenyOutOfScope,
+                    &guest_chain,
+                    ScopeDeclarant::NotRead,
+                );
                 log(
                     scope,
                     format_args!(
@@ -669,11 +702,20 @@ pub fn handle_request(
             // argument, so no story a guest tells can turn a miss into a
             // hit — which is precisely the "silent release" this design
             // refuses to sell.
-            let decision = if approvals.granted(scope, &reference) {
-                Decision::ApproveCached
+            let Consented {
+                decision,
+                declared_by,
+            } = if approvals.granted(scope, &reference) {
+                // Served by the scope's own grant, so again nothing read a
+                // peer for *this* row. The prompt that granted it has its own
+                // row, with its own declarant.
+                Consented {
+                    decision: Decision::ApproveCached,
+                    declared_by: ScopeDeclarant::NotRead,
+                }
             } else {
                 match gate.consent(scope, &reference, &guest_chain) {
-                    Ok(decision) => decision,
+                    Ok(consented) => consented,
                     Err(err) => {
                         // Same reasoning as the resolution failure below: the
                         // chain here carries `default_socket_path()`, which
@@ -693,7 +735,7 @@ pub fn handle_request(
             };
 
             if !decision.approved() {
-                audit_release(scope, &reference, decision, &guest_chain);
+                audit_release(scope, &reference, decision, &guest_chain, declared_by);
                 log(
                     scope,
                     format_args!("← resolve {reference}: {}", decision.as_str()),
@@ -714,7 +756,7 @@ pub fn handle_request(
             // Fresh, every time — including on the cached-decision path.
             match gate.resolve(scope, &reference) {
                 Ok(value) => {
-                    audit_release(scope, &reference, decision, &guest_chain);
+                    audit_release(scope, &reference, decision, &guest_chain, declared_by);
                     log(
                         scope,
                         format_args!("← resolve {reference}: {}", decision.as_str()),
@@ -772,12 +814,14 @@ fn audit_release(
     reference: &Reference,
     decision: Decision,
     guest_chain: &GuestChain,
+    declared_by: ScopeDeclarant,
 ) {
     let entry = AuditEntry::agent_resolve(
         scope.name(),
         &reference.to_string(),
         decision,
         guest_chain.display(),
+        declared_by,
     );
     if let Err(err) = audit::append(&entry) {
         log(
@@ -1221,7 +1265,7 @@ mod tests {
             _scope: &Scope,
             reference: &Reference,
             guest_chain: &GuestChain,
-        ) -> Result<Decision> {
+        ) -> Result<Consented> {
             self.prompts
                 .lock()
                 .expect("prompts mutex")
@@ -1230,7 +1274,10 @@ mod tests {
                 .lock()
                 .expect("chains mutex")
                 .push(guest_chain.display().map(str::to_owned));
-            Ok(self.decision)
+            Ok(Consented {
+                decision: self.decision,
+                declared_by: test_declarant(),
+            })
         }
 
         fn resolve(&self, _scope: &Scope, reference: &Reference) -> Result<SecretValue> {
@@ -1240,6 +1287,18 @@ mod tests {
                 .push(reference.to_string());
             Ok(SecretValue::new(self.value.clone()))
         }
+    }
+
+    /// The declarant a genuine `secreq agent open` produces, as the daemon
+    /// hands it back: the installed binary at the path the kernel loaded it
+    /// from. Fixtures that care about a forgery build their own.
+    fn test_declarant() -> ScopeDeclarant {
+        ScopeDeclarant::Peer(crate::audit::AuditLocalPeer {
+            pid: 4711,
+            name: "secreq".to_owned(),
+            command: "secreq agent open brain-nx-t5".to_owned(),
+            exe: Some("/usr/local/bin/secreq".to_owned()),
+        })
     }
 
     /// A clock a test winds by hand. Expiry is a property worth asserting,
@@ -1488,6 +1547,94 @@ mod tests {
             assert!(
                 gate.prompts().is_empty(),
                 "the gate (and therefore the prompt) must never be reached for an out-of-scope ref"
+            );
+        });
+    }
+
+    /// The gap this closes: an `agent:` row named a scope any local process
+    /// could have put on the wire, and nothing on it said which one did. The
+    /// prompt renders that peer; the row now keeps it, so a forgery is still
+    /// legible after the window is gone.
+    #[test]
+    fn a_released_row_records_the_process_the_daemon_saw_naming_the_scope() {
+        audit::with_temp_log(|| {
+            let scope = test_scope();
+            let gate = RecordingGate::new("s3cret");
+
+            handle_request(
+                &scope,
+                &approvals(),
+                &gate,
+                Request::resolve("secret://op/Dev/gh/token"),
+            );
+
+            let history = audit::read_history(None).expect("read audit history");
+            let row = history.last().expect("one row");
+            let Some(ScopeDeclarant::Peer(peer)) = row.declared_by.as_ref() else {
+                panic!(
+                    "expected the daemon's reading of the peer, got {:?}",
+                    row.declared_by
+                );
+            };
+            assert_eq!(peer.pid, 4711);
+            assert_eq!(peer.exe.as_deref(), Some("/usr/local/bin/secreq"));
+            assert!(
+                row.callers.is_empty(),
+                "the peer is not a caller chain and must not become one"
+            );
+        });
+    }
+
+    /// A release the *scope* decided — refused by its allowlist, or served by
+    /// its cached grant — never reached the daemon, so nothing read a peer.
+    /// Recording that as `NotRead` rather than as an unreadable peer is the
+    /// difference between "nobody looked" and "we looked and it was gone".
+    #[test]
+    fn a_release_that_never_reached_the_daemon_records_that_nothing_looked() {
+        audit::with_temp_log(|| {
+            let scope = test_scope();
+            let gate = RecordingGate::new("s3cret");
+
+            // Refused by the allowlist, before any consent request.
+            handle_request(
+                &scope,
+                &approvals(),
+                &gate,
+                Request::resolve("secret://op/Prod/aws/key"),
+            );
+            // Served by the scope's own grant: approve once with the grant
+            // decision, then ask again.
+            let granting = RecordingGate::deciding(Decision::ApproveAgentSession, "s3cret");
+            let approvals = approvals();
+            handle_request(
+                &scope,
+                &approvals,
+                &granting,
+                Request::resolve("secret://op/Dev/gh/token"),
+            );
+            handle_request(
+                &scope,
+                &approvals,
+                &granting,
+                Request::resolve("secret://op/Dev/gh/token"),
+            );
+
+            let history = audit::read_history(None).expect("read audit history");
+            assert_eq!(history.len(), 3);
+            assert_eq!(history[0].declared_by, Some(ScopeDeclarant::NotRead));
+            assert!(
+                matches!(history[1].declared_by, Some(ScopeDeclarant::Peer(_))),
+                "the prompted release records the peer the daemon read"
+            );
+            assert_eq!(
+                history[2].decision, "approve+cached",
+                "the second ask rides the grant"
+            );
+            assert_eq!(
+                history[2].declared_by,
+                Some(ScopeDeclarant::NotRead),
+                "a cached release consulted nothing; the row that granted it \
+                 carries the declarant"
             );
         });
     }

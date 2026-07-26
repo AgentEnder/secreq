@@ -29,9 +29,10 @@ use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
+use secreq::audit::ScopeDeclarant;
 use secreq::consent::Decision;
 use secreq::reference::Reference;
-use secreq::scoped_agent::{serve_on, Gate, GuestChain, Scope, ScopeApprovals};
+use secreq::scoped_agent::{serve_on, Consented, Gate, GuestChain, Scope, ScopeApprovals};
 use secreq::secret::SecretValue;
 
 /// Distinctive so "never on stdout / never in stderr" assertions can search
@@ -58,8 +59,11 @@ struct FakeGate {
 }
 
 impl Gate for FakeGate {
-    fn consent(&self, _: &Scope, _: &Reference, _: &GuestChain) -> Result<Decision> {
-        Ok(self.decision)
+    fn consent(&self, _: &Scope, _: &Reference, _: &GuestChain) -> Result<Consented> {
+        Ok(Consented {
+            decision: self.decision,
+            declared_by: ScopeDeclarant::NotRead,
+        })
     }
 
     fn resolve(&self, _: &Scope, _: &Reference) -> Result<SecretValue> {
@@ -421,12 +425,15 @@ fn the_client_sends_its_own_process_chain_as_a_claim() {
     struct CapturingGate(Mutex<Vec<Option<String>>>);
 
     impl Gate for CapturingGate {
-        fn consent(&self, _: &Scope, _: &Reference, chain: &GuestChain) -> Result<Decision> {
+        fn consent(&self, _: &Scope, _: &Reference, chain: &GuestChain) -> Result<Consented> {
             self.0
                 .lock()
                 .expect("chains mutex")
                 .push(chain.display().map(str::to_owned));
-            Ok(Decision::Approve)
+            Ok(Consented {
+                decision: Decision::Approve,
+                declared_by: ScopeDeclarant::NotRead,
+            })
         }
         fn resolve(&self, _: &Scope, _: &Reference) -> Result<SecretValue> {
             Ok(SecretValue::new(SECRET_VALUE.to_owned()))

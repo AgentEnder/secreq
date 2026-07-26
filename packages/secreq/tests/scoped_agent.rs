@@ -21,10 +21,11 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use secreq::audit;
+use secreq::audit::{AuditLocalPeer, ScopeDeclarant};
 use secreq::consent::Decision;
 use secreq::reference::Reference;
 use secreq::scoped_agent::proto::{read_message, write_message, Request, Response};
-use secreq::scoped_agent::{serve_on, Clock, Gate, GuestChain, Scope, ScopeApprovals};
+use secreq::scoped_agent::{serve_on, Clock, Consented, Gate, GuestChain, Scope, ScopeApprovals};
 use secreq::secret::SecretValue;
 
 mod common;
@@ -99,7 +100,7 @@ impl Gate for RecordingGate {
         _scope: &Scope,
         reference: &Reference,
         guest_chain: &GuestChain,
-    ) -> Result<Decision> {
+    ) -> Result<Consented> {
         self.prompts
             .lock()
             .expect("prompts mutex")
@@ -108,7 +109,15 @@ impl Gate for RecordingGate {
             .lock()
             .expect("chains mutex")
             .push(guest_chain.display().map(str::to_owned));
-        Ok(self.decision)
+        Ok(Consented {
+            decision: self.decision,
+            declared_by: ScopeDeclarant::Peer(AuditLocalPeer {
+                pid: 4711,
+                name: "secreq".to_owned(),
+                command: "secreq agent open brain-nx-t5".to_owned(),
+                exe: Some("/usr/local/bin/secreq".to_owned()),
+            }),
+        })
     }
 
     fn resolve(&self, _scope: &Scope, reference: &Reference) -> Result<SecretValue> {

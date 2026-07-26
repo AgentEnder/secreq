@@ -51,7 +51,7 @@ use std::sync::{mpsc, Arc, Mutex, Once};
 use egui::Vec2;
 use egui_kittest::Harness;
 
-use secreq::audit::AuditEntry;
+use secreq::audit::{AuditEntry, AuditLocalPeer, ScopeDeclarant};
 use secreq::consent::Decision;
 use secreq::daemon::manager_ui::{render_manager_panel, ManagerWindowState};
 use secreq::daemon::prompt_ui::{render_prompt_panel, PromptWindowState, PROMPT_DEFAULT_SIZE};
@@ -504,6 +504,7 @@ fn audit_line(
         rule_id: None,
         fingerprint: None,
         sign_anchor: None,
+        declared_by: None,
         unverified_guest_chain: None,
     }
 }
@@ -512,8 +513,28 @@ fn audit_line(
 /// rather than by hand — so the fixture can't quietly misrepresent the shape
 /// (no caller chain, no cwd, ref in `secrets`, `agent:<scope>` as the wrap).
 /// That's the whole thing this fixture exists to show.
-fn agent_audit_line(secs_ago: u64, scope: &str, reference: &str, decision: Decision) -> AuditEntry {
-    let mut entry = AuditEntry::agent_resolve(scope, reference, decision, None);
+///
+/// `declared_by` says which local process the daemon saw naming the scope, or
+/// that nothing read one.
+/// The declarant a genuine `secreq agent open` produces: the installed
+/// binary, at the path the user installed it to, as the kernel reports it.
+fn genuine_agent_peer() -> ScopeDeclarant {
+    ScopeDeclarant::Peer(AuditLocalPeer {
+        pid: 4711,
+        name: "secreq".to_owned(),
+        command: "secreq agent open brain-nx-t5".to_owned(),
+        exe: Some("/usr/local/bin/secreq".to_owned()),
+    })
+}
+
+fn agent_audit_line(
+    secs_ago: u64,
+    scope: &str,
+    reference: &str,
+    decision: Decision,
+    declared_by: ScopeDeclarant,
+) -> AuditEntry {
+    let mut entry = AuditEntry::agent_resolve(scope, reference, decision, None, declared_by);
     entry.ts_unix = now_unix().saturating_sub(secs_ago);
     entry
 }
@@ -553,6 +574,7 @@ fn audit_line_traced(
         rule_id: None,
         fingerprint: None,
         sign_anchor: None,
+        declared_by: None,
         unverified_guest_chain: None,
     }
 }
@@ -667,6 +689,7 @@ fn audit_auto_fire(secs_ago: u64, rule_id: &str, decision: &str) -> AuditEntry {
         rule_id: Some(rule_id.to_owned()),
         fingerprint: None,
         sign_anchor: None,
+        declared_by: None,
         unverified_guest_chain: None,
     }
 }
@@ -2281,12 +2304,17 @@ fn audit_tab_agent_out_of_scope_row() {
             "brain-nx-t5",
             "secret://op/Dev/gh/token",
             Decision::Approve,
+            genuine_agent_peer(),
         ),
         agent_audit_line(
             60 * 4,
             "brain-nx-t5",
             "secret://op/Prod/aws/root_key",
             Decision::DenyOutOfScope,
+            // The allowlist refused this one before any daemon was dialled,
+            // so nothing read a peer for it. That is what the production path
+            // records, and what the row must not dress up as a reading.
+            ScopeDeclarant::NotRead,
         ),
         audit_line_traced(
             60 * 9,
@@ -2359,6 +2387,59 @@ fn audit_tab_chain_completeness() {
              launched the command is not shown here. <b>… may be more above</b> is an \
              older row, written before secreq recorded which of the two it was — the \
              log cannot say, so neither does the tree.",
+        ),
+        audit,
+        ManagerExtras {
+            window_state: Some(Box::new(
+                secreq::daemon::manager_ui::ManagerWindowState::focus_audit_view,
+            )),
+            ..ManagerExtras::default()
+        },
+    );
+}
+
+#[test]
+fn audit_tab_agent_declared_by() {
+    // The audit counterpart to fixtures 34 and 42, which show the same
+    // comparison live. Two guest releases against one scope, alike in every
+    // field the log kept until now — same scope, same ref, same verdict — and
+    // the `named by` line is the whole difference:
+    //
+    //   `secreq  /usr/local/bin/secreq` — the agent the user started.
+    //   `secreq  /tmp/.build-cache/…`   — a process that chose that `comm`.
+    //
+    // Newest first, so the forgery is the row on top: the reader meets the
+    // odd one and then finds what an ordinary one looks like directly beneath
+    // it, rather than having to remember an ordinary one from elsewhere.
+    let audit = vec![
+        agent_audit_line(
+            60 * 60 * 5,
+            "brain-nx-t5",
+            "secret://op/Dev/gh/token",
+            Decision::Approve,
+            genuine_agent_peer(),
+        ),
+        agent_audit_line(
+            60 * 6,
+            "brain-nx-t5",
+            "secret://op/Dev/gh/token",
+            Decision::Approve,
+            ScopeDeclarant::Peer(AuditLocalPeer {
+                pid: 82702,
+                name: "secreq".to_owned(),
+                command: "secreq agent open brain-nx-t5".to_owned(),
+                exe: Some("/tmp/.build-cache/postinstall".to_owned()),
+            }),
+        ),
+    ];
+    render_manager_fixture(
+        Shot::new("44-audit-agent-declared-by").caption(
+            "A sandbox request records which local process put its scope name on the \
+             wire. A genuine request names the <code>secreq agent open</code> you \
+             started, at the path you installed it to; the one above it names \
+             <code>secreq</code> too, and an executable you did not install. secreq \
+             cannot tell the two apart and does not guess — it writes down what the \
+             kernel said, so the difference is still there when you come back to it.",
         ),
         audit,
         ManagerExtras {

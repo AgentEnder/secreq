@@ -2375,6 +2375,16 @@ fn render_audit_row_body(ui: &mut egui::Ui, entry: &AuditEntry, now: u64) {
         render_audit_caller_chain(ui, &entry.callers, entry.callers_truncated);
     }
 
+    // ── Who named the scope, on a guest row ──
+    //
+    // The counterpart to the caller tree above, on the one kind of row that
+    // structurally cannot have one. It sits where the tree would, because it
+    // answers the same question as far as the host can answer it at all.
+    if let Some(row) = scope_declarant_row(entry) {
+        ui.add_space(6.0);
+        render_scope_declarant_row(ui, &th, &row);
+    }
+
     // ── The forwarding marker, on a sign row that needs one ──
     //
     // Below the tree because that is where the frame it names belongs and
@@ -2410,6 +2420,108 @@ fn render_audit_row_body(ui: &mut egui::Ui, entry: &AuditEntry, now: u64) {
                 .color(th.faint),
         );
     });
+}
+
+/// What a scoped-agent row says about the process that named its scope.
+///
+/// Either the peer itself, or one of the two things the log can say instead —
+/// which are different and must not be spelled the same way.
+enum ScopeDeclarantRow<'a> {
+    /// The kernel's answer. `name` is what the process called itself, `exe`
+    /// what was actually loaded, and the row keeps them adjacent for the
+    /// reason the prompt does: `secreq` beside `/tmp/.build-cache/postinstall`
+    /// is a contradiction nobody has to go looking for.
+    Peer(&'a crate::audit::AuditLocalPeer),
+    /// Something is wrong or unknown, said out loud in `th.danger`.
+    Caveat(&'static str, &'static str),
+}
+
+/// What (if anything) to draw about who named this row's scope, for each state
+/// [`crate::audit::AuditEntry::declared_by`] can be in.
+///
+/// - **A peer** — drawn always, including the ordinary genuine case. A line
+///   that appears only when secreq is suspicious is a line that teaches a
+///   reader nothing about what normal looks like, and "normal" here is the
+///   whole comparison: an installed `secreq` at the path you installed it to.
+/// - **`Gone`** — the daemon looked and the process had exited. Said, because
+///   a row that reads the same whether or not anything checked is the failure
+///   this field exists to fix.
+/// - **`NotRead`** — nothing looked, because the release never reached the
+///   daemon. Silent: the row's own `deny+out-of-scope` / `approve+cached`
+///   verdict already says so, and a second line repeating it would compete
+///   with the two above for a reader's attention.
+/// - **Absent on an `agent:` row** — the row predates the field. Marked, for
+///   the same reason an unrecorded truncation answer is: silence here would
+///   read as "there was nothing to say".
+/// - **Any non-`agent:` row** — no scope was declared, so nothing named one.
+fn scope_declarant_row(entry: &AuditEntry) -> Option<ScopeDeclarantRow<'_>> {
+    if !entry.wrap.starts_with("agent:") {
+        return None;
+    }
+    match &entry.declared_by {
+        Some(crate::audit::ScopeDeclarant::Peer(peer)) => Some(ScopeDeclarantRow::Peer(peer)),
+        Some(crate::audit::ScopeDeclarant::Gone) => Some(ScopeDeclarantRow::Caveat(
+            "\u{26a0} secreq could not read the process that named this scope",
+            "The process on the consent socket had already exited when the daemon\n\
+             looked it up, so nothing here identifies who put this scope name on\n\
+             the wire.",
+        )),
+        Some(crate::audit::ScopeDeclarant::NotRead) => None,
+        None => Some(ScopeDeclarantRow::Caveat(
+            "\u{26a0} the process that named this scope was not recorded",
+            "This row was written before secreq recorded which local process put\n\
+             a scope name on the consent socket, so the log cannot say whether\n\
+             this request came from an agent you started.",
+        )),
+    }
+}
+
+/// Draw [`scope_declarant_row`]'s answer, in the audit tree's own idiom.
+fn render_scope_declarant_row(ui: &mut egui::Ui, th: &Theme, row: &ScopeDeclarantRow<'_>) {
+    match row {
+        ScopeDeclarantRow::Caveat(text, hover) => {
+            ui.horizontal(|ui| {
+                ui.add(egui::Label::new(
+                    egui::RichText::new(*text).size(11.0).color(th.danger),
+                ))
+                .on_hover_text(*hover);
+            });
+        }
+        ScopeDeclarantRow::Peer(peer) => {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 5.0;
+                ui.label(
+                    egui::RichText::new("\u{b7}")
+                        .font(egui::FontId::monospace(11.0))
+                        .color(th.faint),
+                );
+                ui.label(egui::RichText::new("named by").size(10.0).color(th.faint));
+                ui.label(
+                    egui::RichText::new(&peer.name)
+                        .font(egui::FontId::monospace(11.5))
+                        .color(th.fg),
+                );
+                ui.label(
+                    egui::RichText::new(format!("pid {}", peer.pid))
+                        .size(10.0)
+                        .color(th.faint),
+                );
+                let exe = peer
+                    .exe
+                    .as_deref()
+                    .map_or_else(|| "executable unknown".to_owned(), abbreviate_home);
+                let font = egui::FontId::monospace(11.0);
+                let avail = (ui.available_width() - 4.0).max(40.0);
+                let shown = truncate_to_width(ui, &exe, &font, avail);
+                let resp = ui.label(egui::RichText::new(&shown).font(font).color(th.fg));
+                if shown != exe {
+                    resp.on_hover_text(&exe);
+                }
+            })
+            .response
+            .on_hover_text(&peer.command);
+        }
+    }
 }
 
 /// What (if anything) to say about agent forwarding under a sign row's caller
@@ -3013,6 +3125,73 @@ mod tests {
         );
     }
 
+    // ── the guest row's "named by" line ──────────────────────────
+
+    fn agent_row(declared: Option<crate::audit::ScopeDeclarant>) -> AuditEntry {
+        let mut entry = mk_audit(1000, "agent:brain-nx-t5", "zsh", "approve");
+        entry.callers.clear();
+        entry.declared_by = declared;
+        entry
+    }
+
+    /// The peer is drawn on an ordinary genuine row too. A line that appears
+    /// only when secreq is suspicious teaches a reader nothing about what
+    /// normal looks like, and "normal" is the entire comparison.
+    #[test]
+    fn a_guest_row_names_the_process_that_put_its_scope_on_the_wire() {
+        let peer = crate::audit::AuditLocalPeer {
+            pid: 82702,
+            name: "secreq".to_owned(),
+            command: "secreq agent open brain-nx-t5".to_owned(),
+            exe: Some("/tmp/.build-cache/postinstall".to_owned()),
+        };
+        let entry = agent_row(Some(crate::audit::ScopeDeclarant::Peer(peer)));
+        let row = scope_declarant_row(&entry).expect("a recorded peer is drawn");
+        let ScopeDeclarantRow::Peer(drawn) = row else {
+            panic!("expected the peer itself");
+        };
+        assert_eq!(drawn.pid, 82702);
+        assert_eq!(drawn.exe.as_deref(), Some("/tmp/.build-cache/postinstall"));
+    }
+
+    /// Three ways a guest row can decline to name a process, and only two of
+    /// them are worth a line. "Nobody looked" is already said by the row's own
+    /// `deny+out-of-scope` / `approve+cached` verdict; the other two are not
+    /// said anywhere else, and must not be spelled the same way.
+    #[test]
+    fn an_unrecorded_declarant_reads_as_neither_gone_nor_silent() {
+        let unrecorded_row = agent_row(None);
+        let gone_row = agent_row(Some(crate::audit::ScopeDeclarant::Gone));
+        let unrecorded = scope_declarant_row(&unrecorded_row).expect("an old row says so");
+        let gone = scope_declarant_row(&gone_row).expect("an unreadable peer says so");
+        let (
+            ScopeDeclarantRow::Caveat(unrecorded_text, unrecorded_hover),
+            ScopeDeclarantRow::Caveat(gone_text, gone_hover),
+        ) = (unrecorded, gone)
+        else {
+            panic!("both are caveats");
+        };
+        assert_ne!(
+            unrecorded_text, gone_text,
+            "'nobody wrote it down' and 'we looked and it had exited' are \
+             different claims and must not share a row"
+        );
+        assert_ne!(unrecorded_hover, gone_hover, "nor a hover");
+
+        let not_read_row = agent_row(Some(crate::audit::ScopeDeclarant::NotRead));
+        assert!(
+            scope_declarant_row(&not_read_row).is_none(),
+            "a release the daemon was never asked about says so with its verdict"
+        );
+    }
+
+    /// A row that declared no scope has nothing to name.
+    #[test]
+    fn a_row_with_no_scope_gets_no_named_by_line() {
+        assert!(scope_declarant_row(&mk_audit(1000, "gh", "zsh", "approve")).is_none());
+        assert!(scope_declarant_row(&mk_audit(1000, "ssh:github", "zsh", "approve")).is_none());
+    }
+
     // ── abbreviate_home ──────────────────────────────────────────
 
     #[test]
@@ -3106,6 +3285,7 @@ mod tests {
             rule_id: None,
             fingerprint: None,
             sign_anchor: None,
+            declared_by: None,
             unverified_guest_chain: None,
         }
     }
@@ -3257,6 +3437,7 @@ mod tests {
             rule_id: rule_id.map(str::to_owned),
             fingerprint: None,
             sign_anchor: None,
+            declared_by: None,
             unverified_guest_chain: None,
         }
     }
@@ -3378,6 +3559,7 @@ mod tests {
             rule_id: None,
             fingerprint: None,
             sign_anchor: None,
+            declared_by: None,
             unverified_guest_chain: None,
         }
     }
