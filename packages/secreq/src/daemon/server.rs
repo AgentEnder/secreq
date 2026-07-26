@@ -365,8 +365,8 @@ fn handle_consent_window_connection(
     }
 
     // **Detach order matters.** We must remove the subscriber from
-    // `state.consent_subscribers` BEFORE dropping our local tx — the
-    // subscriber list holds a clone of the sender, and as long as it
+    // `state.consent` BEFORE dropping our local tx — the
+    // subscriber group holds a clone of the sender, and as long as it
     // sits there the writer thread's `Receiver::recv()` keeps
     // returning `Ok(...)`. Then we drop our tx, and only then is
     // there zero senders remaining, so `rx.recv()` returns `Err` and

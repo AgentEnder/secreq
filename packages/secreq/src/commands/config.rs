@@ -158,10 +158,12 @@ pub fn unwrap_cmd(binary: &str, config_path: Option<&Path>) -> Result<i32> {
         false
     };
     write_config(&config_path, &config)?;
-    // Drop the cache entry if any (best-effort across all parent pids).
-    // We can't know which (ppid, start_time) tuples are in cache, so we
-    // can't precisely target this wrap's entries — that's a known
-    // limitation; entries will expire by TTL.
+    // The daemon's approvals cache may still hold entries for this wrap, and
+    // nothing here can reach them: they are keyed on a `ProcessIdentity` this
+    // process cannot enumerate, and they carry no TTL — the parent process's
+    // own lifetime is their expiry (see `consent::ApprovalEntry`). So an
+    // entry survives until its parent exits or the daemon does, and
+    // `secreq daemon stop` is the way to clear one deliberately.
     match (removed, shim_removed) {
         (true, true) => println!("Unwrapped `{binary}` (config + shim removed)."),
         (true, false) => println!("Removed config entry for `{binary}` (no shim was present)."),

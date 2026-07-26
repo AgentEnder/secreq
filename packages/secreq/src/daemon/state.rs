@@ -2009,10 +2009,13 @@ pub type SharedState = Arc<Mutex<State>>;
 /// Order: direct parent first, then each ancestor outwards. Direct
 /// parent wins ties — most-specific approval scope is the most informative.
 pub fn approval_scope_for(approvals: &[ApprovalEntry], ask: &Ask) -> Option<ProcessIdentity> {
-    // Direct parent: encoded in the dedupe key (it's the same data as
-    // callers[0] but stored separately because the wire format predates
-    // start_time on Caller). Check it first so legacy clients (whose
-    // Caller.start_time is 0) still hit the cache.
+    // Direct parent: encoded in the dedupe key, which is the same pair as
+    // `callers[0]` for a wrap ask — `adopt_peer_provenance` re-derives both
+    // from the same walk. Checked first because it is the most specific
+    // scope, not because the chain might be missing a start time: the
+    // `BUILD_ID` handshake restarts a daemon whose client is a different
+    // build, so the "legacy client with `start_time == 0`" this comment used
+    // to describe cannot reach here.
     let direct = ProcessIdentity {
         pid: ask.dedupe_key.ppid,
         start_time: ask.dedupe_key.parent_start_time,

@@ -703,6 +703,33 @@ pub struct DedupeKey {
     pub subject_digest: Option<String>,
 }
 
+/// One process in an ask's caller chain, on the wire.
+///
+/// **Field-identical to [`crate::provenance::Caller`], and deliberately not
+/// merged with it.** A `pub use` would absorb the whole rename — three
+/// hand-written `.map(|c| proto::Caller { … })` blocks and nothing else — so
+/// the cost of keeping them apart is thirty lines, and the reason is worth
+/// more than thirty lines:
+///
+/// - **The conversion is one-directional, and the direction is the security
+///   property.** `server::adopt_peer_provenance` replaces what a client sent
+///   with what the daemon walked. One type makes `ask.callers` and
+///   `chain.frames` assignment-compatible *both* ways, so the compiler stops
+///   telling a reader which of the two a value is. Today
+///   `chain.frames = ask.callers().to_vec()` does not compile, at the one
+///   site where writing it would undo the fix.
+/// - **They are allowed to diverge, and the pressure is real rather than
+///   hypothetical.** The walk already knows things the wire must not carry:
+///   `provenance::PeerProcess` hangs `forwards_agent` off a `Caller` instead
+///   of adding a field, precisely because a wire field there would turn a
+///   fact derived from raw argv into a claim a client could write. Merging
+///   makes every future addition to the walk a protocol change by default,
+///   in a file whose job is to be the readable list of what crosses this
+///   socket.
+///
+/// [`crate::audit::AuditCaller`] is the third of these on purpose and for a
+/// third reason: it is a *persisted* record and keeps only what a reader
+/// months later can use.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Caller {
     pub pid: u32,
