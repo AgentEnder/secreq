@@ -32,57 +32,41 @@ evaluate together in one pass and compete under the same precedence
 (see below), so you can freely mix them, including keeping protective
 declarative denies alongside a programmable approve.
 
-## The security model, in plain language
+## The security model
 
-A rule module is untrusted code that participates in security
-decisions, so the daemon constrains it structurally rather than by
-convention:
+A rule module is untrusted code that helps decide whether a secret is
+released. The daemon constrains what it can do structurally, so the limits
+hold whatever the module contains.
 
-- **The sandbox has no I/O.** A module gets no filesystem, network,
-  environment, clock, or randomness. The only import the daemon
-  provides is AssemblyScript's `abort` (which cleanly fails the
-  evaluation). A module that imports anything else (WASI included) is
-  rejected at registration time, with an error naming the offending
-  import. The only thing a rule can do is read the ctx it is handed
-  and return a decision.
-- **The ctx carries secret _names_, never values.** A rule sees what an
-  ask would release (`secrets`): env-var names, or `ssh:<key_id>` for a
-  key signing; no secret value ever enters the sandbox.
-- **Deny wins.** If any enabled rule (declarative or wasm) denies,
-  the ask is denied, no matter what any approve says. A wasm rule that
-  returns approve or deny is treated as maximally specific among
-  approves (it made a programmatic decision about this exact ask);
-  ties break on the lexically smallest rule id.
-- **The trained-secrets guard runs before your code.** Every rule
-  carries the set of secret names it was registered for. An ask
-  requesting any name outside that set skips the rule entirely: the
-  module never even sees the ask, let alone decides it. An SSH sign
-  declares `ssh:<key_id>`, so a rule that gates key signings is scoped
-  with `--secret ssh:github` like any other name.
-- **Errors fail to the prompt, never to an approve.** A module that
-  traps, aborts, runs out of fuel (there's a fixed instruction
-  budget, so an infinite loop can't hang the daemon), exceeds the
-  64 MiB memory cap, or returns malformed output does not match:
-  the ask falls through to the interactive prompt, and the failure is
-  logged loudly in the daemon log.
-- **Modules are pinned by content hash.** Registration records the
-  module's SHA-256, and the daemon re-verifies it every time it loads
-  the rules. A module that changed on disk is refused, so the rule can
-  never fire, and the refusal is visible in `rules list`, `rules
-show`, and the UI.
+| Constraint                   | How it is enforced                                                                                                                                                             |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| No I/O of any kind           | The only import a module may declare is AssemblyScript's `env.abort`. Anything else, WASI included, is refused at registration with an error naming the import.                |
+| No secret values             | The ctx carries names: env-var names, or `ssh:<key_id>` for a signing. No value enters the sandbox.                                                                             |
+| Bounded time                 | A fixed fuel budget of 10⁸ instructions per call. An infinite loop stops in well under a second.                                                                                |
+| Bounded memory               | 64 MiB of guest memory, and 64 KiB for the decision it returns.                                                                                                                |
+| No state between asks        | Every evaluation instantiates the module fresh.                                                                                                                                 |
+| Only the bytes you registered | Registration records the module's SHA-256 and re-verifies it on every rules load. A file that changed is refused, and `rules list`, `rules show` and the manager say so.        |
+| Only the secrets you trained it on | Each rule carries the secret names it was registered with, checked before the module runs. An ask naming anything outside that set skips the rule entirely.               |
 
-Each evaluation runs in a fresh instance, so no state survives from
-one ask to the next.
+Two behaviors matter when you write one.
 
-Running user-authored code in secreq's most security-sensitive path is
-acceptable because the module's capabilities are a property of construction
-rather than of policy. No imports means no filesystem, network, clock, or
-environment, because instantiation would otherwise fail. What remains is a
-pure function from ask-context to decision, bounded in time and space,
-pinned by hash, and subordinate to
-deny-wins. **The worst a hostile module can do is approve asks within the
-secret set you explicitly trained it on**, which is the authority you granted
-when you registered it.
+Decisions rank deny, then prompt, then approve. If any enabled rule denies,
+declarative or wasm, the ask is denied whatever else approved. If any rule
+returns `prompt()`, no approve applies and the ask goes to the consent
+window. Among approves, a wasm rule that returned a decision counts as
+maximally specific (it made a programmatic decision about this exact ask),
+and ties break on the lexically smallest rule id.
+
+A failure never becomes an approve. A module that traps, aborts, exhausts
+its fuel, exceeds a cap, or returns malformed output has no opinion to
+give — and a rule that cannot be consulted may have been the one that would
+have denied. So a failure suppresses any competing approve and sends the ask
+to the consent prompt, which the daemon logs. The same applies to a module
+refused at load time for a SHA-256 mismatch: tampering with one file must
+not both disable a guard and leave the thing it guarded auto-approved.
+
+The residual risk is the last row of that table: a hostile module can
+approve asks for the secrets you trained it on, and nothing else.
 
 ## What your rule sees and returns
 
@@ -103,20 +87,39 @@ evaluation context:
 | `cwd`        | `string`   | Working directory of the requesting process.                                                                                                        |
 | `secrets`    | `string[]` | What the ask would release, by name: env-var names for a wrap run, or the single identity `ssh:<key_id>` for an SSH sign. Names only, never values. |
 
-The decision is built with three constructors:
+The decision is built with four constructors:
 
 - `approve()`: auto-approve the ask without prompting.
 - `pass()`: no opinion; this rule does not match. Other rules and the
   interactive prompt still apply.
 - `deny(reason)`: auto-deny. `reason` is shown to the user (the wrap
   client prints it to stderr, the consent window shows a toast).
+- `prompt(reason)`: require the consent prompt. No rule may auto-approve
+  this ask.
 
-On the wire this is JSON with snake_case field names
-(`joined_argv`, `secrets`, …) and decisions encoded as
-`"approve"`, `"pass"`, or `{"deny": "reason"}`. The SDK's build
-tool generates all of that glue; you only write `decide`. The exact
-ABI is documented in `packages/secreq-rule/README.md` and
-`packages/secreq/src/wasm_rules.rs` if you want to author modules in another language.
+`prompt()` covers the case `pass()` cannot. Passing means "no opinion", so
+another rule's approve still releases the ask silently. That is right when
+your rule does not recognise the request, and wrong when it recognises it as
+one a human should see. Reach for `prompt()` when a request is not
+suspicious enough to refuse but too consequential to release unattended:
+
+```ts
+export function decide(ctx: RuleCtx): Decision {
+  if (ctx.joinedArgv.startsWith('npm publish')) {
+    return prompt('publishing to a registry');
+  }
+  return pass();
+}
+```
+
+Write `reason` as the answer to "why am I being asked?".
+
+On the wire this is JSON with snake_case field names (`joined_argv`,
+`secrets`, …) and decisions encoded as `"approve"`, `"pass"`,
+`{"deny": "reason"}` or `{"prompt": "reason"}`. The SDK's build tool
+generates all of that glue; you only write `decide`. The exact ABI is in
+`packages/secreq-rule/README.md` and `packages/secreq/src/wasm_rules.rs` if
+you want to author modules in another language.
 
 ## Write a rule
 

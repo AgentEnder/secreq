@@ -7,7 +7,8 @@
 //     the UTF-8 ctx JSON into.
 //   - export `decide(ptr: usize, len: i32) -> u64`: parse the ctx, run the
 //     rule, return `(ptr << 32) | len` pointing at UTF-8 decision JSON.
-//   - decision JSON: `"approve"` | `"pass"` | `{"deny": "reason"}`.
+//   - decision JSON: `"approve"` | `"pass"` | `{"deny": "reason"}`
+//     | `{"prompt": "reason"}`.
 //
 // Compiled with `--runtime stub` (bump allocator, no GC, nothing is ever
 // freed), so buffers returned to the host stay valid until the instance is
@@ -34,6 +35,8 @@ export function encodeDecision(d: Decision): u64 {
     json = '"approve"';
   } else if (d.kind == DecisionKind.Pass) {
     json = '"pass"';
+  } else if (d.kind == DecisionKind.Prompt) {
+    json = '{"prompt":' + quoteJson(d.reason) + '}';
   } else {
     json = '{"deny":' + quoteJson(d.reason) + '}';
   }

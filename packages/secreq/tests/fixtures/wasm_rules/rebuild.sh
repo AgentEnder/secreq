@@ -20,6 +20,7 @@ node "$BUILD" approve_if.ts -o approve_if.wasm
 node "$BUILD" deny_echo.ts -o deny_echo.wasm
 node "$BUILD" aborts.ts -o aborts.wasm
 node "$BUILD" spins.ts -o spins.wasm
+node "$BUILD" prompts.ts -o prompts.wasm
 node "$BUILD" --raw bad_decision.ts -o bad_decision.wasm
 
 echo "rebuilt $(ls -1 ./*.wasm | wc -l | tr -d ' ') wasm fixtures"

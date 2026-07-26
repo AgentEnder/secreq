@@ -1,7 +1,7 @@
 //! Programmable auto-rules — the WebAssembly host side.
 //!
 //! Users author a rule as a single AssemblyScript function
-//! (`decide(ctx) -> approve | pass | deny`), compile it with the
+//! (`decide(ctx) -> approve | pass | deny | prompt`), compile it with the
 //! `packages/secreq-rule` helper package, and register the resulting `.wasm`
 //! module. At decision time the daemon evaluates the module in the same
 //! pre-queue path as the declarative rules in [`crate::rules`].
@@ -53,7 +53,7 @@
 //! "command": "..."}], "cwd": "...", "secrets": ["..."]}`.
 //!
 //! Decision JSON is the serde encoding of [`Decision`]:
-//! `"approve"` | `"pass"` | `{"deny": "reason string"}`.
+//! `"approve"` | `"pass"` | `{"deny": "reason"}` | `{"prompt": "reason"}`.
 
 use std::path::Path;
 
@@ -95,7 +95,8 @@ pub const MAX_GUEST_MEMORY_BYTES: usize = 64 << 20;
 const MAX_DECISION_LEN: u32 = 64 * 1024;
 
 /// What a wasm rule returned. The serde encoding is the wire format
-/// (externally tagged): `"approve"`, `"pass"`, or `{"deny": "reason"}`.
+/// (externally tagged): `"approve"`, `"pass"`, `{"deny": "reason"}`, or
+/// `{"prompt": "reason"}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Decision {
@@ -105,6 +106,19 @@ pub enum Decision {
     Pass,
     /// Auto-deny the ask; the string is shown to the user.
     Deny(String),
+    /// Require the consent prompt: no rule may auto-approve this ask.
+    ///
+    /// The gap [`Pass`] leaves. `Pass` means "no opinion", so a *different*
+    /// rule's approve still carries the ask through silently — which is the
+    /// right default for a rule that simply does not recognise the request,
+    /// and the wrong one for a rule that recognises it as needing a human.
+    /// `Prompt` says the second thing: not suspicious enough to refuse
+    /// outright, too consequential to release unattended.
+    ///
+    /// Ranked between the two it sits under: a [`Deny`] still wins (refusing
+    /// is strictly stronger than asking), and it beats every approve.
+    /// The string explains to the user why they are being asked.
+    Prompt(String),
 }
 
 /// Wire shape of the ctx JSON — [`EvalCtx`] is authoritative, this is
@@ -351,6 +365,7 @@ mod tests {
     const BAD_DECISION: &[u8] = include_bytes!("../tests/fixtures/wasm_rules/bad_decision.wasm");
     const ABORTS: &[u8] = include_bytes!("../tests/fixtures/wasm_rules/aborts.wasm");
     const SPINS: &[u8] = include_bytes!("../tests/fixtures/wasm_rules/spins.wasm");
+    const PROMPTS: &[u8] = include_bytes!("../tests/fixtures/wasm_rules/prompts.wasm");
 
     // Hand-written wat fixtures, assembled at test time via the `wat`
     // dev-dependency (the production loader only ever sees binaries).
@@ -614,6 +629,24 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&Decision::Deny("nope".to_owned())).expect("encode"),
             r#"{"deny":"nope"}"#
+        );
+    }
+
+    /// The decision that neither approves nor denies: it removes the option
+    /// of an auto-approve and hands the ask to the user, with a reason.
+    #[test]
+    fn a_module_can_mandate_the_consent_prompt() {
+        let module = RuleModule::from_binary(PROMPTS).expect("compile");
+        let ctx = crate::rules::EvalCtx {
+            wrap: "npm",
+            joined_argv: "npm publish",
+            callers: &[],
+            cwd: "/x",
+            secrets: &["NPM_TOKEN"],
+        };
+        assert_eq!(
+            module.evaluate(&ctx).expect("evaluate"),
+            Decision::Prompt("needs a human for wrap=npm".to_owned())
         );
     }
 }

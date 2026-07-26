@@ -1512,6 +1512,20 @@ impl State {
             secrets: &requested,
         };
         let evaluation = rules::evaluate(&self.rules, &self.rule_modules, &ctx);
+        // A mandated prompt reaches the daemon as `hit: None`, the same shape
+        // as "nothing matched", so without this line the difference between
+        // "no rule had an opinion" and "a rule insisted on a human" would be
+        // invisible in the log — and the second is the interesting one.
+        if let Some(mandate) = &evaluation.mandated_prompt {
+            super::log::log_at(
+                "state",
+                format_args!(
+                    "rule `{}` (id {}) requires the consent prompt for wrap `{}`: {} \
+                     — no auto-approve will be applied",
+                    mandate.rule_name, mandate.rule_id, ask.dedupe_key.wrap, mandate.reason,
+                ),
+            );
+        }
         for failure in &evaluation.wasm_failures {
             super::log::log_at(
                 "state",

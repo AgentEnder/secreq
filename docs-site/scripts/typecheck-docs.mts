@@ -56,7 +56,7 @@ const SDK_ENTRY = join(REPO_ROOT, 'packages/secreq-rule/index.ts');
  * this preamble withheld, so the two never collide.
  */
 const SDK_PREAMBLE =
-  "import { Caller, RuleCtx, Decision, DecisionKind, approve, pass, deny } from 'secreq-rule';\n";
+  "import { Caller, RuleCtx, Decision, DecisionKind, approve, pass, deny, prompt } from 'secreq-rule';\n";
 
 /** How many lines {@link SDK_PREAMBLE} adds ahead of the fragment's own code. */
 const SDK_PREAMBLE_LINES = 1;

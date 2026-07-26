@@ -646,11 +646,31 @@ pub struct WasmFailure {
     pub error: String,
 }
 
-/// What [`evaluate`] produced: the winning hit (if any) plus every
-/// wasm-rule runtime failure encountered along the way.
+/// Why an evaluation refuses to let anything auto-approve, even though no
+/// deny fired. Either a rule asked for a human ([`WasmDecision::Prompt`]),
+/// or a rule that might have denied could not be consulted at all.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PromptMandate {
+    /// The rule that mandated it, for the daemon log.
+    pub rule_id: String,
+    pub rule_name: String,
+    /// The module's stated reason, or a description of why the rule could
+    /// not be consulted. Shown to the user alongside the prompt.
+    pub reason: String,
+}
+
+/// What [`evaluate`] produced: the winning hit (if any), any mandate that
+/// suppressed an approve, and every wasm-rule runtime failure along the way.
 #[derive(Debug, Default, PartialEq)]
 pub struct Evaluation {
     pub hit: Option<RuleHit>,
+    /// `Some` when an approve was suppressed in favour of the interactive
+    /// prompt. `hit` is `None` whenever this is set (a deny outranks it, and
+    /// would have produced a hit instead), so the daemon's existing
+    /// fall-through already does the right thing — this is here so the reason
+    /// can be logged and shown rather than the ask silently looking like
+    /// "no rule matched".
+    pub mandated_prompt: Option<PromptMandate>,
     pub wasm_failures: Vec<WasmFailure>,
 }
 
@@ -705,7 +725,20 @@ struct Candidate<'r> {
 pub fn evaluate(rules: &[Rule], modules: &RuleModules, ctx: &EvalCtx) -> Evaluation {
     let mut best_deny: Option<Candidate> = None;
     let mut best_approve: Option<Candidate> = None;
+    let mut mandated_prompt: Option<PromptMandate> = None;
     let mut wasm_failures = Vec::new();
+
+    // First mandate wins. Which rule is named matters only for the log line;
+    // any one of them suppresses every approve identically.
+    let mut mandate = |rule: &Rule, reason: String| {
+        if mandated_prompt.is_none() {
+            mandated_prompt = Some(PromptMandate {
+                rule_id: rule.id.clone(),
+                rule_name: rule.name.clone(),
+                reason,
+            });
+        }
+    };
 
     for rule in rules {
         if !rule.enabled || !trained_secrets_allow(rule, ctx) {
@@ -713,8 +746,16 @@ pub fn evaluate(rules: &[Rule], modules: &RuleModules, ctx: &EvalCtx) -> Evaluat
         }
         let candidate = if rule.wasm.is_some() {
             let Some(module) = modules.get(&rule.id) else {
-                // Refused at load time (sha256 mismatch, missing file);
-                // already warned about then. Never matches.
+                // Refused at load time (sha256 mismatch, missing file).
+                // "Cannot be consulted" is not "passed": this rule may have
+                // been the deny protecting the ask, and letting a surviving
+                // approve carry it means tampering with one module both
+                // disables the guard and leaves the guarded thing enabled.
+                // Fall through to the human instead.
+                mandate(
+                    rule,
+                    "a rule module could not be loaded, so the ruleset is incomplete".to_owned(),
+                );
                 continue;
             };
             match module.evaluate(ctx) {
@@ -731,12 +772,24 @@ pub fn evaluate(rules: &[Rule], modules: &RuleModules, ctx: &EvalCtx) -> Evaluat
                     deny_message: Some(reason),
                     specificity: WASM_DECISION_SPECIFICITY,
                 },
+                Ok(WasmDecision::Prompt(reason)) => {
+                    // Not a candidate: `Prompt` produces no hit, it removes
+                    // the option of one. A deny still outranks it.
+                    mandate(rule, reason);
+                    continue;
+                }
                 Err(err) => {
+                    // Same reasoning as a refused module: a rule that trapped
+                    // is a rule whose opinion we do not have.
                     wasm_failures.push(WasmFailure {
                         rule_id: rule.id.clone(),
                         rule_name: rule.name.clone(),
                         error: format!("{err:#}"),
                     });
+                    mandate(
+                        rule,
+                        "a rule module errored, so the ruleset is incomplete".to_owned(),
+                    );
                     continue;
                 }
             }
@@ -770,14 +823,30 @@ pub fn evaluate(rules: &[Rule], modules: &RuleModules, ctx: &EvalCtx) -> Evaluat
         }
     }
 
-    // Deny wins, then most-specific approve.
-    let hit = best_deny.or(best_approve).map(|c| RuleHit {
+    // Deny > Prompt > Approve. A deny still wins outright: refusing is
+    // strictly stronger than asking, and a mandate that could veto a deny
+    // would let a broken module turn a block into a dialog.
+    let winner = match (best_deny, &mandated_prompt) {
+        (Some(deny), _) => Some(deny),
+        (None, Some(_)) => None,
+        (None, None) => best_approve,
+    };
+    let hit = winner.map(|c| RuleHit {
         rule_id: c.rule.id.clone(),
         rule_name: c.rule.name.clone(),
         decide: c.decide,
         deny_message: c.deny_message,
     });
-    Evaluation { hit, wasm_failures }
+    // A mandate that lost to a deny is spent: the ask is already blocked, and
+    // reporting "we also wanted to ask you" alongside it would only be noise.
+    if hit.is_some() {
+        mandated_prompt = None;
+    }
+    Evaluation {
+        hit,
+        mandated_prompt,
+        wasm_failures,
+    }
 }
 
 /// The trained-secrets guard, applied to declarative and wasm rules
@@ -856,6 +925,7 @@ mod tests {
     const APPROVE_IF: &[u8] = include_bytes!("../tests/fixtures/wasm_rules/approve_if.wasm");
     const DENY_ECHO: &[u8] = include_bytes!("../tests/fixtures/wasm_rules/deny_echo.wasm");
     const ABORTS: &[u8] = include_bytes!("../tests/fixtures/wasm_rules/aborts.wasm");
+    const PROMPTS: &[u8] = include_bytes!("../tests/fixtures/wasm_rules/prompts.wasm");
 
     fn rule_id(id: &str) -> String {
         id.to_owned()
@@ -1474,7 +1544,13 @@ mod tests {
     }
 
     #[test]
-    fn erroring_wasm_rule_does_not_block_other_rules() {
+    fn an_erroring_wasm_rule_suppresses_a_competing_approve() {
+        // The composition the docs encourage: a broad declarative approve
+        // plus a wasm rule carrying nuance the match clause cannot express
+        // ("never auto-approve `gh repo delete`"). When the module stops
+        // working, "the rule does not match" used to mean the approve won
+        // and the ask was released with no prompt — so tampering with one
+        // file both disabled the guard and left the guarded thing enabled.
         let broken = mk_wasm_rule("01", "aborts", &["GITHUB_TOKEN"]);
         let approve = mk_rule(
             "02",
@@ -1486,8 +1562,63 @@ mod tests {
         let modules = modules_for(&[("01", ABORTS)]);
         let c = ctx("gh", "gh api", &[], "/x", &["GITHUB_TOKEN"]);
         let out = evaluate(&[broken, approve], &modules, &c);
-        assert_eq!(out.hit.expect("declarative rule still fires").rule_id, "02");
+
+        assert!(
+            out.hit.is_none(),
+            "an approve must not win an evaluation that could not consult every rule"
+        );
+        let mandate = out
+            .mandated_prompt
+            .expect("the unconsultable rule should mandate a prompt");
+        assert_eq!(mandate.rule_id, "01");
         assert_eq!(out.wasm_failures.len(), 1);
+    }
+
+    /// A refused module (sha256 mismatch, missing file) is the same class of
+    /// hazard as one that trapped: an opinion we do not have. The existing
+    /// load-path test proves a tampered module does not knock out the user's
+    /// other rules; this proves it does not silently promote them either.
+    #[test]
+    fn a_refused_wasm_module_suppresses_a_competing_approve() {
+        let refused = mk_wasm_rule("01", "never loaded", &["GITHUB_TOKEN"]);
+        let approve = mk_rule(
+            "02",
+            "declarative approve",
+            RuleDecision::Approve,
+            match_for("gh", None, None, None),
+            &["GITHUB_TOKEN"],
+        );
+        // No module registered for "01" — exactly what a load refusal leaves.
+        let modules = RuleModules::new();
+        let c = ctx("gh", "gh api", &[], "/x", &["GITHUB_TOKEN"]);
+        let out = evaluate(&[refused, approve], &modules, &c);
+
+        assert!(out.hit.is_none(), "incomplete ruleset must not auto-approve");
+        assert_eq!(out.mandated_prompt.expect("mandate").rule_id, "01");
+    }
+
+    /// A deny still outranks a mandate. Refusing is strictly stronger than
+    /// asking, and a mandate that could veto a deny would let a broken module
+    /// turn a block into a dialog the user can click through.
+    #[test]
+    fn a_deny_still_wins_over_a_mandated_prompt() {
+        let broken = mk_wasm_rule("01", "aborts", &["GITHUB_TOKEN"]);
+        let deny = mk_rule(
+            "02",
+            "declarative deny",
+            RuleDecision::Deny,
+            match_for("gh", None, None, None),
+            &["GITHUB_TOKEN"],
+        );
+        let modules = modules_for(&[("01", ABORTS)]);
+        let c = ctx("gh", "gh api", &[], "/x", &["GITHUB_TOKEN"]);
+        let out = evaluate(&[broken, deny], &modules, &c);
+
+        let hit = out.hit.expect("the deny still fires");
+        assert_eq!(hit.decide, RuleDecision::Deny);
+        assert_eq!(hit.rule_id, "02");
+        // Spent: the ask is blocked, so "we also wanted to ask you" is noise.
+        assert!(out.mandated_prompt.is_none());
     }
 
     #[test]
@@ -1779,5 +1910,69 @@ mod tests {
         assert!(p.matches_prefix("gh api --get /repos/x"));
         assert!(p.matches_prefix("gh api"));
         assert!(!p.matches_prefix("gh pr list"));
+    }
+
+    /// `pass()` leaves a competing approve free to release the ask silently.
+    /// `prompt()` is the difference: it suppresses the approve and sends the
+    /// ask to the user instead.
+    #[test]
+    fn a_wasm_prompt_suppresses_a_competing_approve() {
+        let asks_human = mk_wasm_rule("01", "needs a human", &["NPM_TOKEN"]);
+        let approve = mk_rule(
+            "02",
+            "declarative approve",
+            RuleDecision::Approve,
+            match_for("npm", None, None, None),
+            &["NPM_TOKEN"],
+        );
+        let modules = modules_for(&[("01", PROMPTS)]);
+        let c = ctx("npm", "npm publish", &[], "/x", &["NPM_TOKEN"]);
+        let out = evaluate(&[asks_human, approve], &modules, &c);
+
+        assert!(out.hit.is_none(), "the approve must not win");
+        let mandate = out.mandated_prompt.expect("a mandate");
+        assert_eq!(mandate.rule_id, "01");
+        assert_eq!(mandate.reason, "needs a human for wrap=npm");
+        assert!(out.wasm_failures.is_empty(), "a mandate is not a failure");
+    }
+
+    /// Contrast, so the distinction from `pass()` is pinned rather than
+    /// implied: the same ruleset with a passing module releases silently.
+    #[test]
+    fn a_wasm_pass_leaves_a_competing_approve_alone() {
+        let passes = mk_wasm_rule("01", "no opinion", &["NPM_TOKEN"]);
+        let approve = mk_rule(
+            "02",
+            "declarative approve",
+            RuleDecision::Approve,
+            match_for("npm", None, None, None),
+            &["NPM_TOKEN"],
+        );
+        let modules = modules_for(&[("01", ALWAYS_PASS)]);
+        let c = ctx("npm", "npm publish", &[], "/x", &["NPM_TOKEN"]);
+        let out = evaluate(&[passes, approve], &modules, &c);
+
+        assert_eq!(out.hit.expect("the approve fires").rule_id, "02");
+        assert!(out.mandated_prompt.is_none());
+    }
+
+    /// Deny > Prompt: a module asking for a human cannot soften another
+    /// rule's refusal into a dialog.
+    #[test]
+    fn a_deny_outranks_a_wasm_prompt() {
+        let asks_human = mk_wasm_rule("01", "needs a human", &["NPM_TOKEN"]);
+        let deny = mk_rule(
+            "02",
+            "declarative deny",
+            RuleDecision::Deny,
+            match_for("npm", None, None, None),
+            &["NPM_TOKEN"],
+        );
+        let modules = modules_for(&[("01", PROMPTS)]);
+        let c = ctx("npm", "npm publish", &[], "/x", &["NPM_TOKEN"]);
+        let out = evaluate(&[asks_human, deny], &modules, &c);
+
+        assert_eq!(out.hit.expect("the deny fires").decide, RuleDecision::Deny);
+        assert!(out.mandated_prompt.is_none());
     }
 }
