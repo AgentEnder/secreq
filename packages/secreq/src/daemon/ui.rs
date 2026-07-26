@@ -2375,6 +2375,21 @@ fn render_audit_row_body(ui: &mut egui::Ui, entry: &AuditEntry, now: u64) {
         render_audit_caller_chain(ui, &entry.callers, entry.callers_truncated);
     }
 
+    // ── The forwarding marker, on a sign row that needs one ──
+    //
+    // Below the tree because that is where the frame it names belongs and
+    // cannot go: the forwarding `ssh` is the socket peer, which the walk
+    // starts above.
+    if let Some((text, hover)) = forwarded_sign_marker(entry) {
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.add(egui::Label::new(
+                egui::RichText::new(text).size(11.0).color(th.danger),
+            ))
+            .on_hover_text(hover);
+        });
+    }
+
     // ── Line 4: cwd + time footer ──
     let ago = humanize_duration(Duration::from_secs(now.saturating_sub(entry.ts_unix)));
     ui.add_space(5.0);
@@ -2395,6 +2410,56 @@ fn render_audit_row_body(ui: &mut egui::Ui, entry: &AuditEntry, now: u64) {
                 .color(th.faint),
         );
     });
+}
+
+/// What (if anything) to say about agent forwarding under a sign row's caller
+/// tree, for each state [`crate::audit::AuditEntry::sign_anchor`] can be in.
+///
+/// The row is drawn only when there is something a reader would otherwise get
+/// wrong, which is the same rule the chain-completeness markers follow:
+///
+/// - **A forwarded anchor** — the sign arrived through an agent handed to
+///   another host, and the `ssh -A <host>` argv is the only place on the row
+///   that names it. The tree above shows the local shell either way, so
+///   without this line the two cases are one row.
+/// - **An `ssh:` row with no anchor recorded** — written before the log kept
+///   this, so it cannot say. Drawn rather than left silent, because silence
+///   here reads as "local", which is the claim nothing checked.
+/// - **A session anchor** — the ordinary local sign. Nothing to say; the tree
+///   already draws that frame with its argv.
+/// - **Any non-sign row** — there was no sign, so the field never applied.
+///
+/// The `ssh:` prefix is what separates the middle two from the last: it is how
+/// the row says the field is applicable, exactly as `fingerprint` is absent on
+/// a wrap row without meaning "no fingerprint was computed".
+fn forwarded_sign_marker(entry: &AuditEntry) -> Option<(String, &'static str)> {
+    if !entry.wrap.starts_with("ssh:") {
+        return None;
+    }
+    match &entry.sign_anchor {
+        Some(anchor) if anchor.forwarded() => {
+            let via = caller_args(&anchor.name, anchor.command.as_deref().unwrap_or_default());
+            let named = if via.is_empty() {
+                format!("{} pid {}", anchor.name, anchor.pid)
+            } else {
+                format!("{} {via} · pid {}", anchor.name, anchor.pid)
+            };
+            Some((
+                format!("\u{26a0} signed through a forwarded agent \u{b7} {named}"),
+                "The agent was forwarded to another host, so the request to sign\n\
+                 came through that SSH session rather than from this machine.\n\
+                 The client is the socket peer, which the caller tree starts above.",
+            ))
+        }
+        Some(_) => None,
+        None => Some((
+            "\u{26a0} agent forwarding not recorded".to_owned(),
+            "This row was written before secreq recorded whether a sign arrived\n\
+             through a forwarded agent, so the log cannot say whether the request\n\
+             came from this machine or from a host at the other end of an SSH\n\
+             session.",
+        )),
+    }
 }
 
 /// Normalized view of an audit decision string. Carries the verb, an
@@ -2877,6 +2942,77 @@ mod tests {
         );
     }
 
+    // ── the sign row's forwarding marker ─────────────────────────
+
+    fn sign_row(anchor: Option<crate::audit::AuditSignAnchor>) -> AuditEntry {
+        let mut entry = mk_audit(1000, "ssh:github", "zsh", "approve");
+        entry.fingerprint = Some("SHA256:x".to_owned());
+        entry.sign_anchor = anchor;
+        entry
+    }
+
+    fn anchor(kind: crate::provenance::SignAnchorKind) -> crate::audit::AuditSignAnchor {
+        crate::audit::AuditSignAnchor {
+            kind,
+            pid: 9200,
+            name: "ssh".to_owned(),
+            command: matches!(kind, crate::provenance::SignAnchorKind::ForwardedSsh)
+                .then(|| "ssh -A build-box".to_owned()),
+        }
+    }
+
+    /// A forwarded sign has to say so **and** name the host: `ssh -A
+    /// build-box` is the only thing on the row that identifies who could have
+    /// been asking, and that process is not in the caller tree.
+    #[test]
+    fn a_forwarded_sign_row_names_the_host_the_agent_went_to() {
+        let (text, _) = forwarded_sign_marker(&sign_row(Some(anchor(
+            crate::provenance::SignAnchorKind::ForwardedSsh,
+        ))))
+        .expect("a forwarded sign says so");
+        assert!(text.contains("forwarded agent"), "{text}");
+        assert!(text.contains("-A build-box"), "{text}");
+        assert!(text.contains("9200"), "{text}");
+    }
+
+    /// The three states an `ssh:` row can be in, and the one that would be a
+    /// lie. An old row recorded nothing, so it must not render like a row that
+    /// recorded "this was local" — that is the whole reason the field is an
+    /// `Option` rather than a `bool`.
+    #[test]
+    fn an_ssh_row_with_no_recorded_anchor_renders_as_unknown_not_as_local() {
+        let unknown = forwarded_sign_marker(&sign_row(None)).expect("an old row says so");
+        assert!(unknown.0.contains("not recorded"), "{}", unknown.0);
+
+        let forwarded = forwarded_sign_marker(&sign_row(Some(anchor(
+            crate::provenance::SignAnchorKind::ForwardedSsh,
+        ))))
+        .expect("forwarded");
+        assert_ne!(
+            unknown.0, forwarded.0,
+            "'nobody wrote it down' and 'it was forwarded' are different claims"
+        );
+        assert_ne!(unknown.1, forwarded.1, "and must not share a hover either");
+
+        assert!(
+            forwarded_sign_marker(&sign_row(Some(anchor(
+                crate::provenance::SignAnchorKind::Session
+            ))))
+            .is_none(),
+            "an ordinary local sign has nothing to add"
+        );
+    }
+
+    /// A wrap row never had a sign, so an absent anchor there is not a gap —
+    /// the same way an absent `fingerprint` on a wrap row is not one.
+    #[test]
+    fn a_row_that_never_signed_anything_gets_no_marker() {
+        assert!(forwarded_sign_marker(&mk_audit(1000, "gh", "zsh", "approve")).is_none());
+        assert!(
+            forwarded_sign_marker(&mk_audit(1000, "agent:brain-nx-t5", "zsh", "approve")).is_none()
+        );
+    }
+
     // ── abbreviate_home ──────────────────────────────────────────
 
     #[test]
@@ -2969,6 +3105,7 @@ mod tests {
             decision: decision.to_owned(),
             rule_id: None,
             fingerprint: None,
+            sign_anchor: None,
             unverified_guest_chain: None,
         }
     }
@@ -3119,6 +3256,7 @@ mod tests {
             decision: "approve+auto".to_owned(),
             rule_id: rule_id.map(str::to_owned),
             fingerprint: None,
+            sign_anchor: None,
             unverified_guest_chain: None,
         }
     }
@@ -3239,6 +3377,7 @@ mod tests {
             decision: decision.to_owned(),
             rule_id: None,
             fingerprint: None,
+            sign_anchor: None,
             unverified_guest_chain: None,
         }
     }

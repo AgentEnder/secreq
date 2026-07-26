@@ -22,7 +22,7 @@ use std::time::{Duration, Instant, SystemTime};
 use anyhow::{Context, Result};
 use zeroize::Zeroizing;
 
-use crate::audit::{self, AuditCaller, AuditEntry};
+use crate::audit::{self, AuditCaller, AuditEntry, AuditSignAnchor};
 use crate::consent::{ApprovalEntry, Decision, SshGrant};
 use crate::manifest::{BatchRetrieve, Manifest, Provider};
 use crate::provenance::ProcessIdentity;
@@ -79,6 +79,12 @@ pub struct Waiter {
     /// (`adopt_peer_provenance`), so it is the only place the answer still
     /// exists once the client is gone.
     pub callers_truncated: bool,
+    /// On a sign ask, the frame its grant would have bound to — kept for the
+    /// same reason `callers_truncated` is. An abandoned sign writes an `ssh:`
+    /// audit row, and whether the sign was arriving through a forwarded agent
+    /// is not recoverable from `callers`: the forwarding client is the socket
+    /// peer, and the chain starts above it.
+    pub sign_anchor: Option<AuditSignAnchor>,
 }
 
 impl QueueEntry {
@@ -129,6 +135,21 @@ struct PendingEntry {
     representative: Ask,
     /// When resolution began — drives the card's "Ns ago" label.
     since: Instant,
+}
+
+/// The prompt's anchor as the audit log records it.
+///
+/// Two near-identical structs rather than one shared type, for the reason
+/// `AuditCaller` is not `proto::Caller`: one crosses a socket to be drawn, the
+/// other is written to a file a year's worth of readers will `jq`. The wire
+/// side is free to gain fields the log has no business persisting.
+fn audit_sign_anchor(info: &super::proto::SshAnchorInfo) -> AuditSignAnchor {
+    AuditSignAnchor {
+        kind: info.kind,
+        pid: info.pid,
+        name: info.name.clone(),
+        command: info.command.clone(),
+    }
 }
 
 /// The fixed `dedupe_key.wrap` every `secreq run` ask carries.
@@ -1132,6 +1153,7 @@ impl State {
             cwd: ask.cwd().to_owned(),
             callers: ask.callers().to_vec(),
             callers_truncated: ask.callers_truncated(),
+            sign_anchor: ask.sign_anchor().map(audit_sign_anchor),
         });
         self.show_window();
         self.broadcast_consent_update();
@@ -1339,6 +1361,7 @@ impl State {
             &callers,
             waiter.callers_truncated,
             &secret_names,
+            waiter.sign_anchor.clone(),
         )
     }
 
@@ -3309,6 +3332,7 @@ mod tests {
             cwd: "/work".to_owned(),
             callers: x_ask.callers().to_vec(),
             callers_truncated: x_ask.callers_truncated(),
+            sign_anchor: None,
         };
         let entry = State::abandoned_audit_entry(&x_ask.dedupe_key, &waiter);
         assert_eq!(entry.wrap, "gh");
@@ -3329,6 +3353,7 @@ mod tests {
             cwd: String::new(),
             callers: vec![],
             callers_truncated: false,
+            sign_anchor: None,
         };
         let entry2 = State::abandoned_audit_entry(&run_ask.dedupe_key, &waiter2);
         assert_eq!(entry2.wrap, "run");
@@ -3352,10 +3377,53 @@ mod tests {
                 cwd: "/work".to_owned(),
                 callers: ask.callers().to_vec(),
                 callers_truncated: truncated,
+                sign_anchor: None,
             };
             let entry = State::abandoned_audit_entry(&ask.dedupe_key, &waiter);
             assert_eq!(entry.callers_truncated, Some(truncated));
         }
+    }
+
+    /// A sign the requester gave up on still writes an `ssh:` row, and that
+    /// row has to say whether the sign was arriving through a forwarded agent.
+    /// The daemon is the only one left holding the answer — and it is not in
+    /// the chain, because the forwarding client is the socket peer the walk
+    /// starts above.
+    #[test]
+    fn an_abandoned_sign_keeps_the_anchor_that_says_it_was_forwarded() {
+        let mut state = State::new();
+        let mut ask = ask_with_secret("ssh:github", &["ssh-sign", "github"], "unused");
+        ask.subject = AskSubject::SshSign(super::super::proto::SshSubject {
+            cwd: "/repos/acme".to_owned(),
+            callers_truncated: false,
+            callers: vec![],
+            info: super::super::proto::SshAskInfo {
+                key_id: "github".to_owned(),
+                fingerprint: "SHA256:x".to_owned(),
+                reason: None,
+                anchor: Some(super::super::proto::SshAnchorInfo {
+                    name: "ssh".to_owned(),
+                    pid: 9200,
+                    kind: crate::provenance::SignAnchorKind::ForwardedSsh,
+                    command: Some("ssh -A build-box".to_owned()),
+                }),
+            },
+        });
+        let (tx, _rx) = mpsc::channel();
+        state.submit_ask(ask.clone(), tx);
+        let waiter = &state
+            .queue_entry_for_test(&ask.dedupe_key)
+            .expect("queued")
+            .waiters[0];
+
+        let entry = State::abandoned_audit_entry(&ask.dedupe_key, waiter);
+        let anchor = entry.sign_anchor.as_ref().expect("anchor on the row");
+        assert!(anchor.forwarded(), "{anchor:?}");
+        assert_eq!(anchor.command.as_deref(), Some("ssh -A build-box"));
+        assert!(
+            entry.wrap.starts_with("ssh:"),
+            "an ssh: row with no anchor reads as one written by an older secreq"
+        );
     }
 
     /// And the flag has to reach the waiter in the first place — it is read

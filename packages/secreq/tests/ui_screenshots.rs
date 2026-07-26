@@ -503,6 +503,7 @@ fn audit_line(
         decision: decision.to_owned(),
         rule_id: None,
         fingerprint: None,
+        sign_anchor: None,
         unverified_guest_chain: None,
     }
 }
@@ -551,8 +552,76 @@ fn audit_line_traced(
         decision: decision.to_owned(),
         rule_id: None,
         fingerprint: None,
+        sign_anchor: None,
         unverified_guest_chain: None,
     }
+}
+
+/// An SSH-agent sign row, built through the **production constructor** so the
+/// fixture cannot quietly misrepresent the shape: no secrets named, the
+/// public-key fingerprint present, and the anchor the grant bound to recorded
+/// beside a caller chain that — under forwarding — does not contain it.
+///
+/// `via` is the forwarding `ssh` client's command line, or `None` for an
+/// ordinary local sign.
+fn ssh_audit_line(
+    secs_ago: u64,
+    key_id: &str,
+    chain: &[(u32, &str, &str)],
+    via: Option<(u32, &str)>,
+    decision: Decision,
+) -> AuditEntry {
+    let chain = secreq::provenance::CallerChain {
+        frames: chain
+            .iter()
+            .map(|(pid, name, cmd)| secreq::provenance::Caller {
+                pid: *pid,
+                name: (*name).to_owned(),
+                command: (*cmd).to_owned(),
+                exe: None,
+                start_time: 1,
+            })
+            .collect(),
+        truncated: false,
+    };
+    let anchor = if let Some((pid, command)) = via {
+        secreq::provenance::SignAnchor {
+            identity: secreq::provenance::ProcessIdentity { pid, start_time: 1 },
+            name: "ssh".to_owned(),
+            command: command.to_owned(),
+            kind: secreq::provenance::SignAnchorKind::ForwardedSsh,
+        }
+    } else {
+        let outermost = chain.frames.last().expect("a chain to anchor on");
+        secreq::provenance::SignAnchor {
+            identity: secreq::provenance::ProcessIdentity {
+                pid: outermost.pid,
+                start_time: 1,
+            },
+            name: outermost.name.clone(),
+            command: outermost.command.clone(),
+            kind: secreq::provenance::SignAnchorKind::Session,
+        }
+    };
+    let mut entry = AuditEntry::ssh_sign(
+        key_id,
+        "SHA256:Nh0Me49Zh9fDwabcQ2VqLm",
+        &chain,
+        &anchor,
+        "~/repos/acme",
+        decision,
+    );
+    entry.ts_unix = now_unix().saturating_sub(secs_ago);
+    entry
+}
+
+/// The same sign row as an **older** `secreq` wrote it, before the log
+/// recorded which process the grant bound to. `None` is not "this was local" —
+/// it is "nobody wrote it down", and the row says so rather than letting a
+/// forwarded sign pass for one the user drove.
+fn sign_anchor_unrecorded(mut entry: AuditEntry) -> AuditEntry {
+    entry.sign_anchor = None;
+    entry
 }
 
 /// The same row, but written by a walk that stopped at its own ceiling: real
@@ -597,6 +666,7 @@ fn audit_auto_fire(secs_ago: u64, rule_id: &str, decision: &str) -> AuditEntry {
         decision: decision.to_owned(),
         rule_id: Some(rule_id.to_owned()),
         fingerprint: None,
+        sign_anchor: None,
         unverified_guest_chain: None,
     }
 }
@@ -2289,6 +2359,60 @@ fn audit_tab_chain_completeness() {
              launched the command is not shown here. <b>… may be more above</b> is an \
              older row, written before secreq recorded which of the two it was — the \
              log cannot say, so neither does the tree.",
+        ),
+        audit,
+        ManagerExtras {
+            window_state: Some(Box::new(
+                secreq::daemon::manager_ui::ManagerWindowState::focus_audit_view,
+            )),
+            ..ManagerExtras::default()
+        },
+    );
+}
+
+#[test]
+fn audit_tab_forwarded_sign() {
+    // The two things an SSH sign row can say about agent forwarding that a
+    // reader would otherwise get wrong, one above the other:
+    //
+    //   `⚠ signed through a forwarded agent` — the request came from the host
+    //                                          at the other end of an `ssh -A`
+    //                                          session, and the argv names it.
+    //   `⚠ agent forwarding not recorded`    — the row predates the field, so
+    //                                          the log cannot say which it was.
+    //
+    // The third state — an ordinary local sign — draws no marker, exactly the
+    // way a whole caller chain draws no `… more above`. Giving it a row here
+    // would push one of these two below the fold and teach nothing: the
+    // caller tree in both rows is the same, which is the point.
+    let audit = vec![
+        sign_anchor_unrecorded(ssh_audit_line(
+            60 * 60 * 26,
+            "github",
+            &[(8120, "git", "git push origin main"), (7926, "zsh", "-zsh")],
+            None,
+            Decision::ApproveCached,
+        )),
+        ssh_audit_line(
+            60 * 3,
+            "github",
+            &[(8120, "git", "git push origin main"), (7926, "zsh", "-zsh")],
+            Some((9310, "ssh -A build-box")),
+            // Plain `Approve`, not `ApproveSshSession`: the session-grant
+            // decisions currently fall through `AuditVerdict::from_decision`
+            // to a faint "seen", and a fixture is not the place to publish
+            // that. See the handoff note.
+            Decision::Approve,
+        ),
+    ];
+    render_manager_fixture(
+        Shot::new("43-audit-forwarded-sign").caption(
+            "An SSH signature says whether it was asked for from this machine or \
+             through an agent you forwarded. <b>signed through a forwarded agent</b> \
+             names the session that could have been asking — that <code>ssh</code> is \
+             the process on the socket, so it is never in the tree above it. \
+             <b>agent forwarding not recorded</b> is an older row, written before \
+             secreq kept the difference.",
         ),
         audit,
         ManagerExtras {

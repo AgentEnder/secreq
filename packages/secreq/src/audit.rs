@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::consent::Decision;
-use crate::provenance::{Caller, CallerChain};
+use crate::provenance::{Caller, CallerChain, SignAnchor, SignAnchorKind};
 
 /// One audit record. Serialized as a single JSON line.
 ///
@@ -81,6 +81,33 @@ pub struct AuditEntry {
     /// non-SSH row, which omits it) deserialize cleanly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
+    /// The process the sign grant bound to, on an SSH-agent sign row only.
+    ///
+    /// **This is the field that tells a forwarded sign from a local one**, and
+    /// nothing else on the row can. Under `ssh -A` the anchor is the local
+    /// `ssh` client — the socket peer — and the caller-chain walk deliberately
+    /// starts at the peer's *parent*, so [`AuditEntry::callers`] on a forwarded
+    /// sign looks exactly like the chain behind a local `git push`: shell,
+    /// terminal, launchd. A remote host asking for a signature and the user
+    /// asking for one were the same row.
+    ///
+    /// Recorded as the whole anchor rather than a `forwarded: bool` because
+    /// "which host" is the question a reader actually has, and
+    /// [`AuditSignAnchor::command`] is the only place the answer exists: the
+    /// `ssh -A build-box` argv names it, and that process appears nowhere in
+    /// `callers`.
+    ///
+    /// `None` means one of two things, told apart by `wrap`:
+    ///
+    /// - On a row whose `wrap` does **not** start with `ssh:`, there was no
+    ///   sign and so no anchor — the same way `fingerprint` is absent there.
+    /// - On an `ssh:` row, the row **predates this field**. The audit view
+    ///   renders that as its own state rather than as "not forwarded", because
+    ///   a log that reports an unknown as a fact is worse than one that admits
+    ///   the gap. Every `ssh:` row this version writes carries the field; see
+    ///   `every_sign_row_this_version_names_its_anchor`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_anchor: Option<AuditSignAnchor>,
     /// The caller chain a **guest reported about itself** on a scoped-agent
     /// row, already rendered for display (`"node → pnpm → postinstall"`);
     /// `None` on every other row, and on guest rows that claimed nothing.
@@ -117,6 +144,49 @@ pub struct AuditCaller {
     /// `#[serde(default)]` so rows written before this decode as `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exe: Option<String>,
+}
+
+/// The process an SSH sign grant bound to, as an audit row records it.
+///
+/// Mirrors the runtime [`crate::provenance::SignAnchor`] minus its
+/// `start_time`: that half of the identity exists to stop a recycled pid
+/// inheriting a live grant, and a grant no longer exists by the time anyone
+/// reads this row.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuditSignAnchor {
+    /// `"session"` or `"forwarded_ssh"` — why the grant bound where it did,
+    /// and the whole reason this struct is on the row.
+    pub kind: SignAnchorKind,
+    pub pid: u32,
+    /// The anchor's sanitized `comm`.
+    pub name: String,
+    /// The anchor's command line, carried only for a forwarded anchor — the
+    /// one frame [`AuditEntry::callers`] does not contain. `ssh -A build-box`
+    /// names the host that could have been asking; without it the row says a
+    /// forwarded sign happened and cannot say to where.
+    ///
+    /// Absent on a session anchor, whose argv the caller tree already draws.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+}
+
+impl AuditSignAnchor {
+    pub fn from_runtime(anchor: &SignAnchor) -> AuditSignAnchor {
+        AuditSignAnchor {
+            kind: anchor.kind,
+            pid: anchor.identity.pid,
+            name: anchor.name.clone(),
+            command: match anchor.kind {
+                SignAnchorKind::ForwardedSsh => Some(anchor.command.clone()),
+                SignAnchorKind::Session => None,
+            },
+        }
+    }
+
+    /// Did this sign go out through an agent forwarded to another host?
+    pub fn forwarded(&self) -> bool {
+        self.kind == SignAnchorKind::ForwardedSsh
+    }
 }
 
 impl AuditCaller {
@@ -158,6 +228,9 @@ impl AuditEntry {
             decision: decision.as_str().to_owned(),
             rule_id: None,
             fingerprint: None,
+            // Not a sign, so there is no anchor — absent for the same reason
+            // `fingerprint` is.
+            sign_anchor: None,
             // Local wraps have a real, kernel-sourced `callers`; there is no
             // guest to be claiming anything.
             unverified_guest_chain: None,
@@ -178,10 +251,18 @@ impl AuditEntry {
     /// [`crate::provenance::cwd_for_pid`], because a sign request has no wrap
     /// client to self-report one the way [`AuditEntry::new`] does. Empty when
     /// it couldn't be read — the row records what was observed, not a guess.
+    ///
+    /// `anchor` is the frame the grant bound to, and it travels with the chain
+    /// rather than being derivable from it: under agent forwarding the anchor
+    /// is the socket peer, which the walk starts *above*, so no amount of
+    /// reading `chain` afterwards recovers it. It is the difference between a
+    /// signature the user asked for and one a remote host asked for — see
+    /// [`AuditEntry::sign_anchor`].
     pub fn ssh_sign(
         key_id: &str,
         fingerprint: &str,
         chain: &CallerChain,
+        anchor: &SignAnchor,
         cwd: &str,
         decision: Decision,
     ) -> AuditEntry {
@@ -196,6 +277,7 @@ impl AuditEntry {
             decision: decision.as_str().to_owned(),
             rule_id: None,
             fingerprint: Some(fingerprint.to_owned()),
+            sign_anchor: Some(AuditSignAnchor::from_runtime(anchor)),
             unverified_guest_chain: None,
         }
     }
@@ -244,6 +326,8 @@ impl AuditEntry {
             decision: decision.as_str().to_owned(),
             rule_id: None,
             fingerprint: None,
+            // Nothing was signed, so there is no anchor.
+            sign_anchor: None,
             unverified_guest_chain: guest_chain.map(str::to_owned),
         }
     }
@@ -264,6 +348,11 @@ impl AuditEntry {
     /// fact about the same chain: the ask carried both from the daemon's own
     /// walk of the socket peer, and splitting them here is how a row ends up
     /// claiming an ancestry it only has part of.
+    ///
+    /// `sign_anchor` is `Some` on exactly the rows a live [`AuditEntry::ssh_sign`]
+    /// would have filled it on: an abandoned sign carries an `ssh:` wrap, and a
+    /// reader must not have to know that "abandoned" is the one kind of `ssh:`
+    /// row where an absent anchor means something other than an old log.
     pub fn abandoned(
         wrap: &str,
         args: &[String],
@@ -271,6 +360,7 @@ impl AuditEntry {
         callers: &[AuditCaller],
         callers_truncated: bool,
         secret_names: &[String],
+        sign_anchor: Option<AuditSignAnchor>,
     ) -> AuditEntry {
         AuditEntry {
             ts_unix: now_unix(),
@@ -283,6 +373,7 @@ impl AuditEntry {
             decision: Decision::Abandoned.as_str().to_owned(),
             rule_id: None,
             fingerprint: None,
+            sign_anchor,
             unverified_guest_chain: None,
         }
     }
@@ -458,6 +549,7 @@ mod tests {
             "ssh.deploy",
             "SHA256:Nh0Me49Zh9fDwabc",
             &chain,
+            &test_anchor(SignAnchorKind::Session, 4000, "-zsh"),
             "/home/dev/repos/acme",
             Decision::ApproveCached,
         );
@@ -637,6 +729,7 @@ mod tests {
             &callers,
             false,
             &["GITHUB_TOKEN".to_owned()],
+            None,
         );
         assert_eq!(entry.decision, "abandoned");
         assert_eq!(entry.wrap, "gh");
@@ -652,6 +745,171 @@ mod tests {
         let parsed: AuditEntry = serde_json::from_str(&json).expect("round-trip");
         assert_eq!(parsed.decision, "abandoned");
         assert_eq!(parsed.wrap, "gh");
+    }
+
+    /// A session anchor for tests that only need the shape.
+    fn test_anchor(kind: SignAnchorKind, pid: u32, command: &str) -> SignAnchor {
+        SignAnchor {
+            identity: crate::provenance::ProcessIdentity { pid, start_time: 1 },
+            name: "ssh".to_owned(),
+            command: command.to_owned(),
+            kind,
+        }
+    }
+
+    /// The finding: a sign that went out through a forwarded agent and one the
+    /// user drove themselves produced identical rows. The anchor is what
+    /// separates them, and the forwarded case has to name the host — its `ssh`
+    /// client is the socket peer, which the caller walk starts above, so it
+    /// appears nowhere in `callers`.
+    #[test]
+    fn a_forwarded_sign_names_the_ssh_client_the_caller_chain_cannot() {
+        let chain = CallerChain {
+            frames: vec![Caller {
+                pid: 7926,
+                name: "zsh".to_owned(),
+                command: "-zsh".to_owned(),
+                exe: None,
+                start_time: 1,
+            }],
+            truncated: false,
+        };
+        let forwarded = AuditEntry::ssh_sign(
+            "ssh.deploy",
+            "SHA256:x",
+            &chain,
+            &test_anchor(SignAnchorKind::ForwardedSsh, 9310, "ssh -A build-box"),
+            "/w",
+            Decision::Approve,
+        );
+        let anchor = forwarded.sign_anchor.as_ref().expect("anchor recorded");
+        assert!(anchor.forwarded(), "{anchor:?}");
+        assert_eq!(anchor.pid, 9310);
+        assert_eq!(
+            anchor.command.as_deref(),
+            Some("ssh -A build-box"),
+            "the host the agent was handed to is the answer a reader wants, \
+             and this row is the only place it exists"
+        );
+        assert!(
+            !forwarded.callers.iter().any(|c| c.pid == 9310),
+            "the forwarding client is the socket peer; the chain starts above it"
+        );
+
+        let local = AuditEntry::ssh_sign(
+            "ssh.deploy",
+            "SHA256:x",
+            &chain,
+            &test_anchor(SignAnchorKind::Session, 7926, "-zsh"),
+            "/w",
+            Decision::Approve,
+        );
+        let anchor = local.sign_anchor.as_ref().expect("anchor recorded");
+        assert!(!anchor.forwarded(), "{anchor:?}");
+        assert_eq!(
+            anchor.command, None,
+            "a session anchor's argv is already on its row in the caller tree"
+        );
+    }
+
+    /// The on-disk vocabulary, asserted on the serialized line rather than the
+    /// struct: `jq 'select(.sign_anchor.kind == "forwarded_ssh")'` is the
+    /// query this whole field exists to make answerable.
+    #[test]
+    fn a_forwarded_sign_is_greppable_in_the_written_line() {
+        let chain = CallerChain {
+            frames: Vec::new(),
+            truncated: false,
+        };
+        let entry = AuditEntry::ssh_sign(
+            "ssh.deploy",
+            "SHA256:x",
+            &chain,
+            &test_anchor(SignAnchorKind::ForwardedSsh, 9310, "ssh -A build-box"),
+            "/w",
+            Decision::Approve,
+        );
+        let json = serde_json::to_string(&entry).expect("serialize");
+        assert!(json.contains("\"kind\":\"forwarded_ssh\""), "json: {json}");
+        assert!(json.contains("ssh -A build-box"), "json: {json}");
+
+        let parsed: AuditEntry = serde_json::from_str(&json).expect("round-trip");
+        assert!(parsed.sign_anchor.expect("anchor").forwarded());
+    }
+
+    /// An `ssh:` row from before the field reads back as **unknown**, not as
+    /// "local". Rendering silence as a definite negative is the over-claim this
+    /// field exists to remove, and on the audit view it would mislead worst:
+    /// that surface is what someone uses to reconstruct what happened.
+    #[test]
+    fn an_ssh_row_written_before_the_field_reads_back_as_unknown_not_as_local() {
+        let json = r#"{"ts_unix":1,"cwd":"/w","wrap":"ssh:ssh.deploy","args":[],
+                       "callers":[{"pid":9,"name":"zsh","command":"-zsh"}],
+                       "callers_truncated":false,"secrets":[],
+                       "decision":"approve","fingerprint":"SHA256:x"}"#;
+        let parsed: AuditEntry = serde_json::from_str(json).expect("older rows must parse");
+        assert_eq!(parsed.sign_anchor, None);
+        assert!(
+            parsed.wrap.starts_with("ssh:"),
+            "the wrap prefix is what says the absent field is a gap rather than \
+             an inapplicable field"
+        );
+    }
+
+    /// The invariant the audit view's unknown state rests on: every row this
+    /// version writes with an `ssh:` wrap names its anchor, so an absent one on
+    /// such a row means an old log and nothing else. The two constructors that
+    /// can produce an `ssh:` row are [`AuditEntry::ssh_sign`] and
+    /// [`AuditEntry::abandoned`] (a sign whose requester gave up is still an
+    /// `ssh:` row); the other two cannot, and say so with `None`.
+    #[test]
+    fn every_sign_row_this_version_names_its_anchor() {
+        let chain = CallerChain {
+            frames: Vec::new(),
+            truncated: false,
+        };
+        let anchor = test_anchor(SignAnchorKind::Session, 7926, "-zsh");
+        let sign_rows = [
+            AuditEntry::ssh_sign(
+                "ssh.deploy",
+                "SHA256:x",
+                &chain,
+                &anchor,
+                "/w",
+                Decision::Approve,
+            ),
+            AuditEntry::abandoned(
+                "ssh:ssh.deploy",
+                &[],
+                "/w",
+                &[],
+                false,
+                &[],
+                Some(AuditSignAnchor::from_runtime(&anchor)),
+            ),
+        ];
+        for row in &sign_rows {
+            assert!(
+                row.wrap.starts_with("ssh:"),
+                "this test is only meaningful for sign rows: {row:?}"
+            );
+            assert!(
+                row.sign_anchor.is_some(),
+                "constructor left the anchor absent on an ssh: row, which a \
+                 reader takes to mean 'written by an older secreq': {row:?}"
+            );
+        }
+
+        // The two that cannot sign leave it off, which is what keeps the field
+        // out of every wrap row in the log.
+        assert!(AuditEntry::new("gh", &[], &chain, &[], Decision::Approve)
+            .sign_anchor
+            .is_none());
+        assert!(
+            AuditEntry::agent_resolve("scope", "secret://op/a/b", Decision::Approve, None)
+                .sign_anchor
+                .is_none()
+        );
     }
 
     /// The invariant the audit view's third state rests on: **every**
@@ -670,11 +928,19 @@ mod tests {
             }],
             truncated: true,
         };
+        let anchor = test_anchor(SignAnchorKind::Session, 7926, "-zsh");
         let rows = [
             AuditEntry::new("gh", &[], &chain, &[], Decision::Approve),
-            AuditEntry::ssh_sign("ssh.deploy", "SHA256:x", &chain, "/w", Decision::Approve),
+            AuditEntry::ssh_sign(
+                "ssh.deploy",
+                "SHA256:x",
+                &chain,
+                &anchor,
+                "/w",
+                Decision::Approve,
+            ),
             AuditEntry::agent_resolve("scope", "secret://op/a/b", Decision::Approve, None),
-            AuditEntry::abandoned("gh", &[], "/w", &[], true, &[]),
+            AuditEntry::abandoned("gh", &[], "/w", &[], true, &[], None),
         ];
         for row in &rows {
             assert!(
@@ -714,8 +980,15 @@ mod tests {
             Some(false)
         );
         assert_eq!(
-            AuditEntry::ssh_sign("k", "SHA256:x", &clipped, "/w", Decision::Approve)
-                .callers_truncated,
+            AuditEntry::ssh_sign(
+                "k",
+                "SHA256:x",
+                &clipped,
+                &test_anchor(SignAnchorKind::Session, 1, "-zsh"),
+                "/w",
+                Decision::Approve
+            )
+            .callers_truncated,
             Some(true)
         );
     }

@@ -371,7 +371,7 @@ fn handle_sign(
     let decision = match decide_sign(state, identity, &anchor, &chain, &cwd, data) {
         Some(d) if d.approved() => d,
         Some(deny) => {
-            audit_sign(identity, &chain, &cwd, deny);
+            audit_sign(identity, &chain, &anchor, &cwd, deny);
             super::log::log_at(
                 "ssh-agent",
                 format_args!(
@@ -424,7 +424,7 @@ fn handle_sign(
             // carries the decision that authorized it (`ApproveCached` on a
             // cache hit, or whatever the user chose). The signature bytes are
             // never recorded; the row holds only the key id + fingerprint.
-            audit_sign(identity, &chain, &cwd, decision);
+            audit_sign(identity, &chain, &anchor, &cwd, decision);
             super::log::log_at(
                 "ssh-agent",
                 format_args!(
@@ -774,9 +774,16 @@ fn resolve_and_sign(
 /// mirroring the wrap client, which treats `audit::append` errors as
 /// non-fatal (`commands/run.rs` ignores the `Result`). Failing a sign over an
 /// audit-log write error would be a worse outcome than a missing row.
+///
+/// `anchor` rides along because the chain cannot stand in for it. Under agent
+/// forwarding the anchor is the socket peer and `chain` starts at that peer's
+/// *parent*, so a forwarded sign and a local one hand this function the same
+/// `chain` — which is exactly how the log came to be unable to tell them apart.
+/// It is the one value here that is not recoverable after the fact.
 fn audit_sign(
     identity: &PreparedIdentity,
     chain: &crate::provenance::CallerChain,
+    anchor: &SignAnchor,
     cwd: &str,
     decision: Decision,
 ) {
@@ -784,6 +791,7 @@ fn audit_sign(
         &identity.key_id,
         &identity.fingerprint,
         chain,
+        anchor,
         cwd,
         decision,
     );
@@ -1075,6 +1083,70 @@ mod tests {
         assert_eq!(
             info.pid, ask.dedupe_key.ppid,
             "the session the prompt names must be the session the grant keys on"
+        );
+    }
+
+    /// The prompt can tell a forwarded sign from a local one; the log has to
+    /// as well, or a review months later reads a remote host's signature and a
+    /// user's own as the same event. The chain is no help — it is identical in
+    /// both cases, because the forwarding client is the socket peer and the
+    /// walk starts above it.
+    #[test]
+    fn a_forwarded_sign_is_audited_as_forwarded_and_a_local_one_as_local() {
+        let mut ssh = test_caller(9200, "ssh", Some("/usr/bin/ssh"));
+        ssh.command = "ssh -A build-box".to_owned();
+        let peer = crate::provenance::PeerProcess {
+            forwards_agent: crate::provenance::requests_agent_forwarding(&ssh.command),
+            caller: ssh,
+        };
+        let chain = whole_chain(vec![test_caller(7926, "-zsh", Some("/bin/zsh"))]);
+        let identity = test_identity("github");
+
+        let forwarded =
+            crate::provenance::select_sign_anchor(Some(&peer), &chain.frames).expect("anchor");
+        let local = crate::provenance::select_sign_anchor(None, &chain.frames).expect("anchor");
+
+        let rows = crate::audit::with_temp_log(|| {
+            audit_sign(
+                &identity,
+                &chain,
+                &forwarded,
+                "/repos/acme",
+                Decision::Approve,
+            );
+            audit_sign(&identity, &chain, &local, "/repos/acme", Decision::Approve);
+            crate::audit::read_history(None).expect("read audit history")
+        });
+
+        assert_eq!(rows.len(), 2, "one row per sign");
+        let recorded = rows[0].sign_anchor.as_ref().expect("anchor on the row");
+        assert!(
+            recorded.forwarded(),
+            "the row must say the sign came through a forwarded agent"
+        );
+        assert_eq!(
+            recorded.command.as_deref(),
+            Some("ssh -A build-box"),
+            "and name the host it was forwarded to — the row is the only place \
+             that process appears"
+        );
+        assert!(
+            !rows[0].callers.iter().any(|c| c.pid == 9200),
+            "which is why: the forwarding client is absent from the chain"
+        );
+
+        assert!(
+            !rows[1]
+                .sign_anchor
+                .as_ref()
+                .expect("anchor on the row")
+                .forwarded(),
+            "an ordinary local sign must not be marked forwarded"
+        );
+        assert_eq!(
+            rows[0].callers, rows[1].callers,
+            "the two rows agree on everything the chain can say, which is the \
+             whole reason the anchor has to be recorded separately"
         );
     }
 

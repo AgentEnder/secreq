@@ -413,6 +413,22 @@ impl Ask {
         }
     }
 
+    /// The frame a sign grant would bind to, on a sign ask; `None` on every
+    /// other kind.
+    ///
+    /// Read by [`crate::daemon::state::State::withdraw_waiter`]'s audit row: a
+    /// sign whose requester gave up still writes an `ssh:` row, and that row
+    /// has to say whether the sign was arriving through a forwarded agent for
+    /// the same reason a completed one does. It cannot be re-derived there —
+    /// the forwarding client is the socket peer, and [`Ask::callers`] starts
+    /// above it.
+    pub fn sign_anchor(&self) -> Option<&SshAnchorInfo> {
+        match &self.subject {
+            AskSubject::SshSign(s) => s.info.anchor.as_ref(),
+            AskSubject::Wrap(_) | AskSubject::ScopedAgent(_) => None,
+        }
+    }
+
     /// Secrets the daemon is being asked to resolve, or `&[]` when this ask
     /// resolves nothing daemon-side (every non-wrap kind).
     pub fn secrets(&self) -> &[SecretAsk] {

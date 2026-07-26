@@ -170,6 +170,15 @@ point where you look for the origin.
 
 ::shot{id=40-audit-chain-completeness}
 
+An SSH sign row also says whether the request arrived through an agent you
+forwarded. The `ssh` client that carried it is the process on the socket, and
+a sign's tree starts above that, so `signed through a forwarded agent` is the
+only place the row names the session a remote host could have been asking
+from. `agent forwarding not recorded` marks a row written before secreq kept
+the difference.
+
+::shot{id=43-audit-forwarded-sign}
+
 Search narrows across every field at once and reports how much of the log
 you're looking at. Each term may match a different field, so `gh auth` finds
 the row where both are true.
@@ -207,12 +216,24 @@ jq -c 'select(.decision | startswith("deny"))' ~/.secreq/audit.log
 `secrets` holds **names only, never values**. That is the invariant the
 whole file rests on. `callers_truncated` answers whether `callers` is the
 whole ancestry or only the part the walk reached; rows written before it
-existed omit it, which reads as "unknown" rather than as "complete". Three
+existed omit it, which reads as "unknown" rather than as "complete". Four
 more fields appear only when they apply: `rule_id` on
-auto-decisions, `fingerprint` (of the **public** key) on SSH sign rows, and
-`unverified_guest_chain` for a chain a sandbox guest reported about itself.
-That last one is a claim rather than evidence, so it is kept out of `callers`
-and never read by rule matching.
+auto-decisions, `fingerprint` (of the **public** key) and `sign_anchor` on SSH
+sign rows, and `unverified_guest_chain` for a chain a sandbox guest reported
+about itself. That last one is a claim rather than evidence, so it is kept out
+of `callers` and never read by rule matching.
+
+`sign_anchor` names the process the signature was granted against, and its
+`kind` is `forwarded_ssh` when the request came through an agent you forwarded
+rather than from this machine:
+
+```sh
+jq -c 'select(.sign_anchor.kind == "forwarded_ssh")' ~/.secreq/audit.log
+```
+
+That process is the one the caller chain cannot hold, so on an `ssh:` row
+written before the field existed the answer is absent, which again reads as
+unknown rather than as "local".
 
 The `decision` values distinguish what you did from what happened without
 you:
