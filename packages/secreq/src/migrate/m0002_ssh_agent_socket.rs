@@ -103,6 +103,12 @@ fn run_in(home: &Path, legacy_dir: &Path, new_dir: &Path) -> Result<()> {
     let new_sock = new_dir.join("agent.sock");
     let legacy_needle = legacy_sock.display().to_string();
 
+    // Files carrying a block whose socket path we could not resolve. Deleting
+    // the legacy socket dir while one of those is still on disk is the M4
+    // failure: we skipped a block we could not read, then removed the very
+    // socket it may name.
+    let mut unresolved: Vec<PathBuf> = Vec::new();
+
     for (method, shell, path) in candidate_files(home) {
         let Some(existing) = ssh_setup::block_in_file(&path) else {
             continue;
@@ -118,6 +124,9 @@ fn run_in(home: &Path, legacy_dir: &Path, new_dir: &Path) -> Result<()> {
         let expanded = ssh_setup::expand_home_tokens(&existing, home);
         // Someone else's socket, or already ours. Not our business.
         if !expanded.contains(&legacy_needle) {
+            if carries_an_unexpanded_home_token(&expanded) {
+                unresolved.push(path);
+            }
             continue;
         }
         // Rebuild through `plan` so the block is byte-identical to what
@@ -133,8 +142,32 @@ fn run_in(home: &Path, legacy_dir: &Path, new_dir: &Path) -> Result<()> {
         );
     }
 
+    if !unresolved.is_empty() {
+        for path in &unresolved {
+            eprintln!(
+                "secreq: the SSH-agent block in {} names a socket path secreq \
+                 could not resolve, so it was left alone — and the pre-upgrade \
+                 socket directory {} was kept in case that block still names it.",
+                path.display(),
+                legacy_dir.display(),
+            );
+        }
+        return Ok(());
+    }
+
     clean_legacy_runtime_dir(legacy_dir);
     Ok(())
+}
+
+/// Did home-expansion leave a token behind? Then this block names a path we
+/// cannot compare against anything — we do not know whether it is the legacy
+/// socket, and "I do not know" is not "no".
+///
+/// `ssh setup` only ever writes the quoted forms [`ssh_setup::expand_home_tokens`]
+/// understands, so this catches a hand-edit (an unquoted `~/…`, a `${HOME}/…`)
+/// rather than anything secreq produced.
+fn carries_an_unexpanded_home_token(expanded_block: &str) -> bool {
+    expanded_block.contains("~/") || expanded_block.contains("$HOME")
 }
 
 /// The files the pre-0001 daemon left in its socket dir. Frozen: this is the
@@ -147,6 +180,12 @@ const LEGACY_RUNTIME_FILES: &[&str] = &[
 ];
 
 /// Remove the abandoned socket dir, by name and only the names we put there.
+///
+/// **Only reached once every managed block on the machine is accounted for** —
+/// see the `unresolved` gate in [`run_in`]. Removing the socket a block still
+/// names is strictly worse than leaving it: the block was skipped precisely
+/// because we could not read it, so we would be deleting the one path we know
+/// something might be pointing at.
 ///
 /// A dead socket is worse than a missing one: `connect()` on it fails with
 /// `ECONNREFUSED`, so anything still holding the old path gets "Connection
@@ -401,6 +440,67 @@ mod tests {
         assert!(
             !sb.legacy_dir.exists(),
             "a dead socket answers connect() with ECONNREFUSED; it must go"
+        );
+    }
+
+    /// Hand-write a managed block whose socket path we cannot resolve. An
+    /// unquoted `~` is the realistic way to get one — ssh accepts it, `ssh
+    /// setup` never writes it, and `expand_home_tokens` deliberately only
+    /// expands the quoted form.
+    fn wire_unresolvable_block(sb: &Sandbox) -> PathBuf {
+        let ssh_dir = sb.home.join(".ssh");
+        std::fs::create_dir_all(&ssh_dir).unwrap();
+        let config = ssh_dir.join("config");
+        std::fs::write(
+            &config,
+            format!(
+                "{}\nHost *\n    IdentityAgent ~/Library/Caches/secreq/agent.sock\n{}\n",
+                ssh_setup::BEGIN_SENTINEL,
+                ssh_setup::END_SENTINEL,
+            ),
+        )
+        .unwrap();
+        config
+    }
+
+    /// The M4 shape. A block we could not read as naming the legacy socket was
+    /// skipped — and then the cleanup deleted the socket that block may well
+    /// still name, turning "this path is wrong" into `ECONNREFUSED`, which
+    /// reads as "the agent is broken". Cleanup has to be earned.
+    #[test]
+    fn a_block_we_cannot_resolve_spares_the_legacy_socket_dir() {
+        let sb = sandbox_with_legacy_under_home();
+        wire_unresolvable_block(&sb);
+        std::fs::write(sb.legacy_dir.join("agent.sock"), "").unwrap();
+        std::fs::write(sb.legacy_dir.join("daemon.pid"), "123").unwrap();
+
+        run_in(&sb.home, &sb.legacy_dir, &sb.new_dir).unwrap();
+
+        assert!(
+            sb.legacy_dir.join("agent.sock").exists(),
+            "a socket a surviving block may still name must not be removed"
+        );
+        assert!(sb.legacy_dir.exists());
+    }
+
+    /// The other side of that gate: a block naming a socket we *did* resolve,
+    /// which simply is not ours, is accounted for. It stays untouched and it
+    /// does not hold the stale directory hostage.
+    #[test]
+    fn a_resolvable_foreign_block_still_allows_cleanup() {
+        let sb = sandbox_with_legacy_under_home();
+        let elsewhere = sb.home.join("custom/agent.sock");
+        let plan = ssh_setup::plan(&sb.home, Method::SshConfig, Shell::Zsh, &elsewhere).unwrap();
+        ssh_setup::apply(&plan).unwrap();
+        let before = std::fs::read_to_string(&plan.config_file).unwrap();
+        std::fs::write(sb.legacy_dir.join("agent.sock"), "").unwrap();
+
+        run_in(&sb.home, &sb.legacy_dir, &sb.new_dir).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&plan.config_file).unwrap(), before);
+        assert!(
+            !sb.legacy_dir.exists(),
+            "nothing points at the legacy socket, so the dead socket goes"
         );
     }
 
