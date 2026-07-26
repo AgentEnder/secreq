@@ -436,7 +436,7 @@ pub struct WireBatchRetrieve {
 }
 
 /// One message from daemon → client.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DaemonMsg {
     /// The decision plus, on approve, the resolved secret values keyed by
@@ -518,6 +518,69 @@ pub enum DaemonMsg {
     },
 }
 
+/// Hand-written so `{:?}` cannot print resolved secret values.
+///
+/// [`SecretValue`](crate::secret::SecretValue) goes to real trouble to redact
+/// its own `Debug`, but by the time values reach [`DaemonMsg::Decision`] they
+/// are plain `String`s in a map, and a derive would print all of them. Five
+/// call sites in `daemon::client` end with `other => bail!("… {other:?}")`,
+/// so any protocol desync — a stale daemon, a reply-routing bug, a future
+/// connection-reuse optimisation — would put the whole secret set into an
+/// error, which reaches stderr and, daemon-side, `daemon.log`.
+///
+/// Names are kept: they are what the audit log records anyway, and an error
+/// naming which secrets were in flight is worth having.
+impl std::fmt::Debug for DaemonMsg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DaemonMsg::Decision {
+                decision,
+                secrets,
+                rule_id,
+                rule_name,
+                deny_message,
+            } => f
+                .debug_struct("Decision")
+                .field("decision", decision)
+                .field("secrets", &RedactedNames(secrets))
+                .field("rule_id", rule_id)
+                .field("rule_name", rule_name)
+                .field("deny_message", deny_message)
+                .finish(),
+            DaemonMsg::Ok => f.write_str("Ok"),
+            DaemonMsg::Hello { build_id } => {
+                f.debug_struct("Hello").field("build_id", build_id).finish()
+            }
+            DaemonMsg::WindowOpened { child_pid } => f
+                .debug_struct("WindowOpened")
+                .field("child_pid", child_pid)
+                .finish(),
+            DaemonMsg::Err { message } => {
+                f.debug_struct("Err").field("message", message).finish()
+            }
+            DaemonMsg::ConsentUpdate { .. } => f.write_str("ConsentUpdate { .. }"),
+            DaemonMsg::ConsentExitPlease => f.write_str("ConsentExitPlease"),
+            DaemonMsg::RulesList { .. } => f.write_str("RulesList { .. }"),
+            DaemonMsg::RuleAdded { rule } => {
+                f.debug_struct("RuleAdded").field("rule", rule).finish()
+            }
+            DaemonMsg::AutoDenyToast { .. } => f.write_str("AutoDenyToast { .. }"),
+        }
+    }
+}
+
+/// Renders a secret map as its key names, never its values.
+struct RedactedNames<'a>(&'a HashMap<String, String>);
+
+impl std::fmt::Debug for RedactedNames<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut names: Vec<&str> = self.0.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        write!(f, "{{{} redacted: {names:?}}}", names.len())
+    }
+}
+
+
 /// Wire-form snapshot of state the consent-window child needs to render.
 /// Audit history lives in `audit.log` and the child reads it on its own
 /// via `AuditCache`, so it's not in this struct.
@@ -564,4 +627,40 @@ pub struct WireQueueRow {
     /// snapshot treats unknown rows as the common Awaiting case.
     #[serde(default)]
     pub status: RowStatus,
+}
+
+
+#[cfg(test)]
+mod debug_redaction_tests {
+    use super::*;
+
+    /// `SecretValue` redacts its own `Debug`, but resolved values reach
+    /// `DaemonMsg::Decision` as plain `String`s in a map. Five call sites in
+    /// `daemon::client` end with `bail!("… {other:?}")`, so a derived Debug
+    /// would put the whole secret set into an error that reaches stderr and
+    /// `daemon.log`.
+    #[test]
+    fn decision_debug_shows_names_but_never_values() {
+        let mut secrets = HashMap::new();
+        secrets.insert("GITHUB_TOKEN".to_owned(), "ghp_supersecretvalue".to_owned());
+        secrets.insert("NPM_TOKEN".to_owned(), "npm_anothersecret".to_owned());
+
+        let rendered = format!(
+            "{:?}",
+            DaemonMsg::Decision {
+                decision: Decision::Approve,
+                secrets,
+                rule_id: None,
+                rule_name: None,
+                deny_message: None,
+            }
+        );
+
+        assert!(!rendered.contains("ghp_supersecretvalue"), "{rendered}");
+        assert!(!rendered.contains("npm_anothersecret"), "{rendered}");
+        // The names survive: they are what the audit log records anyway, and
+        // an error naming which secrets were in flight is worth having.
+        assert!(rendered.contains("GITHUB_TOKEN"), "{rendered}");
+        assert!(rendered.contains("NPM_TOKEN"), "{rendered}");
+    }
 }

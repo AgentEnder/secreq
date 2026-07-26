@@ -362,11 +362,15 @@ fn parse_store_capability(
         }
     }
 
-    // `value: "stdin"` selects stdin delivery; anything else (e.g. `"{value}"`)
-    // means substitute into argv. Default = Arg when omitted.
+    // Omitting `value:` means stdin. Argv delivery is the explicit opt-in,
+    // because it exposes the secret in `/proc/<pid>/cmdline` — world-readable
+    // on Linux at the default `hidepid=0`, so a *cross-UID* leak, outside the
+    // same-user carve-out. Every built-in uses stdin and `docs/providers.md`
+    // says to prefer it; the silent default used to be the mode the docs warn
+    // about, with no diagnostic.
     let value_mode = match obj.get("value").and_then(|v| v.as_str()) {
-        Some("stdin") => ValueMode::Stdin,
-        Some(_) | None => ValueMode::Arg,
+        Some("stdin") | None => ValueMode::Stdin,
+        Some(_) => ValueMode::Arg,
     };
 
     let locator_template = obj

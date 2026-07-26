@@ -30,6 +30,7 @@
 use std::io::{self, Read, Write};
 
 use anyhow::{Context, Result};
+use zeroize::Zeroizing;
 use serde::{Deserialize, Serialize};
 
 /// Upper bound on one frame's JSON payload. Requests are a verb plus a
@@ -137,7 +138,14 @@ impl Response {
 /// implementation — there is no request-only or response-only framing
 /// quirk for a carrier to have to know about.
 pub fn encode<T: Serialize>(message: &T) -> Result<Vec<u8>> {
-    let payload = serde_json::to_vec(message).context("serialize scoped-agent frame")?;
+    // Zeroizing, because for a `Response::Value` this buffer is a complete
+    // plaintext copy of the secret as JSON. `write_response` scrubs the
+    // `Response`'s own `String` and the frame it writes; this was the third
+    // copy, freed intact on return. (serde_json's growth reallocations leave
+    // further partial copies behind, which is harder to reach — but the final
+    // buffer is ours and is the one that lives longest.)
+    let payload =
+        Zeroizing::new(serde_json::to_vec(message).context("serialize scoped-agent frame")?);
     if payload.len() > MAX_FRAME_LEN {
         anyhow::bail!(
             "scoped-agent frame payload of {} bytes exceeds the cap of {MAX_FRAME_LEN}",
