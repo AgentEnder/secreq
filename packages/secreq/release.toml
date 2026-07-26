@@ -1,5 +1,5 @@
 # cargo-release configuration — the SemVer + CHANGELOG side of the release
-# flow. See dev-docs/RELEASING.md for the full runbook.
+# flow. See brain: areas/secreq/releasing.md for the full runbook.
 #
 #   cargo release patch|minor|major        # or an explicit x.y.z
 #
@@ -15,7 +15,7 @@ allow-branch = ["main"]
 # Publish the crate to crates.io as part of the release so `cargo install
 # secreq` works. cargo-release runs `cargo publish` before it tags, so the
 # maintainer must be `cargo login`'d (or have CARGO_REGISTRY_TOKEN set) — see
-# dev-docs/RELEASING.md. The GitHub Release (binaries) is still cut by the
+# brain: areas/secreq/releasing.md. The GitHub Release (binaries) is still cut by the
 # tag-triggered workflow; the two channels are independent.
 publish = true
 

@@ -19,10 +19,10 @@ By participating you agree to abide by our
   template). Never paste real secret values, tokens, or `secret://`
   refs that point at live credentials.
 - **Request a feature** — open an issue describing the problem first,
-  then the proposed shape. `secreq` deliberately does *not* do some
-  things (project-scope config, cloud sync, rotation — see
-  [`dev-docs/AGENTS.md`](./dev-docs/AGENTS.md) → "What this project
-  deliberately doesn't do"); check that list before proposing.
+  then the proposed shape. `secreq` deliberately does _not_ do some
+  things (project-scope config, cloud sync, rotation); check
+  [`docs/overview.md`](./docs/overview.md) for the scope before
+  proposing.
 - **Send a patch** — small, focused PRs are easiest to review. For
   anything that touches the trust model, the wire protocol, or rule
   semantics, open an issue to align on the design first.
@@ -74,23 +74,60 @@ Notes:
 
 ## Where things live
 
-Start with the contributor docs in [`dev-docs/`](./dev-docs/):
+The mental model in one line: a shim on your `PATH` intercepts a wrapped
+command, asks the consent daemon (which knows _who_ is asking, by walking
+the caller chain), and only on approval fetches the secrets and execs the
+real binary with them in its environment — masking them back out of its
+output.
 
-- **[`dev-docs/AGENTS.md`](./dev-docs/AGENTS.md)** — the fastest
-  orientation: the mental model in 60 seconds, a module map (which file
-  owns which concept), common tasks, and the **invariants you must not
-  break** (consent before fetch; no secret values in logs/prompts/audit;
-  fail-closed at boundaries; cache scoped to the direct parent).
-- **[`dev-docs/architecture.md`](./dev-docs/architecture.md)** — the
-  data flow for `secreq <binary>`, consent-daemon threading, and the
-  masking algorithm.
-- **[`dev-docs/plans/`](./dev-docs/plans/)** — historical design docs.
-  Context, not source of truth; the code and `AGENTS.md` win.
+| Looking for…                       | File                |
+| ---------------------------------- | ------------------- |
+| CLI entry / argv parsing           | `src/cli.rs`        |
+| Subcommand implementations         | `src/commands.rs`   |
+| Wraps config model + parsing       | `src/wraps.rs`      |
+| Provider types + built-ins         | `src/manifest.rs`   |
+| `secret://` parser                 | `src/reference.rs`  |
+| Provider invocation                | `src/provider.rs`   |
+| Resolution + batching              | `src/resolve.rs`    |
+| Output masking                     | `src/mask.rs`       |
+| Caller-chain provenance            | `src/provenance.rs` |
+| Consent enum + approval record     | `src/consent.rs`    |
+| Consent daemon (queue, UI, socket) | `src/daemon/`       |
+| Auto-rules evaluation              | `src/rules.rs`      |
+| Audit log (names only)             | `src/audit.rs`      |
+| PTY / piped exec                   | `src/exec.rs`       |
+| PATH shim management               | `src/shim.rs`       |
+| JSON Schema source of truth        | `src/schema.rs`     |
+| Secret value (zeroizing)           | `src/secret.rs`     |
 
-Design docs that are load-bearing for the trust model live under
-`dev-docs/plans/` and are called out in [`CLAUDE.md`](./CLAUDE.md) — if
-your change materially alters the trust model, wire protocol, or rule
-semantics, update the relevant plan **before** the code lands.
+### Invariants you must not break
+
+1. **Consent before fetch.** Provider commands run only after
+   `Decision::approved()`.
+2. **No secret values in logs, prompts, the audit log, or the approvals
+   cache.** `SecretValue`'s `Debug` redacts; the audit log records secret
+   _names_. The only two boundaries values cross are the `0600` daemon
+   socket and env-var injection into the wrapped child.
+3. **Fail closed.** No daemon and no `--yes` ⇒ deny. No graphical
+   environment and no `--yes` ⇒ deny. A required secret missing with no
+   default ⇒ hard error before exec. Integration tests pin each.
+4. **The approvals cache is scoped to the direct parent only** —
+   `(wrap_name, ppid, parent_start_time)`. A postinstall hook has a
+   different ppid; a recycled pid has a different start time. Both
+   re-prompt.
+5. **Schema drift is a build failure.** `tests/schema_drift.rs` fails if
+   `docs/wraps.schema.json` falls out of sync with
+   `schema::wraps_schema()`. Regenerate with
+   `cargo run --example gen-schema > docs/wraps.schema.json`.
+6. **The shim sentinel is load-bearing.** `shim::install` won't clobber a
+   file that doesn't carry the sentinel; `shim::remove` won't delete one.
+7. **`find_real_binary` must skip the shim dir**, or the shim recurses
+   into itself.
+
+If your change materially alters the trust model, the wire protocol, or
+rule semantics, open an issue to align on the design **before** the code
+lands — see [`CLAUDE.md`](./CLAUDE.md) for the conventions that go with
+each of those surfaces.
 
 ## Authoring rules
 
@@ -114,7 +151,7 @@ scope), see [`docs/wraps.md`](./docs/wraps.md) and point your editor at
 ## Testing patterns
 
 - **Pure logic** gets a unit test in the module (`#[cfg(test)] mod
-  tests`).
+tests`).
 - **End-to-end behavior** gets an integration test in `tests/cli.rs`,
   driving the built binary via `env!("CARGO_BIN_EXE_secreq")`. Sandbox
   every test with a tempdir plus `XDG_CONFIG_HOME` and `XDG_STATE_HOME`
@@ -133,9 +170,9 @@ invariants honest.
 3. Make the full dev loop green locally (tests, clippy, fmt, schema).
 4. Fill in the PR template, including the security checklist.
 5. Update docs alongside code: user-facing behavior → `docs/`;
-   internals → `dev-docs/`.
+   internals → the module comments and this file.
 
-Commits and PRs should explain *why*, not just *what*. A reviewer of a
+Commits and PRs should explain _why_, not just _what_. A reviewer of a
 secrets tool needs to be able to reason about the security impact of a
 change from its description alone.
 

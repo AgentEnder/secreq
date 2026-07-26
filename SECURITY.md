@@ -14,10 +14,10 @@ the next release; there is **no backport support for older versions**.
 Always run the latest release (or `main`) to be sure you have current
 fixes.
 
-| Version | Supported |
-|---|---|
-| latest release / `main` | ✅ |
-| any earlier version | ❌ (please upgrade) |
+| Version                 | Supported           |
+| ----------------------- | ------------------- |
+| latest release / `main` | ✅                  |
+| any earlier version     | ❌ (please upgrade) |
 
 ## Reporting a vulnerability
 
@@ -92,10 +92,9 @@ Reports in these areas are especially valuable:
 - **SSH agent** — signing without consent, or the resolved private key
   outliving the single in-process use it is zeroized after.
 
-The threat model these boundaries defend is described in
-[`dev-docs/architecture.md`](./dev-docs/architecture.md) and the
-"invariants you must not break" section of
-[`dev-docs/AGENTS.md`](./dev-docs/AGENTS.md).
+The threat model these boundaries defend is summarised in
+[`docs/overview.md`](./docs/overview.md); the enforcement points are
+`src/daemon/peercred.rs`, `src/provenance.rs`, and `src/masking.rs`.
 
 ### Out of scope
 

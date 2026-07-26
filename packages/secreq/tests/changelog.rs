@@ -5,7 +5,7 @@
 //! release body.
 //!
 //! Cut releases with cargo-release (`release.toml`), which rolls the
-//! `## [Unreleased]` section into a dated one; see `dev-docs/RELEASING.md`.
+//! `## [Unreleased]` section into a dated one; see `brain: areas/secreq/releasing.md`.
 
 /// The crate's current version must have a CHANGELOG section. Bumping
 /// `Cargo.toml` without recording the release notes fails here.
@@ -19,7 +19,7 @@ fn changelog_has_a_section_for_the_current_version() {
         changelog.contains(&header),
         "CHANGELOG.md has no `{header}` section.\n\
          Add the release notes for {version} (cargo-release does this when \
-         you cut a release; see dev-docs/RELEASING.md)."
+         you cut a release; see brain: areas/secreq/releasing.md)."
     );
 }
 

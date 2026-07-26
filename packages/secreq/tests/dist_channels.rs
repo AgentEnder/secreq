@@ -10,7 +10,7 @@
 //! When they fall out of lockstep the failure surfaces at a stranger's install
 //! time — a 404 tarball, an "unsupported arch", or a `cargo publish`
 //! rejection — long after the release shipped. These tests fail the build
-//! instead. See dev-docs/RELEASING.md and docs/install.md.
+//! instead. See brain: areas/secreq/releasing.md and docs/install.md.
 
 use std::fs;
 

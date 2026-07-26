@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Releases are cut with [cargo-release](https://github.com/crate-ci/cargo-release)
-(see `release.toml` and `dev-docs/RELEASING.md`). Pushing a `vX.Y.Z` tag runs
+(see `release.toml`). Pushing a `vX.Y.Z` tag runs
 `.github/workflows/release.yml`, which cross-compiles, checksums, and publishes
 the GitHub Release using the notes from the matching section below.
 
@@ -15,9 +15,9 @@ the GitHub Release using the notes from the matching section below.
 ### Added
 
 - **Public distribution channels.** Install with `curl -fsSL
-  https://secreq.dev/install.sh | sh` (detects OS/arch, downloads the release
+https://secreq.dev/install.sh | sh` (detects OS/arch, downloads the release
   binary, and verifies it against the signed `SHA256SUMS`), `brew install
-  AgentEnder/secreq/secreq`, or `cargo install secreq`. The release workflow
+AgentEnder/secreq/secreq`, or `cargo install secreq`. The release workflow
   now also generates the Homebrew formula from the real checksums, and
   cargo-release publishes the crate to crates.io. See [`docs/install.md`](docs/install.md).
 

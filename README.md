@@ -8,7 +8,7 @@
 > stdout/stderr.
 
 `secreq` is a **per-binary** wrap tool, scoped to your user account. For
-*project-level* secrets management (typed `.env` schemas, framework
+_project-level_ secrets management (typed `.env` schemas, framework
 integrations, type-safe access) see [varlock](https://varlock.dev/) —
 the two tools coexist; they solve different problems.
 
@@ -55,8 +55,7 @@ sha256sum -c SHA256SUMS            # or: shasum -a 256 -c SHA256SUMS
 install secreq-<version>-<target>/secreq ~/.local/bin/secreq
 ```
 
-See [`docs/install.md`](./docs/install.md) to verify the cosign signature and
-[`dev-docs/RELEASING.md`](./dev-docs/RELEASING.md) for the full release process.
+See [`docs/install.md`](./docs/install.md) to verify the cosign signature.
 
 ### From source
 
@@ -87,7 +86,7 @@ gh repo list      # invokes secreq via PATH shim → consent → real gh
 aws s3 ls         # same; one biometric for both keys (retrieve_batch)
 ```
 
-For an *arbitrary* command (no wrap entry), `secreq run` is `op run` for
+For an _arbitrary_ command (no wrap entry), `secreq run` is `op run` for
 every store — it resolves `secret://` refs found in the environment (and
 in any `--env-file`), then execs your command with the values injected
 and masked:
@@ -103,18 +102,18 @@ Concurrent `secreq run` invocations in one process tree share a single
 consent prompt: the daemon unions their secret requests into one card,
 you approve once, and each command receives only its own secrets.
 
-| Command | Purpose |
-|---|---|
-| `secreq init` | First-time setup: pick a shim dir and (optionally) wire it into PATH. |
-| `secreq wrap <bin>` | Add a wrap entry + install the PATH shim. |
-| `secreq unwrap <bin>` | Remove the wrap entry + delete the shim. |
-| `secreq wraps` | List configured wraps (names only — no values). |
-| `secreq check` / `doctor` | Validate config / verify provider CLIs. |
-| `secreq edit` | Open the config in `$EDITOR`. |
-| `secreq x <bin> [args…]` | Wrap-and-run path. The shim invokes this. |
-| `secreq run [--env-file F]… -- <cmd>` | `op run`, but for every store: resolve ambient `secret://` refs, then exec `<cmd>`. |
-| `secreq view` / `secreq ui` | Open the daemon's window in viewer mode (audit log, pinned). |
-| `secreq` (bare, in a terminal) | Interactive action picker over the common verbs. Non-TTY invocations print a usage hint instead. |
+| Command                               | Purpose                                                                                          |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `secreq init`                         | First-time setup: pick a shim dir and (optionally) wire it into PATH.                            |
+| `secreq wrap <bin>`                   | Add a wrap entry + install the PATH shim.                                                        |
+| `secreq unwrap <bin>`                 | Remove the wrap entry + delete the shim.                                                         |
+| `secreq wraps`                        | List configured wraps (names only — no values).                                                  |
+| `secreq check` / `doctor`             | Validate config / verify provider CLIs.                                                          |
+| `secreq edit`                         | Open the config in `$EDITOR`.                                                                    |
+| `secreq x <bin> [args…]`              | Wrap-and-run path. The shim invokes this.                                                        |
+| `secreq run [--env-file F]… -- <cmd>` | `op run`, but for every store: resolve ambient `secret://` refs, then exec `<cmd>`.              |
+| `secreq view` / `secreq ui`           | Open the daemon's window in viewer mode (audit log, pinned).                                     |
+| `secreq` (bare, in a terminal)        | Interactive action picker over the common verbs. Non-TTY invocations print a usage hint instead. |
 
 On the `x` (wrap-and-run) path, secreq reserves the **`--sq-` prefix**
 for its own options — e.g. `--sq-yes` (skip consent), `--sq-raw`
@@ -131,10 +130,10 @@ multi-secret invocation), `keychain` (macOS), `lastpass`, `pass` (Unix).
 - **Multi-provider, in one config.** Mix `op` + Keychain + `pass`
   freely. The 1Password Shell Plugin is 1Password-only; aws-vault is
   AWS-only; envchain is Keychain-only — `secreq` covers the union.
-- **Provenance-aware consent.** Before any provider call, you see *what
-  is asking* (the parent process chain), with the chance to deny. Cache
+- **Provenance-aware consent.** Before any provider call, you see _what
+  is asking_ (the parent process chain), with the chance to deny. Cache
   is scoped to the **direct parent process** (`(wrap_name, ppid,
-  parent_start_time)`) — an approval for `gh` from your shell doesn't
+parent_start_time)`) — an approval for `gh` from your shell doesn't
   extend to `npm` postinstall hooks. pid recycling can't sneak past it.
 - **PATH shim, not shell alias.** Every `execvp("gh", …)` goes through
   us, including subprocesses of `npm` / `make` / `cargo` / IDE tooling.
@@ -152,23 +151,24 @@ multi-secret invocation), `keychain` (macOS), `lastpass`, `pass` (Unix).
 
 End-user docs live in [`docs/`](./docs/):
 
-| Reading | For |
-|---|---|
-| [`docs/install.md`](./docs/install.md) | Every install channel — curl \| sh, Homebrew, `cargo install`, prebuilt binaries + verification |
-| [`docs/getting-started.md`](./docs/getting-started.md) | First-time walkthrough: install → init → first wrap → first run |
-| [`docs/overview.md`](./docs/overview.md) | What `secreq` is + mental model |
-| [`docs/cli.md`](./docs/cli.md) | Every subcommand, every flag, the wrap-and-run flow |
-| [`docs/wraps.md`](./docs/wraps.md) | Authoring `wraps.json5` |
-| [`docs/providers.md`](./docs/providers.md) | Provider model + built-ins |
-| [`docs/ssh-agent.md`](./docs/ssh-agent.md) | The provenance-aware SSH agent: config, setup, the key-custody tradeoff |
-| [`docs/consent-window.md`](./docs/consent-window.md) | The daemon UI: pending tree, audit log, audit JSONL format |
-| [`docs/troubleshooting.md`](./docs/troubleshooting.md) | FAQ + fixes: no consent window, dev-build home traps, PATH shadowing, locked providers, where the logs live |
-| [`docs/wasm-rules.md`](./docs/wasm-rules.md) | Programmable auto-rules: author, test, compile, and register a sandboxed wasm rule |
-| [`docs/platform-support.md`](./docs/platform-support.md) | Platform support matrix: macOS/Linux first-class, \*BSD best-effort, Windows unsupported |
-| [`docs/wraps.schema.json`](./docs/wraps.schema.json) | JSON Schema (point your editor at it) |
+| Reading                                                  | For                                                                                                         |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| [`docs/install.md`](./docs/install.md)                   | Every install channel — curl \| sh, Homebrew, `cargo install`, prebuilt binaries + verification             |
+| [`docs/getting-started.md`](./docs/getting-started.md)   | First-time walkthrough: install → init → first wrap → first run                                             |
+| [`docs/overview.md`](./docs/overview.md)                 | What `secreq` is + mental model                                                                             |
+| [`docs/cli.md`](./docs/cli.md)                           | Every subcommand, every flag, the wrap-and-run flow                                                         |
+| [`docs/wraps.md`](./docs/wraps.md)                       | Authoring `wraps.json5`                                                                                     |
+| [`docs/providers.md`](./docs/providers.md)               | Provider model + built-ins                                                                                  |
+| [`docs/ssh-agent.md`](./docs/ssh-agent.md)               | The provenance-aware SSH agent: config, setup, the key-custody tradeoff                                     |
+| [`docs/consent-window.md`](./docs/consent-window.md)     | The daemon UI: pending tree, audit log, audit JSONL format                                                  |
+| [`docs/troubleshooting.md`](./docs/troubleshooting.md)   | FAQ + fixes: no consent window, dev-build home traps, PATH shadowing, locked providers, where the logs live |
+| [`docs/wasm-rules.md`](./docs/wasm-rules.md)             | Programmable auto-rules: author, test, compile, and register a sandboxed wasm rule                          |
+| [`docs/platform-support.md`](./docs/platform-support.md) | Platform support matrix: macOS/Linux first-class, \*BSD best-effort, Windows unsupported                    |
+| [`docs/wraps.schema.json`](./docs/wraps.schema.json)     | JSON Schema (point your editor at it)                                                                       |
 
-Contributor docs (module map, internals, AI-agent primer, historical
-design) live in [`dev-docs/`](./dev-docs/).
+Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md) to hack on `secreq`
+itself. [`dev-docs/`](./dev-docs/) holds the generated UI screenshot and
+CLI transcript fixtures.
 
 ## Development
 

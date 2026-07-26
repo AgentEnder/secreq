@@ -7,7 +7,7 @@
 //! ```
 //!
 //! A drift test ensures the committed file matches what this example
-//! produces. See `dev-docs/plans/2026-06-02-auto-rules.md` for the
+//! produces. See `brain: areas/secreq/design/2026-06-02-auto-rules.md` for the
 //! design and `src/rules.rs` for the data model.
 
 fn main() {

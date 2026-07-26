@@ -1,24 +1,44 @@
-# Contributor documentation
+# Contributor fixtures
 
-This directory holds documents aimed at people working **on** `secreq`
-(maintainers, contributors, AI coding agents). For docs aimed at people
-**using** `secreq`, see [`../docs/`](../docs/).
+This directory holds **generated fixtures** that the test suites produce and
+the docs site consumes. For docs aimed at people **using** `secreq`, see
+[`../docs/`](../docs/).
 
 ## Index
 
-| Reading | For |
+| Directory | For |
 |---|---|
-| [`AGENTS.md`](./AGENTS.md) | AI-agent orientation: mental model in 60s, module map, common tasks, invariants. |
-| [`architecture.md`](./architecture.md) | Module map, data flow for `secreq <BINARY>`, consent-daemon threading, masking algorithm. |
-| [`plans/`](./plans/) | Historical design documents (pre-pivot). Kept for context, not as a source of truth. |
-| [`ui-screenshots/`](./ui-screenshots/) | Generated PNGs of the consent-window UI in representative states, plus the regen recipe. |
+| [`ui-screenshots/`](./ui-screenshots/) | Generated PNGs of the consent-window UI in representative states, one folder per fixture, each carrying the `layout.json` that guards its renders and holds the caption the docs site publishes. |
+| [`cli-transcripts/`](./cli-transcripts/) | Recorded pty sessions for the interactive CLI flows (`init`, `wrap`, `ssh setup`, the bare picker), replayed by the docs site via `::term{id=…}`. |
 
-## Why "dev-docs" and not "docs/internal"
+Both are regenerated, never hand-edited — see each directory's `README.md`
+for the recipe, and [`../CLAUDE.md`](../CLAUDE.md) for when regeneration is
+mandatory.
 
-Keeping the directory hierarchy flat makes it obvious at a glance which
-docs are for users vs contributors. `docs/` only contains user-facing
-material; `dev-docs/` only contains contributor material; no mixed
-audiences.
+## Where the prose docs went
 
-If you're writing a new document, ask: *would a user looking at "how do
-I use secreq" want this?* If yes → `docs/`. If no → here.
+Architecture notes, the agent orientation guide, the release runbook, the
+launch checklist, and the fifteen design/implementation plans now live in
+**brain**, under the `secreq` area, so they're searchable alongside the tasks
+and changesets that reference them:
+
+```sh
+brain read secreq                     # list the area's docs
+brain search "consent daemon threading"
+brain search "auto-rules evaluation order" --area secreq
+brain graph areas/secreq/architecture.md
+```
+
+Rough map of the old paths:
+
+| Was | Now |
+|---|---|
+| `dev-docs/architecture.md` | `areas/secreq/architecture.md` |
+| `dev-docs/AGENTS.md` | `areas/secreq/agents.md` |
+| `dev-docs/RELEASING.md` | `areas/secreq/releasing.md` |
+| `dev-docs/launch-checklist.md` | `areas/secreq/launch-checklist.md` |
+| `dev-docs/plans/*.md` | `areas/secreq/design/*.md` |
+
+Source comments and docs in this repo cite those by their brain path — e.g.
+`brain: areas/secreq/design/2026-06-02-auto-rules.md` — which
+`brain read`/`brain graph` resolve directly.
