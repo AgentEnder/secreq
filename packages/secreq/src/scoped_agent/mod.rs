@@ -91,7 +91,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use zeroize::Zeroize;
@@ -971,22 +971,59 @@ fn install_signal_cleanup(socket_path: &Path) -> Result<()> {
 /// the **scope**, not to a TCP-ish session, so a guest that hangs up and
 /// redials within the TTL must not be re-prompted. The socket is the sandbox;
 /// one connection is just one of its processes.
+/// Concurrent guest connections served at once.
+///
+/// The guest is the one genuinely untrusted party in this codebase and it
+/// opens the connections. Unbounded `thread::spawn` per accept meant a guest
+/// could park thousands of threads — each with a stack reservation — by
+/// connecting and saying nothing. Sixteen is far more than a sandbox
+/// resolving a handful of refs needs, and the cap is on *concurrency*, not on
+/// total connections: past it a guest waits rather than being refused.
+const MAX_CONCURRENT_CONNECTIONS: usize = 16;
+
+/// How long a connection may stay silent before it is dropped.
+///
+/// Pairs with the cap above: without a timeout, a guest that connects and
+/// never writes holds one of the sixteen slots forever, so the cap alone
+/// would just make the wedge cheaper. Generous, because a legitimate
+/// connection can be idle while the *user* thinks about a prompt — that wait
+/// happens after a request has been read, not before one.
+const CONNECTION_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+
 pub fn serve_on(
     listener: UnixListener,
     scope: Arc<Scope>,
     approvals: Arc<ScopeApprovals>,
     gate: Arc<dyn Gate>,
 ) {
+    // A permit per in-flight connection. Cloned into each thread and dropped
+    // when it finishes, so the count falls back as connections close.
+    let live = Arc::new(());
+
     for incoming in listener.incoming() {
         let Ok(stream) = incoming else {
             break; // Listener closed or unrecoverable accept error.
         };
+
+        // `Arc::strong_count` is the number of live handlers plus our own
+        // handle. Racy by nature — two accepts can read it at once — which is
+        // fine: this bounds a resource, it does not enforce a policy, and
+        // being off by one under a burst costs nothing.
+        while Arc::strong_count(&live) > MAX_CONCURRENT_CONNECTIONS {
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        // A guest that connects and never speaks must not hold a slot.
+        let _ = stream.set_read_timeout(Some(CONNECTION_IDLE_TIMEOUT));
+
         let scope = Arc::clone(&scope);
         let approvals = Arc::clone(&approvals);
         let gate = Arc::clone(&gate);
+        let permit = Arc::clone(&live);
         thread::Builder::new()
             .name("secreq-agent-conn".to_owned())
             .spawn(move || {
+                let _permit = permit;
                 if let Err(err) = handle_connection(stream, &scope, &approvals, gate.as_ref()) {
                     log(&scope, format_args!("connection error: {err:#}"));
                 }
