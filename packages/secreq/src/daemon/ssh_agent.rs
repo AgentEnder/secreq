@@ -359,14 +359,7 @@ fn handle_sign(
     // 3. Decide whether to sign: approval-cache hit (skip the prompt) or
     //    interactive consent. The lock is held only for the cache check and
     //    the queue submission, never across the (blocking) consent wait.
-    let decision = match decide_sign(
-        state,
-        identity,
-        anchor,
-        &chain,
-        &cwd,
-        data,
-    ) {
+    let decision = match decide_sign(state, identity, anchor, &chain, &cwd, data) {
         Some(d) if d.approved() => d,
         Some(deny) => {
             audit_sign(identity, &chain, &cwd, deny);
@@ -1021,7 +1014,10 @@ mod tests {
         let decision = decide_sign(
             &state,
             &identity,
-            SshAnchor { pid: 4242, start_time: 1 },
+            SshAnchor {
+                pid: 4242,
+                start_time: 1,
+            },
             &chain,
             "/home/dev/repos/acme",
             b"challenge",
@@ -1119,8 +1115,26 @@ mod tests {
         let identity = test_identity("github");
         let chain: Vec<crate::provenance::Caller> = Vec::new();
 
-        let a = sign_ask(&identity, SshAnchor { pid: 4242, start_time: 1 }, &chain, "/repo", b"challenge-one");
-        let b = sign_ask(&identity, SshAnchor { pid: 4242, start_time: 1 }, &chain, "/repo", b"challenge-two");
+        let a = sign_ask(
+            &identity,
+            SshAnchor {
+                pid: 4242,
+                start_time: 1,
+            },
+            &chain,
+            "/repo",
+            b"challenge-one",
+        );
+        let b = sign_ask(
+            &identity,
+            SshAnchor {
+                pid: 4242,
+                start_time: 1,
+            },
+            &chain,
+            "/repo",
+            b"challenge-two",
+        );
 
         assert_ne!(
             a.dedupe_key, b.dedupe_key,
@@ -1138,8 +1152,26 @@ mod tests {
         let identity = test_identity("github");
         let chain: Vec<crate::provenance::Caller> = Vec::new();
 
-        let a = sign_ask(&identity, SshAnchor { pid: 4242, start_time: 1 }, &chain, "/repo", b"same-challenge");
-        let b = sign_ask(&identity, SshAnchor { pid: 4242, start_time: 1 }, &chain, "/repo", b"same-challenge");
+        let a = sign_ask(
+            &identity,
+            SshAnchor {
+                pid: 4242,
+                start_time: 1,
+            },
+            &chain,
+            "/repo",
+            b"same-challenge",
+        );
+        let b = sign_ask(
+            &identity,
+            SshAnchor {
+                pid: 4242,
+                start_time: 1,
+            },
+            &chain,
+            "/repo",
+            b"same-challenge",
+        );
 
         assert_eq!(a.dedupe_key, b.dedupe_key);
     }
@@ -1150,7 +1182,16 @@ mod tests {
     fn the_payload_digest_stays_out_of_the_rule_facing_wrap() {
         let identity = test_identity("github");
         let chain: Vec<crate::provenance::Caller> = Vec::new();
-        let ask = sign_ask(&identity, SshAnchor { pid: 4242, start_time: 1 }, &chain, "/repo", b"challenge");
+        let ask = sign_ask(
+            &identity,
+            SshAnchor {
+                pid: 4242,
+                start_time: 1,
+            },
+            &chain,
+            "/repo",
+            b"challenge",
+        );
         assert_eq!(ask.dedupe_key.wrap, format!("ssh:{}", identity.key_id));
     }
 }

@@ -30,8 +30,8 @@
 use std::io::{self, Read, Write};
 
 use anyhow::{Context, Result};
-use zeroize::Zeroizing;
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 /// Upper bound on one frame's JSON payload. Requests are a verb plus a
 /// `secret://` ref and responses are one secret value or a short list of

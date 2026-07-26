@@ -583,9 +583,7 @@ impl std::fmt::Debug for DaemonMsg {
                 .debug_struct("WindowOpened")
                 .field("child_pid", child_pid)
                 .finish(),
-            DaemonMsg::Err { message } => {
-                f.debug_struct("Err").field("message", message).finish()
-            }
+            DaemonMsg::Err { message } => f.debug_struct("Err").field("message", message).finish(),
             DaemonMsg::ConsentUpdate { .. } => f.write_str("ConsentUpdate { .. }"),
             DaemonMsg::ConsentExitPlease => f.write_str("ConsentExitPlease"),
             DaemonMsg::RulesList { .. } => f.write_str("RulesList { .. }"),
@@ -607,7 +605,6 @@ impl std::fmt::Debug for RedactedNames<'_> {
         write!(f, "{{{} redacted: {names:?}}}", names.len())
     }
 }
-
 
 /// Wire-form snapshot of state the consent-window child needs to render.
 /// Audit history lives in `audit.log` and the child reads it on its own
@@ -656,7 +653,6 @@ pub struct WireQueueRow {
     #[serde(default)]
     pub status: RowStatus,
 }
-
 
 #[cfg(test)]
 mod debug_redaction_tests {

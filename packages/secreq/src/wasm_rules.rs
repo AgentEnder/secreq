@@ -447,7 +447,11 @@ mod tests {
         let c = ctx(
             "gh",
             "gh api --get /repos/me/x/pulls",
-            &[EvalCaller { name: "zsh", command: "-zsh", exe: None }],
+            &[EvalCaller {
+                name: "zsh",
+                command: "-zsh",
+                exe: None,
+            }],
             "/home/me/x",
             &["GITHUB_TOKEN"],
         );

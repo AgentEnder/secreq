@@ -1224,7 +1224,11 @@ mod tests {
         let c = ctx(
             "gh",
             "gh repo delete me/x",
-            &[EvalCaller { name: "Cursor", command: "Cursor.app", exe: None }],
+            &[EvalCaller {
+                name: "Cursor",
+                command: "Cursor.app",
+                exe: None,
+            }],
             "/x",
             &["GITHUB_TOKEN"],
         );
@@ -1255,7 +1259,11 @@ mod tests {
         let c = ctx(
             "gh",
             "gh api --get /repos/x",
-            &[EvalCaller { name: "Cursor", command: "Cursor.app", exe: None }],
+            &[EvalCaller {
+                name: "Cursor",
+                command: "Cursor.app",
+                exe: None,
+            }],
             "/x",
             &["GITHUB_TOKEN"],
         );
@@ -1284,7 +1292,11 @@ mod tests {
         let c = ctx(
             "gh",
             "gh api",
-            &[EvalCaller { name: "Cursor", command: "Cursor.app", exe: None }],
+            &[EvalCaller {
+                name: "Cursor",
+                command: "Cursor.app",
+                exe: None,
+            }],
             "/x",
             &["GITHUB_TOKEN"],
         );
@@ -1464,13 +1476,11 @@ mod tests {
         );
         let wasm_approve = mk_wasm_rule("02", "wasm approve", &["GITHUB_TOKEN"]);
         let modules = modules_for(&[("02", APPROVE_IF)]);
-        let callers = &[
-            EvalCaller {
-                name: "Cursor",
-                command: "/Applications/Cursor.app/Contents/MacOS/Cursor",
-                exe: None,
-            },
-        ];
+        let callers = &[EvalCaller {
+            name: "Cursor",
+            command: "/Applications/Cursor.app/Contents/MacOS/Cursor",
+            exe: None,
+        }];
         let c = ctx(
             "gh",
             "gh api --get /repos/me/x/pulls",
@@ -1524,13 +1534,11 @@ mod tests {
         let b = mk_wasm_rule("r_bbb", "bbb", &["GITHUB_TOKEN"]);
         let a = mk_wasm_rule("r_aaa", "aaa", &["GITHUB_TOKEN"]);
         let modules = modules_for(&[("r_bbb", APPROVE_IF), ("r_aaa", APPROVE_IF)]);
-        let callers = &[
-            EvalCaller {
-                name: "Cursor",
-                command: "/Applications/Cursor.app/Contents/MacOS/Cursor",
-                exe: None,
-            },
-        ];
+        let callers = &[EvalCaller {
+            name: "Cursor",
+            command: "/Applications/Cursor.app/Contents/MacOS/Cursor",
+            exe: None,
+        }];
         let c = ctx(
             "gh",
             "gh api --get /repos/me/x/pulls",
@@ -1559,13 +1567,11 @@ mod tests {
         // veto the rule exactly like it does declarative ones.
         let rule = mk_wasm_rule("01", "wasm approve", &["GITHUB_TOKEN"]);
         let modules = modules_for(&[("01", APPROVE_IF)]);
-        let callers = &[
-            EvalCaller {
-                name: "Cursor",
-                command: "/Applications/Cursor.app/Contents/MacOS/Cursor",
-                exe: None,
-            },
-        ];
+        let callers = &[EvalCaller {
+            name: "Cursor",
+            command: "/Applications/Cursor.app/Contents/MacOS/Cursor",
+            exe: None,
+        }];
         let c = ctx(
             "gh",
             "gh api --get /repos/me/x/pulls",
@@ -1647,7 +1653,10 @@ mod tests {
         let c = ctx("gh", "gh api", &[], "/x", &["GITHUB_TOKEN"]);
         let out = evaluate(&[refused, approve], &modules, &c);
 
-        assert!(out.hit.is_none(), "incomplete ruleset must not auto-approve");
+        assert!(
+            out.hit.is_none(),
+            "incomplete ruleset must not auto-approve"
+        );
         assert_eq!(out.mandated_prompt.expect("mandate").rule_id, "01");
     }
 
@@ -1792,13 +1801,11 @@ mod tests {
         );
         assert!(loaded.modules.contains_key("01"));
         // And the loaded module actually evaluates.
-        let callers = &[
-            EvalCaller {
-                name: "Cursor",
-                command: "/Applications/Cursor.app/Contents/MacOS/Cursor",
-                exe: None,
-            },
-        ];
+        let callers = &[EvalCaller {
+            name: "Cursor",
+            command: "/Applications/Cursor.app/Contents/MacOS/Cursor",
+            exe: None,
+        }];
         let c = ctx(
             "gh",
             "gh api --get /repos/me/x/pulls",

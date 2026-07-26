@@ -5,8 +5,8 @@
 //! **values never appear** here — only names, per the threat model (§11).
 
 use std::fs::OpenOptions;
-use std::os::unix::fs::OpenOptionsExt;
 use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};

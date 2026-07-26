@@ -2177,9 +2177,10 @@ impl State {
             // tree always faces the window, however warm the cache is.
             return false;
         };
-        let all_released = ask.secrets.iter().all(|s| {
-            released.contains(&(s.provider.clone(), s.locator.clone()))
-        });
+        let all_released = ask
+            .secrets
+            .iter()
+            .all(|s| released.contains(&(s.provider.clone(), s.locator.clone())));
         all_released && ask_fully_cached(ask, &self.secret_cache)
     }
 }

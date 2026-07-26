@@ -3142,7 +3142,15 @@ mod tests {
     fn summarize_returns_empty_when_no_match() {
         // Wrong wrap → no signal.
         let entries = vec![mk_audit(1000, "aws", "zsh", "approve")];
-        let s = summarize_history(&entries, "gh", Some(CallerIdentity { name: "zsh", exe: None }), 2000);
+        let s = summarize_history(
+            &entries,
+            "gh",
+            Some(CallerIdentity {
+                name: "zsh",
+                exe: None,
+            }),
+            2000,
+        );
         assert!(s.is_empty());
     }
 
@@ -3154,7 +3162,15 @@ mod tests {
             mk_audit(1000, "gh", "zsh", "approve+remember"),
             mk_audit(1500, "gh", "npm", "deny"),
         ];
-        let s = summarize_history(&entries, "gh", Some(CallerIdentity { name: "zsh", exe: None }), 2000);
+        let s = summarize_history(
+            &entries,
+            "gh",
+            Some(CallerIdentity {
+                name: "zsh",
+                exe: None,
+            }),
+            2000,
+        );
         assert_eq!(s.total_count, 1);
         assert_eq!(s.approve_count, 1);
         assert_eq!(s.deny_count, 0);
@@ -3170,7 +3186,15 @@ mod tests {
         let now = 100 * 24 * 3600;
         let sixty_days_ago = now - 60 * 24 * 3600;
         let entries = vec![mk_audit(sixty_days_ago, "gh", "zsh", "deny")];
-        let s = summarize_history(&entries, "gh", Some(CallerIdentity { name: "zsh", exe: None }), now);
+        let s = summarize_history(
+            &entries,
+            "gh",
+            Some(CallerIdentity {
+                name: "zsh",
+                exe: None,
+            }),
+            now,
+        );
         assert_eq!(s.total_count, 0, "outside 30d window, not counted");
         assert_eq!(s.last_decision.as_deref(), Some("deny"));
     }
@@ -3184,7 +3208,15 @@ mod tests {
             mk_audit(recent + 100, "gh", "zsh", "approve+remember"),
             mk_audit(recent + 200, "gh", "zsh", "deny"),
         ];
-        let s = summarize_history(&entries, "gh", Some(CallerIdentity { name: "zsh", exe: None }), now);
+        let s = summarize_history(
+            &entries,
+            "gh",
+            Some(CallerIdentity {
+                name: "zsh",
+                exe: None,
+            }),
+            now,
+        );
         assert_eq!(s.total_count, 3);
         assert_eq!(s.approve_count, 2);
         assert_eq!(s.deny_count, 1);
@@ -3239,7 +3271,10 @@ mod tests {
             name: "zsh",
             exe: Some("/bin/zsh"),
         };
-        assert_eq!(summarize_history(&entries, "gh", Some(real), 2_000).total_count, 1);
+        assert_eq!(
+            summarize_history(&entries, "gh", Some(real), 2_000).total_count,
+            1
+        );
 
         // The impostor: same name, different binary → no history at all.
         let impostor = CallerIdentity {
@@ -3263,6 +3298,9 @@ mod tests {
             name: "zsh",
             exe: Some("/bin/zsh"),
         };
-        assert_eq!(summarize_history(&entries, "gh", Some(want), 2_000).total_count, 1);
+        assert_eq!(
+            summarize_history(&entries, "gh", Some(want), 2_000).total_count,
+            1
+        );
     }
 }

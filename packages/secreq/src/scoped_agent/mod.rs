@@ -1793,7 +1793,11 @@ mod tests {
         let long = Reference::parse(&format!("secret://op/{}", "A".repeat(65_000)))
             .expect("a long locator is still a valid ref");
         let rendered = display_ref(&long);
-        assert!(rendered.chars().count() < 300, "{} chars", rendered.chars().count());
+        assert!(
+            rendered.chars().count() < 300,
+            "{} chars",
+            rendered.chars().count()
+        );
         assert!(rendered.ends_with("… (truncated)"), "{rendered}");
     }
 }

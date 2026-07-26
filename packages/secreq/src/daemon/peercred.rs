@@ -53,7 +53,9 @@ fn peer_uid<F: AsRawFd>(conn: &F) -> Option<u32> {
 #[cfg(target_os = "linux")]
 pub fn peer_pid<F: AsRawFd>(conn: &F) -> Option<u32> {
     // `ucred::pid` is a `pid_t` (i32); positive values convert losslessly.
-    peer_ucred(conn).filter(|c| c.pid > 0).and_then(|c| u32::try_from(c.pid).ok())
+    peer_ucred(conn)
+        .filter(|c| c.pid > 0)
+        .and_then(|c| u32::try_from(c.pid).ok())
 }
 
 /// The peer's `SO_PEERCRED` record: pid, uid and gid in one call.

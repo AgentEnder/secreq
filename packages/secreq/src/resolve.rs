@@ -229,7 +229,12 @@ pub fn resolve_all(
             // batch — which is the right trade.
             let salvage: Vec<&&SecretRequest> = reqs
                 .iter()
-                .filter(|r| matches!(outcomes.get(&r.name), Some(RetrieveOutcome::NotFound { .. })))
+                .filter(|r| {
+                    matches!(
+                        outcomes.get(&r.name),
+                        Some(RetrieveOutcome::NotFound { .. })
+                    )
+                })
                 .collect();
             stats.batched += reqs.len() - salvage.len();
             stats.per_secret += salvage.len();
@@ -249,10 +254,12 @@ pub fn resolve_all(
     // Assemble in plan order. Apply default / hard-error per request.
     let mut resolved = Vec::with_capacity(plan.requests.len());
     for req in &plan.requests {
-        let outcome = outcomes.remove(&req.name).unwrap_or(RetrieveOutcome::NotFound {
-            status: "missing from resolver output".to_owned(),
-            stderr: String::new(),
-        });
+        let outcome = outcomes
+            .remove(&req.name)
+            .unwrap_or(RetrieveOutcome::NotFound {
+                status: "missing from resolver output".to_owned(),
+                stderr: String::new(),
+            });
         match outcome {
             RetrieveOutcome::Found(value) => {
                 resolved.push(ResolvedSecret {
