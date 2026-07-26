@@ -1,12 +1,16 @@
 //! PATH shim management for `secreq wrap` / `unwrap`.
 //!
 //! A shim is a tiny POSIX shell script in the user's chosen `$shim_dir` that
-//! `exec`s `'<abs path to secreq>' x '<wrap_name>' "$@"`. Because it lives on
-//! `PATH`, every
-//! `execvp("gh", …)` — from interactive shells, from `npm` postinstalls,
-//! from IDE-spawned subprocesses, from anything — resolves to our shim
-//! first, runs through `secreq`'s consent + injection + masking, and then
-//! exec's the real binary inside that wrapper.
+//! `exec`s `'<abs path to secreq>' x '<wrap_name>' "$@"`. Because it lives
+//! on `PATH`, every `execvp("gh", …)` — from interactive shells, from `npm`
+//! postinstalls, from IDE-spawned subprocesses, from anything — resolves to
+//! our shim first, runs through `secreq`'s consent + injection + masking,
+//! and then exec's the real binary inside that wrapper.
+//!
+//! secreq is named by absolute path, not by bare name: a bare name resolves
+//! through whatever `PATH` the *caller* had, and the shim dir only wins
+//! until something prepends to `PATH` later. [`is_current`] detects a shim
+//! written before that was true, and `secreq doctor` repairs it.
 //!
 //! Every shim we write carries a sentinel comment so [`remove`] can refuse
 //! to delete a `gh` file that wasn't ours. This is the structural difference
@@ -99,6 +103,31 @@ pub fn remove(shim_dir: &Path, wrap_name: &str) -> Result<bool> {
 pub fn is_managed(shim_dir: &Path, wrap_name: &str) -> bool {
     let path = shim_dir.join(wrap_name);
     fs::read_to_string(path).is_ok_and(|body| body.contains(SENTINEL))
+}
+
+/// Does the managed shim for `wrap_name` match what [`install`] would write
+/// right now?
+///
+/// Two ways a shim goes stale, both of which keep it working well enough to
+/// look fine:
+///
+/// - It was written by a secreq that emitted `exec secreq x <wrap>`, so it
+///   resolves our name through the caller's PATH and can be hijacked by any
+///   `secreq` that lands earlier on it.
+/// - It names an absolute path the binary has since moved away from, so it
+///   fails at exec time with no hint that a stale shim is the reason.
+///
+/// `is_managed` cannot tell either case apart from a current shim, so
+/// `secreq doctor` compares bodies. Returns `false` for a missing or unowned
+/// file, which is [`install`]'s problem rather than a refresh.
+pub fn is_current(shim_dir: &Path, wrap_name: &str) -> bool {
+    let Ok(existing) = fs::read_to_string(shim_dir.join(wrap_name)) else {
+        return false;
+    };
+    if !existing.contains(SENTINEL) {
+        return false;
+    }
+    secreq_exe().is_ok_and(|exe| existing == body(&exe, wrap_name))
 }
 
 /// POSIX-quote `s` for the shim's `exec` line. Single quotes disable every
@@ -319,5 +348,53 @@ mod tests {
     fn sh_quote_neutralises_an_embedded_single_quote() {
         assert_eq!(sh_quote("gh"), "'gh'");
         assert_eq!(sh_quote("it's"), r"'it'\''s'");
+    }
+
+    /// The upgrade path for an already-installed shim. A body written by an
+    /// older secreq keeps working, so nothing surfaces it — `doctor` compares
+    /// bodies rather than trusting the sentinel, and repairs what it finds.
+    #[test]
+    fn a_bare_name_shim_is_not_current_and_install_repairs_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gh");
+        fs::write(
+            &path,
+            format!("#!/bin/sh\n# {SENTINEL}: wrap=gh\nexec secreq x gh \"$@\"\n"),
+        )
+        .unwrap();
+
+        assert!(is_managed(dir.path(), "gh"), "sentinel says it is ours");
+        assert!(!is_current(dir.path(), "gh"), "a bare-name body is stale");
+
+        install(dir.path(), "gh").unwrap();
+        assert!(is_current(dir.path(), "gh"));
+        let body = fs::read_to_string(&path).unwrap();
+        assert!(!body.contains("exec secreq "), "got: {body}");
+    }
+
+    /// A shim naming a path the binary has moved away from is equally stale,
+    /// and fails at exec time with nothing pointing at the shim as the cause.
+    #[test]
+    fn a_shim_naming_a_different_binary_is_not_current() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("gh"),
+            format!("#!/bin/sh\n# {SENTINEL}: wrap=gh\nexec '/opt/old/secreq' x 'gh' \"$@\"\n"),
+        )
+        .unwrap();
+        assert!(!is_current(dir.path(), "gh"));
+    }
+
+    /// A freshly installed shim is current by construction; an unowned file
+    /// is not ours to call stale.
+    #[test]
+    fn is_current_is_true_after_install_and_false_for_an_unowned_file() {
+        let dir = tempfile::tempdir().unwrap();
+        install(dir.path(), "gh").unwrap();
+        assert!(is_current(dir.path(), "gh"));
+
+        fs::write(dir.path().join("other"), "#!/bin/sh\necho hi\n").unwrap();
+        assert!(!is_current(dir.path(), "other"));
+        assert!(!is_current(dir.path(), "missing"));
     }
 }

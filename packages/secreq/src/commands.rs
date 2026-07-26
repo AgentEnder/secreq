@@ -2554,7 +2554,38 @@ pub fn doctor(config_path: Option<&Path>) -> Result<i32> {
         problems += 1;
     }
 
-    // 2. Provider CLIs.
+    // 2. Shim bodies: every managed shim must exec *this* secreq by absolute
+    // path. A shim from an older secreq says `exec secreq x <wrap>`, which
+    // resolves our name through the caller's PATH — anything that prepends to
+    // PATH later can take our place, with no prompt and no audit row. One
+    // written before the binary moved names a path that no longer exists.
+    // Both are repaired here rather than only reported: the shim is ours, the
+    // rewrite is what `secreq wrap` already does, and leaving a hijackable
+    // shim in place after naming it would be a strange kind of help.
+    if let Some(shim_dir) = config.shim_dir.as_ref() {
+        let stale: Vec<&String> = config
+            .wraps
+            .keys()
+            .filter(|w| shim::is_managed(shim_dir, w) && !shim::is_current(shim_dir, w))
+            .collect();
+        if !stale.is_empty() {
+            println!("\nShim bodies:");
+            for wrap_name in stale {
+                match shim::install(shim_dir, wrap_name) {
+                    Ok(path) => println!(
+                        "  ✓ {wrap_name} → refreshed {} to exec secreq by absolute path",
+                        path.display()
+                    ),
+                    Err(err) => {
+                        println!("  ✗ {wrap_name} → could not refresh the shim: {err:#}");
+                        problems += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Provider CLIs.
     let used: std::collections::BTreeSet<String> = config
         .wraps
         .values()
