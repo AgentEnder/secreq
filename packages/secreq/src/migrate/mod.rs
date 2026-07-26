@@ -22,6 +22,11 @@
 //! 4. **Ids are dense, 1-based, append-only, never reused.** `run_pending`
 //!    slices `MIGRATIONS[level..]`, so a gap would silently run the wrong
 //!    migrations. Pinned by `migration_ids_are_dense_and_one_based`.
+//! 5. **Say whether you finished.** A migration returns an [`Outcome`], not
+//!    `()`, so "I found nothing to do" and "I could not find what I expected"
+//!    are different answers. See [`Outcome`] for why that distinction is the
+//!    difference between a migration that retries and one that is stamped
+//!    over.
 
 mod m0001_secreq_root;
 mod m0002_ssh_agent_socket;
@@ -64,6 +69,32 @@ pub struct Ctx {
     pub legacy_runtime_dir: Option<PathBuf>,
 }
 
+/// What a migration reports when it returns without erroring.
+///
+/// Deliberately not `()`. A migration works by looking for something — a file
+/// at a legacy path, a managed block naming an old socket — and the absence of
+/// that thing is ambiguous: on a fresh install it means "nothing to do", and on
+/// an install whose dotfile we could not read it means "I could not find what I
+/// expected". Returning `()` collapsed the two into success, and success is
+/// what [`run_pending_in`] stamps the level on. A stamped level is permanent —
+/// the migration never runs again — so a migration that silently did less than
+/// it meant to had that written down as if it had done all of it. Migrations
+/// 0002 (skipped a block it could not parse, then deleted the socket that block
+/// named) and the truncated-dotfile case in `ssh_setup::rewrite_in_place` are
+/// both that bug.
+///
+/// Erroring is not the same thing either: nothing failed. The migration read
+/// the world, found it not as expected, and declined to pretend otherwise.
+pub(crate) enum Outcome {
+    /// Everything this migration set out to do is on disk. Includes the
+    /// fresh-install case, where there was genuinely nothing to do.
+    Done,
+    /// The migration stopped short, for the reason carried here — written for
+    /// a user, naming the file that stopped it. The level is not stamped, so
+    /// the migration runs again (they are idempotent) once the obstacle clears.
+    Incomplete(String),
+}
+
 struct Migration {
     id: u32,
     name: &'static str,
@@ -71,7 +102,7 @@ struct Migration {
     /// locations. Snapshots are keyed by pre-migration level, so
     /// `snapshots/K/` is the config as it stood at level K.
     snapshot: fn(&Ctx) -> Vec<PathBuf>,
-    run: fn(&Ctx) -> Result<()>,
+    run: fn(&Ctx) -> Result<Outcome>,
 }
 
 /// Append-only. Never reorder, never reuse an id, never delete an entry.
@@ -176,11 +207,33 @@ pub fn run_pending_in(ctx: &Ctx) -> Result<()> {
 
     for m in &MIGRATIONS[level..] {
         snapshot_if_absent(ctx, m)?;
-        (m.run)(ctx).with_context(|| format!("migration {:04} ({}) failed", m.id, m.name))?;
+        let outcome =
+            (m.run)(ctx).with_context(|| format!("migration {:04} ({}) failed", m.id, m.name))?;
+        // Refusing to stamp is the whole point: the level is what makes a
+        // migration's result permanent, so it may only record a migration that
+        // says it finished.
+        if let Outcome::Incomplete(detail) = outcome {
+            bail!(incomplete_message(m, &detail));
+        }
         // Stamp after each, not at the end, so a failure at 3 keeps 1 and 2.
         write_state(&ctx.root, m.id)?;
     }
     Ok(())
+}
+
+/// A migration that stopped short is neither a crash nor a success, and the
+/// message has to read as neither. It says what stopped it and that the level
+/// stayed put — because the user's next move (fix the thing, run any secreq
+/// command) only makes sense if they know the migration will come back.
+fn incomplete_message(m: &Migration, detail: &str) -> String {
+    format!(
+        "migration {:04} ({}) could not finish:\n\
+         \n  {detail}\n\
+         \n\
+         Migration level {} was not recorded, so secreq will run this migration\n\
+         again — they are idempotent — once the above is resolved.\n",
+        m.id, m.name, m.id,
+    )
 }
 
 /// The read-only counterpart to [`run_pending`], for background/service roles
@@ -1010,6 +1063,43 @@ mod tests {
             mode_of(&snapshot_dir(&ctx.root, 0).join("filemap.json")),
             0o600
         );
+    }
+
+    /// The framework used to read `Ok(())` from a migration as "done", with no
+    /// way for one to say "I ran, and I could not finish". Migration 0002 hit
+    /// that: a managed block it could not read was skipped, the level was
+    /// stamped over the skip, and the stamp is what makes it permanent — a
+    /// stamped level never retries, so a user who then fixed the block would
+    /// never get the migration that fixing it was for.
+    #[test]
+    fn an_incomplete_migration_does_not_stamp_the_level() {
+        use crate::ssh_setup::{BEGIN_SENTINEL, END_SENTINEL};
+
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_in(&tmp);
+        // A block whose socket path secreq cannot resolve — an unquoted `~`,
+        // which is a hand-edit rather than anything `ssh setup` writes.
+        write(
+            &ctx.home.clone().unwrap().join(".ssh/config"),
+            &format!(
+                "{BEGIN_SENTINEL}\nHost *\n    IdentityAgent ~/Library/Caches/secreq/agent.sock\n{END_SENTINEL}\n"
+            ),
+        );
+
+        let err = run_pending_in(&ctx).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("could not finish"),
+            "an incomplete migration must say so: {msg}"
+        );
+        assert!(
+            msg.contains(".ssh/config"),
+            "and name what stopped it: {msg}"
+        );
+
+        // 0001 finished and stamped; 0002 did not, so the level stays at 1 and
+        // the next foreground command runs 0002 again.
+        assert_eq!(read_state(&ctx.root).unwrap().migration_level, 1);
     }
 
     #[test]

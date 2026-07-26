@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use super::Ctx;
+use super::{Ctx, Outcome};
 use crate::path_setup::{self, Shell};
 use crate::paths;
 use crate::ssh_setup::{self, Method};
@@ -78,9 +78,11 @@ pub(super) fn legacy_runtime_dir() -> Option<PathBuf> {
     dirs::cache_dir().map(|c| c.join("secreq"))
 }
 
-pub fn run(ctx: &Ctx) -> Result<()> {
+pub fn run(ctx: &Ctx) -> Result<Outcome> {
     let (Some(home), Some(legacy_dir)) = (&ctx.home, &ctx.legacy_runtime_dir) else {
-        return Ok(());
+        // No home means no dotfiles to carry a block, so there is nothing this
+        // migration could have been expected to find.
+        return Ok(Outcome::Done);
     };
     // Target tracks current behavior, but off the injected root — `paths`
     // would re-read `$SECREQ_HOME` and ignore the `Ctx` we were handed.
@@ -91,12 +93,12 @@ pub fn run(ctx: &Ctx) -> Result<()> {
 /// The whole migration, with every location injected. [`run`] is a thin
 /// resolver over this; **tests must call this**, never `run`, or they rewrite
 /// the developer's real `~/.ssh/config`.
-fn run_in(home: &Path, legacy_dir: &Path, new_dir: &Path) -> Result<()> {
+fn run_in(home: &Path, legacy_dir: &Path, new_dir: &Path) -> Result<Outcome> {
     // Nothing moved (a set `$XDG_RUNTIME_DIR` resolves both the same way), so
     // there is no stale path to repoint and nothing safe to clean — the
     // "legacy" sockets are the live ones.
     if legacy_dir == new_dir {
-        return Ok(());
+        return Ok(Outcome::Done);
     }
 
     let legacy_sock = legacy_dir.join("agent.sock");
@@ -133,8 +135,20 @@ fn run_in(home: &Path, legacy_dir: &Path, new_dir: &Path) -> Result<()> {
         // `ssh setup` would write today — one block format, one source.
         let plan = ssh_setup::plan(home, method, shell, &new_sock)
             .with_context(|| format!("building the SSH-agent block for {}", path.display()))?;
-        ssh_setup::rewrite_in_place(&plan.config_file, &plan.block)
+        let rewrote = ssh_setup::rewrite_in_place(&plan.config_file, &plan.block)
             .with_context(|| format!("repointing the SSH-agent block in {}", path.display()))?;
+        // We read a block out of this file a moment ago and decided it had to
+        // move; `false` means the block was gone by the time we wrote — the
+        // file was truncated or rewritten under us. Discarding this was the
+        // shape of the bug: "no block to replace" reads as "already fine".
+        if !rewrote {
+            return Ok(Outcome::Incomplete(format!(
+                "the SSH-agent block in {} disappeared while it was being \
+                 repointed, so it still names the pre-upgrade socket. Check \
+                 that file before running secreq again.",
+                path.display(),
+            )));
+        }
         eprintln!(
             "secreq: repointed the SSH-agent block in {} at {}.",
             path.display(),
@@ -142,21 +156,28 @@ fn run_in(home: &Path, legacy_dir: &Path, new_dir: &Path) -> Result<()> {
         );
     }
 
+    // Nothing was destroyed and some blocks may have been repointed, but we
+    // cannot claim to have finished: a block we could not read may still name
+    // the socket dir we are supposed to have emptied. Reporting this rather
+    // than stamping is what lets the migration come back once it is fixed.
     if !unresolved.is_empty() {
-        for path in &unresolved {
-            eprintln!(
-                "secreq: the SSH-agent block in {} names a socket path secreq \
-                 could not resolve, so it was left alone — and the pre-upgrade \
-                 socket directory {} was kept in case that block still names it.",
-                path.display(),
-                legacy_dir.display(),
-            );
-        }
-        return Ok(());
+        return Ok(Outcome::Incomplete(format!(
+            "secreq could not resolve the socket path named by the SSH-agent \
+             block in {}, so it was left alone and the pre-upgrade socket \
+             directory {} was kept in case that block still names it. Spell \
+             the path absolutely (or quote the `~`), or remove the block, and \
+             secreq will finish the job.",
+            unresolved
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            legacy_dir.display(),
+        )));
     }
 
     clean_legacy_runtime_dir(legacy_dir);
-    Ok(())
+    Ok(Outcome::Done)
 }
 
 /// Did home-expansion leave a token behind? Then this block names a path we
@@ -474,13 +495,19 @@ mod tests {
         std::fs::write(sb.legacy_dir.join("agent.sock"), "").unwrap();
         std::fs::write(sb.legacy_dir.join("daemon.pid"), "123").unwrap();
 
-        run_in(&sb.home, &sb.legacy_dir, &sb.new_dir).unwrap();
+        let outcome = run_in(&sb.home, &sb.legacy_dir, &sb.new_dir).unwrap();
 
         assert!(
             sb.legacy_dir.join("agent.sock").exists(),
             "a socket a surviving block may still name must not be removed"
         );
         assert!(sb.legacy_dir.exists());
+        // And it says so, rather than letting the level be stamped over the
+        // block it never managed to read.
+        let Outcome::Incomplete(detail) = outcome else {
+            panic!("a skipped block is not a finished migration");
+        };
+        assert!(detail.contains(".ssh/config"), "unhelpful detail: {detail}");
     }
 
     /// The other side of that gate: a block naming a socket we *did* resolve,

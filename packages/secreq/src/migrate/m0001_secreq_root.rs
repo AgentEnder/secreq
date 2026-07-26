@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
-use super::Ctx;
+use super::{Ctx, Outcome};
 use crate::atomic;
 
 /// The two config files. Frozen — this is the set as it existed at level 0.
@@ -33,12 +33,14 @@ pub fn snapshot_files(ctx: &Ctx) -> Vec<PathBuf> {
     CONFIG_FILES.iter().map(|f| dir.join(f)).collect()
 }
 
-pub fn run(ctx: &Ctx) -> Result<()> {
+pub fn run(ctx: &Ctx) -> Result<Outcome> {
     for name in CONFIG_FILES {
         migrate_config_file(ctx, name).with_context(|| format!("migrating {name}"))?;
     }
     migrate_audit_log(ctx).context("migrating audit.log")?;
-    Ok(())
+    // Nothing here is ever half-done: every case either moves the file, finds
+    // it already moved, or errors on an ambiguity it refuses to guess at.
+    Ok(Outcome::Done)
 }
 
 /// ```text
