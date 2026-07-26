@@ -25,11 +25,7 @@ export function Interception() {
               <span aria-hidden="true">·</span>
               <span>~/project</span>
 
-              <button
-                type="button"
-                className="icept-replay"
-                onClick={() => setRun((n) => n + 1)}
-              >
+              <button type="button" className="icept-replay" onClick={() => setRun((n) => n + 1)}>
                 <svg
                   width="10"
                   height="10"

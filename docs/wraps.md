@@ -1,106 +1,89 @@
 # Authoring `wraps.json5`
 
-> **You may not need this page.** `secreq wrap <binary>` with no flags asks
-> for everything a wrap needs and writes the entry for you — and unlike
-> hand-editing, it resolves the locator against your store before saving,
-> so a typo fails while you're still looking at it. This page is the
-> reference for the file it produces: read it when you want to know what a
+> **You may not need this page.** `secreq wrap <binary>` asks for everything
+> a wrap needs and writes the entry for you — and unlike hand-editing, it
+> resolves the locator against your store before saving, so a typo fails
+> while you're still looking at it. Read this when you want to know what a
 > field means, hand-edit something the prompts don't cover, or check a
 > config into a dotfiles repo.
 
 ::term{id=wrap-gh}
 
-The config lives at `~/.secreq/wraps.json5` (or `$SECREQ_HOME/wraps.json5`
-when `$SECREQ_HOME` is set). For schema-driven validation in your
-editor, point it at [`./wraps.schema.json`](./wraps.schema.json):
+The config lives at `~/.secreq/wraps.json5` (or `$SECREQ_HOME/wraps.json5`).
+It's JSON5 — comments, unquoted keys, trailing commas, single quotes. Point
+your editor at [`wraps.schema.json`](./wraps.schema.json) for completion:
 
 ```json5
 {
-  $schema: "./wraps.schema.json",
-  // …
-}
-```
-
-## Top-level shape
-
-```json5
-{
-  $shim_dir: "~/.secreq/shims",       // set by `secreq init`
+  $schema: './wraps.schema.json',
+  $shim_dir: '~/.secreq/shims', // set by `secreq init`
 
   gh: {
-    $reason: "GitHub API access",
+    $reason: 'GitHub API access',
     env: {
-      GITHUB_TOKEN: "secret://op/Personal/GitHub Token/credential",
+      GITHUB_TOKEN: 'secret://op/Personal/GitHub Token/credential',
     },
   },
 
   aws: {
-    $reason: "AWS deployments",
+    $reason: 'AWS deployments',
     env: {
-      AWS_ACCESS_KEY_ID:     "secret://op/Work/AWS/access_key_id",
-      AWS_SECRET_ACCESS_KEY: "secret://op/Work/AWS/secret_access_key",
+      AWS_ACCESS_KEY_ID: 'secret://op/Work/AWS/access_key_id',
+      AWS_SECRET_ACCESS_KEY: 'secret://op/Work/AWS/secret_access_key',
     },
   },
 
-  // Optional: override a built-in provider or define a custom one.
-  // providers: { … },
-}
-```
-
-JSON5: comments, unquoted keys, trailing commas, single-quoted strings.
-
-### Top-level keys
-
-| Key | Meaning |
-|---|---|
-| `$shim_dir` | Where `secreq wrap` drops PATH shims. Tilde-expansion (`~/`) honored. Set by `secreq init`. |
-| `$wait_indicator` | Boolean (default `true`). Whether a wrap prints a "waiting for approval" indicator to stderr while blocked on the consent prompt — a spinner on a TTY, a timestamped line (reprinted every 30s) on a pipe. Set `false` to silence. The `SECREQ_NO_WAIT_INDICATOR` env var silences it per-invocation regardless of this setting. |
-| `$editor` | Editor id (e.g. `code`, `cursor`, `zed`, `nvim`) the rule editor's "Open in editor" split-button opens by default. Machine-local, like `$shim_dir`; written when you pick an editor in the Rules view of `secreq view`. |
-| `$schema` | Editor pointer; ignored at runtime. |
-| `providers` | Provider scheme definitions. Optional — see [providers](./providers.md). |
-| Any other identifier | A **wrap** (binary name). |
-
-## Wraps
-
-A wrap declares how to invoke one specific binary. The top-level key is the
-binary name; the value is an object:
-
-```json5
-gh: {
-  $reason: "GitHub API access",          // shown in the consent prompt
-  env: {                                  // env vars to inject
-    GITHUB_TOKEN: "secret://op/Personal/GitHub Token/credential",
+  kubectl: {
+    env: { KUBECONFIG: 'secret://keychain/work/kubeconfig' },
   },
 }
 ```
 
-### Per-wrap settings
+Every top-level key that isn't `$`-prefixed is a **wrap**, named for the
+binary. `$`-prefixed keys are settings.
 
-| Setting | Type | Meaning |
-|---|---|---|
-| `$reason` | string | Rationale shown in the consent prompt for context. |
-| `env` | object (optional) | Environment variables to inject. Each value is a `secret://provider/locator` reference (full ref only — bare locators aren't supported here, unlike the old manifest model). Omit (or leave empty) to make a [gate-only wrap](#gate-only-wraps). |
+## Settings
+
+| Key               | Meaning                                                                                                                                                                                                             |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `$shim_dir`       | Where `secreq wrap` drops PATH shims. `~/` is expanded. Set by `secreq init`.                                                                                                                                        |
+| `$wait_indicator` | Default `true`. Whether a blocked wrap prints a "waiting for approval" indicator to stderr — a spinner on a TTY, a timestamped line every 30s on a pipe. `SECREQ_NO_WAIT_INDICATOR` silences it per-invocation.      |
+| `$editor`         | Editor id (`code`, `cursor`, `zed`, `nvim`) the rule editor's "Open in editor" button defaults to. Written when you pick one in the manager's Rules view.                                                            |
+| `$schema`         | Editor pointer; ignored at runtime.                                                                                                                                                                                 |
+| `providers`       | Provider definitions. Optional — see [providers](./providers.md).                                                                                                                                                    |
+
+Other `$`-prefixed keys are reserved. A per-wrap `$description` parses but
+does nothing yet.
+
+## Wraps
+
+| Setting   | Type              | Meaning                                                                                                                                                     |
+| --------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `$reason` | string            | Rationale shown in the consent prompt.                                                                                                                      |
+| `env`     | object (optional) | Environment variables to inject. Each value is a full `secret://provider/locator` reference — bare locators aren't accepted here. Omit for a gate-only wrap. |
+
+A reference is `secret://<provider>/<locator>`: the provider is a scheme
+name (built-in or declared in `providers`), and the locator is everything
+after the first `/`. See [providers](./providers.md).
 
 ### Already-satisfied env vars
 
-An `env` entry whose variable is **already set in the calling
-environment** — to a non-empty value that isn't a `secret://…` marker —
-is skipped: nothing is resolved or injected for it, and the child simply
-inherits the parent's value. If every entry is satisfied this way, the
-run needs no consent at all and passes straight through (secreq releases
-nothing, so there is nothing to approve). A partially-satisfied wrap
-prompts only for the missing variables. This keeps wrapped binaries
-cheap inside environments that pre-inject credentials (CI, a shell where
-you've exported the token yourself, a nested `secreq run`). Gate-only
-wraps are unaffected — with no `env` to satisfy, they always gate.
+An `env` entry whose variable is **already set** in the calling environment
+to a non-empty value that isn't a `secret://…` marker, is skipped entirely. Nothing is resolved, and the child inherits what was already
+there.
+
+If every entry is satisfied this way the run needs no consent at all and
+passes straight through, because secreq is releasing nothing. A partially
+satisfied wrap prompts only for what's missing. This is what keeps wrapped
+binaries cheap inside environments that pre-inject credentials — CI, a
+shell where you exported the token yourself, a nested `secreq run`.
 
 ### Gate-only wraps
 
 A wrap with no `env` is a **gate-only wrap**: invoking the binary still
-requires consent through the daemon, but nothing is resolved or
-injected. Use it to gate a tool that manages its own credentials and has
-no secret for `secreq` to pass — `op` (the 1Password CLI) is the
-canonical case:
+requires consent, but nothing is resolved or injected. Use it for a tool
+that manages its own credentials and has no secret for secreq to pass.
+`op` is the canonical case:
 
 ```json5
 op: {
@@ -110,141 +93,57 @@ op: {
 
 ::shot{id=21-gate-only-pending}
 
-Now every `op` invocation (`op read …`, `op item get …`, …) pauses for a
-consent prompt that shows the full command, the working directory, and
-the caller process tree — the "why am I getting this request?" context
-the tool's own prompt usually omits. The consent card displays a
-**"Gate only — no secrets injected"** marker in place of the secret
-rows. Create one non-interactively with:
+Now every `op read …` pauses for a prompt showing the full command, the
+working directory and the caller tree — the "why am I getting this?"
+context the tool's own prompt omits. The evidence well's secret row gives
+way to a gate-only marker.
 
-In an interactive terminal, `secreq wrap op` offers this as a choice —
-"Gate only (no secrets)" is the second option on the first question:
+`secreq wrap op --reason "1Password vault access"` creates one directly, and
+the interactive flow offers it as the second option on the first question:
 
 ::term{id=wrap-gate-only}
 
-Or create one in a single non-interactive command:
+**Wrapping a provider CLI is safe.** If you gate `op` *and* use it as a
+`secret://op/...` provider, secreq won't double-prompt: it runs the provider
+with an internal marker that makes the wrapped `op` pass straight through.
+Only the `op` calls *you* make are gated, never the ones secreq makes to
+fetch a value for another wrap.
 
-```sh
-secreq wrap op --reason "1Password vault access"
-```
-
-(`secreq wrap op` with no `--env` and no terminal creates a gate too —
-with nothing to inject and nobody to ask, "just gate it" is the only
-sensible reading.)
-
-Gate-only wraps participate in [auto-rules](./consent-window.md) like any
-other wrap — e.g. auto-approve `op read op://Work/*` while still
-prompting for everything else.
-
-**Wrapping a provider CLI is safe.** If you gate `op` *and* also use it as
-a `secret://op/...` provider for other wraps, secreq won't double-prompt:
-when it resolves a secret it runs the provider with an internal marker
-(`SECREQ_RESOLVING`) that makes the wrapped `op` pass straight through.
-Only the `op` calls *you* (or your tools) make are gated; the ones secreq
-makes to fetch values for another wrap are not.
-
-There is **no TTL setting**. Cache lifetime is bounded by the lifetime
-of your parent process *and* the daemon process (see "How approval is
-scoped" below). To clear every remembered approval at once, run
-`secreq daemon stop` — the daemon's in-memory cache goes with it.
-
-### Reference syntax
-
-```
-secret://<provider>/<locator>
-```
-
-- `<provider>` matches a provider scheme name (built-in or in `providers`).
-- `<locator>` is everything after the first `/`.
-
-See [providers](./providers.md) for the built-in providers and how to add
-your own.
-
-## How approval is scoped (the cache)
+## How approval is scoped
 
 When you approve a wrap invocation, the decision is cached against the
-**direct parent process** — specifically `(wrap_name, ppid, parent_start_time)`.
+**direct parent process**, keyed on `(wrap, ppid, parent start time)`.
 
-| Scenario | Cache outcome |
-|---|---|
-| You run `gh` from your zsh, approve, then run `gh` again from the *same* zsh | Cache hit → no prompt. |
-| You open a new terminal and run `gh` there | Different ppid → prompt. |
-| A `npm` postinstall hook invokes `gh` via the shim | Different ppid (`npm`, not your shell) → prompt. |
-| pid recycled into a new process after the original shell died | Different `start_time` → prompt. |
+| Scenario                                                     | Outcome                             |
+| ------------------------------------------------------------ | ----------------------------------- |
+| Run `gh` from your zsh, approve, run `gh` again from that zsh | Cache hit → no prompt.              |
+| Open a new terminal and run `gh` there                        | Different ppid → prompt.            |
+| An `npm` postinstall hook invokes `gh` through the shim       | Different ppid (`npm`) → prompt.    |
+| A pid is recycled after the original shell died               | Different start time → prompt.      |
 
-The `start_time` component is what makes the cache pid-recycle safe.
-`(ppid, start_time)` together identify *exactly* one process across its
-lifetime; a new process inheriting the recycled pid number has a different
-`start_time` and gets a fresh prompt.
+Descendants of a process you already approved for ride the same grant.
 
-**Cache lifetime is bounded by two things:** the parent process's
-lifetime and the daemon's lifetime. Whichever ends first ends the
-entry. When the shell that approved a wrap exits, no new process can
-share both its pid *and* its start_time, so the entry becomes
-unreachable. When the daemon exits (`secreq daemon stop`, idle timeout,
-or `--force`), the whole in-memory cache goes with it.
+The start-time component is what makes this pid-recycle safe: `(ppid,
+start_time)` identifies exactly one process across its lifetime, so a new
+process inheriting the number gets a fresh prompt.
 
-There is no clock-based TTL and no on-disk file: nothing artificial
-expires the entries between those two natural boundaries, and a daemon
-restart is always the clean reset path.
+**There is no TTL and no on-disk file.** Cache lifetime is bounded by two
+natural boundaries: the parent process's lifetime, and the daemon's. When
+the shell that approved a wrap exits, no process can share both its pid and
+its start time, so the entry becomes unreachable. When the daemon exits
+(`secreq daemon stop`, `--force`, or the two-hour idle timeout), the whole
+cache goes with it. Nothing artificial expires entries in between, and a
+daemon restart is always the clean reset.
 
-## Examples
-
-### Minimal: wrap `gh`
-
-```json5
-{
-  $shim_dir: "~/.secreq/shims",
-  gh: {
-    env: { GITHUB_TOKEN: "secret://op/Personal/GitHub Token/credential" },
-  },
-}
-```
-
-### Multi-provider, mixed local + cloud
-
-```json5
-{
-  $shim_dir: "~/.secreq/shims",
-
-  gh: {
-    env: { GITHUB_TOKEN: "secret://op/Personal/GitHub Token/credential" },
-  },
-
-  aws: {
-    $reason: "AWS deployments",
-    env: {
-      AWS_ACCESS_KEY_ID:     "secret://op/Work/AWS/access_key_id",
-      AWS_SECRET_ACCESS_KEY: "secret://op/Work/AWS/secret_access_key",
-    },
-  },
-
-  kubectl: {
-    env: { KUBECONFIG: "secret://keychain/work/kubeconfig" },
-  },
-
-  psql: {
-    $reason: "Prod DB — `secreq daemon stop` clears the cache if you want a fresh prompt",
-    env: { PGPASSWORD: "secret://op/Work/Postgres/prod/password" },
-  },
-}
-```
+Two kinds of request deliberately never remember: `secreq run`, whose
+identity is fixed and would over-match, and SSH signatures, which have
+their own clock-bounded [session grants](./ssh-agent.md).
 
 ## Editing the file
 
-`secreq edit` opens it in `$EDITOR` (falls back to `vi`). After editing,
-`secreq check` and `secreq doctor` validate.
+`secreq edit` opens it in `$EDITOR`; `secreq check` and `secreq doctor`
+validate afterwards.
 
-`secreq wrap` and `secreq unwrap` edit the file for you; they don't preserve
-hand-written comments through a write, so prefer them for adding entries
-and use `secreq edit` for surgical edits you want to keep verbatim.
-
-## What `secreq` ignores
-
-- Top-level keys starting with `$` other than `$shim_dir`,
-  `$wait_indicator`, and `$editor` are reserved metadata (e.g. `$schema`,
-  future `$version`).
-- Per-wrap `$description` is accepted and currently ignored at runtime
-  (parity with future tooling).
-- Comments, trailing commas, and JSON5 syntax sugar are accepted on read
-  but not preserved through a write.
+`secreq wrap` and `unwrap` edit the file for you but **don't preserve
+hand-written comments** through a write. Prefer them for adding entries,
+and `secreq edit` for surgical changes you want kept verbatim.

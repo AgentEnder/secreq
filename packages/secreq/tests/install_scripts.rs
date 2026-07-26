@@ -135,13 +135,29 @@ fn dist_tarballs_are_ignored_but_tracked_dist_files_are_not() {
     }
 }
 
-/// Keep the docs honest: getting-started must actually mention the script so a
-/// coworker can find the one-command path.
+/// Keep the docs honest: a coworker starting cold has to be able to reach the
+/// one-command checkout path.
+///
+/// The assertion is the *route*, not one page. `docs/install.md` owns the
+/// install channels, and `getting-started` covers installation in a sentence
+/// and links onward — so pinning this to whichever page happens to spell the
+/// script out today would fail the next time the two are rebalanced, without
+/// anything actually having become undiscoverable. Both halves are checked
+/// because either one alone leaves the path broken: the script documented on a
+/// page nothing links to, or a link to a page that no longer explains it.
 #[test]
-fn getting_started_documents_the_script() {
-    let doc = read("docs/getting-started.md");
+fn the_checkout_install_path_is_reachable_from_getting_started() {
+    let install = read("docs/install.md");
     assert!(
-        doc.contains("scripts/install.sh"),
-        "docs/getting-started.md must document the scripts/install.sh path"
+        install.contains("scripts/install.sh"),
+        "docs/install.md owns the install channels and must document the \
+         scripts/install.sh path"
+    );
+
+    let start = read("docs/getting-started.md");
+    assert!(
+        start.contains("install.md"),
+        "docs/getting-started.md must link to docs/install.md, or the checkout \
+         path is documented where nobody starting out will find it"
     );
 }

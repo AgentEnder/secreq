@@ -32,14 +32,14 @@ function Hero() {
 
           <p className="t-lede max-w-[46ch] mb-5">
             secreq wraps the CLIs you use every day — <code>gh</code>, <code>aws</code>,{' '}
-            <code>kubectl</code>, <code>psql</code> — so each invocation pulls its credentials
-            from your own secret store. Every release is gated by a prompt that names the
-            process asking, and every value is masked on the way back out.
+            <code>kubectl</code>, <code>psql</code> — so each invocation pulls its credentials from
+            your own secret store. Every release is gated by a prompt that names the process asking,
+            and every value is masked on the way back out.
           </p>
 
           <p className="text-sm leading-relaxed text-text-3 max-w-[46ch] mb-8">
-            It is a PATH shim, not a shell alias, so it catches the requests you did not type:
-            an <code>npm</code> postinstall, a Makefile, an agent running in your editor.
+            It is a PATH shim, not a shell alias, so it catches the requests you did not type: an{' '}
+            <code>npm</code> postinstall, a Makefile, an agent running in your editor.
           </p>
 
           <div className="flex flex-wrap gap-3">
@@ -221,11 +221,14 @@ function Setup() {
             <h3 className="t-title mb-4 max-w-[18ch]">Answer four questions, get a wrap</h3>
             <p className="t-lede mb-5">
               <code>secreq wrap gh</code> asks what the wrap should do, which provider holds the
-              secret, and where. It resolves the locator against your store before writing
-              anything, so a mistyped path fails while you are still looking at it — not the
-              first time you run <code>gh</code> next week.
+              secret, and where. It resolves the locator against your store before writing anything,
+              so a mistyped path fails while you are still looking at it — not the first time you
+              run <code>gh</code> next week.
             </p>
-            <Link href="/docs/getting-started" className="text-sm font-semibold text-accent no-underline">
+            <Link
+              href="/docs/getting-started"
+              className="text-sm font-semibold text-accent no-underline"
+            >
               Getting started →
             </Link>
           </div>
@@ -270,11 +273,11 @@ const INSTALL_METHODS: readonly InstallMethod[] = [
   },
   {
     id: 'windows',
-    'label': 'Windows',
+    label: 'Windows',
     platform: 'windows',
     requires: '',
-    command: 'Coming Soon'
-  }
+    command: 'Coming Soon',
+  },
 ];
 
 function Install() {
@@ -290,8 +293,8 @@ function Install() {
             <h3 className="t-heading mb-3">Then run secreq init</h3>
             <p className="text-sm leading-relaxed text-text-2 mb-4">
               Installing creates no wraps — nothing on your PATH changes until you ask for it.{' '}
-              <code>secreq init</code> sets up the shim directory and walks you through your
-              first wrap.
+              <code>secreq init</code> sets up the shim directory and walks you through your first
+              wrap.
             </p>
             <p className="text-sm leading-relaxed text-text-3">
               The full platform matrix and signature verification are in the{' '}

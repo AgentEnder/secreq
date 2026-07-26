@@ -23,7 +23,7 @@ interface PagefindModule {
   search: (query: string) => Promise<PagefindSearchResponse>;
   debouncedSearch: (
     query: string,
-    options?: { debounceTimeoutMs?: number }
+    options?: { debounceTimeoutMs?: number },
   ) => Promise<PagefindSearchResponse>;
 }
 
@@ -78,12 +78,20 @@ export function PagefindSearch() {
       setIsOpen(true);
       try {
         const response = await window.pagefind.debouncedSearch(q, { debounceTimeoutMs: 150 });
-        if (!response?.results) { setResults([]); return; }
+        if (!response?.results) {
+          setResults([]);
+          return;
+        }
         const loaded = await Promise.all(
           response.results.slice(0, 8).map(async (r) => {
             const data = await r.data();
-            return { id: r.id, url: data.url, title: data.meta?.title ?? 'Untitled', excerpt: data.excerpt };
-          })
+            return {
+              id: r.id,
+              url: data.url,
+              title: data.meta?.title ?? 'Untitled',
+              excerpt: data.excerpt,
+            };
+          }),
         );
         setResults(loaded);
       } catch {
@@ -92,7 +100,7 @@ export function PagefindSearch() {
         setIsLoading(false);
       }
     },
-    [pagefindReady]
+    [pagefindReady],
   );
 
   useEffect(() => {
@@ -161,7 +169,11 @@ export function PagefindSearch() {
           viewBox="0 0 24 24"
           aria-hidden="true"
         >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+          />
         </svg>
         <input
           ref={inputRef}

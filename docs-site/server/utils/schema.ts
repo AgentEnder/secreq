@@ -157,7 +157,9 @@ function isClosed(schema: JsonSchema): boolean {
 function objectNotes(schema: JsonSchema): string[] {
   const branches = (schema.anyOf ?? schema.oneOf ?? [])
     .filter((branch) => branch.required?.length)
-    .map((branch) => branch.required!.map((name) => `<code>${escapeHtml(name)}</code>`).join(' + '));
+    .map((branch) =>
+      branch.required!.map((name) => `<code>${escapeHtml(name)}</code>`).join(' + '),
+    );
 
   return branches.length > 0 ? [`Requires ${dedupe(branches).join(' or ')}.`] : [];
 }
@@ -169,7 +171,9 @@ function fieldNotes(schema: JsonSchema): string[] {
     notes.push(`Default <code>${escapeHtml(JSON.stringify(schema.default))}</code>`);
   }
   if (schema.enum) {
-    notes.push(`One of ${schema.enum.map((v) => `<code>${escapeHtml(JSON.stringify(v))}</code>`).join(', ')}`);
+    notes.push(
+      `One of ${schema.enum.map((v) => `<code>${escapeHtml(JSON.stringify(v))}</code>`).join(', ')}`,
+    );
   }
   if (schema.minItems !== undefined) {
     notes.push(`At least ${schema.minItems} item${schema.minItems === 1 ? '' : 's'}`);
@@ -201,7 +205,7 @@ export function typeTokens(schema: JsonSchema | undefined, anchorFor: AnchorFor)
     if (branches.length > 0) {
       return joinTokens(
         branches.map((branch) => typeTokens(branch, anchorFor)),
-        ' | '
+        ' | ',
       );
     }
   }
@@ -218,9 +222,7 @@ export function typeTokens(schema: JsonSchema | undefined, anchorFor: AnchorFor)
     const inner = typeTokens(schema.items, anchorFor);
     // `(a | b)[]` — parenthesised so the brackets bind to the whole union.
     const needsParens = inner.some((token) => token.text.includes('|'));
-    return needsParens
-      ? [{ text: '(' }, ...inner, { text: ')[]' }]
-      : [...inner, { text: '[]' }];
+    return needsParens ? [{ text: '(' }, ...inner, { text: ')[]' }] : [...inner, { text: '[]' }];
   }
 
   if (schema.type === 'object' || schema.properties || schema.additionalProperties) {
@@ -236,7 +238,7 @@ export function typeTokens(schema: JsonSchema | undefined, anchorFor: AnchorFor)
 
 function joinTokens(groups: TypeToken[][], separator: string): TypeToken[] {
   return groups.flatMap((tokens, index) =>
-    index === 0 ? tokens : [{ text: separator }, ...tokens]
+    index === 0 ? tokens : [{ text: separator }, ...tokens],
   );
 }
 

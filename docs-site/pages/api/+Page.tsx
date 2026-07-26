@@ -54,8 +54,8 @@ export default function ApiIndexPage() {
         <ApiPackageLanding apiPackage={apiPackage} />
       ) : (
         <p className="text-text-3 mt-8">
-          The API reference has not been generated. Run the <code>typedoc</code> extract step
-          before building.
+          The API reference has not been generated. Run the <code>typedoc</code> extract step before
+          building.
         </p>
       )}
     </article>

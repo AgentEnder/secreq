@@ -13,8 +13,8 @@ export default function DocsPage() {
         <h1 className="t-title mb-4">Everything secreq does</h1>
         <p className="t-lede max-w-[54ch]">
           Start with the install guide, then wrap your first CLI. The reference sections cover
-          authoring wraps, the providers secreq can read from, and the two agents it can stand
-          in for.
+          authoring wraps, the providers secreq can read from, and the two agents it can stand in
+          for.
         </p>
       </header>
 

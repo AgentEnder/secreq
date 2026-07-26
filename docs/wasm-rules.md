@@ -10,11 +10,11 @@ function, compiled to a sandboxed WebAssembly module, evaluated by the
 daemon before the consent prompt.
 
 ```ts
-import { RuleCtx, Decision, approve, pass, deny } from "secreq-rule";
+import { RuleCtx, Decision, approve, pass, deny } from 'secreq-rule';
 
 export function decide(ctx: RuleCtx): Decision {
-  if (ctx.wrap == "gh" && ctx.joinedArgv.startsWith("gh repo delete")) {
-    return deny("repo deletes are never auto-approved");
+  if (ctx.wrap == 'gh' && ctx.joinedArgv.startsWith('gh repo delete')) {
+    return deny('repo deletes are never auto-approved');
   }
   return pass(); // no opinion — fall through to the prompt
 }
@@ -25,7 +25,7 @@ export function decide(ctx: RuleCtx): Decision {
 Prefer a declarative rule whenever one can express the policy — it's
 auditable at a glance in `rules show`, editable in the UI, and can't
 have bugs. Reach for a wasm rule when the decision needs logic a match
-clause can't express: combinations ("this argv *unless* that caller"),
+clause can't express: combinations ("this argv _unless_ that caller"),
 negations, computed conditions on several ctx fields at once, or a
 reason string built from the ask itself. Declarative and wasm rules
 evaluate together in one pass and compete under the same precedence
@@ -45,7 +45,7 @@ convention:
   rejected at registration time, with an error naming the offending
   import. The only thing a rule can do is read the ctx it is handed
   and return a decision.
-- **The ctx carries secret *names*, never values.** A rule sees what an
+- **The ctx carries secret _names_, never values.** A rule sees what an
   ask would release (`secrets`) — env-var names, or `ssh:<key_id>` for a
   key signing; no secret value ever enters the sandbox.
 - **Deny wins.** If any enabled rule — declarative or wasm — denies,
@@ -69,29 +69,39 @@ convention:
   module's SHA-256, and the daemon re-verifies it every time it loads
   the rules. A module that changed on disk is refused — the rule can
   never fire — and the refusal is visible in `rules list`, `rules
-  show`, and the UI.
+show`, and the UI.
 
 Each evaluation runs in a fresh instance, so no state survives from
 one ask to the next.
+
+Taken together, that is why running user-authored code in secreq's most
+security-sensitive path is acceptable: the module's capabilities are a
+property of construction rather than of policy — no imports means no
+filesystem, network, clock or environment, because instantiation would
+otherwise fail. What remains is a pure function from ask-context to
+decision, bounded in time and space, pinned by hash, and subordinate to
+deny-wins. **The worst a hostile module can do is approve asks within the
+secret set you explicitly trained it on** — which is exactly the authority
+you granted when you registered it.
 
 ## What your rule sees and returns
 
 Your rule is one exported function:
 
-```ts
+```ts path=decide.d.ts
 export function decide(ctx: RuleCtx): Decision;
 ```
 
 `RuleCtx` (from the `secreq-rule` package) mirrors the daemon's
 evaluation context:
 
-| Field | Type | Meaning |
-|---|---|---|
-| `wrap` | `string` | The wrap being asked for (e.g. `gh`, `npm`). |
-| `joinedArgv` | `string` | Joined argv of the wrapped command (e.g. `gh api --get /repos/x`). |
-| `callers` | `Caller[]` | Caller chain, **nearest-first**. Each entry has `name` (short process name, e.g. `zsh`, `Cursor`) and `command` (full joined command line). |
-| `cwd` | `string` | Working directory of the requesting process. |
-| `secrets` | `string[]` | What the ask would release, by name — env-var names for a wrap run, or the single identity `ssh:<key_id>` for an SSH sign. Names only, never values. |
+| Field        | Type       | Meaning                                                                                                                                              |
+| ------------ | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wrap`       | `string`   | The wrap being asked for (e.g. `gh`, `npm`).                                                                                                         |
+| `joinedArgv` | `string`   | Joined argv of the wrapped command (e.g. `gh api --get /repos/x`).                                                                                   |
+| `callers`    | `Caller[]` | Caller chain, **nearest-first**. Each entry has `name` (short process name, e.g. `zsh`, `Cursor`) and `command` (full joined command line).          |
+| `cwd`        | `string`   | Working directory of the requesting process.                                                                                                         |
+| `secrets`    | `string[]` | What the ask would release, by name — env-var names for a wrap run, or the single identity `ssh:<key_id>` for an SSH sign. Names only, never values. |
 
 The decision is built with three constructors:
 
@@ -114,13 +124,19 @@ ABI is documented in `packages/secreq-rule/README.md` and
 
 The fastest path is the Rules view in `secreq view`. The **"Write a
 programmatic rule"** card at the top scaffolds a starter project on disk
-(`$SECREQ_HOME/rule-drafts/<slug>/rule.ts` plus a README) and offers a
-GitHub-style **"Open in editor"** split-button: the primary action opens
-the scaffold in your preferred editor, and the caret picks from the
-editors detected on your machine. Your choice is remembered as the
-reserved `$editor` key in `wraps.json5`, so the button defaults to it
-next time. Land in your editor, edit `decide`, then compile and register
-(below).
+(`$SECREQ_HOME/rule-drafts/<slug>/rule.ts` plus a README) and offers an
+**"Open in editor"** split-button:
+
+::shot{id=37-rules-scaffold-open-in-editor}
+
+The primary action opens the scaffold in your preferred editor; the caret
+picks from the editors detected on your machine, and your choice is
+remembered as `$editor` in `wraps.json5` so the button defaults to it next
+time.
+
+::shot{id=38-rules-scaffold-editor-picker}
+
+Land in your editor, edit `decide`, then compile and register (below).
 
 ### Scaffold by hand
 
@@ -142,33 +158,33 @@ is a complete, runnable package for this policy: approve `npm publish`
 from checkouts under `/home/me/oss/`, deny it when an agent session
 appears anywhere in the caller chain, pass on everything else:
 
-```ts
-import { RuleCtx, Decision, approve, pass, deny } from "secreq-rule";
+```ts path=assembly/rule.ts
+import { RuleCtx, Decision, approve, pass, deny } from 'secreq-rule';
 
-const PUBLISH_ROOT = "/home/me/oss/";
+const PUBLISH_ROOT = '/home/me/oss/';
 
 export function decide(ctx: RuleCtx): Decision {
-  if (ctx.wrap != "npm") return pass();
+  if (ctx.wrap != 'npm') return pass();
   const argv = ctx.joinedArgv;
-  if (argv != "npm publish" && !argv.startsWith("npm publish ")) {
+  if (argv != 'npm publish' && !argv.startsWith('npm publish ')) {
     return pass();
   }
   for (let i = 0; i < ctx.callers.length; i++) {
     const c = ctx.callers[i];
-    if (c.name.toLowerCase().includes("claude") ||
-        c.command.toLowerCase().includes("claude")) {
-      return deny("npm publish from an AI-agent session is never auto-approved " +
-        "(caller: " + c.name + ")");
+    if (c.name.toLowerCase().includes('claude') || c.command.toLowerCase().includes('claude')) {
+      return deny(
+        'npm publish from an AI-agent session is never auto-approved ' + '(caller: ' + c.name + ')',
+      );
     }
   }
-  if (ctx.cwd == "/home/me/oss" || ctx.cwd.startsWith(PUBLISH_ROOT)) {
+  if (ctx.cwd == '/home/me/oss' || ctx.cwd.startsWith(PUBLISH_ROOT)) {
     return approve();
   }
   return pass();
 }
 ```
 
-One AssemblyScript caveat worth knowing: it is a *subset* of
+One AssemblyScript caveat worth knowing: it is a _subset_ of
 TypeScript. Stick to strings, arrays, and plain loops (as above) and
 you won't notice; regexes, closures over `this`, and most of the
 JavaScript standard library are not available.
@@ -180,10 +196,10 @@ cleanly. The example uses [as-pect](https://github.com/as-pect/as-pect),
 the AssemblyScript test runner — your spec is compiled to wasm and
 exercises `decide` with contexts you construct:
 
-```ts
+```ts path=assembly/__tests__/rule.spec.ts
 // assembly/__tests__/rule.spec.ts
-import { RuleCtx, Caller, DecisionKind } from "secreq-rule";
-import { decide } from "../rule";
+import { RuleCtx, Caller, DecisionKind } from 'secreq-rule';
+import { decide } from '../rule';
 
 function ctx(wrap: string, joinedArgv: string, cwd: string): RuleCtx {
   const c = new RuleCtx();
@@ -191,18 +207,18 @@ function ctx(wrap: string, joinedArgv: string, cwd: string): RuleCtx {
   c.joinedArgv = joinedArgv;
   c.cwd = cwd;
   c.callers = [];
-  c.secrets = ["NPM_TOKEN"];
+  c.secrets = ['NPM_TOKEN'];
   return c;
 }
 
-describe("npm-publish-guard", () => {
-  it("approves a publish from inside the publish root", () => {
-    const d = decide(ctx("npm", "npm publish", "/home/me/oss/my-lib"));
+describe('npm-publish-guard', () => {
+  it('approves a publish from inside the publish root', () => {
+    const d = decide(ctx('npm', 'npm publish', '/home/me/oss/my-lib'));
     expect(d.kind).toBe(DecisionKind.Approve);
   });
 
-  it("passes on a publish from outside the publish root", () => {
-    const d = decide(ctx("npm", "npm publish", "/tmp/scratch-clone"));
+  it('passes on a publish from outside the publish root', () => {
+    const d = decide(ctx('npm', 'npm publish', '/tmp/scratch-clone'));
     expect(d.kind).toBe(DecisionKind.Pass);
   });
 });
@@ -231,7 +247,7 @@ core wasm module — typically 10–20 KB — whose only import is
 ## Register it
 
 Registration goes through the daemon, which vets the module in the
-sandbox *before* anything is stored — a module that imports the wrong
+sandbox _before_ anything is stored — a module that imports the wrong
 things, misses an ABI export, or fails instantiation registers
 nothing:
 
@@ -256,21 +272,10 @@ trained on:     NPM_TOKEN
   vetted bytes. Your original file is no longer consulted; edits to it
   do nothing until you register a new build.
 
-### `--all-secrets` and its blast radius
-
-Omitting `--secret` entirely is refused:
-
-```
-no --secret given: a wasm rule with an empty trained-secrets snapshot
-is consulted for EVERY ask across EVERY wrap, and an Approve from it
-auto-approves secrets it was never trained on.
-```
-
-If you truly want an unscoped rule — say, a global deny policy — opt
-in explicitly with `--all-secrets`. Understand what you're accepting:
-the module will be consulted for every ask across every wrap, and an
-`approve()` from it auto-releases secrets it has never seen. Scoped
-rules with `--secret` are almost always what you want.
+Omitting `--secret` entirely is refused, because an unscoped rule is
+consulted for every ask across every wrap and an `approve()` from it
+releases secrets it was never trained on. If you genuinely want that — a
+global deny policy is the honest case — opt in with `--all-secrets`.
 
 ## Inspect, pause, delete
 
@@ -294,11 +299,13 @@ wasm status:    ok (module loaded and hash-verified)
 If the stored module has been deleted, replaced, or corrupted, the
 rule is **refused** at load: `rules list` marks the row with
 `[REFUSED: sha256 mismatch]` (or `module missing` / `module
-rejected`), `rules show` prints the full reason, and the consent
-window's Rules view badges the rule in red. A refused rule stays in
-your ruleset but can never fire. Only that rule is refused — your
-other rules, in particular protective declarative denies, keep
-working; a tampered module must not be able to switch off the rest of
+rejected`), and `rules show` prints the full reason.
+
+::shot{id=39-rules-wasm-refused}
+
+A refused rule stays in your ruleset but can never fire. Only that rule
+is refused. Your other rules keep working, protective denies included,
+because a tampered module must not be able to switch off the rest of
 your policy.
 
 ## Update a rule's module
@@ -322,7 +329,7 @@ hand-edits belong to a stopped daemon.
 - **Integrity status reflects the daemon's last rules load.** The
   daemon verifies each module's sha256 when it loads the rules file
   (at startup, on any rules-file change, and on every rule mutation)
-  and evaluates the *verified, in-memory* module from then on. A file
+  and evaluates the _verified, in-memory_ module from then on. A file
   swapped on disk after that load is therefore never executed: the
   running daemon keeps evaluating the bytes it verified, and the next
   load re-checks the hash and refuses the mismatch. Tampering fails
@@ -332,7 +339,7 @@ hand-edits belong to a stopped daemon.
   exhaustion, or malformed decision shows up in the daemon log
   (`secreq daemon log-path`) as
   `WARN: wasm rule … errored evaluating wrap … — treating the rule as
-  not matching; falling through to the prompt`. If a rule that used
+not matching; falling through to the prompt`. If a rule that used
   to fire silently stopped, look there first.
 - **Auto-decisions are audited like any rule hit.** Fires appear in
   the audit log as `approve+auto` / `deny+auto` with the rule's id, so
@@ -340,15 +347,3 @@ hand-edits belong to a stopped daemon.
 - **Rule size is bounded.** Registration refuses modules over 16 MiB;
   real rules compile to a few KB.
 
-## Trust-model note: why arbitrary code is acceptable here
-
-The reason secreq can run user-authored code in its most
-security-sensitive path is that the sandbox makes the module's
-capabilities a property of construction: no imports means no
-filesystem, network, clocks, or environment — not as policy, but
-because the instantiation would fail. What remains is a pure function
-from ask-context to decision, bounded in time (fuel) and space (memory
-cap), pinned by hash, guarded by the trained-secrets snapshot, and
-subordinate to deny-wins. The worst a hostile module can do is approve
-asks within the secret set you explicitly trained it on — which is
-exactly the authority you granted when you registered it.

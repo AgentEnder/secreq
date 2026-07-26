@@ -123,7 +123,7 @@ export function ShotLightbox() {
     // screen — after a client-side navigation it may not be.
     const src = dialogRef.current?.querySelector('img')?.src;
     const thumb = [...document.querySelectorAll<HTMLImageElement>('.shot-img')].find(
-      (candidate) => candidate.src === src && candidate.offsetParent !== null
+      (candidate) => candidate.src === src && candidate.offsetParent !== null,
     );
 
     withTransition(() => {
@@ -155,6 +155,6 @@ export function ShotLightbox() {
         </figure>
       )}
     </dialog>,
-    document.body
+    document.body,
   );
 }

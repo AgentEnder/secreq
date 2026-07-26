@@ -21,8 +21,8 @@ export default function SchemasPage() {
         <p className="t-eyebrow mb-4">Reference</p>
         <h1 className="t-title mb-4">JSON Schemas</h1>
         <p className="t-lede max-w-[54ch]">
-          Point your editor at these and it will complete and validate secreq&apos;s config as
-          you type. Add a <code>$schema</code> key to the file, or register the URL in your
+          Point your editor at these and it will complete and validate secreq&apos;s config as you
+          type. Add a <code>$schema</code> key to the file, or register the URL in your
           editor&apos;s JSON settings.
         </p>
       </header>

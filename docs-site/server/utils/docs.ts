@@ -54,24 +54,39 @@ export async function scanAndRenderDocs(docsDir: string): Promise<DocPage[]> {
 
   for (const section of DOCS_NAV) {
     for (const navDoc of section.docs) {
+      // Both failures below used to be `console.warn` and carry on, which
+      // made every guard downstream of them advisory. A `::flow` naming a
+      // fixture that does not exist, a `::term` naming a missing recording,
+      // a marker pointing at a renamed screenshot — each throws, and each
+      // throw was caught here and turned into a page that built green and
+      // shipped a blank section. A warning in a build log that already runs
+      // to hundreds of lines is not a signal; it is a place for a bug to
+      // live. These are static pages, so anything wrong with one is knowable
+      // now, and the only useful time to find out is before it is published.
       const filePath = join(docsDir, `${navDoc.slug}.md`);
       let raw: string;
       try {
         raw = await readFile(filePath, 'utf-8');
-      } catch {
-        console.warn(`[docs-site] Missing doc for nav entry "${navDoc.slug}" at ${filePath}`);
-        continue;
+      } catch (err) {
+        throw new Error(
+          `[docs-site] Missing doc for nav entry "${navDoc.slug}": expected ${filePath}.\n` +
+            `Either add that file or remove the entry from docs.nav.ts.\n` +
+            `Cause: ${(err as Error).message}`,
+        );
       }
 
       const title = extractH1(raw) ?? navDoc.label;
 
-      let renderedHtml = '';
+      let renderedHtml: string;
       try {
         renderedHtml = stripH1(await renderMarkdown(raw));
       } catch (err) {
-        console.warn(
-          `[docs-site] Markdown rendering failed for "${navDoc.slug}":`,
-          (err as Error).message
+        throw new Error(
+          `[docs-site] Markdown rendering failed for "${navDoc.slug}" (${filePath}).\n` +
+            `This is usually a directive naming something that is not there — ` +
+            `a ::shot or ::flow with an unknown fixture id, or a ::term with an ` +
+            `unknown recording.\n` +
+            `Cause: ${(err as Error).message}`,
         );
       }
 

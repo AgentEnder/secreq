@@ -7,15 +7,15 @@ persisted in the guest.
 
 This is [`ssh-agent.md`](./ssh-agent.md)'s pattern applied to secret
 resolution, down to the convention: **an env var names a socket**
-(`SECREQ_SOCK`, mirroring `SSH_AUTH_SOCK`), the socket *is* the capability,
+(`SECREQ_SOCK`, mirroring `SSH_AUTH_SOCK`), the socket _is_ the capability,
 and having it lets you ask — not decide.
 
 ## The two halves
 
-| Where | Command | What it does |
-|---|---|---|
-| **Host** | `secreq agent open --scope <name> --allow <ref>… --sock <path>` | Binds a scoped, ephemeral socket. The scope name and the allowlist are declared here and are immutable for the socket's life. |
-| **Guest** | `secreq resolve <ref>` | Dials `$SECREQ_SOCK` and asks. Prints the value on stdout. |
+| Where     | Command                                                         | What it does                                                                                                                  |
+| --------- | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| **Host**  | `secreq agent open --scope <name> --allow <ref>… --sock <path>` | Binds a scoped, ephemeral socket. The scope name and the allowlist are declared here and are immutable for the socket's life. |
+| **Guest** | `secreq resolve <ref>`                                          | Dials `$SECREQ_SOCK` and asks. Prints the value on stdout.                                                                    |
 
 Between them: `ssh -R`, exactly as `ssh -A` forwards `SSH_AUTH_SOCK`. There
 is no network listener and no new auth surface — SSH is the auth.
@@ -65,11 +65,11 @@ host didn't already declare to this very socket.
 
 ### Exit codes
 
-| Code | Meaning |
-|---|---|
-| 0 | Released. The value is on stdout. |
-| 3 | **Denied** by the host — you said no, a rule denied it, or the ref is outside this socket's declared scope. The reason is on stderr; stdout is empty. |
-| 1 | Error: `$SECREQ_SOCK` unset, the agent unreachable, a malformed ref, or resolution failed on the host after approval. |
+| Code | Meaning                                                                                                                                               |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0    | Released. The value is on stdout.                                                                                                                     |
+| 3    | **Denied** by the host — you said no, a rule denied it, or the ref is outside this socket's declared scope. The reason is on stderr; stdout is empty. |
+| 1    | Error: `$SECREQ_SOCK` unset, the agent unreachable, a malformed ref, or resolution failed on the host after approval.                                 |
 
 `3` and `1` are distinct on purpose. A denial is a normal, final answer —
 **don't retry it**; retrying is how a user gets trained to click through
@@ -86,15 +86,21 @@ retrying.
   stopped, or the `ssh -R` forward is down. Check both; from inside the
   guest you can't tell which.
 - **`denied by the host: reference is outside this socket's declared
-  scope`** — the ref isn't in the `--allow` list this socket was opened
+scope`** — the ref isn't in the `--allow` list this socket was opened
   with. This is refused **without a prompt** (and audited), so nobody on the
   host saw a window. Re-open the socket with the ref in its allowlist.
 
 ## Behavior on the host
 
 - **The allowlist is the coarse bound.** A ref outside it is denied without
-  a prompt and audited. A compromised guest can neither train you to click
-  through nor enumerate your vault one prompt at a time.
+  a prompt and audited as `deny+out-of-scope` — distinct from a `deny` you
+  chose, because nobody was asked. A run of these rows is what a probing
+  sandbox looks like, and it is the reason the refusal is silent: a
+  compromised guest can neither train you to click through nor enumerate
+  your vault one prompt at a time.
+
+  ::shot{id=35-audit-tab-agent-out-of-scope}
+
 - **Every allowed request is gated.** The prompt shows the **scope** as the
   principal — "sandbox `my-vm` wants `secret://op/Dev/gh/token`".
 
@@ -107,7 +113,7 @@ retrying.
 
 - **Approvals cache per scope, with a 5-minute TTL.** "Approve for 5 min"
   anchors the decision to that `(scope, ref)`; requests within the window are
-  silent. The *decision* is cached — the secret is resolved fresh and
+  silent. The _decision_ is cached — the secret is resolved fresh and
   zeroized every single time.
 - **The socket is ephemeral.** It lives exactly as long as the `agent open`
   process. Kill it and the grants die with it; there is nothing to revoke.
@@ -126,7 +132,7 @@ forwarded socket the socket's peer is the tunnel (sshd), not the asker.
 There is nothing to check.
 
 So the **sandbox is the principal**. Approving a ref for a sandbox approves
-*everything running in that sandbox* for the TTL, not one process. That is
+_everything running in that sandbox_ for the TTL, not one process. That is
 strictly weaker than the local wrap and SSH stories.
 
 A guest may report its own caller chain, and the prompt shows it — marked

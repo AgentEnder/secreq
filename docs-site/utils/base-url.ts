@@ -1,6 +1,6 @@
 export function applyBaseUrl(
   href: string,
-  baseUrl: string | undefined | null = import.meta.env.BASE_URL
+  baseUrl: string | undefined | null = import.meta.env.BASE_URL,
 ): string {
   if (!baseUrl || baseUrl === '/' || baseUrl === './' || baseUrl === '.') {
     return href;

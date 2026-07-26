@@ -35,9 +35,7 @@ export function ApiPackageLanding({ apiPackage }: ApiPackageLandingProps) {
     else byKind.set(exp.kind, [exp]);
   }
 
-  const sortedKinds = Array.from(byKind.keys()).sort(
-    (a, b) => KIND_ORDER[a] - KIND_ORDER[b]
-  );
+  const sortedKinds = Array.from(byKind.keys()).sort((a, b) => KIND_ORDER[a] - KIND_ORDER[b]);
 
   return (
     <div className="mt-10 grid gap-9">

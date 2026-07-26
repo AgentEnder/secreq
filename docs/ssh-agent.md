@@ -2,7 +2,7 @@
 
 `secreq` doubles as a **provenance-aware SSH agent**. When `ssh`, `git`,
 or any SSH client asks it to sign with one of your keys, `secreq` shows
-*who is asking* — the caller process chain plus the key's fingerprint —
+_who is asking_ — the caller process chain plus the key's fingerprint —
 and gates the signature on your consent. It's the consent ceremony you
 already get for wrapped binaries, applied to SSH key use.
 
@@ -14,7 +14,7 @@ If you want the mental model for the rest of `secreq` first, read
 - **Lists your keys without a biometric.** `ssh-add -l` (and any client's
   identity listing) answers from the inline public keys in your config.
   No provider call, no prompt.
-- **Gates every new signature.** The first sign per *anchor* (your shell,
+- **Gates every new signature.** The first sign per _anchor_ (your shell,
   IDE, or git session) pops the consent window showing the caller chain
   and the key's SHA256 fingerprint. You approve or deny.
 - **Resolves the private key fresh, then drops it.** On approval `secreq`
@@ -40,10 +40,10 @@ the consent prompt.
 {
   // ... your providers and wraps ...
   ssh: {
-    "github-personal": {
-      $reason: "git pushes to github",
-      public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... me@mac",
-      private_key: "secret://op/Private/gh-key/private key",
+    'github-personal': {
+      $reason: 'git pushes to github',
+      public_key: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... me@mac',
+      private_key: 'secret://op/Private/gh-key/private key',
     },
   },
 }
@@ -111,7 +111,7 @@ command entirely and hand-edit the `ssh` block (see [Configure](#configure)).
 ### 2. Keep the daemon running
 
 The agent socket only exists **while the daemon runs**. Wraps auto-spawn
-the daemon on demand, but nothing spawns it for an *incoming* SSH sign —
+the daemon on demand, but nothing spawns it for an _incoming_ SSH sign —
 so `SSH_AUTH_SOCK` points at a dead socket unless a daemon already
 happens to be up. Install a per-user login service to fix that:
 
@@ -125,7 +125,7 @@ every login. What it writes, per platform:
 
 - **macOS:** a launchd LaunchAgent at
   `~/Library/LaunchAgents/com.secreq.daemon.plist` running `secreq daemon
-  --fg`, with `RunAtLoad` and `KeepAlive` set (start at login, restart on
+--fg`, with `RunAtLoad` and `KeepAlive` set (start at login, restart on
   exit). launchd hands jobs a near-empty environment, so the plist pins a
   `PATH` (`/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`)
   so the daemon can find `op` and other provider binaries. **If your `op`
@@ -175,11 +175,11 @@ directly:
 
 - **`ssh-config`** prepends a `Host *` / `IdentityAgent` stanza to
   `~/.ssh/config`. Scoped to SSH only — it doesn't touch other clients'
-  environments. (It's prepended because ssh applies the *first*
+  environments. (It's prepended because ssh applies the _first_
   `IdentityAgent` it finds for a host.) secreq creates `~/.ssh` as
   `0700` and keeps the config `0600`, which ssh requires.
 - **`shell-rc`** appends an `SSH_AUTH_SOCK` export to your shell rc
-  (`~/.zshrc`, `~/.bashrc`, fish `conf.d`, …). Affects *every* SSH
+  (`~/.zshrc`, `~/.bashrc`, fish `conf.d`, …). Affects _every_ SSH
   client launched from that shell, not just `ssh`.
 
 After it writes, restart your shell (`exec $SHELL`) or open a new SSH
@@ -204,7 +204,7 @@ Host *
 
 ### One agent only
 
-`secreq` *is* your agent now — it resolves keys through your provider. Do
+`secreq` _is_ your agent now — it resolves keys through your provider. Do
 **not** also point `SSH_AUTH_SOCK` or `IdentityAgent` at 1Password's SSH
 agent (or any other agent). Pick one. Running both means SSH talks to
 whichever it finds first, and you lose secreq's consent gating for keys
@@ -240,7 +240,7 @@ things up.
   treated as a transport frame and skipped, so the prompt anchors on the
   real initiator — your git command, shell, or IDE.
 - **Approvals cache per anchor, with a TTL.** Approving "remember" caches
-  the *decision* (not the key) for that anchor for about five minutes.
+  the _decision_ (not the key) for that anchor for about five minutes.
   Subsequent signs within the window sign silently — each still resolves
   the key fresh and zeroizes it. Unlike the wrap cache, which lives as long
   as the parent process, the SSH approval cache is clock-bounded: an anchor

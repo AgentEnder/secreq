@@ -2,6 +2,8 @@
 @import './ambient.css';
 @import './terminal.css';
 @import './interception.css';
+@import './window.css';
+@import './flow.css';
 
 /* ════════════════════════════════════════════════════════════════════
    secreq docs — theme
@@ -40,6 +42,15 @@
   --sq-frost-well: rgb(32 35 39 / 0.58);
   --sq-frost-blur: 14px;
 
+  /* The flat colour `sq-frost-well` composites to over the page, for the
+     one element that has to *hide* what is beneath it rather than soften
+     it: the terminal's typing overlay, which erases a prompt placeholder.
+     Glass cannot do that job — a second translucent layer would darken
+     the band and still show the placeholder through it. Mirrors the fill
+     and alpha directly above, and follows the page background on its
+     own. */
+  --sq-frost-well-solid: color-mix(in srgb, rgb(32 35 39) 58%, var(--sq-bg));
+
   /* Text */
   --sq-text: #d8dbdf;
   --sq-text-2: #a1a8b1;
@@ -77,6 +88,7 @@
   --sq-frost: rgb(255 255 255 / 0.58);
   --sq-frost-well: rgb(232 235 239 / 0.72);
   --sq-frost-blur: 14px;
+  --sq-frost-well-solid: color-mix(in srgb, rgb(232 235 239) 72%, var(--sq-bg));
 
   --sq-text: #1a1c1f;
   --sq-text-2: #4d525a;
@@ -134,7 +146,11 @@
 html {
   background-color: var(--sq-bg);
   color: var(--sq-text-2);
-  font-family: 'Instrument Sans', system-ui, -apple-system, sans-serif;
+  font-family:
+    'Instrument Sans',
+    system-ui,
+    -apple-system,
+    sans-serif;
   font-synthesis-weight: none;
   -webkit-text-size-adjust: 100%;
   scroll-behavior: smooth;
@@ -1220,7 +1236,6 @@ kbd.key {
    an edge passing through the glyphs — so the glass goes exactly where
    the glyphs are, and the gaps between blocks stay clear, where the
    graph is still worth seeing.
-   ════════════════════════════════════════════════════════════════════ */
 
    The rules themselves live at the end of the prose section, after the
    blocks they apply to: lists and blockquotes declare their own padding,
@@ -1300,8 +1315,18 @@ kbd.key {
   border-bottom-width: 2px;
   border-radius: 4px;
 }
-.prose-content ul,
+/* Tailwind's preflight strips `list-style` from every `ul` and `ol`, which is
+   right for the nav and the shot grids and wrong for prose: a numbered list in
+   a guide is numbered because the order carries the meaning. Getting started's
+   "what happens the first time" ran as six unnumbered lines, so a reader could
+   not tell that pressing Approve is step five of a sequence. The `::marker`
+   rule below has been styling markers that were never drawn. */
+.prose-content ul {
+  list-style: disc outside;
+  padding-left: 1.4em;
+}
 .prose-content ol {
+  list-style: decimal outside;
   padding-left: 1.4em;
 }
 .prose-content li + li {
@@ -1544,8 +1569,7 @@ kbd.key {
   border-top-left-radius: 0;
   border-top-right-radius: 0;
 }
-.prose-content
-  > :is(p, h2, h3, h4, dl, ul, ol, blockquote):has(+ :is(p, dl, ul, ol, blockquote)) {
+.prose-content > :is(p, h2, h3, h4, dl, ul, ol, blockquote):has(+ :is(p, dl, ul, ol, blockquote)) {
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
   /* A heading's own bottom margin would reopen the seam just closed. */

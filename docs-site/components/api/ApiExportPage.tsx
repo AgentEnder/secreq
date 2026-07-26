@@ -203,9 +203,7 @@ export function ApiExportPage({ apiExport }: ApiExportPageProps) {
                 <code className="text-sm text-text block mb-2">
                   <TypeText html={method.signatureHtml} text={method.signature} />
                 </code>
-                {method.description && (
-                  <p className="text-sm text-text-3">{method.description}</p>
-                )}
+                {method.description && <p className="text-sm text-text-3">{method.description}</p>}
               </li>
             ))}
           </ul>
@@ -215,7 +213,11 @@ export function ApiExportPage({ apiExport }: ApiExportPageProps) {
       {apiExport.examplesHtml && apiExport.examplesHtml.length > 0 ? (
         <Section title="Examples">
           {apiExport.examplesHtml.map((html, i) => (
-            <div key={i} className="prose-content mb-3" dangerouslySetInnerHTML={{ __html: html }} />
+            <div
+              key={i}
+              className="prose-content mb-3"
+              dangerouslySetInnerHTML={{ __html: html }}
+            />
           ))}
         </Section>
       ) : apiExport.comment?.examples && apiExport.comment.examples.length > 0 ? (

@@ -3,74 +3,37 @@
 `secreq` wraps the CLIs you use every day — `gh`, `aws`, `kubectl`,
 `psql` — so they get their credentials from your secret store of choice
 (1Password, macOS Keychain, `pass`, …) with a provenance-aware consent
-prompt before any release. **Per-binary wrap × multi-provider ×
-consent ceremony** — the wedge nobody else covers.
+prompt before any release.
 
-## Start here
+**Per-binary wrap × multi-provider × consent ceremony** — the wedge nobody
+else covers.
 
-| If you're… | Read |
-|---|---|
-| **Installing `secreq`** | [install](./install.md) — curl \| sh, Homebrew, `cargo install`, or a verified prebuilt binary. |
-| **New to `secreq`** | [getting-started](./getting-started.md) — five-minute walkthrough from install to first wrap. |
-| **Looking for the design rationale** | [overview](./overview.md) — what it is, what problem it solves, the mental model. |
-| **Looking up a command or flag** | [cli](./cli.md) — full reference. |
-| **Authoring `wraps.json5`** | [wraps](./wraps.md) + [wraps.schema.json](./wraps.schema.json) (point your editor at the schema for validation). |
-| **Picking or defining a provider** | [providers](./providers.md). |
-| **Using `secreq` as your SSH agent** | [ssh-agent](./ssh-agent.md) — onboarding (`ssh add`, `daemon install`, `ssh setup`), config, the key-custody tradeoff. |
-| **Getting secrets into a VM sandbox without copying them** | [secret-agent](./secret-agent.md) — `agent open` on the host, `secreq resolve` + `SECREQ_SOCK` in the guest. |
-| **Writing a programmable auto-rule** | [wasm-rules](./wasm-rules.md) — author a rule as code, test it, compile it to a sandboxed wasm module, register it with `rules add-wasm`. |
-| **Understanding what the daemon window shows** | [consent-window](./consent-window.md) — pending tree, audit log, viewer mode. |
-| **Checking whether your machine is supported** | [platform-support](./platform-support.md) — the OS/arch matrix (macOS + Linux first-class, Windows unsupported) and per-OS prerequisites. |
-| **Stuck — something isn't working** | [troubleshooting](./troubleshooting.md) — no consent window, dev-build home traps, PATH shadowing, locked providers, where the logs live. |
+| Page                                          | What it covers                                                            |
+| --------------------------------------------- | --------------------------------------------------------------------------- |
+| [install](./install.md)                       | Every install channel, and how to verify a download.                       |
+| [getting-started](./getting-started.md)       | Install to first wrap, in five minutes.                                    |
+| [overview](./overview.md)                     | What it is, what it isn't, and the threat model.                           |
+| [cli guide](./cli.md)                         | Why there are two run verbs, and the argv contract.                        |
+| [all commands](./cli-reference.md)            | Every command and flag. Generated from the CLI itself.                     |
+| [wraps](./wraps.md)                           | Authoring `wraps.json5`. Also where approval scoping is explained.         |
+| [providers](./providers.md)                   | The built-in providers, and how to declare your own.                       |
+| [consent-window](./consent-window.md)         | Both windows, and the audit log format.                                    |
+| [ssh-agent](./ssh-agent.md)                   | Serving your SSH keys, and the key-custody tradeoff.                       |
+| [secret-agent](./secret-agent.md)             | Getting secrets into a VM without copying them in.                         |
+| [wasm-rules](./wasm-rules.md)                 | Rules that need real logic: author, test, compile, register.               |
+| [platform-support](./platform-support.md)     | The OS and arch matrix, and per-OS prerequisites.                          |
+| [troubleshooting](./troubleshooting.md)       | The first-week traps, and how to get unstuck.                              |
 
-## Documentation map
+New here? Read [getting-started](./getting-started.md).
 
-- **[install](./install.md)** — every install channel (curl | sh,
-  Homebrew, `cargo install`, prebuilt binaries) and how to verify a
-  download's checksum and cosign signature.
-- **[getting-started](./getting-started.md)** — concrete first-run
-  walkthrough.
-- **[overview](./overview.md)** — design rationale, mental model,
-  what `secreq` is and isn't.
-- **[cli](./cli.md)** — every subcommand + the wrap-and-run path.
-- **[wraps](./wraps.md)** — authoring `wraps.json5` (per-binary
-  wraps, settings, refs, how cache scope works).
-- **[providers](./providers.md)** — the provider model
-  (retrieve / store / retrieve_batch), the built-ins, defining your own.
-- **[ssh-agent](./ssh-agent.md)** — the provenance-aware SSH agent:
-  the three-step onboarding (`ssh add` to declare an identity, `daemon
-  install` for the login service, `ssh setup` to wire clients), the `ssh`
-  config block, the per-anchor TTL, and the key-custody downgrade vs.
-  1Password's sealed agent.
-- **[secret-agent](./secret-agent.md)** — serving `secret://` refs to a
-  VM sandbox over a forwarded socket instead of copying tokens into it:
-  `agent open` and its host-declared allowlist, `secreq resolve` +
-  `SECREQ_SOCK` in the guest, and the granularity downgrade (the sandbox is
-  the principal — there is no caller chain to verify).
-- **[consent-window](./consent-window.md)** — the daemon UI: the
-  pending tree, approve-all-at-an-ancestor semantics, the audit log
-  tab, audit log JSONL format.
-- **[wasm-rules](./wasm-rules.md)** — programmable auto-rules: the
-  sandbox trust model, the `secreq-rule` authoring SDK, unit-testing
-  and compiling a rule, `rules add-wasm` registration, sha256 pinning
-  and refusal states.
-- **[platform-support](./platform-support.md)** — the platform
-  support matrix: which OSes and architectures `secreq` builds and runs
-  on (macOS + Linux first-class, \*BSD best-effort, Windows
-  unsupported), the login-service and display-server prerequisites per
-  OS, and how to run headless.
-- **[troubleshooting](./troubleshooting.md)** — FAQ and fixes for the
-  common first-week snags: the consent window never appearing (no
-  display / stale daemon), dev builds corrupting your real `~/.secreq`
-  via migrations, shim/PATH shadowing (the zsh + Homebrew ordering
-  gotcha), a missing or locked provider CLI, and where the logs and
-  audit log live for self-diagnosis.
-- **[wraps.schema.json](./wraps.schema.json)** — JSON Schema for
-  `wraps.json5`. Generated; don't edit by hand.
+Two files are generated and should not be hand-edited:
+[`cli-reference.md`](./cli-reference.md) comes from the CLI definition, and
+[`wraps.schema.json`](./wraps.schema.json) from the Rust types. Point your
+editor at the schema for completion while authoring `wraps.json5`.
 
 ## Contributing
 
-If you're hacking on `secreq` itself, start with
+Hacking on `secreq` itself? Start with
 [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — the dev loop, how to author
 wraps and rules, and how to submit a change.
 

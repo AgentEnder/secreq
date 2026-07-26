@@ -84,7 +84,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               className="icon-btn"
               aria-label="secreq on GitHub"
             >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 16 16"
+                fill="currentColor"
+                aria-hidden="true"
+              >
                 <path d="M8 0a8 8 0 0 0-2.5 15.6c.4.07.55-.17.55-.38v-1.35C3.84 14.3 3.4 13 3.4 13c-.36-.9-.87-1.15-.87-1.15-.71-.48.05-.47.05-.47.79.05 1.2.81 1.2.81.7 1.2 1.83.85 2.28.65.07-.5.27-.85.5-1.05-1.74-.2-3.56-.87-3.56-3.87 0-.85.3-1.55.8-2.1-.08-.2-.35-1 .08-2.07 0 0 .65-.21 2.14.8a7.4 7.4 0 0 1 3.9 0c1.49-1.01 2.14-.8 2.14-.8.43 1.07.16 1.87.08 2.07.5.55.8 1.25.8 2.1 0 3.01-1.83 3.67-3.57 3.86.28.24.53.72.53 1.45v2.15c0 .21.14.46.55.38A8 8 0 0 0 8 0z" />
               </svg>
             </a>
@@ -109,7 +115,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 strokeLinecap="round"
                 aria-hidden="true"
               >
-                {menuOpen ? <path d="M6 18 18 6M6 6l12 12" /> : <path d="M4 7h16M4 12h16M4 17h16" />}
+                {menuOpen ? (
+                  <path d="M6 18 18 6M6 6l12 12" />
+                ) : (
+                  <path d="M4 7h16M4 12h16M4 17h16" />
+                )}
               </svg>
             </button>
           </div>
@@ -117,7 +127,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       </header>
 
       {menuOpen && (
-        <div className="fixed inset-0 top-14 z-30 md:hidden bg-bg overflow-y-auto" data-pagefind-ignore>
+        <div
+          className="fixed inset-0 top-14 z-30 md:hidden bg-bg overflow-y-auto"
+          data-pagefind-ignore
+        >
           <nav className="border-b border-hairline py-2">
             {NAV.map((link) => (
               <Link

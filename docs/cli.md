@@ -1,575 +1,179 @@
-# CLI reference
+# CLI guide
 
-`secreq` has admin subcommands (configuration) and two run verbs: `x`
-(wrap-and-run, invoked when a PATH shim runs a wrapped binary) and `run`
-(resolve ambient `secret://` refs for an arbitrary command). The
-wrap-and-run path is what fires when a PATH shim invokes
-`secreq x <WRAP> "$@"`.
+`secreq` has **admin verbs** that configure things (`init`, `wrap`, `ssh`,
+`rules`, `daemon`, …) and **two run verbs** that actually release secrets:
 
 ```
-secreq [GLOBAL OPTIONS] <ADMIN VERB> ...      # init, wrap, unwrap, wraps, check, doctor, edit, ssh
-secreq x [--sq-OPTIONS] <WRAP> [ARGS...]      # wrap-and-run; global options do NOT apply
-secreq [GLOBAL OPTIONS] run [--env-file F]… -- <CMD> [ARGS...]   # resolve ambient refs
+secreq x    <WRAP> [ARGS...]        # a wrapped binary — what a PATH shim calls
+secreq run  -- <CMD> [ARGS...]      # any command, resolving ambient secret:// refs
 ```
 
-## Global options
-
-These apply to the admin verbs and `run` — **not to `x`**, whose argv
-belongs to the wrapped binary (see [`x`](#x) for its reserved `--sq-`
-options).
-
-| Flag | Effect |
-|---|---|
-| `--config <PATH>` | Use this config instead of `~/.secreq/wraps.json5`. |
-| `--raw` | Disable output masking for the `run` path. |
-| `-y`, `--yes` | Auto-approve without prompting (resolves client-side, no daemon); intended for scripted/CI runs. |
-| `-h`, `--help` | Print help. |
-| `-V`, `--version` | Print version. |
-
-To revoke a "remembered" approval, run `secreq daemon stop` — the cache
-is in-memory, so a daemon restart clears it. There's no per-invocation
-flag because the daemon design coalesces parallel asks; a one-shot
-"don't remember this specific run" doesn't fit cleanly.
-
-## Admin verbs
-
-### Bare `secreq`
-
-```
-secreq
-```
-
-With no subcommand and a terminal to prompt on, `secreq` presents an
-action picker — open the viewer, list wraps, manage auto-rules, open
-pending requests, set up the SSH agent, or run first-time setup — and
-dispatches into the verb you choose. The cursor starts on the viewer, so
-`secreq` then <kbd>Enter</kbd> opens the window.
-
-Without a terminal (a shim, a pipe, CI) there is nothing to pick from, so
-a bare invocation exits 2 with the usage hint instead.
-
-### `init`
-
-```
-secreq init [--shim-dir <PATH>]
-```
-
-First-time setup. Prompts for a shim directory (defaults to `~/.secreq/shims` — a dedicated dir nobody else manages, so there's no risk of collision with other tools' shims),
-checks whether it's on `PATH`, and if not, offers to append a
-sentinel-bracketed `export PATH=…` block to the appropriate shell config
-(`~/.zshenv`, `~/.bashrc`, `~/.config/fish/conf.d/secreq.fish`, or
-`~/.profile`).
-
-::term{id=init}
-
-Idempotent: re-running detects the sentinel and skips the append.
-
-The PATH-config edit is shown to you in full and gated by a y/N prompt;
-nothing touches your dotfiles without explicit confirmation.
-
-`init` also offers to run the SSH-agent wiring step (see `ssh setup`)
-once PATH is sorted.
-
-### `ssh`
-
-```
-secreq ssh add <NAME> [--public-key <PATH-OR-LITERAL>] [--private-key secret://...] [--reason "..."] [--force]
-secreq ssh setup [--method ssh-config|shell-rc] [--undo]
-secreq ssh validate [<NAME>]
-```
-
-`secreq`'s SSH agent is managed through three nested subcommands:
-`add` declares an identity, `setup` runs the guided wiring flow, and
-`validate` proves the agent can sign. See [`ssh-agent.md`](./ssh-agent.md)
-for the full onboarding.
-
-#### `ssh add`
-
-```
-secreq ssh add <NAME> [--public-key <PATH-OR-LITERAL>] [--private-key secret://...] [--reason "..."] [--force]
-```
-
-Declares an SSH identity in `wraps.json5` under the `ssh` block so the
-agent can serve it. The public key is stored inline (it isn't secret);
-the private key is a `secret://provider/locator` reference resolved only
-at sign time.
-
-| Flag | Meaning |
-|---|---|
-| `--public-key <PATH-OR-LITERAL>` | A path to a `.pub` file (read and validated) or a literal `ssh-…`/`ecdsa-…`/`sk-…` line. Prompted for if omitted. |
-| `--private-key secret://...` | The private-key reference, `secret://provider/locator`. Prompted for if omitted. |
-| `--reason "..."` | Reason shown in the consent prompt when this identity signs. |
-| `--force` | Overwrite an existing identity of the same name (otherwise a duplicate name errors). |
-
-Pass both `--public-key` and `--private-key` for a fully non-interactive
-run. Omit either and `secreq` resolves it interactively — including
-1Password `op` discovery (pick an SSH-Key item; the private-key
-reference, and the public key if you didn't supply one, are derived from
-it) when `op` is on `PATH`, otherwise a manual prompt. You can also
-hand-edit the `ssh` block directly. See [`ssh-agent.md`](./ssh-agent.md).
-
-On the interactive path (not the fully non-interactive `--public-key` +
-`--private-key` run), `ssh add` offers to run `ssh validate` for the new
-identity once it's written, so you can confirm the agent can sign with it.
-
-#### `ssh setup`
-
-```
-secreq ssh setup [--method ssh-config|shell-rc] [--undo]
-```
-
-A guided flow that walks the three SSH-onboarding steps: declare an
-identity (`ssh add`), install the login service (`daemon install`), then
-wire your SSH clients at secreq's agent socket by writing a
-sentinel-bracketed managed block to a config file.
-
-::term{id=ssh-setup}
-
-| Flag | Meaning |
-|---|---|
-| `--method ssh-config` | Prepend a `Host *` / `IdentityAgent` stanza to `~/.ssh/config` (scoped to SSH). |
-| `--method shell-rc` | Append an `SSH_AUTH_SOCK` export to your shell rc (affects every SSH client in that shell). |
-| `--undo` | Remove the managed block instead of writing it. |
-
-Run it bare to be walked through all three steps interactively (each is
-skippable). The scripted form `ssh setup --yes --method <method>` skips
-the identity and auto-start prompts and runs **only** the client-wiring
-step — the deterministic path for scripts. Omit `--method` to choose the
-method interactively. Each block is shown to you in full and gated by a
-confirm prompt (use `--yes` to skip it). Idempotent: re-running detects
-the sentinel and skips the write. See [`ssh-agent.md`](./ssh-agent.md)
-for the full onboarding, the two wiring methods, and the key-custody
-tradeoff.
-
-The guided (non-scripted) flow ends by offering to run `ssh validate` so
-you can confirm the agent can actually sign before you walk away.
-
-#### `ssh validate`
-
-```
-secreq ssh validate [<NAME>]
-```
-
-Proves the agent can sign. Connects to the agent socket, asks it to sign a
-fixed test message with the configured key, and verifies the returned
-signature against the key's public half — exercising the real
-consent → resolve → sign path. With a `<NAME>` it tests that one identity;
-with none, it tests every configured identity.
-
-This performs a **real** signature, so it needs the daemon running and **may
-prompt for consent** the first time (answer the prompt if the window
-appears). Exit code 0 only if every tested identity signed and verified;
-any failure (or no identities configured) returns non-zero. See
-[`ssh-agent.md`](./ssh-agent.md).
-
-### `wrap`
-
-```
-secreq wrap [--env NAME=secret://...] [--reason "..."] <BINARY>
-```
-
-Adds (or updates) a wrap entry in the config and installs a PATH shim at
-`<shim_dir>/<BINARY>`.
-
-| Flag | Meaning |
-|---|---|
-| `--env NAME=secret://provider/locator` | Repeatable. Each env var to inject. |
-| `--reason "..."` | Reason shown in the consent prompt. |
-
-**With no `--env`, `wrap` asks.** It first offers the choice between
-injecting secrets and a [gate-only wrap](./wraps.md#gate-only-wraps),
-then — for the injecting path — loops over env vars: reuse a
-`secret://` reference another wrap already uses, or pick a provider from
-the available list and give a locator. Each new locator is resolved
-against its provider before the wrap is written, so a typo fails here
-rather than the first time you run the binary.
-
-::term{id=wrap-gh}
-
-`--env` and `--reason` each answer one of those questions up front;
-supplying `--env` skips the interactive flow entirely. With no `--env`
-**and** no terminal to prompt on (a script, a pipe, CI), `wrap` creates a
-gate-only wrap — there is nothing to inject and nobody to ask.
-
-The shim file carries a sentinel comment so `unwrap` knows it's safe to
-remove; if a file already exists at the target without our sentinel,
-`wrap` refuses to clobber it.
-
-> **There is no per-wrap cache TTL.** Approvals live in the daemon's
-> memory for as long as the parent process that approved them is alive
-> *and* the daemon hasn't been stopped. See "How approval is scoped" in
-> [`wraps.md`](./wraps.md).
-
-### `unwrap`
-
-```
-secreq unwrap <BINARY>
-```
-
-Removes the wrap's config entry and deletes the shim file (only if it's
-ours — refuses to remove an unowned file at the target path).
-
-### `wraps`
-
-```
-secreq wraps
-```
-
-Lists configured wraps with their reasons and the env-var names + provider
-each one references. **Never prints values.**
-
-### `check`
-
-```
-secreq check
-```
-
-Validates the config:
-- Top-level structure is an object.
-- Each `env` entry is a valid `secret://provider/locator` reference.
-- Every referenced provider scheme exists (built-in or declared in
-  `providers`).
-
-Exit code 0 if clean; 1 if problems.
-
-### `doctor`
-
-```
-secreq doctor
-```
-
-`check` plus: for every provider scheme that an `env` actually references,
-confirms its retrieve CLI is on `PATH`. Providers declared but unused
-aren't reported.
-
-### `edit`
-
-```
-secreq edit
-```
-
-Opens the config file in `$EDITOR` (falls back to `vi`). The file is
-created (empty object) if it doesn't exist yet.
-
-### `daemon`
-
-```
-secreq daemon              # ensure a daemon is running, then tail its log
-secreq daemon --fg         # run the daemon in the foreground in this process
-secreq daemon stop [--force | -f]
-secreq daemon log-path     # print the persistent log file path
-secreq daemon install [--undo]   # install (or remove) the login service
-```
-
-Bare `secreq daemon` ensures a daemon is running in the background
-(spawning a detached one if none is live), then **tails its persistent
-log** (`<state_dir>/daemon.log`) until you Ctrl-C — handy for watching
-the consent flow and the periodic CPU/memory samples live. It prints
-the last 50 lines of existing log, then follows new ones.
-
-`secreq daemon --fg` runs the daemon in the foreground in the current
-process — the historical behavior, and the form a wrap auto-spawns
-(detached) when it finds no live daemon. The daemon exits after 2
-hours of empty queue. Singleton-per-user is enforced by an
-fcntl-locked pidfile, so a second foreground daemon exits 0 silently.
-
-`secreq daemon log-path` prints the absolute path of the persistent log
-and exits without starting a daemon. The log is newline-delimited JSON
-(one object per line: `ts_unix`, `t_mono_s`, `pid`, `level`, `tag`,
-`msg`, plus `cpu_pct` / `rss_bytes` / `uptime_s` on `tag:"resource"`
-sample lines) — pipe it through `jq` to filter.
-
-`secreq daemon stop` tells a running daemon to exit cleanly. Since the
-approvals cache lives in the daemon's memory only, this is also how
-you clear any "approve all" decisions you made earlier — the next wrap
-auto-spawns a fresh daemon with an empty cache. Exits 0 whether or not
-a daemon was running.
-
-`secreq daemon stop --force` SIGKILLs the daemon directly instead of
-asking it to exit. Use when the daemon is unresponsive (wedged UI,
-hung socket thread). Liveness is probed via the pidfile flock, not
-just `kill(pid, 0)`, so a recycled pid can't be mistaken for a live
-daemon. The force path also removes the pidfile and socket file,
-which a SIGKILL'd process can't clean up itself.
-
-`secreq daemon install` writes a per-user login service that runs
-`secreq daemon --fg` at login and keeps it alive — a launchd
-LaunchAgent at `~/Library/LaunchAgents/com.secreq.daemon.plist` on
-macOS, a systemd `--user` unit at `~/.config/systemd/user/secreq.service`
-on Linux. This is what keeps the SSH agent socket live for incoming
-connections: wraps auto-spawn the daemon on demand, but nothing else
-spawns it for an *incoming* SSH sign. It shows the service file before
-writing (gated by a confirm prompt; `--yes` skips it), then loads it so
-the daemon is running immediately. `--undo` unloads and removes the
-service. See [`ssh-agent.md`](./ssh-agent.md) for the per-platform
-details and the `op`-on-PATH caveat.
-
-### `pending`
-
-```
-secreq pending
-```
-
-Open the consent daemon's window so you can review the queue and any
-recent activity. Auto-spawns the daemon if it isn't running. The
-window auto-hides ~2 seconds after the queue empties.
-
-### `view`
-
-```
-secreq view
-```
-
-Open the **manager** window, which holds the two browsable surfaces:
-
-- **Rules** — your saved auto-rules, plus the suggestions the
-  recommendation engine has drawn from your decisions.
-- **Audit** — past decisions read from `audit.log`, newest first.
-  Names only (the audit log never contains secret values).
-
-`view` lands on **Audit**; a segmented control switches between them.
-The manager never holds a pending decision — that is the prompt
-window's job (`secreq pending`), and the two are independent, so
-browsing history never blocks a request. Closing the manager leaves
-the daemon running. Auto-spawns the daemon if it isn't running.
-
-See [`consent-window.md`](./consent-window.md) for both windows in
-full.
-
-### `rules`
-
-```
-secreq rules                          # list (default action)
-secreq rules show <id|name>
-secreq rules enable <id|name>
-secreq rules disable <id|name>
-secreq rules rm <id|name>
-secreq rules add-wasm <file.wasm> [--name <name>] (--secret <NAME>... | --all-secrets)
-```
-
-Headless management of auto-approve / auto-deny rules. Declarative
-rules are created from the consent window's Rules tab; the CLI covers
-list, inspect, enable/disable, delete — and `add-wasm`, which registers
-a compiled programmable rule module (see
-[wasm-rules](./wasm-rules.md)). `<id|name>` matches by id first,
-then exact name.
-
-- `list` marks a wasm rule whose module was refused at the daemon's
-  last rules load with `[REFUSED: <reason>]`; `show` prints the
-  module path, pinned sha256, and full refusal reason.
-- `add-wasm` has the daemon vet the module in its sandbox, copy it
-  into `~/.secreq/rules/`, and pin it by sha256 — a failed vetting
-  registers nothing. `--secret` (repeatable) sets the trained-secrets
-  guard; with no `--secret` you must pass `--all-secrets` to accept
-  explicitly that the module is consulted for every ask.
-- `rm` also deletes the rule's canonically-stored module file.
-
-### `x`
-
-```
-secreq x [--sq-OPTIONS] <WRAP> [ARGS...]
-```
-
-The wrap-and-run verb. Most of the time you don't invoke this by hand —
-your PATH shim does. The shim at `<shim_dir>/<WRAP>` is a 5-line POSIX
-script that execs `secreq x <WRAP> "$@"`, so anything that does
-`execvp("<WRAP>", …)` (interactive shells, `npm`, `make`, IDEs) routes
-through us.
-
-#### Argv contract
-
-Because the shim forwards the user's argv wholesale, `x` owns **no
-ordinary flags**: every argument except the wrap name reaches the wrapped
-binary untouched — `gh --help`, `gh -y`, `gh --config foo` all mean gh's
-flags, never secreq's. The options secreq keeps for itself use the
-reserved `--sq-` prefix, recognized before or after the wrap name (so
-`gh --sq-raw api …` works through the shim):
-
-| Flag | Effect |
-|---|---|
-| `--sq-config <PATH>` | Use this config instead of `~/.secreq/wraps.json5`. |
-| `--sq-raw` | Disable output masking; secrets are still injected. |
-| `--sq-yes` | Auto-approve without prompting (resolves client-side, no daemon). |
-| `--sq-no-remember` | Don't read or write the remembered-approval cache. |
-| `--sq-help` | Print `x`'s help. |
-| `--` | Stop `--sq-` recognition; everything after a literal `--` forwards as-is. |
-
-An unrecognized `--sq-*` argument is an error (exit 2), not a forward —
-the prefix is reserved so a typo can't silently hand the flag to the
-wrong process. The global options (`--raw`, `--yes`, …) do not compose
-with `x`.
-
-#### Flow
-
-1. Load the config. Look up `<WRAP>` in `wraps`.
-2. **If no wrap is configured**: pass through unchanged. Find the real
-   `<WRAP>` on PATH (excluding our shim dir to avoid recursion) and exec
-   it with no injection. This makes blanket-aliasing of binaries safe even
-   before you've wrapped each one.
-3. **Drop `env` entries the parent environment already satisfies**: a
-   variable that is already set to a non-empty value that isn't a
-   `secret://…` marker needs no injection — the child inherits the
-   parent's value as-is. Consent gates the release of secret material
-   *by secreq*, so if **every** entry is satisfied the run passes through
-   with no prompt at all; if only some are, the prompt asks for (and
-   resolution fetches) only the missing ones. Gate-only wraps (no `env`)
-   are exempt — they still always gate.
-4. **If a wrap exists** (with at least one entry still to resolve):
-   - Walk the parent process tree for the consent prompt.
-   - Hand off to the consent daemon (auto-spawning it if no socket is
-     live). The daemon checks its in-memory cache keyed on
-     `(wrap_name, ppid, parent_start_time)`; a hit replies immediately,
-     otherwise the daemon shows a native window listing pending
-     requests. Parallel asks with the same key coalesce into one row.
-   - On approve: resolve every `env` entry through its provider (with
-     batching for providers that support `retrieve_batch`).
-   - Build the child command: real binary path + forwarded args; child
-     env layered with the resolved values.
-   - Spawn in a PTY (or piped if non-tty), streaming output through a
-     masking filter that redacts any resolved value (unless `--sq-raw`).
-
-#### Exit codes
-
-| Code | Meaning |
-|---|---|
-| 0 | Child exited cleanly. |
-| 1 | Consent denied, or provider resolution failed. |
-| 2 | Usage error: `secreq` invoked with no command, `x` with no wrap name, or an unknown `--sq-*` option. |
-| child's | Otherwise the child's exit code propagates. |
-
-### `run`
-
-```
-secreq run [--env-file PATH]… [--] <CMD> [ARGS...]
-```
-
-`op run`, but for every secret store. Where `x` injects a *declared* env
-map for a *known binary* (a `wraps.json5` entry), `run` resolves
-*ambient* `secret://provider/locator` references found in the
-environment for an *arbitrary* command — no wrap entry required. The
-references describe the secrets inline, so there's nothing to configure
-first.
-
-| Flag | Meaning |
-|---|---|
-| `--env-file <PATH>` | Repeatable. Load `NAME=value` lines and layer them **under** the inherited environment (inherited wins on conflict, matching `op run --env-file`). Values may be `secret://…` references or plaintext. The file holds **refs, not secrets**, so it's safe to commit. |
-
-The global `--raw` (skip output masking) and `--yes` (auto-approve,
-resolve client-side) apply. `--no-remember` is a no-op for `run` — it
-already never persists approvals (see below).
-
-#### Flow
-
-1. Build the effective environment: the inherited env, with any
-   `--env-file` entries layered **under** it.
-2. Scan every variable whose **value** is a well-formed
-   `secret://provider/locator` reference. Plain `NAME=value` entries pass
-   through untouched. A value that starts with `secret://` but doesn't
-   parse is a **hard error** before the command runs (it names the
-   offending variable) — a literal `secret://…` never reaches the child.
-3. **No references → fast path.** Exec `<CMD>` with the effective env
-   directly: no daemon contact, no consent prompt.
-4. Otherwise hand off to the consent daemon (the same path as `x`):
-   consent prompt, rules engine, the in-memory value cache, and batched
-   provider unlocks (one biometric per provider with ≥2 misses). Under
-   `--yes` this resolves client-side instead, with no daemon.
-5. On approve, substitute each reference with its resolved value and exec
-   `<CMD>` in a PTY (or piped if non-tty), masking the resolved values on
-   stdout/stderr unless `--raw`.
-
-The consent window shows `secreq run` as what's asking, plus the actual
-`<CMD> [args…]` and the caller chain. It never shows secret values.
-
-#### Trust model
-
-`run` presents a **fixed identity** (`run`) for every invocation, and it
-**does not persist remembered approvals** — every `run` re-prompts for
-consent. The re-prompt is cheap: because all `run` invocations share one
-value-cache bucket, a reference that's already been resolved is served
-from the cache with **no provider call and no biometric** — the prompt is
-a single approve click, not an unlock. (A rule on the Rules tab can
-auto-approve `run` for a given set of providers if you want to skip the
-click entirely.)
-
-Nested `run` is correct without any special handling: the outer `run`
-has already replaced every reference in the child environment with a
-plain value, so an inner `run` sees no `secret://` refs and just execs.
-
-Concurrent `run` invocations in one process tree share **one** consent
-prompt. The daemon unions their secret requests into a single card (each
-secret annotated with the command that asked for it), you approve once,
-and each command receives **only its own** secrets — never a sibling's.
-
-#### Example
+Everything each command accepts is in
+[All commands](./cli-reference.md), generated from the CLI itself so it
+can't drift from the binary you have. This page is the part that isn't a
+flag list: why there are two run verbs, why `x` forwards every flag you
+give it, and what each one does between your keystroke and the child
+process.
+
+## `x` — wrap-and-run
+
+`x` runs a binary you have wrapped. You rarely type it: `secreq wrap gh`
+drops a five-line shim at `<shim_dir>/gh` whose body is
+`exec secreq x gh "$@"`, so anything that resolves `gh` through `PATH` —
+your shell, `npm`, `make`, your IDE — routes through secreq without
+knowing it.
+
+### The argv contract
+
+Because the shim forwards your argv wholesale, **`x` owns no ordinary
+flags.** Every argument except the wrap name reaches the wrapped binary
+untouched, so `gh --help` through the shim means gh's help, `gh -y` means
+gh's `-y`. Anything else would mean secreq could silently eat a flag you
+meant for the binary.
+
+secreq's own options therefore use a reserved `--sq-` prefix, recognized
+before or after the wrap name:
+
+| Flag                 | Effect                                                                    |
+| -------------------- | ------------------------------------------------------------------------- |
+| `--sq-config <PATH>` | Use this config instead of `~/.secreq/wraps.json5`.                       |
+| `--sq-raw`           | Disable output masking. Secrets are still injected.                       |
+| `--sq-yes`           | Auto-approve without prompting; resolves client-side, no daemon.          |
+| `--sq-no-remember`   | Don't read or write the remembered-approval cache.                        |
+| `--sq-help`          | Print `x`'s help.                                                         |
+| `--`                 | Stop `--sq-` recognition; everything after a literal `--` forwards as-is. |
+
+These are the one part of the CLI that clap never sees. They're parsed by
+hand, precisely so `<wrap> --help` can reach the binary, which is why they
+are listed here rather than in the generated reference.
+
+An unrecognized `--sq-*` argument is an error (exit 2), not a forward: the
+prefix is reserved so a typo can't hand the flag to the wrong process. The
+global options (`--raw`, `--yes`, …) don't compose with `x`; passing one
+before the wrap name is rejected with a hint to use the `--sq-` form.
+
+### What a run does
+
+1. Look up `<WRAP>` in the config.
+2. **No wrap configured → pass through.** Find the real binary on `PATH`
+   (skipping the shim dir, so it can't recurse) and exec it with no
+   injection. This is what makes it safe to shim a binary before you've
+   decided what it needs.
+3. **Drop `env` entries the environment already satisfies.** A variable
+   already set to a non-empty, non-`secret://` value needs no injection;
+   the child inherits it. If *every* entry is satisfied, the run passes
+   through with no prompt at all, because secreq is releasing nothing.
+   Gate-only wraps are exempt; with no `env` to satisfy, they always gate.
+4. Walk the parent process tree, then hand off to the consent daemon
+   (auto-spawning it if no socket is live). A cache hit replies
+   immediately; otherwise you get the [prompt](./consent-window.md).
+   Parallel asks with the same key coalesce into one request.
+5. On approve, resolve each entry through its provider, batched when a
+   provider supports it, so N secrets cost one biometric.
+6. Exec the real binary with the resolved values in its environment,
+   streaming its output through a masker that redacts every resolved value
+   (unless `--sq-raw`).
+
+### Exit codes
+
+| Code    | Meaning                                                                  |
+| ------- | ------------------------------------------------------------------------ |
+| 0       | Child exited cleanly.                                                    |
+| 1       | Consent denied, or provider resolution failed.                           |
+| 2       | Usage error: no wrap name, or an unknown `--sq-*` option.                |
+| child's | Otherwise the child's own exit code propagates.                          |
+
+## `run` — ambient references
+
+Where `x` injects a *declared* env map for a *known binary*, `run` resolves
+`secret://provider/locator` references it finds *in the environment* for an
+*arbitrary* command. Nothing needs configuring first, because the
+references describe the secrets inline:
 
 ```sh
-# A committable, refs-only .env (no plaintext secrets):
+# A committable, refs-only .env — no plaintext secrets:
 #   DATABASE_URL=secret://op/Work/Postgres/url
 #   STRIPE_KEY=secret://keychain/stripe-live
 secreq run --env-file .env -- ./deploy.sh
 ```
 
-`./deploy.sh` runs with `DATABASE_URL` and `STRIPE_KEY` set to their
-resolved values; both are redacted in anything the script prints.
+`--env-file` entries layer **under** the inherited environment (inherited
+wins on conflict, matching `op run --env-file`). A value that starts with
+`secret://` but doesn't parse is a hard error *before* the command runs, so
+a literal `secret://…` never reaches the child. With no references at all,
+`run` execs directly, with no daemon and no prompt.
 
-#### Exit codes
+### Why `run` always asks
 
-Same as `x`: `0` on a clean child exit, `1` on denied consent or
-resolution failure (including a malformed `secret://` value), `2` when no
-command was given, otherwise the child's exit code.
+`run` presents a **fixed identity** for every invocation, so a remembered
+approval would over-match wildly: approving one `run` would approve every
+later one from that shell. It therefore never persists approvals.
 
-### `resolve`
+The re-prompt is deliberately cheap: all `run` invocations share one
+value-cache bucket, so a reference that's already resolved is served
+without a provider call and without a biometric. The prompt is one click,
+not an unlock. A rule on the Rules view can remove even that.
 
-```
-secreq resolve <REF>
-secreq resolve --list
-```
+Two consequences worth knowing:
 
-The **guest** side of the secret agent: ask the *host's* `secreq`, over the
-socket named by `$SECREQ_SOCK`, for one secret this sandbox was declared
-allowed to have. Nothing is stored in the guest — every use is asked for,
-gated by consent on the host, and audited there. Full story:
-[secret-agent](./secret-agent.md).
+- **Nested `run` needs no special handling.** The outer run already
+  replaced every reference with a plain value, so the inner one sees no
+  refs and just execs.
+- **Concurrent runs in one process tree share one prompt.** The daemon
+  unions their requests into a single card, annotating each secret with the
+  command that asked for it. You approve once, and each command receives
+  **only its own** secrets — never a sibling's.
 
-`$SECREQ_SOCK` is set for you inside a brain `--vm` sandbox. On a host, the
-other end is `secreq agent open --scope <name> --allow <ref>… --sock <path>`,
-forwarded in with `ssh -R`.
+::shot{id=run-session-card}
 
-`<REF>` is a full `secret://provider/locator` or the bare
-`provider/locator` shorthand.
+Exit codes match `x`.
 
-**The value, and only the value, goes to stdout** — diagnostics, errors, and
-denials all go to stderr, so the command substitutes cleanly:
+## Reading a value directly
 
-```sh
-export GH_TOKEN="$(secreq resolve secret://op/Dev/gh/token)"
-```
+`secreq read <REF>…` resolves references and prints them as a JSON object
+keyed by each ref exactly as typed, so it pipes into `jq`. Every read goes
+through the consent daemon, so it is prompted and audited. There is
+deliberately **no `--yes` bypass**: the value lands on stdout, where masking
+cannot help you.
 
-The value is printed with a trailing newline (`op read`'s convention), which
-`$(…)` strips. `--list` prints the scope's allowed ref **names**, one per
-line, and never prompts — listing is free.
+`secreq resolve` is a different thing that looks similar: it is the *guest*
+half of a sandbox socket, asking a **host** secreq to release something.
+See [secret-agent](./secret-agent.md).
 
-The global flags don't apply: the host owns every decision, so there is
-nothing for `--yes`, `--no-remember`, or `--config` to act on.
+## Bare `secreq`
 
-#### Exit codes
+With no subcommand and a terminal to prompt on, `secreq` presents an action
+picker (open the manager, list wraps, manage rules, open pending requests,
+set up the SSH agent, run first-time setup) and dispatches into the verb you
+choose. The cursor starts on the manager, so `secreq` then
+<kbd>Enter</kbd> opens the window.
 
-| Code | Meaning |
-|---|---|
-| 0 | Released. The value is on stdout. |
-| 3 | Denied by the host (you said no, a rule denied it, or the ref is outside this socket's declared scope). Reason on stderr, stdout empty. **A denial is final — don't retry it.** |
-| 1 | Error: `$SECREQ_SOCK` unset, the agent unreachable, a malformed ref, or resolution failed on the host after approval. |
+Without a terminal (a shim, a pipe, CI) there is nothing to pick from, so a
+bare invocation exits 2 with a usage hint instead.
 
-## Environment variables `secreq` reads or sets
+## Revoking an approval
 
-| Variable | When |
-|---|---|
-| `SHELL` | `init` reads this to choose which shell config to edit. |
-| `SECREQ_HOME` | Root for `secreq`'s config — `wraps.json5` and `auto-rules.json5` live directly under it. Falls back to `~/.secreq`. |
-| `XDG_CONFIG_HOME` | Legacy config location (`secreq/wraps.json5`) that the first-run root migration copies into `~/.secreq`; no longer used for discovery. Falls back to `~/.config`. |
-| `XDG_STATE_HOME` | Audit log (`secreq/audit.log`) and the daemon's persistent log (`secreq/daemon.log`, see `secreq daemon log-path`) live here. Falls back to `~/.local/state`. The approvals cache is in-memory only — `secreq daemon stop` clears it. |
-| `XDG_RUNTIME_DIR` | Consent daemon socket + pidfile. Falls back to `$TMPDIR/secreq-<uid>`. |
-| `EDITOR` / `VISUAL` | Used by `secreq edit`. |
-| `DISPLAY` / `WAYLAND_DISPLAY` | Linux/BSD: when neither is set, `secreq` fails closed instead of spawning a daemon that can't render. |
-| `SECREQ_SOCK` | Read by `secreq resolve`: the scoped secret agent socket to ask, mirroring `SSH_AUTH_SOCK`. Set inside a brain `--vm` sandbox, where the host forwards its `secreq agent open` socket in. See [secret-agent](./secret-agent.md). |
-| `SECREQ_NO_DAEMON` | Set to `1` to disable the daemon entirely — consent fails closed unless `--yes` is used. Intended for tests and headless automation. |
+There is no per-invocation "forget this" flag. Approvals live in the
+daemon's memory, so `secreq daemon stop` clears every one of them; the next
+wrap auto-spawns a fresh daemon with an empty cache. How the scope is keyed,
+and why it has no TTL, is in [wraps](./wraps.md#how-approval-is-scoped).
+
+## Environment variables
+
+| Variable                      | When                                                                                                                                                        |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `SECREQ_HOME`                 | Root for everything secreq owns — config, `audit.log`, `daemon.log`, registered rule modules. Falls back to `~/.secreq`.                                     |
+| `SECREQ_SOCK`                 | Read by `secreq resolve`: the scoped agent socket to ask, mirroring `SSH_AUTH_SOCK`. See [secret-agent](./secret-agent.md).                                  |
+| `SECREQ_NO_DAEMON`            | Any non-empty value disables the daemon entirely; consent fails closed unless `--sq-yes` / `--yes` is used. For tests and headless automation.               |
+| `SECREQ_NO_WAIT_INDICATOR`    | Silences the "waiting for approval" indicator for one invocation, regardless of the `$wait_indicator` config setting.                                        |
+| `XDG_RUNTIME_DIR`             | Preferred home for the daemon's sockets and pidfile — it is mode-0700 tmpfs. Falls back to `<root>/run`.                                                     |
+| `XDG_CONFIG_HOME`             | Legacy config location the first-run migration copies into the root. No longer used for discovery.                                                           |
+| `SHELL`                       | `init` reads this to choose which shell config to edit.                                                                                                     |
+| `EDITOR` / `VISUAL`           | Used by `secreq edit`.                                                                                                                                      |
+| `DISPLAY` / `WAYLAND_DISPLAY` | Linux/BSD: with neither set, secreq fails closed rather than spawning a daemon that can't render.                                                             |
+
+## Next
+
+- [All commands](./cli-reference.md): every subcommand and flag.
+- [wraps](./wraps.md): authoring `wraps.json5`, and how approval is scoped.
+- [consent-window](./consent-window.md): the windows these verbs put up.

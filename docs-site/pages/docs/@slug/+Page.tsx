@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { useData } from 'vike-react/useData';
 import { Breadcrumb } from '../../../components/Breadcrumb';
 import { Link } from '../../../components/Link';
@@ -8,19 +8,6 @@ import type { DocDetailData } from './+data';
 
 export default function DocDetailPage() {
   const { doc } = useData<DocDetailData>();
-
-  useEffect(() => {
-    if (!doc) return;
-    const root = document.querySelector('.prose-content');
-    if (!root) return;
-
-    // Screenshots and terminals need no hydration — `<secreq-shot>` and
-    // `<secreq-terminal>` upgrade themselves wherever markdown injected
-    // them. What's left here is decoration applied to plain markdown
-    // output, which owns no element of its own.
-    wrapTables(root);
-    addCopyButtons(root);
-  }, [doc?.slug]);
 
   const activeHeading = useScrollSpy(doc?.headings.map((h) => h.id) ?? []);
 
@@ -52,11 +39,7 @@ export default function DocDetailPage() {
 
         <h1 className="t-title mb-8">{doc.title}</h1>
 
-        <div
-          className="prose-content"
-          data-pagefind-body
-          dangerouslySetInnerHTML={{ __html: doc.renderedHtml }}
-        />
+        <ProseContent html={doc.renderedHtml} />
 
         <div
           data-pagefind-ignore
@@ -101,11 +84,74 @@ export default function DocDetailPage() {
 }
 
 /**
- * Track which heading the reader is currently under.
+ * The rendered markdown, and the only thing on this page allowed to write it.
  *
- * Watches a narrow band across the upper third of the viewport rather than the
- * whole thing: with a full-height root margin, a short section sandwiched
- * between two long ones never wins, and the marker skips over it entirely.
+ * `memo` here is load-bearing, not an optimisation. React compares
+ * `dangerouslySetInnerHTML` by the identity of the `{__html}` object, which JSX
+ * rebuilds every render — so an unmemoised parent re-render re-runs
+ * `innerHTML = html` and replaces this whole subtree with a byte-identical copy.
+ * That silently detaches every node anything else on the page is holding: the
+ * table wrappers and copy buttons below, and every heading the scroll spy
+ * observes. The spy would then set the marker exactly once, destroy its own
+ * observation targets in the resulting render, and freeze there forever.
+ *
+ * Memoising on the html string means the parent's `activeHeading` state can
+ * change freely without the article underneath it being rebuilt.
+ */
+const ProseContent = memo(function ProseContent({ html }: { html: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+
+    // Screenshots and terminals need no hydration — `<secreq-shot>` and
+    // `<secreq-terminal>` upgrade themselves wherever markdown injected
+    // them. What's left here is decoration applied to plain markdown
+    // output, which owns no element of its own.
+    wrapTables(root);
+    addCopyButtons(root);
+  }, [html]);
+
+  return (
+    <div
+      ref={ref}
+      className="prose-content"
+      data-pagefind-body
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+});
+
+/**
+ * Where a heading comes to rest when the reader jumps to its anchor — the
+ * `scroll-margin-top: 5.5rem` the prose headings carry, clearing the 56px
+ * sticky header. Using the same line to decide "the reader is under this
+ * heading" is what makes clicking a link in the list agree with scrolling to
+ * the same place by hand.
+ */
+const HEADING_REST_LINE = 88;
+
+/**
+ * A heading parked by `scrollIntoView` lands a fraction either side of the rest
+ * line — 88.31 one time, 87.73 the next — because the prose above it lays out on
+ * subpixel boundaries. Testing the line exactly would let that noise decide
+ * whether a link the reader just clicked marks itself or its predecessor.
+ */
+const REST_LINE_TOLERANCE = 1;
+
+/**
+ * Track which heading the reader is currently under: the last one to have
+ * crossed the line where an anchor jump would park it.
+ *
+ * Deliberately reads geometry rather than reacting to intersection events. An
+ * observer only reports the targets whose visibility *changed*, so the answer
+ * it can give is "of the headings that just moved, which is highest" — which is
+ * not the same question. Two short headings crossing together are reported once
+ * and the second never gets its turn, and any discontinuous jump (a link in
+ * this list, End, Page Down, restoring a hash on load) moves the page without
+ * any heading passing through the trigger zone at all, leaving the marker on
+ * whatever section the reader has long since left.
  */
 function useScrollSpy(ids: string[]): string | null {
   const [active, setActive] = useState<string | null>(null);
@@ -114,21 +160,48 @@ function useScrollSpy(ids: string[]): string | null {
   useEffect(() => {
     if (ids.length === 0) return;
 
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visible = entries
-          .filter((entry) => entry.isIntersecting)
-          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
-        if (visible[0]) setActive(visible[0].target.id);
-      },
-      { rootMargin: '-80px 0px -66% 0px' }
-    );
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
 
-    for (const id of ids) {
-      const el = document.getElementById(id);
-      if (el) observer.observe(el);
-    }
-    return () => observer.disconnect();
+      // The last section is usually too short to ever reach the line — the page
+      // runs out of scroll first — so at the end of the document it is the
+      // answer by definition, whatever the geometry says.
+      //
+      // This is why a heading in the final screenful marks the last one instead
+      // of itself: every one of them shares a single scroll position, the
+      // document's maximum, so no rule reading scroll position can tell a
+      // reader who jumped to one from a reader who reached the end.
+      const doc = document.documentElement;
+      if (window.scrollY + window.innerHeight >= doc.scrollHeight - 2) {
+        setActive(ids[ids.length - 1]);
+        return;
+      }
+
+      let current: string | null = null;
+      for (const id of ids) {
+        const el = document.getElementById(id);
+        if (el && el.getBoundingClientRect().top <= HEADING_REST_LINE + REST_LINE_TOLERANCE) {
+          current = id;
+        }
+      }
+      setActive(current);
+    };
+
+    // Coalesce to one measurement per frame: scroll fires far more often than
+    // the page paints, and each pass reads a rect per heading.
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(measure);
+    };
+
+    measure();
+    window.addEventListener('scroll', schedule, { passive: true });
+    window.addEventListener('resize', schedule);
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      window.removeEventListener('scroll', schedule);
+      window.removeEventListener('resize', schedule);
+    };
   }, [key]);
 
   return active;

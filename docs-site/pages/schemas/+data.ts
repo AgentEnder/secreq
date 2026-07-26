@@ -54,7 +54,7 @@ export async function data(): Promise<SchemasData> {
         groups,
         rawHtml,
       };
-    })
+    }),
   );
 
   return { schemas };
