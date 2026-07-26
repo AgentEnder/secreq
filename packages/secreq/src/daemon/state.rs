@@ -211,7 +211,7 @@ pub struct State {
     /// `ConsentWindowAttach` so a burst of Asks doesn't launch N
     /// children. Cleared when the first child attaches OR after a
     /// timeout (so a failed spawn doesn't permanently block).
-    consent_spawn_in_flight_since: Option<Instant>,
+    consent_spawn: SpawnDebounce,
 
     // ── Manager-window streaming subscribers ──────────────────────
     //
@@ -227,8 +227,8 @@ pub struct State {
     /// other counters so the ID spaces stay grep-distinguishable.
     manager_next_subscriber_id: u64,
     /// Spawn-debounce for the manager child, mirroring
-    /// `consent_spawn_in_flight_since`.
-    manager_spawn_in_flight_since: Option<Instant>,
+    /// `consent_spawn`.
+    manager_spawn: SpawnDebounce,
 
     // ── Pending-badge streaming subscribers ───────────────────────
     //
@@ -244,10 +244,10 @@ pub struct State {
     /// consent counter so the two ID spaces stay grep-distinguishable.
     badge_next_subscriber_id: u64,
     /// Spawn-debounce for the badge child, mirroring
-    /// `consent_spawn_in_flight_since`: set between `Command::spawn`
+    /// `consent_spawn`: set between `Command::spawn`
     /// and the child's `BadgeWindowAttach` so a burst of asks doesn't
     /// launch N badges. Cleared on attach or after `CONSENT_SPAWN_TIMEOUT`.
-    badge_spawn_in_flight_since: Option<Instant>,
+    badge_spawn: SpawnDebounce,
     /// `true` between `initiate_consent_restart()` and the moment the
     /// dying child's detach is processed. Tells the detach handler
     /// "this isn't a user-initiated close — preserve viewer_mode and
@@ -331,13 +331,13 @@ impl Default for State {
             shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             consent_subscribers: Vec::new(),
             consent_next_subscriber_id: 1,
-            consent_spawn_in_flight_since: None,
+            consent_spawn: SpawnDebounce::default(),
             manager_subscribers: Vec::new(),
             manager_next_subscriber_id: 1,
-            manager_spawn_in_flight_since: None,
+            manager_spawn: SpawnDebounce::default(),
             badge_subscribers: Vec::new(),
             badge_next_subscriber_id: 1,
-            badge_spawn_in_flight_since: None,
+            badge_spawn: SpawnDebounce::default(),
             consent_restart_pending: false,
             // Queue starts empty; record the moment so the auto-hide
             // logic has a stable "started counting" anchor.
@@ -353,7 +353,43 @@ impl Default for State {
     }
 }
 
-/// How long we treat `consent_spawn_in_flight_since` as "still
+/// Debounce for "a window child is being spawned right now".
+///
+/// Between `Command::spawn` and the child's attach there is a window where a
+/// burst of asks would each see "no child attached" and launch another. All
+/// three window kinds have the identical race, and each carried its own
+/// `Option<Instant>` field plus its own copy of these two methods.
+///
+/// Stale entries self-clear after [`CONSENT_SPAWN_TIMEOUT`], so a spawn that
+/// failed silently cannot block launching a replacement forever.
+#[derive(Debug, Default)]
+struct SpawnDebounce(Option<Instant>);
+
+impl SpawnDebounce {
+    /// Is a spawn in flight? Clears a stale mark as a side effect, which is
+    /// why this takes `&mut self`.
+    fn in_flight(&mut self) -> bool {
+        if let Some(at) = self.0 {
+            if at.elapsed() < CONSENT_SPAWN_TIMEOUT {
+                return true;
+            }
+            self.0 = None;
+        }
+        false
+    }
+
+    /// Record that a spawn has just been kicked off.
+    fn mark(&mut self) {
+        self.0 = Some(Instant::now());
+    }
+
+    /// A child attached, so nothing is in flight any more.
+    fn clear(&mut self) {
+        self.0 = None;
+    }
+}
+
+/// How long we treat a spawn mark as "still
 /// pending" before assuming the spawn failed silently and allowing a
 /// new attempt.
 const CONSENT_SPAWN_TIMEOUT: Duration = Duration::from_secs(3);
@@ -490,7 +526,7 @@ impl State {
     ) -> (u64, super::proto::WireSnapshot) {
         let id = self.consent_next_subscriber_id;
         self.consent_next_subscriber_id = id.wrapping_add(1);
-        self.consent_spawn_in_flight_since = None;
+        self.consent_spawn.clear();
         self.consent_subscribers.push(ConsentSubscriber {
             id,
             pid,
@@ -614,7 +650,7 @@ impl State {
     ) -> (u64, super::proto::WireSnapshot) {
         let id = self.badge_next_subscriber_id;
         self.badge_next_subscriber_id = id.wrapping_add(1);
-        self.badge_spawn_in_flight_since = None;
+        self.badge_spawn.clear();
         self.badge_subscribers
             .push(BadgeSubscriber { id, tx: sender });
         super::log::log_at(
@@ -659,18 +695,12 @@ impl State {
     /// [`CONSENT_SPAWN_TIMEOUT`] (shared constant — the spawn race is
     /// identical to the consent window's).
     pub fn badge_spawn_in_flight(&mut self) -> bool {
-        if let Some(at) = self.badge_spawn_in_flight_since {
-            if at.elapsed() < CONSENT_SPAWN_TIMEOUT {
-                return true;
-            }
-            self.badge_spawn_in_flight_since = None;
-        }
-        false
+        self.badge_spawn.in_flight()
     }
 
     /// Record that a badge `Command::spawn` has just been kicked off.
     pub fn mark_badge_spawn_in_flight(&mut self) {
-        self.badge_spawn_in_flight_since = Some(Instant::now());
+        self.badge_spawn.mark();
     }
 
     /// Tell every attached badge child to exit. Sent when the queue
@@ -722,7 +752,7 @@ impl State {
     ) -> (u64, super::proto::WireSnapshot) {
         let id = self.manager_next_subscriber_id;
         self.manager_next_subscriber_id = id.wrapping_add(1);
-        self.manager_spawn_in_flight_since = None;
+        self.manager_spawn.clear();
         self.manager_subscribers.push(ManagerSubscriber {
             id,
             pid,
@@ -776,18 +806,12 @@ impl State {
     /// start another. Stale entries auto-clear after
     /// [`CONSENT_SPAWN_TIMEOUT`] (shared constant — same race shape).
     pub fn manager_spawn_in_flight(&mut self) -> bool {
-        if let Some(at) = self.manager_spawn_in_flight_since {
-            if at.elapsed() < CONSENT_SPAWN_TIMEOUT {
-                return true;
-            }
-            self.manager_spawn_in_flight_since = None;
-        }
-        false
+        self.manager_spawn.in_flight()
     }
 
     /// Record that a manager `Command::spawn` has just been kicked off.
     pub fn mark_manager_spawn_in_flight(&mut self) {
-        self.manager_spawn_in_flight_since = Some(Instant::now());
+        self.manager_spawn.mark();
     }
 
     /// Push `msg` to every attached manager child, pruning dead senders.
@@ -869,15 +893,7 @@ impl State {
     /// start another. Stale entries auto-clear after
     /// `CONSENT_SPAWN_TIMEOUT`.
     pub fn consent_spawn_in_flight(&mut self) -> bool {
-        if let Some(at) = self.consent_spawn_in_flight_since {
-            if at.elapsed() < CONSENT_SPAWN_TIMEOUT {
-                return true;
-            }
-            // Timed out — assume the spawn failed silently and allow
-            // a retry on the next state change.
-            self.consent_spawn_in_flight_since = None;
-        }
-        false
+        self.consent_spawn.in_flight()
     }
 
     /// Record that a `Command::spawn` for a consent-window child has
@@ -885,7 +901,7 @@ impl State {
     /// `consent_spawn_in_flight()` return `true` until the child
     /// attaches or `CONSENT_SPAWN_TIMEOUT` elapses.
     pub fn mark_consent_spawn_in_flight(&mut self) {
-        self.consent_spawn_in_flight_since = Some(Instant::now());
+        self.consent_spawn.mark();
     }
 
     /// Should the daemon ensure a consent-prompt child is running?
