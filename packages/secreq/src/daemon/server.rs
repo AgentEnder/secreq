@@ -1008,12 +1008,93 @@ fn handle_ask(ask: Ask, state: SharedState) -> AskDisposition {
 /// killed before the user decides closes its socket — we notice the EOF and
 /// withdraw the ask (reaping the card + writing an `abandoned` audit row)
 /// instead of leaving it orphaned in the queue.
+/// The `dedupe_key.wrap` a `secreq run` ask carries. Its
+/// `(ppid, parent_start_time)` is a *session* identity — the outer run's pid
+/// plus a random nonce, propagated to descendants through
+/// [`crate::RUN_SESSION_ENV`] — not a process identity, so
+/// [`adopt_peer_provenance`] leaves it alone. Nothing keys the approvals
+/// cache on it: `run` asks set `allow_remember: false`, so no `ApprovalEntry`
+/// with this wrap is ever stored, and a lookup needs an entry to hit.
+const RUN_SESSION_WRAP: &str = "run";
+
+/// Replace the client-supplied provenance on `ask` with a chain the daemon
+/// walks itself from the socket peer.
+///
+/// The client sends `callers`, `cwd` and a dedupe key describing who is
+/// asking, and until now the daemon rendered all of it as fact. Any process
+/// that can reach this socket can therefore name the user's own shell as its
+/// parent, and the consent prompt will say so. The kernel already knows the
+/// truth, and `SO_PEERCRED` / `LOCAL_PEERCRED` is how the SSH agent has
+/// always got it (`ssh_agent.rs`); this brings the wrap path level with it.
+///
+/// Returns `Err` with a client-facing message when provenance cannot be
+/// established. That is fail-closed by construction: the caller replies with
+/// the error and never enqueues the ask, so no prompt is shown and nothing is
+/// released.
+///
+/// **Scoped-agent asks are exempt, and must stay exempt.** Their peer is the
+/// `secreq agent open` process, whose parent is whatever shell started the
+/// sandbox — a host process that has nothing to do with the guest making the
+/// request. Walking it would not be "the truth about the asker", it would be
+/// a plausible-looking chain attached to the wrong principal, which is worse
+/// than the empty one the prompt shows today. The host-declared scope is the
+/// principal on that path (see `scoped_agent`).
+fn adopt_peer_provenance(ask: &mut Ask, stream: &UnixStream) -> Result<()> {
+    if ask.agent.is_some() {
+        return Ok(());
+    }
+
+    let peer = super::peercred::peer_pid(stream)
+        .context("could not read the peer's pid from the consent socket")?;
+    let chain = crate::provenance::caller_chain_from_pid(peer);
+    let parent = chain.first().context(
+        "the requesting process has no visible parent; refusing to prompt for an ask \
+         whose provenance cannot be established",
+    )?;
+
+    // The dedupe key's process half keys the approvals cache, so a forged one
+    // is a cache-scope escape, not just a display lie. Re-derive it from the
+    // same walk that produced the chain.
+    if ask.dedupe_key.wrap != RUN_SESSION_WRAP {
+        ask.dedupe_key.ppid = parent.pid;
+        ask.dedupe_key.parent_start_time = parent.start_time;
+    }
+
+    ask.callers = chain
+        .iter()
+        .map(|c| super::proto::Caller {
+            pid: c.pid,
+            name: c.name.clone(),
+            command: c.command.clone(),
+            start_time: c.start_time,
+        })
+        .collect();
+    // A cwd we cannot read is rendered as absent rather than guessed at, and
+    // the client's claim is not a fallback — it is the thing being replaced.
+    ask.cwd = crate::provenance::cwd_for_pid(peer).unwrap_or_default();
+
+    Ok(())
+}
+
 fn handle_ask_connection(
     reader: BufReader<UnixStream>,
     stream: UnixStream,
-    ask: Ask,
+    mut ask: Ask,
     state: SharedState,
 ) -> Result<()> {
+    if let Err(err) = adopt_peer_provenance(&mut ask, &stream) {
+        super::log::log_at(
+            "server",
+            format_args!("← ClientMsg::Ask refused: {err:#}"),
+        );
+        let mut writer = stream;
+        return write_reply(
+            &mut writer,
+            &DaemonMsg::Err {
+                message: format!("{err:#}"),
+            },
+        );
+    }
     match handle_ask(ask, state.clone()) {
         AskDisposition::Resolved(reply) => {
             let mut writer = stream;
@@ -1649,5 +1730,129 @@ mod tests {
             },
         );
         assert!(crate::rules::load_rules(&path).unwrap().rules.is_empty());
+    }
+
+    // ── Peer-derived provenance ───────────────────────────────────────
+
+    /// Build an ask carrying a caller chain and dedupe identity that name a
+    /// process which does not exist. This is what a forged ask looks like:
+    /// well-formed, and describing an ancestry the sender never had.
+    fn forged_ask(wrap: &str) -> Ask {
+        Ask {
+            command: vec!["gh".to_owned(), "api".to_owned()],
+            cwd: "/somewhere/the/attacker/named".to_owned(),
+            callers: vec![super::super::proto::Caller {
+                pid: FORGED_PID,
+                name: "zsh".to_owned(),
+                command: "-zsh".to_owned(),
+                start_time: 12345,
+            }],
+            secrets: Vec::new(),
+            providers: std::collections::HashMap::new(),
+            dedupe_key: DedupeKey {
+                wrap: wrap.to_owned(),
+                ppid: FORGED_PID,
+                parent_start_time: 12345,
+            },
+            ssh: None,
+            agent: None,
+            allow_remember: true,
+            nested_run: false,
+        }
+    }
+
+    const FORGED_PID: u32 = 999_999;
+
+    /// A connected pair whose peer is this test process, so the daemon-side
+    /// walk resolves to our own real ancestry.
+    fn connected_pair() -> (UnixStream, UnixStream) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("t.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind");
+        let client = UnixStream::connect(&path).expect("connect");
+        let (server_conn, _) = listener.accept().expect("accept");
+        (server_conn, client)
+    }
+
+    /// The core of the fix: whatever the client claimed about its ancestry is
+    /// discarded in favour of a chain the daemon walked from the socket peer.
+    /// Without this, any process that can reach the socket can name the
+    /// user's own shell as its parent and the prompt will say so.
+    #[test]
+    fn a_forged_caller_chain_is_replaced_by_the_peers_real_one() {
+        let (server_conn, _client) = connected_pair();
+        let mut ask = forged_ask("gh");
+
+        adopt_peer_provenance(&mut ask, &server_conn).expect("provenance");
+
+        assert!(
+            !ask.callers.iter().any(|c| c.pid == FORGED_PID),
+            "the forged frame survived into the chain: {:?}",
+            ask.callers.iter().map(|c| c.pid).collect::<Vec<_>>()
+        );
+        assert!(!ask.callers.is_empty(), "the real chain should be populated");
+        assert_ne!(ask.cwd, "/somewhere/the/attacker/named");
+    }
+
+    /// The dedupe key's process half keys the approvals cache, so leaving it
+    /// client-supplied would be a cache-scope escape and not merely a display
+    /// lie: claim the shell's pid, ride the approval the user granted there.
+    #[test]
+    fn a_forged_dedupe_identity_is_re_derived_from_the_peer() {
+        let (server_conn, _client) = connected_pair();
+        let mut ask = forged_ask("gh");
+
+        adopt_peer_provenance(&mut ask, &server_conn).expect("provenance");
+
+        assert_ne!(ask.dedupe_key.ppid, FORGED_PID);
+        assert_ne!(ask.dedupe_key.parent_start_time, 12345);
+        // It agrees with the chain the daemon just walked, which is how the
+        // client derives it too.
+        assert_eq!(ask.dedupe_key.ppid, ask.callers[0].pid);
+        assert_eq!(
+            ask.dedupe_key.parent_start_time,
+            ask.callers[0].start_time
+        );
+        // The wrap half is config, not provenance, and is left alone.
+        assert_eq!(ask.dedupe_key.wrap, "gh");
+    }
+
+    /// A `run` ask's dedupe key is a *session* identity: the outer run's pid
+    /// plus a random nonce, shared by every descendant so one consent covers
+    /// the tree. Re-deriving it per-process would dissolve the session into
+    /// one entry per nested run. Its caller chain is still corrected.
+    #[test]
+    fn a_run_session_dedupe_key_survives_but_its_chain_does_not() {
+        let (server_conn, _client) = connected_pair();
+        let mut ask = forged_ask(RUN_SESSION_WRAP);
+
+        adopt_peer_provenance(&mut ask, &server_conn).expect("provenance");
+
+        assert_eq!(ask.dedupe_key.ppid, FORGED_PID, "session identity preserved");
+        assert_eq!(ask.dedupe_key.parent_start_time, 12345);
+        assert!(!ask.callers.iter().any(|c| c.pid == FORGED_PID));
+    }
+
+    /// A scoped-agent ask's peer is the `agent open` process, whose parent is
+    /// a host shell with no relationship to the guest that made the request.
+    /// Walking it would attach a plausible chain to the wrong principal —
+    /// worse than the empty one the prompt deliberately shows.
+    #[test]
+    fn a_scoped_agent_ask_keeps_its_empty_chain() {
+        let (server_conn, _client) = connected_pair();
+        let mut ask = forged_ask("agent:sandbox:secret://op/a/b");
+        ask.callers = Vec::new();
+        ask.cwd = String::new();
+        ask.agent = Some(super::super::proto::AgentAskInfo {
+            scope: "sandbox".to_owned(),
+            reference: "secret://op/a/b".to_owned(),
+            guest_chain: None,
+        });
+
+        adopt_peer_provenance(&mut ask, &server_conn).expect("provenance");
+
+        assert!(ask.callers.is_empty(), "a guest ask must not gain a host chain");
+        assert!(ask.cwd.is_empty());
+        assert_eq!(ask.dedupe_key.ppid, FORGED_PID);
     }
 }
