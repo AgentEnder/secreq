@@ -134,17 +134,6 @@ pub fn build_plan(
     Ok(ResolutionPlan { requests })
 }
 
-/// Execute every request through its provider, applying the resolution order
-/// (found → default → hard error). Returns the resolved values **in plan
-/// order** so the consent prompt and the injected env agree.
-///
-/// Behind the scenes, requests are grouped by provider so a provider with a
-/// `retrieve_batch` capability resolves all of its requests in one
-/// invocation — critical for `op`, where each `op read` triggers a
-/// biometric prompt but `op run -- printenv` resolves any number of refs
-/// after a single one. Per-secret retrieves are used when the provider has
-/// no batch capability, when it has fewer than two requests (no benefit),
-/// or as a fallback if batching fails.
 /// Timing and counters for one [`resolve_all`] pass, returned alongside the
 /// resolved secrets so a caller (the daemon) can log where a slow read spent
 /// its time. Only the batch subprocesses are timed — per-secret retrieves are
@@ -164,6 +153,21 @@ pub struct ResolveStats {
     pub per_secret: usize,
 }
 
+/// Execute every request through its provider, applying the resolution order
+/// (found → default → hard error).
+///
+/// Returns the resolved values **in plan order**, so the consent prompt and
+/// the injected env agree, paired with the [`ResolveStats`] for the pass. The
+/// values are what nearly every caller is after; the stats exist for the
+/// daemon's `resolve` log line and are bound as `_stats` everywhere else.
+///
+/// Behind the scenes, requests are grouped by provider so a provider with a
+/// `retrieve_batch` capability resolves all of its requests in one
+/// invocation — critical for `op`, where each `op read` triggers a
+/// biometric prompt but `op run -- printenv` resolves any number of refs
+/// after a single one. Per-secret retrieves are used when the provider has
+/// no batch capability, when it has fewer than two requests (no benefit),
+/// or as a fallback if batching fails.
 pub fn resolve_all(
     manifest: &Manifest,
     plan: &ResolutionPlan,
