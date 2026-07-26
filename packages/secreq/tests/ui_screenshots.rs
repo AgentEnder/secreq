@@ -194,6 +194,7 @@ fn submit(
         wrap: wrap.to_owned(),
         ppid: callers.first().map_or(0, |c| c.pid),
         parent_start_time: callers.first().map_or(0, |c| c.start_time),
+        subject_digest: None,
     };
     let ask = Ask {
         command: command.into_iter().map(String::from).collect(),
@@ -226,6 +227,7 @@ fn submit_run(
         wrap: "run".to_owned(),
         ppid: callers.first().map_or(0, |c| c.pid),
         parent_start_time: callers.first().map_or(0, |c| c.start_time),
+        subject_digest: None,
     };
     let ask = Ask {
         command: command.into_iter().map(String::from).collect(),
@@ -261,6 +263,7 @@ fn submit_ssh(
         wrap: format!("ssh:{key_id}"),
         ppid: callers.first().map_or(0, |c| c.pid),
         parent_start_time: callers.first().map_or(0, |c| c.start_time),
+        subject_digest: None,
     };
     let ask = Ask {
         command: vec![format!("ssh-sign {key_id}")],
@@ -308,6 +311,7 @@ fn submit_agent(
         wrap: format!("agent:{scope}:{reference}"),
         ppid: 4242,
         parent_start_time: 0,
+        subject_digest: None,
     };
     let ask = Ask {
         command: vec![format!("agent-resolve {reference}")],
@@ -348,6 +352,7 @@ fn pending(
         wrap: wrap.to_owned(),
         ppid: callers.first().map_or(0, |c| c.pid),
         parent_start_time: callers.first().map_or(0, |c| c.start_time),
+        subject_digest: None,
     };
     let ask = Ask {
         command: command.into_iter().map(String::from).collect(),

@@ -355,7 +355,15 @@ fn handle_sign(
     // 3. Decide whether to sign: approval-cache hit (skip the prompt) or
     //    interactive consent. The lock is held only for the cache check and
     //    the queue submission, never across the (blocking) consent wait.
-    let decision = match decide_sign(state, identity, anchor_pid, anchor_start_time, &chain, &cwd) {
+    let decision = match decide_sign(
+        state,
+        identity,
+        anchor_pid,
+        anchor_start_time,
+        &chain,
+        &cwd,
+        data,
+    ) {
         Some(d) if d.approved() => d,
         Some(deny) => {
             audit_sign(identity, &chain, &cwd, deny);
@@ -454,6 +462,7 @@ fn decide_sign(
     anchor_start_time: u64,
     chain: &[crate::provenance::Caller],
     cwd: &str,
+    data: &[u8],
 ) -> Option<Decision> {
     // Grant check — lock held only for the lookup. A live session grant needs
     // no UI, so this path is unaffected by whether a display is available; it
@@ -475,7 +484,7 @@ fn decide_sign(
     // every request), so reload hand-edits here too before evaluating. Lock is
     // held only for the reload + evaluation; we drop it before returning.
     {
-        let ask = sign_ask(identity, anchor_pid, anchor_start_time, chain, cwd);
+        let ask = sign_ask(identity, anchor_pid, anchor_start_time, chain, cwd, data);
         let mut guard = state.lock().expect("state mutex");
         guard.reload_rules_if_changed();
         if let Some(hit) = guard.evaluate_rules_for_ask(&ask) {
@@ -502,6 +511,7 @@ fn decide_sign(
         anchor_start_time,
         chain,
         cwd,
+        data,
         super::client::graphical_environment_available(),
     )
 }
@@ -522,6 +532,7 @@ fn decide_sign_on_miss(
     anchor_start_time: u64,
     chain: &[crate::provenance::Caller],
     cwd: &str,
+    data: &[u8],
     gui_available: bool,
 ) -> Option<Decision> {
     // No display → the consent window can never render, so `rx.recv()` below
@@ -542,7 +553,7 @@ fn decide_sign_on_miss(
     // Miss → enqueue an Ask and park on the reply channel. Build the Ask so
     // the consent UI and the audit row have the identity, the caller chain,
     // and the anchor scope to render.
-    let ask = sign_ask(identity, anchor_pid, anchor_start_time, chain, cwd);
+    let ask = sign_ask(identity, anchor_pid, anchor_start_time, chain, cwd, data);
     let (tx, rx) = mpsc::channel();
     {
         let mut guard = state.lock().expect("state mutex");
@@ -607,6 +618,7 @@ fn sign_ask(
     anchor_start_time: u64,
     chain: &[crate::provenance::Caller],
     cwd: &str,
+    data: &[u8],
 ) -> Ask {
     let wrap = format!("ssh:{}", identity.key_id);
     Ask {
@@ -628,6 +640,11 @@ fn sign_ask(
             wrap,
             ppid: anchor_pid,
             parent_start_time: anchor_start_time,
+            // What this ask authorizes is `data`, and `data` appears nowhere
+            // else in the key. Without this, two signs for the same key from
+            // the same anchor coalesce into one card and one Approve signs
+            // both payloads — including one the user never saw.
+            subject_digest: Some(crate::rules::sha256_hex(data)),
         },
         // Mark this ask as an SSH sign so the consent window renders the
         // SSH variant (identity + fingerprint, no secret list) rather than
@@ -837,6 +854,7 @@ mod tests {
             /* anchor_start_time */ 1,
             &chain,
             /* cwd */ "/home/dev/repos/acme",
+            /* data */ b"challenge",
             /* gui_available */ false,
         );
 
@@ -927,6 +945,7 @@ mod tests {
             /* start */ 1,
             &chain,
             /* cwd */ "/home/dev/repos/acme",
+            /* data */ b"challenge",
         );
 
         assert_eq!(
@@ -960,7 +979,7 @@ mod tests {
         let identity = test_identity("github");
         let chain: Vec<crate::provenance::Caller> = Vec::new();
 
-        let decision = decide_sign(&state, &identity, 4242, 1, &chain, "/home/dev/repos/acme");
+        let decision = decide_sign(&state, &identity, 4242, 1, &chain, "/home/dev/repos/acme", b"challenge");
 
         assert_eq!(decision, Some(Decision::DenyAuto));
         assert!(
@@ -1039,5 +1058,53 @@ mod tests {
             .expect("read_frame ok")
             .expect("frame present");
         assert_eq!(frame, input);
+    }
+
+    /// The SIGN path reuses the wrap queue's coalescing, which folds asks
+    /// with an equal dedupe key into one entry answered by one decision.
+    /// That is sound when the key determines what is being authorized. For a
+    /// sign it does not: the subject is the challenge blob, which is not in
+    /// the key, not on the card, and nowhere the user can see. Two signs for
+    /// the same key from the same anchor were one request as far as the
+    /// queue and the UI were concerned, so one Approve signed both — one of
+    /// them a payload the user never saw.
+    #[test]
+    fn two_signs_over_different_payloads_do_not_share_a_dedupe_key() {
+        let identity = test_identity("github");
+        let chain: Vec<crate::provenance::Caller> = Vec::new();
+
+        let a = sign_ask(&identity, 4242, 1, &chain, "/repo", b"challenge-one");
+        let b = sign_ask(&identity, 4242, 1, &chain, "/repo", b"challenge-two");
+
+        assert_ne!(
+            a.dedupe_key, b.dedupe_key,
+            "distinct payloads must not coalesce onto one decision"
+        );
+        // Everything else still agrees — it is only the subject that differs.
+        assert_eq!(a.dedupe_key.wrap, b.dedupe_key.wrap);
+        assert_eq!(a.dedupe_key.ppid, b.dedupe_key.ppid);
+    }
+
+    /// A genuine retry of the same challenge should still coalesce, which is
+    /// what coalescing is for.
+    #[test]
+    fn two_signs_over_the_same_payload_still_coalesce() {
+        let identity = test_identity("github");
+        let chain: Vec<crate::provenance::Caller> = Vec::new();
+
+        let a = sign_ask(&identity, 4242, 1, &chain, "/repo", b"same-challenge");
+        let b = sign_ask(&identity, 4242, 1, &chain, "/repo", b"same-challenge");
+
+        assert_eq!(a.dedupe_key, b.dedupe_key);
+    }
+
+    /// Rules match on `wrap`, documented as `ssh:<key_id>`, so the
+    /// discriminator must not live there.
+    #[test]
+    fn the_payload_digest_stays_out_of_the_rule_facing_wrap() {
+        let identity = test_identity("github");
+        let chain: Vec<crate::provenance::Caller> = Vec::new();
+        let ask = sign_ask(&identity, 4242, 1, &chain, "/repo", b"challenge");
+        assert_eq!(ask.dedupe_key.wrap, format!("ssh:{}", identity.key_id));
     }
 }

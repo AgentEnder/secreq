@@ -2522,6 +2522,7 @@ mod tests {
             wrap: wrap.to_owned(),
             ppid: callers.first().map_or(0, |c| c.0),
             parent_start_time: callers.first().map_or(0, |c| c.1),
+            subject_digest: None,
         };
         Ask {
             command: vec![wrap.to_owned()],
@@ -2889,6 +2890,7 @@ mod tests {
                 wrap: wrap.to_owned(),
                 ppid: 0,
                 parent_start_time: 0,
+                subject_digest: None,
             },
             ssh: None,
             agent: None,
@@ -3032,6 +3034,7 @@ mod tests {
                 wrap: "nope".to_owned(),
                 ppid: 999,
                 parent_start_time: 1,
+                subject_digest: None,
             };
             state.withdraw_waiter(&bogus_key, id);
             assert_eq!(
@@ -3307,6 +3310,7 @@ mod tests {
                 wrap: "gh".to_owned(),
                 ppid: 0,
                 parent_start_time: 0,
+                subject_digest: None,
             },
             ssh: None,
             agent: None,
@@ -3534,6 +3538,7 @@ mod tests {
             wrap: "run".to_owned(),
             ppid: 6042,
             parent_start_time: 12345,
+            subject_digest: None,
         }
     }
 
@@ -3703,6 +3708,7 @@ mod tests {
                 wrap: format!("ssh:{key_id}"),
                 ppid: 0,
                 parent_start_time: 0,
+                subject_digest: None,
             },
             ssh: Some(super::super::proto::SshAskInfo {
                 key_id: key_id.to_owned(),

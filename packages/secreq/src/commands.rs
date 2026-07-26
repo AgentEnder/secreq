@@ -2705,6 +2705,7 @@ fn session_dedupe_key(token: &str) -> Option<proto::DedupeKey> {
         wrap: "run".to_owned(),
         ppid: pid.parse().ok()?,
         parent_start_time: nonce.parse().ok()?,
+        subject_digest: None,
     })
 }
 
@@ -2775,6 +2776,7 @@ pub(crate) fn build_ask(
             wrap: spec.dedupe_wrap,
             ppid: parent.map_or(0, |p| p.pid),
             parent_start_time: parent.map_or(0, |p| p.start_time),
+            subject_digest: None,
         },
         // Wrap / run asks are never SSH sign asks; only the in-process SSH
         // agent path sets this.
@@ -3506,6 +3508,7 @@ mod tests {
                 wrap: "run".to_owned(),
                 ppid: 6042,
                 parent_start_time: 12345678901234567890,
+                subject_digest: None,
             })
         );
         assert_eq!(session_dedupe_key("garbage"), None);

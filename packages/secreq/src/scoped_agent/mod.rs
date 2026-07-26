@@ -598,6 +598,7 @@ fn agent_ask(scope: &Scope, reference: &Reference, guest_chain: &GuestChain) -> 
             // lifetime, so it's the honest "who is parked on this decision".
             ppid: std::process::id(),
             parent_start_time: 0,
+            subject_digest: None,
         },
         ssh: None,
         agent: Some(AgentAskInfo {

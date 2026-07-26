@@ -366,6 +366,27 @@ pub struct DedupeKey {
     pub wrap: String,
     pub ppid: u32,
     pub parent_start_time: u64,
+    /// Distinguishes asks that agree on every other field but authorize
+    /// different things.
+    ///
+    /// Coalescing folds asks with an equal key into one queue entry answered
+    /// by one decision. That is correct when the key determines *what* is
+    /// being authorized — for a wrap or `run` ask the secret set is the
+    /// subject, it is rendered on the card, and merging two asks for it is
+    /// the whole point.
+    ///
+    /// An SSH sign breaks that assumption. What it authorizes is the
+    /// challenge blob, which is not in the key, not on the card, and not
+    /// anywhere the user can see. Two signs for the same key from the same
+    /// shell over completely different payloads were one request as far as
+    /// the queue and the UI were concerned, so one Approve signed both.
+    ///
+    /// Set to a digest of the payload on that path, so identical bytes still
+    /// coalesce (a genuine retry) and different bytes never do. `None`
+    /// elsewhere. Kept out of `wrap`, which rules match on as
+    /// `ssh:<key_id>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_digest: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
