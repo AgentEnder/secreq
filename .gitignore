@@ -13,6 +13,10 @@ node_modules/
 # dist/install.sh and dist/homebrew/ are tracked.
 /dist/*.tar.gz
 
+# Scratch renders from exercise-only screenshot fixtures (see
+# tests/ui_screenshots.rs::SCRATCH_DIR) — never published, never committed.
+/tmp/
+
 # Agent worktrees: full checkouts of this repo living inside it. Every tool
 # that walks the tree finds a second copy of every file — Nx sees duplicate
 # projects, formatters and linters check stale code and report errors against

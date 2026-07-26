@@ -172,7 +172,7 @@ impl Sandbox {
         let lock = LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let mut saved = Vec::new();
         for (var, sub) in PINNED_PATHS {
@@ -206,3 +206,7 @@ impl Drop for EnvGuard {
         }
     }
 }
+
+/// Where the generated UI screenshot fixtures live, relative to the crate dir
+/// (`cargo test` runs with `packages/secreq` as CWD).
+pub const SCREENSHOT_DIR: &str = "../../dev-docs/ui-screenshots";

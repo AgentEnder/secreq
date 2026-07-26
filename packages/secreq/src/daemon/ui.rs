@@ -16,6 +16,9 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+// Only the pinned clock uses these, and it exists only for the harness.
+#[cfg(feature = "harness")]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use eframe::egui;
@@ -464,8 +467,7 @@ impl AuditCache {
         let now = Instant::now();
         let due = self
             .last_load
-            .map(|t| now.duration_since(t) >= Duration::from_secs(AUDIT_REFRESH_SECS))
-            .unwrap_or(true);
+            .is_none_or(|t| now.duration_since(t) >= Duration::from_secs(AUDIT_REFRESH_SECS));
         if !due {
             return;
         }
@@ -531,7 +533,7 @@ fn summarize_history(
             continue;
         }
         if let Some(cn) = caller_name {
-            let direct = e.callers.first().map(|c| c.name.as_str()).unwrap_or("");
+            let direct = e.callers.first().map_or("", |c| c.name.as_str());
             if direct != cn {
                 continue;
             }
@@ -556,11 +558,45 @@ fn summarize_history(
     out
 }
 
+/// A frozen wall clock, or `0` for "read the real one". See [`pin_clock`].
+#[cfg(feature = "harness")]
+static PINNED_CLOCK: AtomicU64 = AtomicU64::new(0);
+
+/// Freeze the wall clock the audit and history surfaces read.
+///
+/// Those surfaces are relative-time views: the HISTORY row says "denied 5m
+/// ago", the Audit page buckets rows by *calendar day* into Today / Yesterday
+/// / N days ago. A window is therefore a function of **when** it was rendered
+/// as much as of what it holds — a row six hours old reads "Today" at noon and
+/// "Yesterday" at 3am. That is correct for a live window and wrong for a
+/// captured one, where it means a fixture's PNGs and its layout snapshot
+/// depend on the hour someone happened to regenerate them.
+///
+/// Pinning the clock makes a capture a function of its fixture data alone.
+///
+/// Behind the `harness` feature, which nothing but the test build enables, so
+/// this does not exist in a shipped binary. That matters more than it looks:
+/// the clock it freezes is the one `audit.rs` stamps onto every `AuditEntry`,
+/// so an unguarded `pub fn` here is a public API for backdating the audit log.
+/// "The harness is the only caller" was true and was enforced by nothing.
+#[cfg(feature = "harness")]
+pub fn pin_clock(ts_unix: u64) {
+    PINNED_CLOCK.store(ts_unix, Ordering::Relaxed);
+}
+
 pub(crate) fn now_unix() -> u64 {
+    // Without the `harness` feature there is no pinned clock to consult and no
+    // branch here at all — a shipped binary reads the real one, always.
+    #[cfg(feature = "harness")]
+    {
+        let pinned = PINNED_CLOCK.load(Ordering::Relaxed);
+        if pinned != 0 {
+            return pinned;
+        }
+    }
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs())
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────────
@@ -780,7 +816,7 @@ fn audit_row_separator(ui: &mut egui::Ui, th: &Theme) {
 fn audit_entry_matches(entry: &AuditEntry, query: &str) -> bool {
     let terms: Vec<String> = query
         .split_whitespace()
-        .map(|t| t.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
         .collect();
     if terms.is_empty() {
         return true;
@@ -1760,22 +1796,19 @@ fn render_rule_form(
         return;
     }
     if save_clicked {
-        match draft.clone().into_rule() {
-            Ok(rule) => {
-                if editing {
-                    actions_out.push(RuleAction::Update(rule));
-                } else {
-                    actions_out.push(RuleAction::Add(rule));
-                }
-                return; // success → close form
+        if let Ok(rule) = draft.clone().into_rule() {
+            if editing {
+                actions_out.push(RuleAction::Update(rule));
+            } else {
+                actions_out.push(RuleAction::Add(rule));
             }
-            Err(_) => {
-                // Defense-in-depth: render_primary_button's gating
-                // should have suppressed the click, but if it didn't,
-                // we still refuse to ship an invalid rule.
-                *draft_slot = Some(draft);
-                return;
-            }
+            return; // success → close form
+        } else {
+            // Defense-in-depth: render_primary_button's gating
+            // should have suppressed the click, but if it didn't,
+            // we still refuse to ship an invalid rule.
+            *draft_slot = Some(draft);
+            return;
         }
     }
     // Form still open; put the draft back.
@@ -2493,9 +2526,10 @@ pub(crate) fn caller_args<'a>(name: &str, command: &'a str) -> &'a str {
 /// rest. The command tail is width-truncated (tooltip on overflow) so a
 /// long argv never pushes the card wider than the window.
 fn render_audit_caller_chain(ui: &mut egui::Ui, callers: &[AuditCaller]) {
-    let th = Theme::of(ui.ctx());
     const MAX_DEPTH: usize = 6;
     const INDENT_PX: f32 = 13.0;
+
+    let th = Theme::of(ui.ctx());
     // Storage is nearest-first; reverse to outermost-first for display.
     let ordered: Vec<&AuditCaller> = callers.iter().rev().collect();
     let visible = ordered.len().min(MAX_DEPTH);
@@ -2686,8 +2720,11 @@ pub(crate) fn abbreviate_home(path: &str) -> String {
 /// The pure half of [`abbreviate_home`], with `$HOME` injected so it can
 /// be tested without touching the environment.
 ///
-/// Collapses only on a path boundary: `/Users/youthful/x` keeps its full
-/// prefix rather than becoming `~thful/x`.
+/// The boundary rule itself lives in [`crate::paths::under_home`] — shared
+/// with the shell-rc and `ssh_config` block builders, which need the same
+/// "only on a path separator" test with a different token. This adds the
+/// display-only case that `under_home` deliberately omits: the home
+/// directory *itself* renders as a bare `~`.
 fn abbreviate_home_within(path: &str, home: Option<&str>) -> String {
     let Some(home) = home.map(|h| h.trim_end_matches('/')) else {
         return path.to_owned();
@@ -2698,10 +2735,7 @@ fn abbreviate_home_within(path: &str, home: Option<&str>) -> String {
     if path == home {
         return "~".to_owned();
     }
-    match path.strip_prefix(home) {
-        Some(rest) if rest.starts_with('/') => format!("~{rest}"),
-        _ => path.to_owned(),
-    }
+    crate::paths::under_home(std::path::Path::new(path), std::path::Path::new(home), "~")
 }
 
 #[cfg(test)]

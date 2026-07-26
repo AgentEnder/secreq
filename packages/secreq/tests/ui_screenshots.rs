@@ -5,11 +5,25 @@
 //! so an agent (or a human) can iterate on visuals without a real
 //! daemon running on a real desktop.
 //!
-//! All tests are `#[ignore]` so a normal `cargo test` run isn't slowed
-//! down by wgpu rendering. Regenerate the screenshots with:
+//! **Every fixture does two things, and only one of them needs a GPU.**
+//!
+//! - It lays its window out on the CPU through [`ui_layout`] and compares
+//!   the result against the `layout.json` committed beside that fixture's
+//!   renders. This is the default: it runs on an ordinary `cargo test`, needs
+//!   no display, and is what turns "changed the UI, forgot the regen" from a
+//!   silent mistake into a red build.
+//! - It renders the PNGs through `egui_kittest` + wgpu. That half only runs
+//!   when `$SECREQ_BLESS_SHOTS` is set, because it needs a GPU and it rewrites
+//!   published assets — neither of which belongs in a test run nobody asked for
+//!   it.
 //!
 //! ```sh
-//! cargo test --test ui_screenshots -- --ignored --nocapture --test-threads=1
+//! # check (the default; no GPU, no writes)
+//! cargo test --test ui_screenshots
+//! # regenerate everything: PNGs and the layout.json beside them
+//! SECREQ_BLESS_SHOTS=1 cargo test --test ui_screenshots -- --nocapture --test-threads=1
+//! # rewrite only layout.json, leaving the committed PNGs untouched
+//! SECREQ_BLESS_SHOTS=layout cargo test --test ui_screenshots -- --nocapture --test-threads=1
 //! ```
 //!
 //! Two window kinds, two harness drivers — mirroring the production
@@ -28,11 +42,11 @@
 //!   size.
 
 mod common;
+mod ui_layout;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{mpsc, Arc, Mutex, Once};
 
 use egui::Vec2;
 use egui_kittest::Harness;
@@ -47,11 +61,19 @@ use secreq::daemon::theme::OsFlavor;
 use secreq::daemon::ui::{AutoDenyToastView, RuleAction, RuleSort};
 use secreq::recommendations::SuggestionSort;
 use secreq::rule_scaffold::Editor;
-use secreq::rules::{Pattern, Rule, RuleDecision, RuleMatch};
+use secreq::rules::{
+    Pattern, Rule, RuleDecision, RuleMatch, WasmRefusal, WasmRefusalCategory, WasmRule,
+};
 
 /// Where the regenerated PNGs land. Relative to the package root,
 /// which is `cargo test`'s CWD.
 const OUT_DIR: &str = "../../dev-docs/ui-screenshots";
+
+/// Where [`Shot::exercise_only`] renders land: gitignored, unpublished, and
+/// carrying no `layout.json`. Named for its only current occupant, the resize
+/// sweep; if a non-resize exercise-only fixture ever appears, rename it — the
+/// directory is scratch, so nothing depends on the name.
+const SCRATCH_DIR: &str = "../../tmp/resize-screenshots";
 
 /// Logical prompt-window size — matches the production viewport
 /// (`prompt_ui::PROMPT_DEFAULT_SIZE`, used by `daemon/child.rs`).
@@ -67,15 +89,73 @@ const MANAGER_SIZE: Vec2 = Vec2::new(
 /// Render at 2x for crisp text — the child picks this up from the OS
 /// in production; in the harness we force it so the PNGs are legible
 /// regardless of where they're regenerated.
+///
+/// Rasterisation only. The layout capture runs in **points** — see
+/// [`ui_layout`] for why setting a pixel scale there truncates text.
 const PIXELS_PER_POINT: f32 = 2.0;
+
+/// The one command every failure message points at.
+const REGEN: &str =
+    "SECREQ_BLESS_SHOTS=1 cargo test --test ui_screenshots -- --nocapture --test-threads=1";
+
+// ── Bless mode ────────────────────────────────────────────────────────────
+
+/// What a run is allowed to overwrite.
+///
+/// Checking is free and safe, so it is the default and needs no opt-in;
+/// everything that writes a published asset is behind `$SECREQ_BLESS_SHOTS`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Bless {
+    /// Lay out and compare. No GPU, no writes — what CI runs.
+    Off,
+    /// Rewrite each fixture's `layout.json`, leave the PNGs alone.
+    ///
+    /// This is also how a re-worded caption reaches the docs site without a
+    /// re-render: the caption is authored in Rust and published from
+    /// `layout.json`, and nothing about changing prose needs a GPU.
+    ///
+    /// The layout pass is independent of wgpu, so a machine that cannot render
+    /// (no GPU, a headless container, a driver that will not initialise) can
+    /// still re-bless the guard. It is also the mode to use for a change that
+    /// moves layout without changing pixels you intend to publish.
+    Layout,
+    /// Rewrite everything: the PNGs and the `layout.json` beside them.
+    All,
+}
+
+fn bless() -> Bless {
+    match std::env::var("SECREQ_BLESS_SHOTS").as_deref() {
+        Ok("layout") => Bless::Layout,
+        Ok("") | Ok("0") | Err(_) => Bless::Off,
+        Ok(_) => Bless::All,
+    }
+}
 
 // ── Fixture-state plumbing ────────────────────────────────────────────────
 
+/// The instant every fixture pretends it is running at: 2026-01-15 12:00:00Z.
+///
+/// The audit views bucket rows by calendar day, so a row six hours old reads
+/// "Today" at noon and "Yesterday" at 3am. Fixtures date their rows relative to
+/// "now", which would leave both the PNGs and the layout snapshots depending on
+/// the hour the run happened at — a snapshot blessed at noon would fail for
+/// anyone running the suite before 6am UTC. Midday keeps every fixture's
+/// intended bucket well clear of a boundary.
+const CLOCK_PIN: u64 = 1_768_478_400;
+
+/// Pin the renderer's clock to [`CLOCK_PIN`]. Idempotent, and called from
+/// both directions — every harness before its first frame, and `now_unix`
+/// whenever a fixture dates a row — so the two halves cannot disagree about
+/// what "now" is no matter which fixture a filtered run happens to reach first.
+fn pin_clock() {
+    static PIN: Once = Once::new();
+    PIN.call_once(|| secreq::daemon::ui::pin_clock(CLOCK_PIN));
+}
+
+/// What a fixture's synthetic audit rows are dated against.
 fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    pin_clock();
+    CLOCK_PIN
 }
 
 fn caller(pid: u32, name: &str, start_time: u64) -> Caller {
@@ -112,8 +192,8 @@ fn submit(
 ) -> mpsc::Receiver<secreq::daemon::state::WaiterReply> {
     let dedupe_key = DedupeKey {
         wrap: wrap.to_owned(),
-        ppid: callers.first().map(|c| c.pid).unwrap_or(0),
-        parent_start_time: callers.first().map(|c| c.start_time).unwrap_or(0),
+        ppid: callers.first().map_or(0, |c| c.pid),
+        parent_start_time: callers.first().map_or(0, |c| c.start_time),
     };
     let ask = Ask {
         command: command.into_iter().map(String::from).collect(),
@@ -144,8 +224,8 @@ fn submit_run(
 ) -> mpsc::Receiver<secreq::daemon::state::WaiterReply> {
     let dedupe_key = DedupeKey {
         wrap: "run".to_owned(),
-        ppid: callers.first().map(|c| c.pid).unwrap_or(0),
-        parent_start_time: callers.first().map(|c| c.start_time).unwrap_or(0),
+        ppid: callers.first().map_or(0, |c| c.pid),
+        parent_start_time: callers.first().map_or(0, |c| c.start_time),
     };
     let ask = Ask {
         command: command.into_iter().map(String::from).collect(),
@@ -179,8 +259,8 @@ fn submit_ssh(
 ) -> mpsc::Receiver<secreq::daemon::state::WaiterReply> {
     let dedupe_key = DedupeKey {
         wrap: format!("ssh:{key_id}"),
-        ppid: callers.first().map(|c| c.pid).unwrap_or(0),
-        parent_start_time: callers.first().map(|c| c.start_time).unwrap_or(0),
+        ppid: callers.first().map_or(0, |c| c.pid),
+        parent_start_time: callers.first().map_or(0, |c| c.start_time),
     };
     let ask = Ask {
         command: vec![format!("ssh-sign {key_id}")],
@@ -266,8 +346,8 @@ fn pending(
 ) {
     let dedupe_key = DedupeKey {
         wrap: wrap.to_owned(),
-        ppid: callers.first().map(|c| c.pid).unwrap_or(0),
-        parent_start_time: callers.first().map(|c| c.start_time).unwrap_or(0),
+        ppid: callers.first().map_or(0, |c| c.pid),
+        parent_start_time: callers.first().map_or(0, |c| c.start_time),
     };
     let ask = Ask {
         command: command.into_iter().map(String::from).collect(),
@@ -411,11 +491,11 @@ fn install_audit_log(audit_entries: &[AuditEntry]) -> (common::EnvGuard, common:
 /// One fixture's identity and everything the docs site needs to publish
 /// it, declared at the fixture that renders it.
 ///
-/// The docs site consumes `manifest.json` and adds nothing of its own, so
-/// this is the only place a screenshot is described. A fixture with
-/// nothing to say to a reader is spelled `"id".into()` and simply ships
-/// without a caption — the resize sweep, for instance, exists to catch
-/// panics and is not documentation.
+/// The docs site reads what lands in `<id>/layout.json` and adds nothing
+/// of its own, so this is the only place a screenshot is described. A
+/// fixture with nothing to say to a reader is spelled `"id".into()` and
+/// simply ships without a caption — the resize sweep, for instance,
+/// exists to catch panics and is not documentation.
 struct Shot {
     /// PNG basename stem, without the chrome suffix or extension.
     id: String,
@@ -470,8 +550,9 @@ impl From<String> for Shot {
     }
 }
 
-/// Which secreq window a fixture drives. Recorded in the manifest so
-/// consumers can label a PNG without pattern-matching on its filename.
+/// Which secreq window a fixture drives. Recorded in the fixture's
+/// `layout.json` so consumers can label a PNG without pattern-matching on
+/// its filename.
 #[derive(Clone, Copy)]
 enum ShotKind {
     Prompt,
@@ -516,14 +597,23 @@ const APPEARANCES: [(&str, bool); 2] = [("dark", true), ("light", false)];
 /// The single cell rendered for a fixture that opts out of the matrix.
 const BASELINE: (OsFlavor, bool) = (OsFlavor::MacOs, true);
 
-/// PNG basename for one cell of the matrix.
+/// Filename of one cell of the matrix, within its fixture's directory.
 ///
-/// Every render is suffixed, including the baseline — a bare `id.png`
-/// would quietly privilege one chrome as the canonical look, which is
-/// exactly the assumption this sweep exists to remove.
-fn render_file_stem(id: &str, flavor: OsFlavor, dark: bool) -> String {
+/// Every render is named for its chrome, including the baseline — a bare
+/// `render.png` would quietly privilege one chrome as the canonical look,
+/// which is exactly the assumption this sweep exists to remove.
+fn variant_name(flavor: OsFlavor, dark: bool) -> String {
     let appearance = if dark { "dark" } else { "light" };
-    format!("{id}-{}-{appearance}", os_flavor_str(flavor))
+    format!("{}-{appearance}", os_flavor_str(flavor))
+}
+
+/// Path of one render relative to [`OUT_DIR`]: `<id>/<os>-<appearance>.png`.
+///
+/// A fixture's id *is* its directory name: one folder per fixture, holding
+/// its six renders and the `layout.json` that guards them, so everything
+/// about a fixture moves as one hunk in a diff.
+fn render_rel_path(id: &str, flavor: OsFlavor, dark: bool) -> String {
+    format!("{id}/{}.png", variant_name(flavor, dark))
 }
 
 /// The `(flavor, dark)` cells a fixture renders.
@@ -537,63 +627,70 @@ fn cells_for(shot: &Shot) -> Vec<(OsFlavor, bool)> {
         .collect()
 }
 
-/// Serialises manifest read-modify-write across the harness's test
-/// threads. `cargo test` runs a target's tests as threads in one
-/// process, so a plain mutex is enough.
-static MANIFEST_LOCK: Mutex<()> = Mutex::new(());
-
-/// Merge one fixture's entry into `dev-docs/ui-screenshots/manifest.json`.
-///
-/// Merging rather than rewriting matters: a filtered run
-/// (`--ignored fixture_name`) regenerates a handful of PNGs, and must
-/// not blank out the entries for every fixture that did not run.
-///
-/// Pixel dimensions are deliberately absent — they are readable from the
-/// PNG header, and a number stored in two places is a number that
-/// eventually disagrees with itself.
-fn record_in_manifest(shot: &Shot, kind: ShotKind) {
-    let _guard = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
-    let path = Path::new(OUT_DIR).join("manifest.json");
-    let mut manifest: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default();
-
-    // `renders` is nested os -> appearance -> filename, mirroring the two
-    // axes a reader's desktop actually varies along.
-    let mut renders = serde_json::Map::new();
-    for (flavor, dark) in cells_for(shot) {
-        let appearance = if dark { "dark" } else { "light" };
-        let file = format!("{}.png", render_file_stem(&shot.id, flavor, dark));
-        renders
-            .entry(os_flavor_str(flavor))
-            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
-            .as_object_mut()
-            .expect("renders[os] is an object")
-            .insert(appearance.into(), file.into());
-    }
-
-    let mut entry = serde_json::Map::new();
-    entry.insert("window".into(), kind.as_str().into());
-    entry.insert("renders".into(), renders.into());
-    if let Some(caption) = shot.caption {
-        entry.insert("caption".into(), caption.into());
-    }
-    manifest.insert(shot.id.clone(), entry.into());
-
-    // `serde_json::Map` is a BTreeMap by default, so keys serialise
-    // sorted and the file diffs cleanly between runs.
-    let body = serde_json::to_string_pretty(&manifest).expect("serialize manifest");
-    std::fs::write(&path, format!("{body}\n")).expect("write manifest.json");
-}
-
 fn save_png(shot: &Shot, flavor: OsFlavor, dark: bool, img: &image::RgbaImage) {
-    let out_dir = Path::new(OUT_DIR);
-    std::fs::create_dir_all(out_dir).expect("mkdir out");
-    let out = out_dir.join(format!("{}.png", render_file_stem(&shot.id, flavor, dark)));
-    img.save(&out).expect("save png");
-    eprintln!("wrote {} ({}x{})", out.display(), img.width(), img.height());
+    // An exercise-only fixture has no reader: it drives a code path looking
+    // for a layout panic, nothing publishes it, and nobody opens it unless a
+    // run fails. Persisting one would put a file in git forever for a render
+    // whose only job was to not crash — so it goes to a gitignored scratch
+    // dir, where it is still there to *look* at when a resize does break.
+    let out_dir = Path::new(if shot.matrix { OUT_DIR } else { SCRATCH_DIR });
+    let out = out_dir.join(render_rel_path(&shot.id, flavor, dark));
+    std::fs::create_dir_all(out.parent().expect("render path has a parent")).expect("mkdir out");
+
+    // Scratch renders skip the (not free) lossless re-encode; bytes only
+    // matter for the ones that live in git.
+    if !shot.matrix {
+        img.save(&out).expect("save png");
+        eprintln!(
+            "wrote {} ({}x{}, scratch)",
+            out.display(),
+            img.width(),
+            img.height()
+        );
+        return;
+    }
+
+    // `image`'s encoder writes a serviceable but unoptimized PNG; every one of
+    // these files is a *published* asset (the docs site serves all of them)
+    // and lives in git forever, so it's worth re-encoding. oxipng is lossless
+    // — same pixels, better filters and deflate — which measured ~70% off this
+    // corpus. Lossy quantization went further but these are documentation
+    // screenshots of antialiased UI text; there is no case for risking banding
+    // to save bytes we can get for free.
+    //
+    // It runs in-process via the crate rather than shelling out to the
+    // `oxipng` binary on purpose: the committed bytes must not depend on
+    // whether a contributor has the tool installed, or which version.
+    //
+    // **Preset 2, not the maximum.** Measured on one prompt cell: preset 2
+    // takes 896ms and lands 33,316 bytes; preset 4 takes 2.38s and lands
+    // 32,621 — 2.6x the time to shave 2.1%. Across 216 published cells that
+    // is minutes of every regen bought with a rounding error of bandwidth,
+    // and a regen nobody wants to sit through is a regen that gets skipped.
+    // (Preset 3 is strictly dominated: byte-identical to 2 at twice the
+    // cost.) Changing this rewrites every committed PNG, so it is a decision
+    // to make deliberately and then leave alone.
+    let mut raw = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut raw, image::ImageFormat::Png)
+        .expect("encode png");
+
+    let opts = oxipng::Options {
+        // `strip safe` — drop non-rendering ancillary chunks (timestamps and
+        // the like) but keep anything that affects display. Also makes the
+        // output byte-stable across runs, which the freshness guard needs.
+        strip: oxipng::StripChunks::Safe,
+        ..oxipng::Options::from_preset(2)
+    };
+    let optimized = oxipng::optimize_from_memory(raw.get_ref(), &opts).expect("optimize png");
+
+    std::fs::write(&out, &optimized).expect("save png");
+    eprintln!(
+        "wrote {} ({}x{}, {} KiB)",
+        out.display(),
+        img.width(),
+        img.height(),
+        optimized.len() / 1024
+    );
 }
 
 /// Hand the renderer the whole window, the way production does.
@@ -615,6 +712,87 @@ fn full_window_ui<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)
     let full = ui.ctx().content_rect();
     ui.scope_builder(egui::UiBuilder::new().max_rect(full), add_contents)
         .inner
+}
+
+/// Everything one fixture does with a cell of the chrome matrix, in the order
+/// the two consumers need it.
+///
+/// The layout capture and the PNG render must run the *same* UI code — a
+/// capture of some other closure would guard nothing — so every harness hands
+/// its per-frame body to this instead of writing it inline for `egui_kittest`.
+/// Each cell is laid out on the CPU regardless (which is also what makes the
+/// resize sweep catch a layout panic without a GPU) and rendered only when
+/// blessing.
+///
+/// `state` is a factory, not a value: the two passes and each cell of the
+/// matrix all start from a fresh window state, the way a freshly-opened window
+/// does.
+fn run_cells<S>(
+    shot: &Shot,
+    kind: ShotKind,
+    size: Vec2,
+    state: impl Fn() -> S,
+    draw: impl Fn(&mut egui::Ui, &mut S, OsFlavor, bool),
+) {
+    pin_clock();
+    let mode = bless();
+    let mut record = ui_layout::Fixture::new(&shot.id, kind.as_str(), shot.caption);
+
+    // Rendered cells wait here to be compressed together. Compression is
+    // where a regen actually spends its life: measured on one prompt cell,
+    // `image` encodes in 156ms and oxipng at preset 4 then takes **2.38s** —
+    // so 216 published cells is roughly nine minutes of squeezing against
+    // half a minute of encoding.
+    //
+    // The renders cannot escape being serial: wgpu wants one harness at a
+    // time and the whole target runs `--test-threads=1` to keep `$SECREQ_HOME`
+    // mutation ordered. Compression is under neither constraint — it is pure
+    // bytes-to-bytes with no environment and no GPU — so a fixture renders
+    // its six chrome cells one after another and then squeezes all six at
+    // once, turning ~14s of waiting per fixture into ~2.4s.
+    let mut rendered: Vec<(OsFlavor, bool, image::RgbaImage)> = Vec::new();
+
+    for (flavor, dark) in cells_for(shot) {
+        let capture = ui_layout::capture(size, state(), |ui, ws| draw(ui, ws, flavor, dark));
+        record.record(&variant_name(flavor, dark), &capture);
+
+        if mode == Bless::All {
+            let mut harness = Harness::builder()
+                .with_size(size)
+                .with_pixels_per_point(PIXELS_PER_POINT)
+                .wgpu()
+                .build_ui_state(|ui, ws: &mut S| draw(ui, ws, flavor, dark), state());
+            harness.run();
+            rendered.push((flavor, dark, harness.render().expect("render wgpu")));
+        }
+    }
+
+    // Scoped threads so the images can be borrowed rather than cloned — six
+    // 1000x940 buffers is 22MB for a prompt and 52MB for a manager, and
+    // copying them to satisfy `'static` would trade the memory back for the
+    // time this is meant to save. The scope joins before it returns, so no
+    // fixture can leave a write racing the next one's.
+    if !rendered.is_empty() {
+        std::thread::scope(|scope| {
+            for (flavor, dark, img) in &rendered {
+                scope.spawn(move || save_png(shot, *flavor, *dark, img));
+            }
+        });
+    }
+
+    // An exercise-only fixture renders to a gitignored scratch dir and is
+    // published nowhere, so there is nowhere to keep a snapshot and nothing to
+    // compare one against — and a `layout.json` in the published tree would
+    // announce a fixture the docs site would then look for renders of. It was
+    // still laid out above, which is the half of it that ever mattered: the
+    // resize sweep exists to catch a panic, not to be read.
+    if !shot.matrix {
+        return;
+    }
+    match mode {
+        Bless::Off => record.check(Path::new(OUT_DIR), REGEN),
+        Bless::Layout | Bless::All => record.write(Path::new(OUT_DIR)),
+    }
 }
 
 // ── Prompt harness ────────────────────────────────────────────────────────
@@ -652,8 +830,8 @@ fn render_prompt_fixture_full(
     setup: impl FnOnce(&SharedState) -> Vec<mpsc::Receiver<secreq::daemon::state::WaiterReply>>,
 ) {
     let shot = shot.into();
-    // Held until after the last `harness.render()` — env reads happen
-    // during rendering, so the guard's lifetime must cover every pass.
+    // Held until after the last pass — env reads happen while laying out and
+    // while rendering, so the guard's lifetime must cover every one of them.
     let sandbox = install_audit_log(&audit_entries);
 
     let state: SharedState = Arc::new(Mutex::new(State::new()));
@@ -662,45 +840,27 @@ fn render_prompt_fixture_full(
 
     // Snapshot the state outside the closure (the renderer takes the
     // plain `QueueSnapshot`, the same shape the prompt child rebuilds
-    // from the daemon's wire snapshot). Cloned per pass so both
-    // appearances render from identical input.
+    // from the daemon's wire snapshot), so every pass sees identical input.
     let snapshot = state.lock().unwrap().snapshot();
 
-    for (flavor, dark) in cells_for(&shot) {
-        let snapshot = snapshot.clone();
-        let toast_ref = toast.clone();
-        let mut harness = Harness::builder()
-            .with_size(size)
-            .with_pixels_per_point(PIXELS_PER_POINT)
-            .wgpu()
-            .build_ui_state(
-                move |ui, ws: &mut PromptWindowState| {
-                    let ctx = ui.ctx().clone();
-                    apply_theme_pin(&ctx, flavor, dark);
-                    secreq::daemon::ui::install_style(&ctx);
-                    // The screenshot harness ignores action output — no
-                    // user is clicking, and we don't need to dispatch
-                    // anywhere.
-                    let mut actions: Vec<secreq::daemon::ui::PendingAction> = Vec::new();
-                    full_window_ui(ui, |ui| {
-                        render_prompt_panel(
-                            &ctx,
-                            ui,
-                            &snapshot,
-                            toast_ref.as_ref(),
-                            ws,
-                            &mut actions,
-                        );
-                    });
-                },
-                PromptWindowState::new(),
-            );
-        harness.run();
-        let img = harness.render().expect("render wgpu");
-        save_png(&shot, flavor, dark, &img);
-    }
+    run_cells(
+        &shot,
+        ShotKind::Prompt,
+        size,
+        PromptWindowState::new,
+        |ui, ws: &mut PromptWindowState, flavor, dark| {
+            let ctx = ui.ctx().clone();
+            apply_theme_pin(&ctx, flavor, dark);
+            secreq::daemon::ui::install_style(&ctx);
+            // The screenshot harness ignores action output — no user is
+            // clicking, and we don't need to dispatch anywhere.
+            let mut actions: Vec<secreq::daemon::ui::PendingAction> = Vec::new();
+            full_window_ui(ui, |ui| {
+                render_prompt_panel(&ctx, ui, &snapshot, toast.as_ref(), ws, &mut actions);
+            });
+        },
+    );
 
-    record_in_manifest(&shot, ShotKind::Prompt);
     drop(sandbox);
 }
 
@@ -718,6 +878,11 @@ type ManagerStateSetup<'a> = Box<dyn Fn(&mut ManagerWindowState) + 'a>;
 struct ManagerExtras<'a> {
     /// Rules to pass to `render_manager_panel` (the Rules view content).
     rules: Vec<Rule>,
+    /// Modules the daemon refused at its last rules load. Empty for
+    /// almost every fixture — a refusal is the abnormal state, and it is
+    /// the one the docs most need a picture of, because a refused rule
+    /// looks exactly like a working one everywhere except here.
+    wasm_refusals: Vec<WasmRefusal>,
     /// Wire viewer-mode flag: `secreq view` sets it, and a fresh
     /// manager state rising-edges onto the Audit view when it's set.
     viewer_mode: bool,
@@ -734,59 +899,53 @@ fn render_manager_fixture(
     extras: ManagerExtras<'_>,
 ) {
     let shot = shot.into();
-    // Held until after the last `harness.render()` — env reads happen
-    // during rendering, so the guard's lifetime must cover every pass.
+    // Held until after the last pass — env reads happen while laying out and
+    // while rendering, so the guard's lifetime must cover every one of them.
     let sandbox = install_audit_log(&audit_entries);
 
     let ManagerExtras {
         rules,
+        wasm_refusals,
         viewer_mode,
         window_state,
     } = extras;
 
-    for (flavor, dark) in cells_for(&shot) {
-        let mut initial_state = ManagerWindowState::new();
-        if let Some(f) = &window_state {
-            f(&mut initial_state);
-        }
-        let rules = rules.clone();
-        let mut harness = Harness::builder()
-            .with_size(MANAGER_SIZE)
-            .with_pixels_per_point(PIXELS_PER_POINT)
-            .wgpu()
-            .build_ui_state(
-                move |ui, ws: &mut ManagerWindowState| {
-                    let ctx = ui.ctx().clone();
-                    apply_theme_pin(&ctx, flavor, dark);
-                    secreq::daemon::ui::install_style(&ctx);
-                    let mut rule_actions: Vec<RuleAction> = Vec::new();
-                    full_window_ui(ui, |ui| {
-                        render_manager_panel(
-                            &ctx,
-                            ui,
-                            &rules,
-                            &[],
-                            viewer_mode,
-                            ws,
-                            &mut rule_actions,
-                        );
-                    });
-                },
-                initial_state,
-            );
-        harness.run();
-        let img = harness.render().expect("render wgpu");
-        save_png(&shot, flavor, dark, &img);
-    }
+    run_cells(
+        &shot,
+        ShotKind::Manager,
+        MANAGER_SIZE,
+        || {
+            let mut initial_state = ManagerWindowState::new();
+            if let Some(f) = &window_state {
+                f(&mut initial_state);
+            }
+            initial_state
+        },
+        |ui, ws: &mut ManagerWindowState, flavor, dark| {
+            let ctx = ui.ctx().clone();
+            apply_theme_pin(&ctx, flavor, dark);
+            secreq::daemon::ui::install_style(&ctx);
+            let mut rule_actions: Vec<RuleAction> = Vec::new();
+            full_window_ui(ui, |ui| {
+                render_manager_panel(
+                    &ctx,
+                    ui,
+                    &rules,
+                    &wasm_refusals,
+                    viewer_mode,
+                    ws,
+                    &mut rule_actions,
+                );
+            });
+        },
+    );
 
-    record_in_manifest(&shot, ShotKind::Manager);
     drop(sandbox);
 }
 
 // ── Prompt fixtures ───────────────────────────────────────────────────────
 
 #[test]
-#[ignore = "screenshot harness — run with --ignored to regenerate"]
 fn empty_state() {
     render_prompt_fixture(
         Shot::new("01-empty-all-clear")
@@ -797,7 +956,6 @@ fn empty_state() {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn empty_state_viewer() {
     // The `secreq view` surface is the *manager* window now: it opens
     // on the Audit view (viewer-mode rising edge) with no history yet.
@@ -817,7 +975,6 @@ fn empty_state_viewer() {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn single_pending() {
     render_prompt_fixture(
         Shot::new("02-single-pending").caption(
@@ -844,7 +1001,6 @@ fn single_pending() {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn run_consent_card() {
     // A `secreq run` consent: the ambient mirror of `x`. Instead of a
     // named wrap, the dedupe identity is the fixed `"run"` and the
@@ -873,7 +1029,6 @@ fn run_consent_card() {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn run_session_card() {
     // A *coalesced* `secreq run` session: three sibling `run` asks land
     // under the same process (the same first caller → the same dedupe
@@ -915,7 +1070,6 @@ fn run_session_card() {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn gate_only_pending() {
     // A *gate-only* wrap: `op` has no secret to inject, so the request
     // exists purely to require consent before the command runs. The
@@ -940,7 +1094,6 @@ fn gate_only_pending() {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn pending_resolving() {
     // An auto-approved (or approvals-cached) ask whose secret isn't yet
     // cached: the provider is being invoked — a biometric prompt may be
@@ -974,7 +1127,6 @@ fn pending_resolving() {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn ssh_sign_pending() {
     // The SSH-agent sign prompt: `git push` over SSH triggered a
     // SIGN_REQUEST the daemon couldn't serve from a session grant, so
@@ -1004,7 +1156,6 @@ fn ssh_sign_pending() {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn agent_scope_pending() {
     // A guest VM asked a scoped agent socket for a ref on its allowlist.
     // This is the prompt's third variant, and the one where what's *absent*
@@ -1036,7 +1187,6 @@ fn agent_scope_pending() {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn agent_guest_chain_pending() {
     // The same scoped-agent prompt, but the guest volunteered a caller
     // chain. This fixture exists to show the **marker**, which is the entire
@@ -1069,7 +1219,6 @@ fn agent_guest_chain_pending() {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn nested_tree() {
     // Two child shells under one Superset.app root. The prompt shows
     // the oldest ask big (Focus Stack) with the full caller chain in
@@ -1120,7 +1269,6 @@ fn nested_tree() {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn multi_root() {
     // Two unrelated callers. The prompt renders the older ask; the
     // unrelated second one is the "1 more waiting" line in the footer.
@@ -1159,7 +1307,6 @@ fn multi_root() {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn folded_run() {
     // Four-deep gh→gh→gh→gh chain — the prompt's ASKED BY tree shows
     // the whole ancestry with the asking leaf in accent.
@@ -1192,7 +1339,6 @@ fn folded_run() {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn pending_with_deny_history() {
     // A wrap whose audit history's last decision is `deny` colours the
     // prompt's HISTORY row — the load-bearing "second look" cue before
@@ -1232,7 +1378,6 @@ fn pending_with_deny_history() {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn auto_deny_toast_on_pending() {
     // The transient toast the renderer draws at the top of the prompt
     // when handed an auto-deny badge. Caller in the production child is
@@ -1270,7 +1415,6 @@ fn auto_deny_toast_on_pending() {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn pending_arrival_highlight() {
     // Two asks queued: the prompt renders the oldest big and counts the
     // rest in the footer's "1 more waiting" line. (The old tabbed
@@ -1303,7 +1447,6 @@ fn pending_arrival_highlight() {
 // ── Manager fixtures: Audit view ──────────────────────────────────────────
 
 #[test]
-#[ignore = "screenshot harness"]
 fn audit_tab_populated() {
     // Viewer mode: the user opened the manager via `secreq view` to
     // browse history — the viewer-mode rising edge lands them on the
@@ -1375,7 +1518,6 @@ fn audit_tab_populated() {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn audit_tab_with_pending() {
     // The manager's Audit view opened deliberately (not viewer-pinned):
     // the user pulled up the manager from the prompt's "Open Manager…"
@@ -1448,7 +1590,9 @@ fn audit_tab_with_pending() {
         ),
         audit,
         ManagerExtras {
-            window_state: Some(Box::new(|ws| ws.focus_audit_view())),
+            window_state: Some(Box::new(
+                secreq::daemon::manager_ui::ManagerWindowState::focus_audit_view,
+            )),
             ..ManagerExtras::default()
         },
     );
@@ -1512,7 +1656,6 @@ fn search_fixture_audit() -> Vec<AuditEntry> {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn audit_tab_search_filtering() {
     // The Audit view with an active query (typed into the header's
     // search box) that filters down to a subset. Exercises the "N of M"
@@ -1536,7 +1679,6 @@ fn audit_tab_search_filtering() {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn audit_tab_abandoned_row() {
     // The Audit tab showing an `abandoned` row — a wrap that exited before
     // the user decided, so the daemon reaped the ask and logged it itself.
@@ -1577,14 +1719,15 @@ fn audit_tab_abandoned_row() {
         ),
         audit,
         ManagerExtras {
-            window_state: Some(Box::new(|ws| ws.focus_audit_view())),
+            window_state: Some(Box::new(
+                secreq::daemon::manager_ui::ManagerWindowState::focus_audit_view,
+            )),
             ..ManagerExtras::default()
         },
     );
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn audit_tab_agent_out_of_scope_row() {
     // The Audit view showing a scoped agent's rows. The `deny+out-of-scope`
     // row is the reason this verdict exists: the guest asked for a ref its
@@ -1623,14 +1766,15 @@ fn audit_tab_agent_out_of_scope_row() {
         ),
         audit,
         ManagerExtras {
-            window_state: Some(Box::new(|ws| ws.focus_audit_view())),
+            window_state: Some(Box::new(
+                secreq::daemon::manager_ui::ManagerWindowState::focus_audit_view,
+            )),
             ..ManagerExtras::default()
         },
     );
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn audit_tab_search_no_matches() {
     // The "your query found nothing" empty state: a query that misses
     // every row falls through to the centered "No matching entries"
@@ -1649,7 +1793,6 @@ fn audit_tab_search_no_matches() {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn audit_tab_search_multi_term() {
     // Multi-term search: each whitespace-separated term must hit some
     // field, so "gh auth" narrows to the single row whose wrap is `gh`
@@ -1700,7 +1843,6 @@ fn sample_rule(id: &str, name: &str, decide: RuleDecision, argv: Option<&str>) -
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn rules_tab_empty() {
     // Land on the Rules view with no rules configured — the empty
     // state should be inviting, not blank.
@@ -1709,14 +1851,15 @@ fn rules_tab_empty() {
             .caption("No rules yet — every request comes to you until you save one."),
         vec![],
         ManagerExtras {
-            window_state: Some(Box::new(|ws| ws.focus_rules_view())),
+            window_state: Some(Box::new(
+                secreq::daemon::manager_ui::ManagerWindowState::focus_rules_view,
+            )),
             ..ManagerExtras::default()
         },
     );
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn rules_tab_list_populated() {
     // The list view with a representative mix: enabled approve, an
     // enabled deny with a configured deny message, and a disabled
@@ -1768,14 +1911,91 @@ fn rules_tab_list_populated() {
         audit,
         ManagerExtras {
             rules,
-            window_state: Some(Box::new(|ws| ws.focus_rules_view())),
+            window_state: Some(Box::new(
+                secreq::daemon::manager_ui::ManagerWindowState::focus_rules_view,
+            )),
+            ..ManagerExtras::default()
+        },
+    );
+}
+
+/// A wasm rule whose stored module no longer hashes to what was pinned.
+///
+/// This is the only state in the whole UI where a rule that looks entirely
+/// normal cannot fire, which is exactly why it needs a picture: every other
+/// way of learning about it (`rules list`, `rules show`, the daemon log)
+/// requires already suspecting something is wrong. The docs claim the Rules
+/// view badges it; this is that claim, rendered.
+///
+/// The healthy wasm rule beside it is load-bearing rather than decorative.
+/// A refusal badge means nothing without the row it is *not* on, and the
+/// pair is also the answer to the question a reader has next: a tampered
+/// module silences its own rule and nothing else, so protective denies keep
+/// working.
+#[test]
+fn rules_tab_wasm_refused() {
+    let wasm_rule = |id: &str, name: &str, sha: &str| Rule {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        enabled: true,
+        decide: None,
+        r#match: None,
+        wasm: Some(WasmRule {
+            path: format!("rules/{id}.wasm"),
+            sha256: sha.to_owned(),
+        }),
+        trained_secrets: ["NPM_TOKEN".to_owned()].into_iter().collect(),
+        deny_message: None,
+        created_at_unix: 0,
+    };
+
+    let rules = vec![
+        wasm_rule(
+            "4a1c8e0b21d3",
+            "npm publish guard",
+            "9c0e0f6c1d2b3a4857e6f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5",
+        ),
+        wasm_rule(
+            "5b2d9f1c32e4",
+            "block agent-driven deploys",
+            "1f2e3d4c5b6a798807162534435261708f9e0d1c2b3a49586776859403a2b1c0",
+        ),
+    ];
+
+    let refusals = vec![WasmRefusal {
+        rule_id: "5b2d9f1c32e4".to_owned(),
+        category: WasmRefusalCategory::Sha256Mismatch,
+        reason: "module `rules/5b2d9f1c32e4.wasm` hashes to \
+                 7d4a…c19f, not the pinned 1f2e…b1c0 — it changed on disk \
+                 since it was registered"
+            .to_owned(),
+    }];
+
+    let audit = (0..6)
+        .map(|i| audit_auto_fire(60 * (i + 1), "4a1c8e0b21d3", "approve+auto"))
+        .collect();
+
+    render_manager_fixture(
+        Shot::new("39-rules-wasm-refused").caption(
+            "A wasm rule is pinned to the hash of the module you registered. If \
+             the file changes, the daemon refuses that rule at its next load and \
+             badges it here: it stays in your ruleset but can never fire. Only \
+             that rule is refused — the one above it keeps working, so a tampered \
+             module cannot switch off the rest of your policy.",
+        ),
+        audit,
+        ManagerExtras {
+            rules,
+            wasm_refusals: refusals,
+            window_state: Some(Box::new(
+                secreq::daemon::manager_ui::ManagerWindowState::focus_rules_view,
+            )),
             ..ManagerExtras::default()
         },
     );
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn rules_tab_by_recency() {
     // The Rules list with the sort toggle flipped to "Recent". The two
     // rules are crafted so count and recency disagree, making the
@@ -1820,7 +2040,6 @@ fn rules_tab_by_recency() {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn rules_form_new() {
     // The blank-form view — same state as the user just clicked
     // "+ New rule". Exercises the decide toggle, text inputs,
@@ -1832,14 +2051,15 @@ fn rules_form_new() {
         ),
         vec![],
         ManagerExtras {
-            window_state: Some(Box::new(|ws| ws.open_new_rule_form())),
+            window_state: Some(Box::new(
+                secreq::daemon::manager_ui::ManagerWindowState::open_new_rule_form,
+            )),
             ..ManagerExtras::default()
         },
     );
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn rules_form_edit_deny() {
     // The edit form pre-filled from an existing deny rule. The
     // deny_message field is visible (decide == Deny) and the trained-
@@ -1875,7 +2095,6 @@ fn sample_editors() -> Vec<Editor> {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn rules_scaffold_open_in_editor() {
     // The programmatic-rule scaffold card in its post-scaffold state: a
     // rule has been scaffolded, so the GitHub-style "Open in editor"
@@ -1901,7 +2120,6 @@ fn rules_scaffold_open_in_editor() {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn rules_scaffold_editor_picker() {
     // The split-button's dropdown expanded — the editor picker. The
     // currently-selected editor (Cursor) carries a check; picking a
@@ -1927,7 +2145,6 @@ fn rules_scaffold_editor_picker() {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn rules_tab_suggestions() {
     // The recommendation engine clusters recent decisions by
     // (wrap, ancestor, side) and proposes one rule per cluster.
@@ -1994,14 +2211,15 @@ fn rules_tab_suggestions() {
         ),
         audit,
         ManagerExtras {
-            window_state: Some(Box::new(|ws| ws.focus_rules_view())),
+            window_state: Some(Box::new(
+                secreq::daemon::manager_ui::ManagerWindowState::focus_rules_view,
+            )),
             ..ManagerExtras::default()
         },
     );
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn rules_tab_suggestions_by_recency() {
     // Same Rules view, but with the suggestion sort toggle flipped to
     // "Recent". The two clusters are crafted so count and recency
@@ -2055,7 +2273,6 @@ fn rules_tab_suggestions_by_recency() {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn rules_tab_rules_and_suggestions() {
     // Both sections at once: the configured "Your rules" list on top
     // (with its usage footnotes + sort toggle) and the "Suggested
@@ -2104,7 +2321,9 @@ fn rules_tab_rules_and_suggestions() {
         audit,
         ManagerExtras {
             rules,
-            window_state: Some(Box::new(|ws| ws.focus_rules_view())),
+            window_state: Some(Box::new(
+                secreq::daemon::manager_ui::ManagerWindowState::focus_rules_view,
+            )),
             ..ManagerExtras::default()
         },
     );
@@ -2121,30 +2340,24 @@ fn render_badge_fixture(shot: impl Into<Shot>, count: usize) {
     // Matches `daemon/badge.rs::BADGE_SIZE`.
     let size = Vec2::new(184.0, 44.0);
 
-    for (flavor, dark) in cells_for(&shot) {
-        let mut harness = Harness::builder()
-            .with_size(size)
-            .with_pixels_per_point(PIXELS_PER_POINT)
-            .wgpu()
-            .build_ui(move |ui| {
-                let ctx = ui.ctx().clone();
-                // Pinned like every other fixture: the badge used to
-                // inherit the harness's fallback theme, which left its
-                // PNGs dependent on the host they were generated on.
-                apply_theme_pin(&ctx, flavor, dark);
-                secreq::daemon::ui::install_style(&ctx);
-                full_window_ui(ui, |ui| secreq::daemon::ui::render_badge(ui, count));
-            });
-        harness.run();
-        let img = harness.render().expect("render wgpu");
-        save_png(&shot, flavor, dark, &img);
-    }
-
-    record_in_manifest(&shot, ShotKind::Badge);
+    run_cells(
+        &shot,
+        ShotKind::Badge,
+        size,
+        || (),
+        |ui, (), flavor, dark| {
+            let ctx = ui.ctx().clone();
+            // Pinned like every other fixture: the badge used to inherit the
+            // harness's fallback theme, which left its PNGs dependent on the
+            // host they were generated on.
+            apply_theme_pin(&ctx, flavor, dark);
+            secreq::daemon::ui::install_style(&ctx);
+            full_window_ui(ui, |ui| secreq::daemon::ui::render_badge(ui, count));
+        },
+    );
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn badge_one_pending() {
     // Singular case — exercises the "1 pending" (not "1 pendings")
     // branch in `render_badge`.
@@ -2157,7 +2370,6 @@ fn badge_one_pending() {
 }
 
 #[test]
-#[ignore = "screenshot harness"]
 fn badge_three_pending() {
     // The common multi-request case: "3 pending" floating over other
     // apps, indicator dot + count, the whole pill a click target.
@@ -2168,13 +2380,13 @@ fn badge_three_pending() {
     );
 }
 
-/// Stress test: render the prompt at progressively smaller viewport
+/// Stress test: lay the prompt out at progressively smaller viewport
 /// sizes to catch panics from hand-painted rects and scope_builder
 /// layouts when the user drags the window down. A user-reported
-/// "crashes on resize" symptom reproduces here as `Harness::run()`
-/// panicking inside the egui pipeline.
+/// "crashes on resize" symptom reproduces here as the layout pass
+/// panicking inside the egui pipeline — which is CPU work, so this runs
+/// on every `cargo test` and needs no GPU to fail.
 #[test]
-#[ignore = "screenshot harness — resize stress, not visual"]
 fn resize_stress() {
     let sizes = [
         PROMPT_SIZE,               // production baseline
@@ -2219,7 +2431,6 @@ fn resize_stress() {
 /// locator-prefix groups inside a scroll-capped grid, the count is the
 /// headline, and the well stays legible.
 #[test]
-#[ignore = "screenshot harness"]
 fn prompt_many_secrets() {
     const WORK: &[&str] = &[
         "AWS_ACCESS_KEY_ID",

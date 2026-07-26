@@ -34,7 +34,7 @@ jobs:
   # this job existed nothing checked them, and 60 of the 61 files under
   # docs-site had wandered into their own shape.
   web:
-    name: oxfmt + oxlint
+    name: oxfmt + oxlint + doc fragments
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -46,6 +46,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run format:check
       - run: pnpm run lint
+
+      # The TypeScript fragments in docs/wasm-rules.md and the SDK's README are
+      # compiled against the real secreq-rule typings. A field renamed on
+      # RuleCtx, a changed `decide` signature, a constructor that no longer
+      # exists — each fails here by markdown line number, rather than shipping a
+      # guide that teaches a package nobody publishes.
+      - run: pnpm --filter @secreq/docs-site run typecheck-docs
 
   test:
     name: build / clippy / test (${{ matrix.os }})
@@ -59,9 +66,10 @@ jobs:
 
       # eframe/wgpu/winit pull in the wayland + xkbcommon stack; the wayland
       # crates link the system library at build time. x11 and xkbcommon are
-      # dlopen'd at runtime, but the packages are installed anyway so the
-      # (#[ignore]-gated) UI screenshot tests can link if ever run. No-op on
-      # macOS, which uses native frameworks.
+      # dlopen'd at runtime, but the packages are installed anyway so the UI
+      # screenshot tests link — their CPU layout half runs in this job, and the
+      # wgpu half must at least compile. No-op on macOS, which uses native
+      # frameworks.
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
@@ -87,8 +95,18 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       # `cargo test` runs the unit, integration, and doc tests, including the
-      # schema-drift guard in tests/schema_drift.rs. The wgpu-backed UI
-      # screenshot tests are #[ignore]-gated (they need a GPU) and are not run
-      # here — the clippy --all-targets step above still compiles them.
+      # schema-drift guard in tests/schema_drift.rs.
+      #
+      # It also runs tests/ui_screenshots.rs, which needs no GPU here: without
+      # $SECREQ_BLESS_SHOTS each fixture only lays its window out on the CPU
+      # and compares the result against the layout.json committed beside its
+      # renders, so a UI change that never got a regen fails this job. Only
+      # re-rendering the PNGs needs wgpu, and that is what the env var gates.
+      #
+      # Pixels are deliberately never compared: a wgpu render is not
+      # byte-reproducible across GPUs, so doing so would force a choice between
+      # fixtures that are reviewable in a PR and fixtures that are verified in
+      # CI. See tests/screenshot_freshness.rs for the rest of the bookkeeping
+      # this job enforces (completeness, orphans, snapshots, README rows).
       - name: Test
         run: cargo test

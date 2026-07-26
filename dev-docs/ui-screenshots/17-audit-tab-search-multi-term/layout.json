@@ -1,0 +1,1778 @@
+{
+  "window": "manager",
+  "caption": "Each term can match a different field, so <code>gh auth</code> finds the row where both are true.",
+  "variants": {
+    "gnome-dark": {
+      "digest": "8108a4cf4ce9bc68808a196f24f24514aa924c7e8c3a1913b8d8b86d1dec86f5",
+      "shapes": [
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#383838ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#303030ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#45454aff","k":"rect","radius":[7,7,7,7],"rect":[340.0,9.0,560.0,37.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[7,7,7,7],"rect":[340.0,9.0,560.0,37.0],"stroke":[1.0,"#14141414"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [380.28,15.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,31.44,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#9a9996ff","family":"proportional","size":13.0,"text":"Rules","underline":[0.0,"#00000000"],"x":[0.0,30.56]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#383838ff","k":"rect","radius":[6,6,6,6],"rect":[450.0,11.0,558.0,35.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[450.0,11.0,558.0,35.0],"stroke":[1.0,"#1a1a1a1a"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [488.3,15.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,31.41,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"Audit","underline":[0.0,"#00000000"],"x":[0.0,31.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#303030ff","k":"rect","radius":[8,8,8,8],"rect":[680.0,10.0,880.0,36.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[8,8,8,8],"rect":[680.0,10.0,880.0,36.0],"stroke":[1.0,"#1a1a1a1a"],"stroke_kind":"Inside"},
+        {"center":[694.0,22.0],"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"circle","radius":4.5,"stroke":[1.5,"#9a9996ff"]},
+        {"a":[697.18,25.18],"b":[700.68,28.68],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.5,"#9a9996ff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[713.0,15.5,874.0,30.5],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [712.0,14.5,758.25,31.5],
+          "k": "text",
+          "pos": [713.0,15.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,44.25,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"gh auth","underline":[0.0,"#00000000"],"x":[0.0,43.4]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"a":[0.0,45.5],"b":[900.0,45.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#1a1a1a1a"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,52.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [880.0,66.0],
+          "rows": [
+            {
+              "rect": [-27.0,0.0,0.22,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9a9996ff","family":"proportional","size":11.0,"text":"1 of 5","underline":[0.0,"#00000000"],"x":[0.0,27.2]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,86.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,89.0,880.0,246.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,89.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,29.66,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":11.0,"text":"Today","underline":[0.0,"#00000000"],"x":[0.0,29.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,113.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,284.47,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#ffffffff","family":"monospace","size":13.5,"text":"gh auth token --hostname github.com","underline":[0.0,"#00000000"],"x":[0.0,284.13]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [880.0,117.0],
+          "rows": [
+            {
+              "rect": [-4.0,0.0,0.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#ff7b63ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [870.78,114.5],
+          "rows": [
+            {
+              "rect": [-33.0,0.0,0.41,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#ff7b63ff","family":"proportional","size":11.0,"text":"denied","underline":[0.0,"#00000000"],"x":[0.0,33.41]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,86.0,900.0,589.0],"fill":"#424242ff","k":"rect","radius":[8,8,8,8],"rect":[789.38,112.0,825.38,130.0],"stroke":[1.0,"#78aeedff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [817.38,115.5],
+          "rows": [
+            {
+              "rect": [-20.0,0.0,-0.19,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#78aeedff","family":"proportional","size":10.0,"text":"auto","underline":[0.0,"#00000000"],"x":[0.0,19.82]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,141.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,18.0],
+              "runs": [
+                {"baseline":11.0,"color":"#3584e4ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,141.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,95.31,18.0],
+              "runs": [
+                {"baseline":13.0,"color":"#9a9996ff","family":"monospace","size":11.5,"text":"GITHUB_TOKEN","underline":[0.0,"#00000000"],"x":[12.0,94.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,173.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,6.63,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#77767bff","family":"monospace","size":11.0,"text":"·","underline":[0.0,"#00000000"],"x":[0.0,6.62]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [31.63,173.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,41.53,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#ffffffff","family":"monospace","size":11.5,"text":"claude","underline":[0.0,"#00000000"],"x":[0.0,40.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [78.16,174.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,44.5,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#77767bff","family":"proportional","size":10.0,"text":"pid 72964","underline":[0.0,"#00000000"],"x":[0.0,43.64]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [127.66,173.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,112.59,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9a9996ff","family":"monospace","size":11.0,"text":"--resume bbb3cb6d","underline":[0.0,"#00000000"],"x":[0.0,112.62]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,202.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,49.63,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":11.0,"text":"in .../acme","underline":[0.0,"#00000000"],"x":[0.0,49.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [74.63,202.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,2.72,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":11.0,"text":"·","underline":[0.0,"#00000000"],"x":[0.0,2.71]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [82.34,202.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,42.72,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":11.0,"text":"22m ago","underline":[0.0,"#00000000"],"x":[0.0,42.4]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [880.0,230.5],
+          "rows": [
+            {
+              "rect": [-130.0,0.0,-0.03,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#78aeedff","family":"proportional","size":11.0,"text":"Create rule from this ask…","underline":[0.0,"#00000000"],"x":[0.0,129.96]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        }
+      ],
+      "size": [900.0,600.0]
+    },
+    "gnome-light": {
+      "digest": "a0d18878c226815a8de35ba5b4483c023418f2b89e114d0e624291665769935d",
+      "shapes": [
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fafafaff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f0f0f0ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#eaeaecff","k":"rect","radius":[7,7,7,7],"rect":[340.0,9.0,560.0,37.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[7,7,7,7],"rect":[340.0,9.0,560.0,37.0],"stroke":[1.0,"#00000017"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [380.28,15.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,31.44,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#77767bff","family":"proportional","size":13.0,"text":"Rules","underline":[0.0,"#00000000"],"x":[0.0,30.56]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fafafaff","k":"rect","radius":[6,6,6,6],"rect":[450.0,11.0,558.0,35.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[450.0,11.0,558.0,35.0],"stroke":[1.0,"#0000001c"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [488.3,15.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,31.41,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#26262bff","family":"proportional","size":13.0,"text":"Audit","underline":[0.0,"#00000000"],"x":[0.0,31.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#ffffffff","k":"rect","radius":[8,8,8,8],"rect":[680.0,10.0,880.0,36.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[8,8,8,8],"rect":[680.0,10.0,880.0,36.0],"stroke":[1.0,"#0000001c"],"stroke_kind":"Inside"},
+        {"center":[694.0,22.0],"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"circle","radius":4.5,"stroke":[1.5,"#77767bff"]},
+        {"a":[697.18,25.18],"b":[700.68,28.68],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.5,"#77767bff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[713.0,15.5,874.0,30.5],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [712.0,14.5,758.25,31.5],
+          "k": "text",
+          "pos": [713.0,15.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,44.25,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#26262bff","family":"proportional","size":13.0,"text":"gh auth","underline":[0.0,"#00000000"],"x":[0.0,43.4]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"a":[0.0,45.5],"b":[900.0,45.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#0000001c"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,52.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [880.0,66.0],
+          "rows": [
+            {
+              "rect": [-27.0,0.0,0.22,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":11.0,"text":"1 of 5","underline":[0.0,"#00000000"],"x":[0.0,27.2]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,86.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,89.0,880.0,246.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,89.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,29.66,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#a4a3a8ff","family":"proportional","size":11.0,"text":"Today","underline":[0.0,"#00000000"],"x":[0.0,29.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,113.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,284.47,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#26262bff","family":"monospace","size":13.5,"text":"gh auth token --hostname github.com","underline":[0.0,"#00000000"],"x":[0.0,284.13]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [880.0,117.0],
+          "rows": [
+            {
+              "rect": [-4.0,0.0,0.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#c01c28ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [870.78,114.5],
+          "rows": [
+            {
+              "rect": [-33.0,0.0,0.41,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#c01c28ff","family":"proportional","size":11.0,"text":"denied","underline":[0.0,"#00000000"],"x":[0.0,33.41]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,86.0,900.0,589.0],"fill":"#f0f0f0ff","k":"rect","radius":[8,8,8,8],"rect":[789.38,112.0,825.38,130.0],"stroke":[1.0,"#1c71d8ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [817.38,115.5],
+          "rows": [
+            {
+              "rect": [-20.0,0.0,-0.19,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#1c71d8ff","family":"proportional","size":10.0,"text":"auto","underline":[0.0,"#00000000"],"x":[0.0,19.82]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,141.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,18.0],
+              "runs": [
+                {"baseline":11.0,"color":"#3584e4ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,141.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,95.31,18.0],
+              "runs": [
+                {"baseline":13.0,"color":"#77767bff","family":"monospace","size":11.5,"text":"GITHUB_TOKEN","underline":[0.0,"#00000000"],"x":[12.0,94.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,173.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,6.63,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#a4a3a8ff","family":"monospace","size":11.0,"text":"·","underline":[0.0,"#00000000"],"x":[0.0,6.62]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [31.63,173.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,41.53,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#26262bff","family":"monospace","size":11.5,"text":"claude","underline":[0.0,"#00000000"],"x":[0.0,40.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [78.16,174.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,44.5,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#a4a3a8ff","family":"proportional","size":10.0,"text":"pid 72964","underline":[0.0,"#00000000"],"x":[0.0,43.64]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [127.66,173.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,112.59,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#77767bff","family":"monospace","size":11.0,"text":"--resume bbb3cb6d","underline":[0.0,"#00000000"],"x":[0.0,112.62]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,202.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,49.63,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#a4a3a8ff","family":"proportional","size":11.0,"text":"in .../acme","underline":[0.0,"#00000000"],"x":[0.0,49.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [74.63,202.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,2.72,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#a4a3a8ff","family":"proportional","size":11.0,"text":"·","underline":[0.0,"#00000000"],"x":[0.0,2.71]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [82.34,202.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,42.72,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#a4a3a8ff","family":"proportional","size":11.0,"text":"22m ago","underline":[0.0,"#00000000"],"x":[0.0,42.4]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [880.0,230.5],
+          "rows": [
+            {
+              "rect": [-130.0,0.0,-0.03,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#1c71d8ff","family":"proportional","size":11.0,"text":"Create rule from this ask…","underline":[0.0,"#00000000"],"x":[0.0,129.96]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        }
+      ],
+      "size": [900.0,600.0]
+    },
+    "macos-dark": {
+      "digest": "89f9de956d43c51b99cbc30ac79afb1cb322d4ee396a726bb94fa0e8590deb90",
+      "shapes": [
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2dff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2dff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#232325ff","k":"rect","radius":[7,7,7,7],"rect":[350.0,10.0,550.0,36.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[7,7,7,7],"rect":[350.0,10.0,550.0,36.0],"stroke":[1.0,"#3a3a3eff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [385.89,16.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,30.22,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#98989dff","family":"proportional","size":12.5,"text":"Rules","underline":[0.0,"#00000000"],"x":[0.0,30.35]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#48484cff","k":"rect","radius":[6,6,6,6],"rect":[450.0,12.0,548.0,34.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[450.0,12.0,548.0,34.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [483.89,16.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,30.22,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#e9e9ebff","family":"proportional","size":12.5,"text":"Audit","underline":[0.0,"#00000000"],"x":[0.0,29.84]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#232325ff","k":"rect","radius":[8,8,8,8],"rect":[670.0,10.0,880.0,36.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[8,8,8,8],"rect":[670.0,10.0,880.0,36.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
+        {"center":[684.0,22.0],"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"circle","radius":4.5,"stroke":[1.5,"#98989dff"]},
+        {"a":[687.18,25.18],"b":[690.68,28.68],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.5,"#98989dff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[703.0,15.81,874.0,30.19],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [702.0,14.81,746.56,31.19],
+          "k": "text",
+          "pos": [703.0,15.81],
+          "rows": [
+            {
+              "rect": [0.0,0.0,42.56,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#e9e9ebff","family":"proportional","size":12.5,"text":"gh auth","underline":[0.0,"#00000000"],"x":[0.0,42.11]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"a":[0.0,45.5],"b":[900.0,45.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#3c3c40ff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,52.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [880.0,66.0],
+          "rows": [
+            {
+              "rect": [-27.0,0.0,0.22,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#98989dff","family":"proportional","size":11.0,"text":"1 of 5","underline":[0.0,"#00000000"],"x":[0.0,27.2]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,86.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,89.0,880.0,246.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,89.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,29.66,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6a6a70ff","family":"proportional","size":11.0,"text":"Today","underline":[0.0,"#00000000"],"x":[0.0,29.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,113.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,284.47,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#e9e9ebff","family":"monospace","size":13.5,"text":"gh auth token --hostname github.com","underline":[0.0,"#00000000"],"x":[0.0,284.13]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [880.0,117.0],
+          "rows": [
+            {
+              "rect": [-4.0,0.0,0.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#e0705fff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [870.78,114.5],
+          "rows": [
+            {
+              "rect": [-33.0,0.0,0.41,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#e0705fff","family":"proportional","size":11.0,"text":"denied","underline":[0.0,"#00000000"],"x":[0.0,33.41]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,86.0,900.0,589.0],"fill":"#333336ff","k":"rect","radius":[8,8,8,8],"rect":[789.38,112.0,825.38,130.0],"stroke":[1.0,"#419cffff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [817.38,115.5],
+          "rows": [
+            {
+              "rect": [-20.0,0.0,-0.19,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#419cffff","family":"proportional","size":10.0,"text":"auto","underline":[0.0,"#00000000"],"x":[0.0,19.82]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,141.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,18.0],
+              "runs": [
+                {"baseline":11.0,"color":"#0a84ffff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,141.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,95.31,18.0],
+              "runs": [
+                {"baseline":13.0,"color":"#98989dff","family":"monospace","size":11.5,"text":"GITHUB_TOKEN","underline":[0.0,"#00000000"],"x":[12.0,94.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,173.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,6.63,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6a6a70ff","family":"monospace","size":11.0,"text":"·","underline":[0.0,"#00000000"],"x":[0.0,6.62]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [31.63,173.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,41.53,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#e9e9ebff","family":"monospace","size":11.5,"text":"claude","underline":[0.0,"#00000000"],"x":[0.0,40.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [78.16,174.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,44.5,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#6a6a70ff","family":"proportional","size":10.0,"text":"pid 72964","underline":[0.0,"#00000000"],"x":[0.0,43.64]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [127.66,173.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,112.59,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#98989dff","family":"monospace","size":11.0,"text":"--resume bbb3cb6d","underline":[0.0,"#00000000"],"x":[0.0,112.62]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,202.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,49.63,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6a6a70ff","family":"proportional","size":11.0,"text":"in .../acme","underline":[0.0,"#00000000"],"x":[0.0,49.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [74.63,202.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,2.72,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6a6a70ff","family":"proportional","size":11.0,"text":"·","underline":[0.0,"#00000000"],"x":[0.0,2.71]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [82.34,202.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,42.72,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6a6a70ff","family":"proportional","size":11.0,"text":"22m ago","underline":[0.0,"#00000000"],"x":[0.0,42.4]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [880.0,230.5],
+          "rows": [
+            {
+              "rect": [-130.0,0.0,-0.03,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#419cffff","family":"proportional","size":11.0,"text":"Create rule from this ask…","underline":[0.0,"#00000000"],"x":[0.0,129.96]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        }
+      ],
+      "size": [900.0,600.0]
+    },
+    "macos-light": {
+      "digest": "cd627700f327b38fcfcdafcb74789a03172d868df350085ab5a4f1cb588cb2ca",
+      "shapes": [
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f5f5f7ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f5f5f7ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#ececefff","k":"rect","radius":[7,7,7,7],"rect":[350.0,10.0,550.0,36.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[7,7,7,7],"rect":[350.0,10.0,550.0,36.0],"stroke":[1.0,"#dcdce1ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [385.89,16.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,30.22,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#6e6e73ff","family":"proportional","size":12.5,"text":"Rules","underline":[0.0,"#00000000"],"x":[0.0,30.35]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#ffffffff","k":"rect","radius":[6,6,6,6],"rect":[450.0,12.0,548.0,34.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[450.0,12.0,548.0,34.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [483.89,16.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,30.22,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#1d1d1fff","family":"proportional","size":12.5,"text":"Audit","underline":[0.0,"#00000000"],"x":[0.0,29.84]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#ececefff","k":"rect","radius":[8,8,8,8],"rect":[670.0,10.0,880.0,36.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[8,8,8,8],"rect":[670.0,10.0,880.0,36.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
+        {"center":[684.0,22.0],"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"circle","radius":4.5,"stroke":[1.5,"#6e6e73ff"]},
+        {"a":[687.18,25.18],"b":[690.68,28.68],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.5,"#6e6e73ff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[703.0,15.81,874.0,30.19],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [702.0,14.81,746.56,31.19],
+          "k": "text",
+          "pos": [703.0,15.81],
+          "rows": [
+            {
+              "rect": [0.0,0.0,42.56,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#1d1d1fff","family":"proportional","size":12.5,"text":"gh auth","underline":[0.0,"#00000000"],"x":[0.0,42.11]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"a":[0.0,45.5],"b":[900.0,45.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#d2d2d7ff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,52.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [880.0,66.0],
+          "rows": [
+            {
+              "rect": [-27.0,0.0,0.22,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6e6e73ff","family":"proportional","size":11.0,"text":"1 of 5","underline":[0.0,"#00000000"],"x":[0.0,27.2]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,86.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,89.0,880.0,246.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,89.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,29.66,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9d9da3ff","family":"proportional","size":11.0,"text":"Today","underline":[0.0,"#00000000"],"x":[0.0,29.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,113.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,284.47,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#1d1d1fff","family":"monospace","size":13.5,"text":"gh auth token --hostname github.com","underline":[0.0,"#00000000"],"x":[0.0,284.13]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [880.0,117.0],
+          "rows": [
+            {
+              "rect": [-4.0,0.0,0.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#c4392eff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [870.78,114.5],
+          "rows": [
+            {
+              "rect": [-33.0,0.0,0.41,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#c4392eff","family":"proportional","size":11.0,"text":"denied","underline":[0.0,"#00000000"],"x":[0.0,33.41]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,86.0,900.0,589.0],"fill":"#e4e4e8ff","k":"rect","radius":[8,8,8,8],"rect":[789.38,112.0,825.38,130.0],"stroke":[1.0,"#006ae0ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [817.38,115.5],
+          "rows": [
+            {
+              "rect": [-20.0,0.0,-0.19,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#006ae0ff","family":"proportional","size":10.0,"text":"auto","underline":[0.0,"#00000000"],"x":[0.0,19.82]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,141.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,18.0],
+              "runs": [
+                {"baseline":11.0,"color":"#007affff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,141.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,95.31,18.0],
+              "runs": [
+                {"baseline":13.0,"color":"#6e6e73ff","family":"monospace","size":11.5,"text":"GITHUB_TOKEN","underline":[0.0,"#00000000"],"x":[12.0,94.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,173.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,6.63,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9d9da3ff","family":"monospace","size":11.0,"text":"·","underline":[0.0,"#00000000"],"x":[0.0,6.62]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [31.63,173.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,41.53,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#1d1d1fff","family":"monospace","size":11.5,"text":"claude","underline":[0.0,"#00000000"],"x":[0.0,40.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [78.16,174.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,44.5,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#9d9da3ff","family":"proportional","size":10.0,"text":"pid 72964","underline":[0.0,"#00000000"],"x":[0.0,43.64]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [127.66,173.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,112.59,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6e6e73ff","family":"monospace","size":11.0,"text":"--resume bbb3cb6d","underline":[0.0,"#00000000"],"x":[0.0,112.62]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,202.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,49.63,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9d9da3ff","family":"proportional","size":11.0,"text":"in .../acme","underline":[0.0,"#00000000"],"x":[0.0,49.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [74.63,202.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,2.72,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9d9da3ff","family":"proportional","size":11.0,"text":"·","underline":[0.0,"#00000000"],"x":[0.0,2.71]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [82.34,202.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,42.72,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9d9da3ff","family":"proportional","size":11.0,"text":"22m ago","underline":[0.0,"#00000000"],"x":[0.0,42.4]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,86.0,900.0,589.0],
+          "k": "text",
+          "pos": [880.0,230.5],
+          "rows": [
+            {
+              "rect": [-130.0,0.0,-0.03,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#006ae0ff","family":"proportional","size":11.0,"text":"Create rule from this ask…","underline":[0.0,"#00000000"],"x":[0.0,129.96]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        }
+      ],
+      "size": [900.0,600.0]
+    },
+    "windows-dark": {
+      "digest": "4d29ac25f6c87d4a442aa0b38eda90907febd3f65d2e4cfd99dd467501cc294c",
+      "shapes": [
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2bff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2bff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,58.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [20.0,6.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,78.28,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#9d9d9dff","family":"proportional","size":11.0,"text":"secreq Manager","underline":[0.0,"#00000000"],"x":[0.0,78.11]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [24.0,30.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,33.84,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#9d9d9dff","family":"proportional","size":14.0,"text":"Rules","underline":[0.0,"#00000000"],"x":[0.0,32.99]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [79.84,30.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,33.84,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#ffffffff","family":"proportional","size":14.0,"text":"Audit","underline":[0.0,"#00000000"],"x":[0.0,33.42]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [80.14,30.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,33.84,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#ffffffff","family":"proportional","size":14.0,"text":"Audit","underline":[0.0,"#00000000"],"x":[0.0,33.42]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#60cdffff","k":"rect","radius":[2,2,2,2],"rect":[77.84,48.0,115.69,51.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#323232ff","k":"rect","radius":[6,6,6,6],"rect":[670.0,25.0,880.0,51.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[670.0,25.0,880.0,51.0],"stroke":[1.0,"#383838ff"],"stroke_kind":"Inside"},
+        {"center":[684.0,37.0],"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"circle","radius":4.5,"stroke":[1.5,"#9d9d9dff"]},
+        {"a":[687.18,40.18],"b":[690.68,43.68],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.5,"#9d9d9dff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[703.0,30.0,874.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [702.0,29.0,749.97,47.0],
+          "k": "text",
+          "pos": [703.0,30.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,45.97,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#ffffffff","family":"proportional","size":13.5,"text":"gh auth","underline":[0.0,"#00000000"],"x":[0.0,45.68]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"a":[0.0,57.5],"b":[900.0,57.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#383838ff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,64.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [880.0,78.0],
+          "rows": [
+            {
+              "rect": [-27.0,0.0,0.22,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9d9d9dff","family":"proportional","size":11.0,"text":"1 of 5","underline":[0.0,"#00000000"],"x":[0.0,27.2]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,98.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,101.0,880.0,258.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,101.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,29.66,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6d6d6dff","family":"proportional","size":11.0,"text":"Today","underline":[0.0,"#00000000"],"x":[0.0,29.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,125.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,284.47,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#ffffffff","family":"monospace","size":13.5,"text":"gh auth token --hostname github.com","underline":[0.0,"#00000000"],"x":[0.0,284.13]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [880.0,129.0],
+          "rows": [
+            {
+              "rect": [-4.0,0.0,0.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#ff99a4ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [870.78,126.5],
+          "rows": [
+            {
+              "rect": [-33.0,0.0,0.41,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#ff99a4ff","family":"proportional","size":11.0,"text":"denied","underline":[0.0,"#00000000"],"x":[0.0,33.41]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,98.0,900.0,589.0],"fill":"#383838ff","k":"rect","radius":[8,8,8,8],"rect":[789.38,124.0,825.38,142.0],"stroke":[1.0,"#60cdffff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [817.38,127.5],
+          "rows": [
+            {
+              "rect": [-20.0,0.0,-0.19,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#60cdffff","family":"proportional","size":10.0,"text":"auto","underline":[0.0,"#00000000"],"x":[0.0,19.82]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,153.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,18.0],
+              "runs": [
+                {"baseline":11.0,"color":"#60cdffff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,153.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,95.31,18.0],
+              "runs": [
+                {"baseline":13.0,"color":"#9d9d9dff","family":"monospace","size":11.5,"text":"GITHUB_TOKEN","underline":[0.0,"#00000000"],"x":[12.0,94.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,185.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,6.63,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6d6d6dff","family":"monospace","size":11.0,"text":"·","underline":[0.0,"#00000000"],"x":[0.0,6.62]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [31.63,185.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,41.53,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#ffffffff","family":"monospace","size":11.5,"text":"claude","underline":[0.0,"#00000000"],"x":[0.0,40.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [78.16,186.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,44.5,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#6d6d6dff","family":"proportional","size":10.0,"text":"pid 72964","underline":[0.0,"#00000000"],"x":[0.0,43.64]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [127.66,185.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,112.59,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9d9d9dff","family":"monospace","size":11.0,"text":"--resume bbb3cb6d","underline":[0.0,"#00000000"],"x":[0.0,112.62]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,214.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,49.63,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6d6d6dff","family":"proportional","size":11.0,"text":"in .../acme","underline":[0.0,"#00000000"],"x":[0.0,49.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [74.63,214.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,2.72,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6d6d6dff","family":"proportional","size":11.0,"text":"·","underline":[0.0,"#00000000"],"x":[0.0,2.71]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [82.34,214.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,42.72,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6d6d6dff","family":"proportional","size":11.0,"text":"22m ago","underline":[0.0,"#00000000"],"x":[0.0,42.4]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [880.0,242.5],
+          "rows": [
+            {
+              "rect": [-130.0,0.0,-0.03,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#60cdffff","family":"proportional","size":11.0,"text":"Create rule from this ask…","underline":[0.0,"#00000000"],"x":[0.0,129.96]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        }
+      ],
+      "size": [900.0,600.0]
+    },
+    "windows-light": {
+      "digest": "9b7753dc80b2900d42c10132278f324a0e2ffd4b959db0f849d5fc3983e94ed6",
+      "shapes": [
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fbfbfbff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fbfbfbff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,58.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [20.0,6.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,78.28,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#5f5f5fff","family":"proportional","size":11.0,"text":"secreq Manager","underline":[0.0,"#00000000"],"x":[0.0,78.11]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [24.0,30.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,33.84,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#5f5f5fff","family":"proportional","size":14.0,"text":"Rules","underline":[0.0,"#00000000"],"x":[0.0,32.99]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [79.84,30.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,33.84,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#1b1b1bff","family":"proportional","size":14.0,"text":"Audit","underline":[0.0,"#00000000"],"x":[0.0,33.42]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [80.14,30.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,33.84,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#1b1b1bff","family":"proportional","size":14.0,"text":"Audit","underline":[0.0,"#00000000"],"x":[0.0,33.42]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#005fb8ff","k":"rect","radius":[2,2,2,2],"rect":[77.84,48.0,115.69,51.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f6f6f6ff","k":"rect","radius":[6,6,6,6],"rect":[670.0,25.0,880.0,51.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[670.0,25.0,880.0,51.0],"stroke":[1.0,"#e5e5e5ff"],"stroke_kind":"Inside"},
+        {"center":[684.0,37.0],"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"circle","radius":4.5,"stroke":[1.5,"#5f5f5fff"]},
+        {"a":[687.18,40.18],"b":[690.68,43.68],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.5,"#5f5f5fff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[703.0,30.0,874.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [702.0,29.0,749.97,47.0],
+          "k": "text",
+          "pos": [703.0,30.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,45.97,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#1b1b1bff","family":"proportional","size":13.5,"text":"gh auth","underline":[0.0,"#00000000"],"x":[0.0,45.68]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"a":[0.0,57.5],"b":[900.0,57.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#e5e5e5ff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,64.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [880.0,78.0],
+          "rows": [
+            {
+              "rect": [-27.0,0.0,0.22,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#5f5f5fff","family":"proportional","size":11.0,"text":"1 of 5","underline":[0.0,"#00000000"],"x":[0.0,27.2]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,98.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,101.0,880.0,258.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,101.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,29.66,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9b9b9bff","family":"proportional","size":11.0,"text":"Today","underline":[0.0,"#00000000"],"x":[0.0,29.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,125.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,284.47,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#1b1b1bff","family":"monospace","size":13.5,"text":"gh auth token --hostname github.com","underline":[0.0,"#00000000"],"x":[0.0,284.13]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [880.0,129.0],
+          "rows": [
+            {
+              "rect": [-4.0,0.0,0.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#c42b1cff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [870.78,126.5],
+          "rows": [
+            {
+              "rect": [-33.0,0.0,0.41,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#c42b1cff","family":"proportional","size":11.0,"text":"denied","underline":[0.0,"#00000000"],"x":[0.0,33.41]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,98.0,900.0,589.0],"fill":"#efefefff","k":"rect","radius":[8,8,8,8],"rect":[789.38,124.0,825.38,142.0],"stroke":[1.0,"#005fb8ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [817.38,127.5],
+          "rows": [
+            {
+              "rect": [-20.0,0.0,-0.19,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#005fb8ff","family":"proportional","size":10.0,"text":"auto","underline":[0.0,"#00000000"],"x":[0.0,19.82]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,153.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,18.0],
+              "runs": [
+                {"baseline":11.0,"color":"#005fb8ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,153.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,95.31,18.0],
+              "runs": [
+                {"baseline":13.0,"color":"#5f5f5fff","family":"monospace","size":11.5,"text":"GITHUB_TOKEN","underline":[0.0,"#00000000"],"x":[12.0,94.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,185.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,6.63,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9b9b9bff","family":"monospace","size":11.0,"text":"·","underline":[0.0,"#00000000"],"x":[0.0,6.62]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [31.63,185.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,41.53,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#1b1b1bff","family":"monospace","size":11.5,"text":"claude","underline":[0.0,"#00000000"],"x":[0.0,40.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [78.16,186.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,44.5,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#9b9b9bff","family":"proportional","size":10.0,"text":"pid 72964","underline":[0.0,"#00000000"],"x":[0.0,43.64]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [127.66,185.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,112.59,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#5f5f5fff","family":"monospace","size":11.0,"text":"--resume bbb3cb6d","underline":[0.0,"#00000000"],"x":[0.0,112.62]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,214.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,49.63,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9b9b9bff","family":"proportional","size":11.0,"text":"in .../acme","underline":[0.0,"#00000000"],"x":[0.0,49.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [74.63,214.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,2.72,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9b9b9bff","family":"proportional","size":11.0,"text":"·","underline":[0.0,"#00000000"],"x":[0.0,2.71]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [82.34,214.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,42.72,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9b9b9bff","family":"proportional","size":11.0,"text":"22m ago","underline":[0.0,"#00000000"],"x":[0.0,42.4]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,98.0,900.0,589.0],
+          "k": "text",
+          "pos": [880.0,242.5],
+          "rows": [
+            {
+              "rect": [-130.0,0.0,-0.03,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#005fb8ff","family":"proportional","size":11.0,"text":"Create rule from this ask…","underline":[0.0,"#00000000"],"x":[0.0,129.96]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        }
+      ],
+      "size": [900.0,600.0]
+    }
+  }
+}
