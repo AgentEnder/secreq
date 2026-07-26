@@ -23,6 +23,8 @@
 //!    matrix doesn't leave a dead PNG the docs site keeps shipping.
 //! 4. **Documentation** — every fixture has a row in the README table, which
 //!    `CLAUDE.md` requires and which is otherwise trivial to forget.
+//! 5. **Numbering** — no two fixtures claim the same `NN-` prefix, which is
+//!    how a fixture is cited everywhere except its own folder name.
 //!
 //! A fixture *is* a directory here — there is no separate list of them to fall
 //! out of step with the tree, which is why (1) can be a real check rather than
@@ -43,7 +45,7 @@
 
 mod common;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 const REGEN: &str =
@@ -106,6 +108,19 @@ fn files_in(id: &str) -> BTreeSet<String> {
         .flatten()
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
         .collect()
+}
+
+/// The number a fixture id claims: the token before its first `-`, when that
+/// token starts with a digit.
+///
+/// Ids read `NN-what-it-shows`, and the `NN` is a single sequence shared by
+/// every window kind. A deliberate second take on one shot carries a letter
+/// suffix (`01b-empty-all-clear-viewer`) and claims a number of its own; a few
+/// fixtures are named rather than numbered (`run-consent`) and claim none.
+fn claimed_number(id: &str) -> Option<&str> {
+    let head = id.split('-').next().unwrap_or(id);
+    head.starts_with(|c: char| c.is_ascii_digit())
+        .then_some(head)
 }
 
 /// Every published fixture carries the layout snapshot that guards it.
@@ -223,5 +238,63 @@ fn every_documented_fixture_has_a_readme_row() {
          so a reviewer can tell from the diff what the new PNG shows.\n",
         undocumented.len(),
         undocumented.join("\n  "),
+    );
+}
+
+/// Two fixtures must not claim the same number.
+///
+/// Nothing else here notices: the ids differ, so the folders differ, and both
+/// halves of a collision satisfy every other check. What breaks is the human
+/// side — the number is how a fixture is referred to in review and in the
+/// README table, and the tree is also what the next contributor scans to pick
+/// a free one, so a duplicate quietly invites a third. It has happened, and it
+/// was caught by eye rather than by anything running.
+///
+/// The sequence is **global across window kinds**: a consent-window fixture
+/// and a session-card fixture draw from the same numbers, which is exactly why
+/// picking one by looking at neighbouring fixtures goes wrong.
+#[test]
+fn no_two_fixtures_claim_the_same_number() {
+    let mut by_number: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    let ids = fixture_ids();
+    for id in &ids {
+        if let Some(number) = claimed_number(id) {
+            by_number.entry(number).or_default().push(id.clone());
+        }
+    }
+
+    let collisions: Vec<String> = by_number
+        .iter()
+        .filter(|(_, ids)| ids.len() > 1)
+        .map(|(number, ids)| format!("{number}: {}", ids.join(", ")))
+        .collect();
+
+    let highest = by_number
+        .keys()
+        .filter_map(|number| {
+            number
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+                .parse::<u32>()
+                .ok()
+        })
+        .max()
+        .unwrap_or(0);
+
+    assert!(
+        collisions.is_empty(),
+        "\n{} fixture number(s) are claimed twice:\n  {}\n\n\
+         The number is how a fixture is cited, so a duplicate makes the README \
+         table ambiguous and the next free number impossible to read off the \
+         tree. Renumber the newer one to {:02} (the highest in use is {highest}, \
+         and numbers are never reused): rename its `Shot::new(\"…\")` id in \
+         tests/ui_screenshots.rs and its README row, delete the old folder, \
+         then regenerate:\n  {REGEN}\n\n\
+         A second take on one shot is the exception — give it a letter suffix \
+         (`01b-…`), which reads as a variant rather than a new slot.\n",
+        collisions.len(),
+        collisions.join("\n  "),
+        highest + 1,
     );
 }
