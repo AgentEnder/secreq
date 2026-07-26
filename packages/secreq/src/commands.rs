@@ -112,7 +112,7 @@ pub fn wrap_run(
         ));
         resolve_wrap_env(&config, &wrap)?
     } else {
-        let outcome = obtain_wrap_consent(&wrap, &callers, args)?;
+        let outcome = obtain_wrap_consent(&wrap, &callers, args, &opts)?;
         let env_names: Vec<String> = wrap.env.keys().cloned().collect();
         let _ = audit::append(
             &AuditEntry::new(binary, args, &callers, &env_names, outcome.decision)
@@ -343,6 +343,7 @@ pub fn run(
                 refs: &refs,
                 reason: None,
                 allow_remember: false,
+                ignore_remembered: false,
             },
             &callers,
             &cwd,
@@ -736,6 +737,7 @@ pub fn read(refs: &[String], config_path: Option<&Path>) -> Result<i32> {
             refs: &parsed,
             reason: None,
             allow_remember: false,
+            ignore_remembered: false,
         },
         &callers,
         &cwd,
@@ -2723,6 +2725,8 @@ pub(crate) struct AskSpec<'a> {
     pub reason: Option<String>,
     /// Whether `ApproveRemember` may persist an approval (`true` for `x`).
     pub allow_remember: bool,
+    /// `--no-remember`: prompt even on a cache hit, and persist nothing.
+    pub ignore_remembered: bool,
 }
 
 /// Build the daemon [`proto::Ask`] from explicit pieces. Pure — no I/O
@@ -2783,6 +2787,7 @@ pub(crate) fn build_ask(
         ssh: None,
         agent: None,
         allow_remember: spec.allow_remember,
+        ignore_remembered: spec.ignore_remembered,
         // Default to false (always-prompt). The `run` path sets it on the
         // returned ask when it detects it's nested under another run.
         nested_run: false,
@@ -2798,6 +2803,7 @@ fn obtain_wrap_consent(
     wrap: &Wrap,
     callers: &[provenance::Caller],
     args: &[String],
+    opts: &WrapRunOpts,
 ) -> Result<daemon_client::ConsentOutcome> {
     // No direct parent ⇒ the dedupe key would be meaningless. Synthetic
     // invocations (e.g. some test harnesses) land here. Fail closed before
@@ -2826,8 +2832,9 @@ fn obtain_wrap_consent(
             refs: &refs,
             reason: wrap.reason.clone(),
             // Wrap (`x`) asks may persist a remembered approval; only
-            // `secreq run` disables this.
-            allow_remember: true,
+            // `secreq run` and `--no-remember` disable it.
+            allow_remember: !opts.no_remember,
+            ignore_remembered: opts.no_remember,
         },
         callers,
         &cwd,
@@ -3545,6 +3552,7 @@ mod tests {
                 refs: &refs,
                 reason: None,
                 allow_remember: false,
+                ignore_remembered: false,
             },
             &callers,
             std::path::Path::new("/tmp/proj"),

@@ -287,6 +287,20 @@ pub struct Ask {
     /// `false` (the never-skip, always-prompt default).
     #[serde(default)]
     pub nested_run: bool,
+    /// Ignore any remembered approval for this ask: prompt even on a cache
+    /// hit, and do not persist a new entry.
+    ///
+    /// What `--no-remember` / `--sq-no-remember` means. The flag was parsed
+    /// into `WrapRunOpts` and then never read by anything, while both doc
+    /// pages promised "don't read or write the remembered-approval cache" —
+    /// so a user asking for one specific invocation to be gated got the
+    /// silent cached release instead, audited as `approve+cached` with
+    /// nothing recording that they had asked.
+    ///
+    /// The write half needs no field: the client sets `allow_remember` to
+    /// false alongside this.
+    #[serde(default)]
+    pub ignore_remembered: bool,
 }
 
 fn default_true() -> bool {

@@ -2112,6 +2112,17 @@ impl State {
         }
     }
 
+    /// Test hook: store the remembered approval `resolve` would on
+    /// `ApproveRemember`.
+    #[cfg(test)]
+    pub(super) fn remember_approval_for_test(&mut self, ask: &Ask) {
+        self.approvals.push(ApprovalEntry {
+            wrap: ask.dedupe_key.wrap.clone(),
+            ppid: ask.dedupe_key.ppid,
+            parent_start_time: ask.dedupe_key.parent_start_time,
+        });
+    }
+
     pub fn nested_run_may_skip_window(&self, ask: &Ask) -> bool {
         if !ask.nested_run {
             return false;
@@ -2646,6 +2657,7 @@ mod tests {
             agent: None,
             allow_remember: true,
             nested_run: false,
+            ignore_remembered: false,
         }
     }
 
@@ -2999,6 +3011,7 @@ mod tests {
             agent: None,
             allow_remember: true,
             nested_run: false,
+            ignore_remembered: false,
         }
     }
 
@@ -3414,6 +3427,7 @@ mod tests {
             agent: None,
             allow_remember: true,
             nested_run: false,
+            ignore_remembered: false,
         };
 
         let state = State::new();
@@ -3816,6 +3830,7 @@ mod tests {
             agent: None,
             allow_remember: false,
             nested_run: false,
+            ignore_remembered: false,
         }
     }
 

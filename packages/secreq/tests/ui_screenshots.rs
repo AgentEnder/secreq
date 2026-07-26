@@ -207,6 +207,7 @@ fn submit(
         agent: None,
         allow_remember: true,
         nested_run: false,
+        ignore_remembered: false,
     };
     let (tx, rx) = mpsc::channel();
     state.lock().unwrap().submit_ask(ask, tx);
@@ -240,6 +241,7 @@ fn submit_run(
         agent: None,
         allow_remember: false,
         nested_run: false,
+        ignore_remembered: false,
     };
     let (tx, rx) = mpsc::channel();
     state.lock().unwrap().submit_ask(ask, tx);
@@ -283,6 +285,7 @@ fn submit_ssh(
         agent: None,
         allow_remember: true,
         nested_run: false,
+        ignore_remembered: false,
     };
     let (tx, rx) = mpsc::channel();
     state.lock().unwrap().submit_ask(ask, tx);
@@ -329,6 +332,7 @@ fn submit_agent(
         }),
         allow_remember: false,
         nested_run: false,
+        ignore_remembered: false,
     };
     let (tx, rx) = mpsc::channel();
     state.lock().unwrap().submit_ask(ask, tx);
@@ -365,6 +369,7 @@ fn pending(
         agent: None,
         allow_remember: true,
         nested_run: false,
+        ignore_remembered: false,
     };
     state.lock().unwrap().begin_pending(ask);
 }

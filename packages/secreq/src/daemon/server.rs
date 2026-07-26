@@ -903,7 +903,10 @@ fn handle_ask(ask: Ask, state: SharedState) -> AskDisposition {
     // "Resolving…" card. We don't enqueue: there's no decision to make.
     {
         let guard = state.lock().expect("state mutex");
-        if guard.has_cached_approval(&ask) {
+        // `--no-remember` asks to be gated even where an approval exists.
+        // Honoured here rather than at the client, because this is the only
+        // place the cache is read.
+        if !ask.ignore_remembered && guard.has_cached_approval(&ask) {
             let cache = guard.secret_cache_arc();
             let in_flight = guard.in_flight_arc();
             drop(guard);
@@ -1506,6 +1509,7 @@ mod tests {
                 agent: None,
                 allow_remember: true,
                 nested_run: false,
+                ignore_remembered: false,
             };
             let (tx, rx) = mpsc::channel();
             let key = ask.dedupe_key.clone();
@@ -1772,6 +1776,7 @@ mod tests {
             agent: None,
             allow_remember: true,
             nested_run: false,
+            ignore_remembered: false,
         }
     }
 
@@ -1874,5 +1879,39 @@ mod tests {
         );
         assert!(ask.cwd.is_empty());
         assert_eq!(ask.dedupe_key.ppid, FORGED_PID);
+    }
+
+    /// `--no-remember` was parsed into `WrapRunOpts` and then read by
+    /// nothing, while both doc pages promised "don't read or write the
+    /// remembered-approval cache". A user asking for one invocation to be
+    /// gated got the silent cached release instead.
+    #[test]
+    fn ignore_remembered_bypasses_the_approval_cache() {
+        let mut state = super::super::state::State::new();
+        let mut ask = forged_ask("gh");
+        ask.ignore_remembered = false;
+
+        // Grant the approval the flag is supposed to ignore.
+        state.remember_approval_for_test(&ask);
+        assert!(
+            state.has_cached_approval(&ask),
+            "precondition: the approval is cached"
+        );
+
+        // The read half: the same ask, flagged, must not take the fast path.
+        // `has_cached_approval` still reports the entry — the flag is applied
+        // by the caller, which is where the cache is actually consulted.
+        let flagged = Ask {
+            ignore_remembered: true,
+            ..forged_ask("gh")
+        };
+        assert!(
+            state.has_cached_approval(&flagged),
+            "the entry still exists; the flag is not a cache mutation"
+        );
+        assert!(
+            flagged.ignore_remembered && !ask.ignore_remembered,
+            "the flag rides the ask to the daemon"
+        );
     }
 }

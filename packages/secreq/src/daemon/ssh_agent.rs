@@ -661,6 +661,7 @@ fn sign_ask(
         allow_remember: true,
         // SSH signs are never `secreq run`; nested-run cache-skip is moot.
         nested_run: false,
+        ignore_remembered: false,
     }
 }
 

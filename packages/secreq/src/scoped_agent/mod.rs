@@ -613,6 +613,7 @@ fn agent_ask(scope: &Scope, reference: &Reference, guest_chain: &GuestChain) -> 
         // out of this path entirely.
         allow_remember: false,
         nested_run: false,
+        ignore_remembered: false,
     }
 }
 
