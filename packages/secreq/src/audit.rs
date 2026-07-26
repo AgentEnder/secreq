@@ -5,6 +5,7 @@
 //! **values never appear** here — only names, per the threat model (§11).
 
 use std::fs::OpenOptions;
+use std::os::unix::fs::OpenOptionsExt;
 use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -248,13 +249,16 @@ impl AuditEntry {
 pub fn append(entry: &AuditEntry) -> Result<()> {
     let path = crate::paths::audit_log_path()?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
+        crate::paths::ensure_private_dir(parent)
             .with_context(|| format!("failed to create state dir {}", parent.display()))?;
     }
     let line = serde_json::to_string(entry).context("failed to serialize audit entry")?;
+    // Owner-only: the row holds no value, but it does hold every wrapped
+    // command's argv, cwd, caller chain and secret names.
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
+        .mode(crate::paths::PRIVATE_FILE_MODE)
         .open(&path)
         .with_context(|| format!("failed to open audit log {}", path.display()))?;
     writeln!(file, "{line}")

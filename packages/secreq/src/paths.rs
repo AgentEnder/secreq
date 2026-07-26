@@ -209,6 +209,43 @@ pub fn default_shims_dir() -> Result<PathBuf> {
     Ok(secreq_root()?.join("shims"))
 }
 
+/// Owner-only mode for every directory secreq creates under its root.
+const PRIVATE_DIR_MODE: u32 = 0o700;
+
+/// Owner-only mode for every file secreq creates under its root.
+pub(crate) const PRIVATE_FILE_MODE: u32 = 0o600;
+
+/// Create `dir` and its missing parents, owner-only, narrowing an existing
+/// directory that is more permissive.
+///
+/// Nothing under the root is low-sensitivity even though none of it holds a
+/// value: `audit.log` records every wrapped command's argv, cwd, caller chain
+/// and the *names* of the secrets released; `auto-rules.json5` records which
+/// commands skip the prompt, which is a map of where to aim. A plain
+/// `create_dir_all` applies the process umask, so this lands 0755 under the
+/// common 022 and 0777 under the 000 that container and CI images often set.
+///
+/// The narrowing pass matters as much as the creation one: the root was
+/// created 0755 by every secreq built before this, so an install that
+/// predates it stays world-traversable until something tightens it. `~/.ssh`
+/// gets the same treatment in `ssh_setup`, for the same reason.
+pub fn ensure_private_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(PRIVATE_DIR_MODE)
+        .create(dir)?;
+
+    // `DirBuilder::mode` applies only to directories it creates, so an
+    // already-existing one keeps whatever mode it had.
+    let current = std::fs::metadata(dir)?.permissions().mode() & 0o777;
+    if current != PRIVATE_DIR_MODE {
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(PRIVATE_DIR_MODE))?;
+    }
+    Ok(())
+}
+
 /// Directory holding `consent.sock`, `agent.sock`, and `daemon.pid`.
 ///
 /// Deliberately still prefers `$XDG_RUNTIME_DIR` over the root: it is
@@ -397,5 +434,36 @@ mod tests {
     fn a_refused_scope_name_is_not_quietly_rewritten() {
         assert!(scoped_agent_socket_name("a/b").is_err());
         assert_eq!(scoped_agent_socket_name("a-b").unwrap(), "scope-a-b.sock");
+    }
+
+    /// `create_dir_all` applies the umask, so the root landed 0755 under the
+    /// common 022 and 0777 under the 000 that CI images set.
+    #[test]
+    fn ensure_private_dir_creates_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let nested = tmp.path().join("a/b/c");
+        ensure_private_dir(&nested).unwrap();
+        for dir in [tmp.path().join("a"), tmp.path().join("a/b"), nested] {
+            let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "{} is {mode:o}", dir.display());
+        }
+    }
+
+    /// The half `DirBuilder::mode` cannot do: it applies only to directories
+    /// it creates, so every install predating this kept its 0755 root until
+    /// something actively narrowed it.
+    #[test]
+    fn ensure_private_dir_narrows_an_existing_permissive_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("legacy");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        ensure_private_dir(&dir).unwrap();
+
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "an existing 0755 dir must be narrowed");
     }
 }

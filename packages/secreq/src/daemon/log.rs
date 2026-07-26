@@ -131,10 +131,18 @@ pub fn jsonl_path() -> anyhow::Result<PathBuf> {
 /// Open (creating if needed) a persistent log sink in append mode. Returns
 /// `None` on any failure — logging degrades rather than erroring.
 fn open_append(path: PathBuf) -> Option<File> {
+    use std::os::unix::fs::OpenOptionsExt;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok()?;
+        crate::paths::ensure_private_dir(parent).ok()?;
     }
-    OpenOptions::new().create(true).append(true).open(path).ok()
+    // Owner-only. The daemon log carries the same provenance detail the
+    // audit log does, in prose rather than JSON.
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(crate::paths::PRIVATE_FILE_MODE)
+        .open(path)
+        .ok()
 }
 
 fn now_unix() -> u64 {

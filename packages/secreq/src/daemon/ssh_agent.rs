@@ -224,6 +224,13 @@ fn handle_connection(mut stream: UnixStream, ctx: &SignContext) -> Result<()> {
     // The connecting peer's pid is read once per connection. The SSH client
     // keeps the socket open across a listing + a sign, so the peer is stable
     // for the connection's lifetime.
+    if super::peercred::peer_is_same_user(&stream) != Some(true) {
+        super::log::log_at(
+            "ssh-agent",
+            format_args!("refused a connection from another user"),
+        );
+        return Ok(());
+    }
     let peer_pid = super::peercred::peer_pid(&stream);
     while let Some(frame) = read_frame(&mut stream)? {
         let reply = match ssh_proto::parse_request(&frame) {

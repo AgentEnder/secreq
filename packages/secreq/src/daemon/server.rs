@@ -24,7 +24,8 @@ use super::state::{SharedState, WaiterId, WaiterReply};
 /// dropped (the OS errors the accept).
 pub fn start(socket_path: PathBuf, state: SharedState) -> Result<UnixListener> {
     if let Some(parent) = socket_path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+        crate::paths::ensure_private_dir(parent)
+            .with_context(|| format!("create {}", parent.display()))?;
     }
     // Clear a stale socket from a previous crashed daemon. We've already
     // taken the pidfile lock by the time we get here, so this can't race
@@ -86,6 +87,16 @@ fn accept_loop(listener: UnixListener, state: SharedState) {
 }
 
 fn handle_connection(stream: UnixStream, state: SharedState) -> Result<()> {
+    // Before a byte is parsed. The socket mode should already have excluded
+    // a foreign uid; this covers the window where it did not (see
+    // `peercred::peer_is_same_user`).
+    if super::peercred::peer_is_same_user(&stream) != Some(true) {
+        super::log::log_at(
+            "server",
+            format_args!("refused a connection from another user"),
+        );
+        return Ok(());
+    }
     let mut reader = BufReader::new(stream.try_clone().context("clone socket")?);
     let mut line = String::new();
     if reader.read_line(&mut line)? == 0 {
