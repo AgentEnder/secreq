@@ -138,10 +138,12 @@ fn run_in(home: &Path, legacy_dir: &Path, new_dir: &Path) -> Result<Outcome> {
         let rewrote = ssh_setup::rewrite_in_place(&plan.config_file, &plan.block)
             .with_context(|| format!("repointing the SSH-agent block in {}", path.display()))?;
         // We read a block out of this file a moment ago and decided it had to
-        // move; `false` means the block was gone by the time we wrote — the
-        // file was truncated or rewritten under us. Discarding this was the
-        // shape of the bug: "no block to replace" reads as "already fine".
-        if !rewrote {
+        // move; `Rewrote::Nothing` means the block was gone by the time we
+        // wrote — the file was truncated or rewritten under us. Discarding
+        // this was the shape of the bug: "no block to replace" reads as
+        // "already fine". `Rewrote` is `#[must_use]` so the discard cannot
+        // come back.
+        if rewrote == ssh_setup::Rewrote::Nothing {
             return Ok(Outcome::Incomplete(format!(
                 "the SSH-agent block in {} disappeared while it was being \
                  repointed, so it still names the pre-upgrade socket. Check \

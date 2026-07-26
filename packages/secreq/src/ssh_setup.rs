@@ -165,7 +165,13 @@ pub fn apply(plan: &SshSetupPlan) -> Result<bool> {
         return Ok(false);
     }
     if plan.updates_existing {
-        return rewrite_in_place(&plan.config_file, &plan.block);
+        // `apply`'s own answer is "did a file change?", so both of
+        // [`Rewrote`]'s outcomes map onto it honestly. The block going missing
+        // between `plan` and here needs a live file racing an interactive
+        // confirm; the migration, which has no user to re-run it, treats the
+        // same answer as `Outcome::Incomplete`.
+        let rewrote = rewrite_in_place(&plan.config_file, &plan.block)?;
+        return Ok(rewrote == Rewrote::TheBlock);
     }
     match plan.method {
         Method::SshConfig => apply_ssh_config(plan),
@@ -173,21 +179,51 @@ pub fn apply(plan: &SshSetupPlan) -> Result<bool> {
     }
 }
 
+/// What [`rewrite_in_place`] did — a type rather than a `bool`, so that not
+/// looking at it is a compile error.
+///
+/// [`Rewrote::Nothing`] is a **real outcome a caller has to handle**, not a
+/// nothing-happened. A caller reaches `rewrite_in_place` because it has
+/// already read a managed block out of that file and decided it must change;
+/// `Nothing` says the block was not there when the write came round, so the
+/// file still carries whatever the caller wanted replaced. Migration 0002
+/// discarded exactly this answer — `rewrite_in_place(..).with_context(..)?;` —
+/// and stamped its migration level over a config still naming the
+/// pre-upgrade socket. A stamped level is permanent, so the user never got
+/// the migration again.
+///
+/// **`#[must_use]` on the function would not have caught that**, which is why
+/// this is a type. `?` counts as a use of the call's `Result`, so the `bool`
+/// that fell out the other side was an expression statement of an ordinary
+/// type and the lint stayed quiet. On the type, the discard is the error.
+#[must_use = "`Rewrote::Nothing` means the managed block was not there to \
+              replace — that is an outcome to handle, not a success"]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Rewrote {
+    /// The block was found and `config_file` now carries `new_block`.
+    TheBlock,
+    /// Nothing was written: the file is absent or unreadable, it carries no
+    /// managed block, or the block it carries is already byte-identical to
+    /// `new_block`.
+    Nothing,
+}
+
 /// Swap the managed block in `config_file` for `new_block`, leaving the rest
-/// of the file byte-identical. `Ok(false)` if there was no block to replace.
+/// of the file byte-identical. See [`Rewrote`] for what the two answers mean
+/// and why they are not a `bool`.
 ///
 /// Shared by [`apply`] and migration 0002 — the migration repoints blocks on
 /// installs whose owner will never re-run `ssh setup`, and must reach the
 /// exact same result.
-pub(crate) fn rewrite_in_place(config_file: &Path, new_block: &str) -> Result<bool> {
+pub(crate) fn rewrite_in_place(config_file: &Path, new_block: &str) -> Result<Rewrote> {
     let Ok(content) = fs::read_to_string(config_file) else {
-        return Ok(false);
+        return Ok(Rewrote::Nothing);
     };
     let Some(updated) = replace_block(&content, new_block) else {
-        return Ok(false);
+        return Ok(Rewrote::Nothing);
     };
     if updated == content {
-        return Ok(false);
+        return Ok(Rewrote::Nothing);
     }
     // Staged and renamed, not written in place. These are the user's own
     // dotfiles and we are rewriting them from a migration, where nobody asked
@@ -204,7 +240,7 @@ pub(crate) fn rewrite_in_place(config_file: &Path, new_block: &str) -> Result<bo
         crate::atomic::Mode::Like(config_file),
     )
     .with_context(|| format!("could not write {}", config_file.display()))?;
-    Ok(true)
+    Ok(Rewrote::TheBlock)
 }
 
 /// The managed block in `config_file`, sentinels included. `None` if the file
@@ -661,7 +697,10 @@ mod tests {
             &home.path().join("new.sock"),
         )
         .unwrap();
-        assert!(rewrite_in_place(&zshrc, &p2.block).unwrap());
+        assert_eq!(
+            rewrite_in_place(&zshrc, &p2.block).unwrap(),
+            Rewrote::TheBlock
+        );
 
         assert_ne!(
             fs::metadata(&zshrc).unwrap().ino(),
@@ -672,6 +711,30 @@ mod tests {
         assert!(fs::read_to_string(&zshrc).unwrap().starts_with("# my rc\n"));
         // And nothing is left beside it for the user to wonder about.
         assert!(!home.path().join(".zshrc.tmp").exists());
+    }
+
+    /// The answer that used to be thrown away. A file carrying no managed
+    /// block is not a file that was successfully rewritten, and it is left
+    /// exactly as it was — migration 0002 read `Ok(false)` here as "already
+    /// fine" and recorded its level over an untouched config.
+    #[test]
+    fn rewrite_reports_nothing_when_there_is_no_managed_block() {
+        let home = tempfile::tempdir().unwrap();
+        let zshrc = home.path().join(".zshrc");
+        fs::write(&zshrc, "# my rc\n").unwrap();
+        let p = plan(
+            home.path(),
+            Method::ShellRc,
+            Shell::Zsh,
+            &home.path().join("agent.sock"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            rewrite_in_place(&zshrc, &p.block).unwrap(),
+            Rewrote::Nothing
+        );
+        assert_eq!(fs::read_to_string(&zshrc).unwrap(), "# my rc\n");
     }
 
     #[test]
