@@ -1922,6 +1922,282 @@ mod tests {
         assert_eq!(json["wasm"]["path"], "02.wasm");
     }
 
+    // ── The on-disk format, pinned ────────────────────────────────────
+    //
+    // `auto-rules.json5` is a file users have on disk today and
+    // hand-edit, and `docs/auto-rules.schema.json` is published to
+    // secreq.dev as its contract. Neither is protected by the schema
+    // drift test: `schema.rs` builds that schema as a hand-written
+    // `json!` tree, so it can agree with the committed file while
+    // disagreeing with [`Rule`]. These tests are the guard that
+    // `tests/schema_drift.rs` is often assumed to be — they pin the
+    // exact bytes `Rule` reads and writes, so a refactor of the type
+    // (nesting the declarative-XOR-wasm shape into a sum type, say)
+    // fails here if it moves the format under a user's file.
+
+    #[test]
+    fn a_declarative_rule_serializes_to_exactly_this_object() {
+        let mut rule = mk_rule(
+            "0a1b2c3d4e5f",
+            "Cursor reads via gh",
+            RuleDecision::Deny,
+            match_for(
+                "gh",
+                Some("gh repo delete *"),
+                Some("Cursor.app"),
+                Some("/Users/me/oss"),
+            ),
+            &["GITHUB_TOKEN", "GITHUB_REPO_TOKEN"],
+        );
+        rule.deny_message = Some("Use the UI instead.".to_owned());
+        rule.created_at_unix = 1_700_000_000;
+        assert_eq!(
+            serde_json::to_value(&rule).expect("serialize"),
+            serde_json::json!({
+                "id": "0a1b2c3d4e5f",
+                "name": "Cursor reads via gh",
+                "enabled": true,
+                "decide": "deny",
+                "match": {
+                    "wrap": "gh",
+                    // Patterns serialize as their source text, and an
+                    // absent clause is an explicit null rather than an
+                    // omitted key — `RuleMatch`'s options carry
+                    // `default` but no `skip_serializing_if`.
+                    "argv": "gh repo delete *",
+                    "ancestor": "Cursor.app",
+                    "cwd": "/Users/me/oss"
+                },
+                "trained_secrets": ["GITHUB_REPO_TOKEN", "GITHUB_TOKEN"],
+                "deny_message": "Use the UI instead.",
+                "created_at_unix": 1_700_000_000
+            })
+        );
+    }
+
+    #[test]
+    fn an_unconstrained_declarative_rule_writes_null_match_clauses() {
+        // The counterpart to the test above: `wasm` and `deny_message`
+        // vanish when absent (`skip_serializing_if`), but the match
+        // clause's optional patterns do not.
+        let rule = mk_rule(
+            "01",
+            "r",
+            RuleDecision::Approve,
+            match_for("gh", None, None, None),
+            &[],
+        );
+        assert_eq!(
+            serde_json::to_value(&rule).expect("serialize"),
+            serde_json::json!({
+                "id": "01",
+                "name": "r",
+                "enabled": true,
+                "decide": "approve",
+                "match": { "wrap": "gh", "argv": null, "ancestor": null, "cwd": null },
+                "trained_secrets": [],
+                "created_at_unix": 0
+            })
+        );
+    }
+
+    #[test]
+    fn a_wasm_rule_serializes_to_exactly_this_object() {
+        let rule = mk_wasm_rule("0a1b2c3d4e5f", "npm publish guard", &["NPM_TOKEN"]);
+        assert_eq!(
+            serde_json::to_value(&rule).expect("serialize"),
+            serde_json::json!({
+                "id": "0a1b2c3d4e5f",
+                "name": "npm publish guard",
+                "enabled": true,
+                "wasm": {
+                    "path": "0a1b2c3d4e5f.wasm",
+                    "sha256": "unverified-in-eval-tests"
+                },
+                "trained_secrets": ["NPM_TOKEN"],
+                "created_at_unix": 0
+            })
+        );
+    }
+
+    #[test]
+    fn a_rule_is_written_in_this_key_order() {
+        // Cosmetic but user-visible: the daemon rewrites the whole
+        // file on every mutation, and the user reads what it wrote.
+        // Serde emits fields in declaration order — but a `flatten`ed
+        // body would emit the flattened keys last, silently shuffling
+        // `decide` and `match` past `created_at_unix` in every file on
+        // every machine. If you mean to reorder, change it here
+        // deliberately.
+        let mut rule = mk_rule(
+            "01",
+            "r",
+            RuleDecision::Deny,
+            match_for("gh", None, None, None),
+            &["GITHUB_TOKEN"],
+        );
+        rule.deny_message = Some("no".to_owned());
+        let text = serde_json::to_string_pretty(&rule).expect("serialize");
+        let keys: Vec<&str> = text
+            .lines()
+            .filter_map(|l| l.strip_prefix("  \""))
+            .filter_map(|l| l.split('"').next())
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "id",
+                "name",
+                "enabled",
+                "decide",
+                "match",
+                "trained_secrets",
+                "deny_message",
+                "created_at_unix"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_hand_authored_file_round_trips_through_save_and_load() {
+        // The whole path a user's file takes: hand-written JSON5 in,
+        // parsed, rewritten by the daemon, re-read. Both rule shapes
+        // must survive it byte-stable — a second save of what the
+        // first save produced has to be identical, or the daemon
+        // rewrites the user's file differently on every mutation.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        std::fs::write(
+            &path,
+            r#"{
+                rules: [
+                    {
+                        id: "01",
+                        name: "Cursor reads via gh",
+                        enabled: true,
+                        decide: "approve",
+                        match: { wrap: "gh", argv: "gh api --get /repos/*" },
+                        trained_secrets: ["GITHUB_TOKEN"],
+                        created_at_unix: 1700000000,
+                    },
+                    {
+                        id: "02",
+                        name: "block deletes",
+                        enabled: false,
+                        decide: "deny",
+                        match: { wrap: "gh", ancestor: "Cursor.app", cwd: "/Users/me/oss" },
+                        deny_message: "Use the UI instead.",
+                        trained_secrets: [],
+                    },
+                    {
+                        id: "03",
+                        name: "npm publish guard",
+                        enabled: true,
+                        wasm: { path: "rules/03.wasm", sha256: "00" },
+                        trained_secrets: ["NPM_TOKEN"],
+                    },
+                ],
+            }"#,
+        )
+        .expect("write");
+        let first = load_rules(&path).expect("load hand-authored file");
+        assert_eq!(first.rules.len(), 3);
+
+        // Rewriting and re-reading must not change a single rule.
+        save_rules(&path, &first.rules).expect("save");
+        let written = std::fs::read_to_string(&path).expect("read back");
+        let second = load_rules(&path).expect("reload");
+        assert_eq!(second.rules, first.rules);
+        save_rules(&path, &second.rules).expect("re-save");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read back"),
+            written,
+            "the daemon must write the same bytes for the same ruleset"
+        );
+
+        // And the fields the user wrote are the fields we hold.
+        let declarative = &first.rules[0];
+        assert_eq!(declarative.decide, Some(RuleDecision::Approve));
+        assert_eq!(declarative.created_at_unix, 1_700_000_000);
+        assert!(declarative.wasm.is_none());
+        let deny = &first.rules[1];
+        assert!(!deny.enabled);
+        assert_eq!(deny.deny_message.as_deref(), Some("Use the UI instead."));
+        assert_eq!(
+            deny.r#match
+                .as_ref()
+                .and_then(|m| m.cwd.as_ref())
+                .map(Pattern::as_str),
+            Some("/Users/me/oss")
+        );
+        let wasm = &first.rules[2];
+        assert!(wasm.decide.is_none() && wasm.r#match.is_none());
+        assert_eq!(
+            wasm.wasm.as_ref().map(|w| w.path.as_str()),
+            Some("rules/03.wasm")
+        );
+    }
+
+    #[test]
+    fn load_rejects_a_wasm_rule_carrying_declarative_fields() {
+        // The shape check has to run on the *file*, not just on the
+        // API. A `decide` or `deny_message` beside a `wasm` module is
+        // a rule whose author believes a static decision is in force
+        // when the module's return value is what actually decides —
+        // so the load fails loudly rather than ignoring the key.
+        //
+        // This is the case a permissive deserializer (an `untagged`
+        // sum type, say) would silently accept by matching the first
+        // variant that fits and dropping the rest.
+        let dir = tempfile::tempdir().expect("tempdir");
+        for (field, snippet) in [
+            ("decide", r#"decide: "deny","#),
+            ("deny_message", r#"deny_message: "blocked","#),
+        ] {
+            let path = dir.path().join(format!("{field}.json5"));
+            std::fs::write(
+                &path,
+                format!(
+                    r#"{{ rules: [ {{
+                        id: "01", name: "confused", enabled: true,
+                        {snippet}
+                        wasm: {{ path: "01.wasm", sha256: "00" }},
+                    }} ] }}"#
+                ),
+            )
+            .expect("write");
+            let err = format!("{:#}", load_rules(&path).expect_err("must reject"));
+            assert!(
+                err.contains(field) && err.contains("confused"),
+                "rejecting `{field}` must name the field and the rule: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn load_rejects_a_match_clause_with_no_decide() {
+        // The other silently-droppable half: a declarative rule that
+        // never says which way it fires. The evaluator's defensive
+        // `let (Some(m), Some(decide)) = …else { continue }` would
+        // skip it, so an operator's *deny* would stop covering what
+        // they wrote without a word anywhere.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        std::fs::write(
+            &path,
+            r#"{ rules: [ {
+                id: "01", name: "half a rule", enabled: true,
+                match: { wrap: "gh" },
+            } ] }"#,
+        )
+        .expect("write");
+        let err = format!("{:#}", load_rules(&path).expect_err("must reject"));
+        assert!(
+            err.contains("decide") && err.contains("half a rule"),
+            "{err}"
+        );
+    }
+
     // ── ID generation ─────────────────────────────────────────────────
 
     #[test]
