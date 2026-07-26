@@ -100,27 +100,61 @@ pub struct Caller {
     pub start_time: u64,
 }
 
+/// Limit on *useful* (non-self) entries a walk returns. The daemon's
+/// approval-cache walk and the consent UI both want to see the user's
+/// monitoring app at the top, even when it sits behind a deeply-recursive
+/// stack of self-frames.
+const MAX_CHAIN: usize = 16;
+
+/// Bound on the raw upward traversal, so a pathological tree can't spin
+/// forever. Deliberately further than [`MAX_CHAIN`], because self-frames
+/// don't count toward that one.
+const MAX_WALK: usize = 256;
+
+/// An ancestry as far as the walk got, and whether that was all of it.
+///
+/// The two halves are separate facts and the second one is the security-
+/// relevant one. `frames` is a *suffix* of the real ancestry — nearest-first
+/// storage means the frames given up are the outermost, the ones that answer
+/// "where did this ultimately come from". A consumer holding only `frames`
+/// cannot tell a chain that ended at its root from one the walk abandoned at
+/// [`MAX_CHAIN`], and the consent prompt spent both of those cases rendering
+/// its topmost row as though it were the origin.
+pub struct CallerChain {
+    /// The frames the walk collected, nearest-first.
+    pub frames: Vec<Caller>,
+    /// True when the walk stopped at its own ceiling with an unread ancestor
+    /// still above `frames`' last entry.
+    ///
+    /// False when the walk ran out of ancestry — reached a process with no
+    /// parent — which is the only way to know the outermost frame really is
+    /// the outermost one.
+    pub truncated: bool,
+}
+
 /// Walk from this process's parent up toward the root, newest first. Our
 /// own process is excluded (that's the *callers*, not us) — and so are
 /// any other `secreq` processes in the chain, because they're our PTY
 /// masters / inner shims, not "who's asking."
 ///
-/// Two depth caps:
-/// - `max_chain` is the limit on *useful* (non-self) entries returned.
-///   The daemon's approval-cache walk and the consent UI both want to
-///   see the user's monitoring app at the top, even when it sits behind
-///   a deeply-recursive stack of self-frames.
-/// - `max_walk` bounds the raw upward traversal so a pathological tree
-///   can't spin forever. We let the walk go further than `max_chain`
-///   because self-frames don't count toward it.
+/// Returns frames only. This is the **client** entry point, and a client's
+/// chain never reaches the consent prompt: the daemon throws it away and
+/// re-walks from the socket peer (`daemon::server::adopt_peer_provenance`),
+/// because a client's account of its own ancestry is a claim rather than a
+/// fact. The truncation bit is a display fact about the chain that gets
+/// rendered, so it is carried by [`caller_chain_from_pid`], which is where
+/// the rendered chain comes from.
 pub fn caller_chain() -> Vec<Caller> {
-    caller_chain_with_limit(16, 256)
+    caller_chain_with_limit(MAX_CHAIN, MAX_WALK).frames
 }
 
-fn caller_chain_with_limit(max_chain: usize, max_walk: usize) -> Vec<Caller> {
+fn caller_chain_with_limit(max_chain: usize, max_walk: usize) -> CallerChain {
     let sys = refreshed_system();
     let Ok(self_pid) = sysinfo::get_current_pid() else {
-        return Vec::new();
+        return CallerChain {
+            frames: Vec::new(),
+            truncated: false,
+        };
     };
     let my_exe = std::env::current_exe().ok();
 
@@ -131,17 +165,18 @@ fn caller_chain_with_limit(max_chain: usize, max_walk: usize) -> Vec<Caller> {
 
 /// Walk the ancestry of `seed_pid` (its parent and up), newest first,
 /// excluding secreq self-frames. `seed_pid` itself is the requester and
-/// is NOT included — we report who is *behind* it. Used by the SSH agent,
-/// where the requester is the socket peer rather than our own parent.
-pub fn caller_chain_from_pid(seed_pid: u32) -> Vec<Caller> {
-    caller_chain_from_pid_with_limit(seed_pid, 16, 256)
+/// is NOT included — we report who is *behind* it. Used by the SSH agent
+/// and by the daemon's peer-provenance adoption, where the requester is the
+/// socket peer rather than our own parent.
+pub fn caller_chain_from_pid(seed_pid: u32) -> CallerChain {
+    caller_chain_from_pid_with_limit(seed_pid, MAX_CHAIN, MAX_WALK)
 }
 
 fn caller_chain_from_pid_with_limit(
     seed_pid: u32,
     max_chain: usize,
     max_walk: usize,
-) -> Vec<Caller> {
+) -> CallerChain {
     let sys = refreshed_system();
     let my_exe = std::env::current_exe().ok();
     let seed = sysinfo::Pid::from_u32(seed_pid);
@@ -294,19 +329,33 @@ fn refreshed_system() -> System {
 /// newest first, collecting non-self frames until `max_chain` useful
 /// entries or `max_walk` raw steps. Shared by `caller_chain` and
 /// `caller_chain_from_pid`.
+///
+/// Stopping at either ceiling sets [`CallerChain::truncated`], because in
+/// both cases `current` is still a live pid we chose not to read. Running out
+/// of ancestry does not: the loop condition fails, and a process with no
+/// parent is genuinely the top.
+///
+/// A frame `sysinfo` cannot resolve mid-walk (`sys.process(pid)` returning
+/// `None` — a process that exited between the refresh and here) also stops
+/// the walk, and deliberately does *not* set the flag. That is a different
+/// fact from "we declined to look further", and a race a reader can do
+/// nothing about is not worth putting a permanent row on the prompt for.
 fn walk(
     sys: &System,
     start: Option<sysinfo::Pid>,
     my_exe: Option<&Path>,
     max_chain: usize,
     max_walk: usize,
-) -> Vec<Caller> {
-    let mut chain = Vec::new();
+) -> CallerChain {
+    let mut frames = Vec::new();
     let mut current = start;
     let mut walked = 0usize;
     while let Some(pid) = current {
-        if walked >= max_walk || chain.len() >= max_chain {
-            break;
+        if walked >= max_walk || frames.len() >= max_chain {
+            return CallerChain {
+                frames,
+                truncated: true,
+            };
         }
         walked += 1;
         let Some(proc) = sys.process(pid) else { break };
@@ -322,11 +371,14 @@ fn walk(
         // `secreq gh` PTY masters sit between the wrap and the real
         // ancestor we want to anchor approvals on.
         if !is_self_frame(&caller, my_exe) {
-            chain.push(caller);
+            frames.push(caller);
         }
         current = proc.parent();
     }
-    chain
+    CallerChain {
+        frames,
+        truncated: false,
+    }
 }
 
 /// True if `caller` is a `secreq` process — our own machinery, not a
@@ -390,7 +442,7 @@ mod tests {
     fn chain_from_pid_starts_above_the_given_pid_and_excludes_self_frames() {
         // Our own parent chain, requested explicitly, equals caller_chain().
         let me = std::process::id();
-        let explicit = caller_chain_from_pid(me);
+        let explicit = caller_chain_from_pid(me).frames;
         let implicit = caller_chain();
         // Both anchor on our parent; neither contains our own pid.
         assert!(explicit.iter().all(|c| c.pid != me));
@@ -398,6 +450,49 @@ mod tests {
             explicit.iter().map(|c| c.pid).collect::<Vec<_>>(),
             implicit.iter().map(|c| c.pid).collect::<Vec<_>>(),
         );
+    }
+
+    /// The fact the consent prompt could not previously state: a chain that
+    /// stops at the walk's ceiling is a *suffix* of the ancestry, and the
+    /// frame it ends on is not the origin. Without this bit the prompt draws
+    /// that frame as its top row and the reader has no way to tell.
+    #[test]
+    fn a_chain_that_hit_the_ceiling_says_so() {
+        let me = std::process::id();
+        // Under any test runner there is at least a cargo process and a shell
+        // above us, so a ceiling of one frame is guaranteed to be short.
+        let clipped = caller_chain_from_pid_with_limit(me, 1, MAX_WALK);
+        assert_eq!(clipped.frames.len(), 1);
+        assert!(
+            clipped.truncated,
+            "a walk that stopped at its own limit must admit it"
+        );
+    }
+
+    /// The mirror image, and the reason the bit is worth carrying: a walk
+    /// that reached a process with no parent has seen the whole ancestry, and
+    /// saying "there may be more above" there would be the prompt inventing a
+    /// doubt of its own.
+    #[test]
+    fn a_chain_that_reached_the_top_does_not_claim_to_be_short() {
+        // Ceilings far past anything a real process tree reaches, so the only
+        // way out of the loop is running out of ancestors.
+        let me = std::process::id();
+        let full = caller_chain_from_pid_with_limit(me, 4096, 4096);
+        assert!(
+            !full.truncated,
+            "walked {} frames to the root and still reported truncation",
+            full.frames.len()
+        );
+    }
+
+    /// The raw-step ceiling is the other way out of the loop, and it means the
+    /// same thing to a reader: we stopped, something is still above.
+    #[test]
+    fn the_raw_walk_ceiling_counts_as_truncation_too() {
+        let me = std::process::id();
+        let clipped = caller_chain_from_pid_with_limit(me, MAX_CHAIN, 1);
+        assert!(clipped.truncated);
     }
 
     #[test]

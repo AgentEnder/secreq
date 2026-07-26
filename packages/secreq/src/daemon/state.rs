@@ -2691,6 +2691,7 @@ mod tests {
             dedupe_key,
             subject: AskSubject::Wrap(super::super::proto::WrapSubject {
                 cwd: String::new(),
+                callers_truncated: false,
                 callers: callers
                     .into_iter()
                     .map(|(pid, start_time)| Caller {
@@ -2720,6 +2721,7 @@ mod tests {
         };
         ask.subject = AskSubject::SshSign(super::super::proto::SshSubject {
             cwd: wrap.cwd,
+            callers_truncated: wrap.callers_truncated,
             callers: wrap.callers,
             info: SshAskInfo {
                 key_id: key_id.to_owned(),
@@ -3063,6 +3065,7 @@ mod tests {
             },
             subject: AskSubject::Wrap(super::super::proto::WrapSubject {
                 cwd: String::new(),
+                callers_truncated: false,
                 callers: vec![],
                 secrets: vec![super::super::proto::SecretAsk {
                     name: secret.to_owned(),
@@ -3874,6 +3877,7 @@ mod tests {
             },
             subject: AskSubject::SshSign(super::super::proto::SshSubject {
                 cwd: String::new(),
+                callers_truncated: false,
                 callers: vec![],
                 info: super::super::proto::SshAskInfo {
                     key_id: key_id.to_owned(),

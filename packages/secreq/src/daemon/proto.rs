@@ -296,6 +296,11 @@ pub struct WrapSubject {
     pub cwd: String,
     /// Parent-process chain, nearest-first.
     pub callers: Vec<Caller>,
+    /// True when the walk that produced `callers` stopped at its own ceiling
+    /// with an ancestor still above the outermost frame. See
+    /// [`Ask::callers_truncated`].
+    #[serde(default)]
+    pub callers_truncated: bool,
     /// Secrets to be granted: name + reference + reason. The locator is
     /// not a value, so it's safe on the wire — and the daemon needs it to
     /// invoke the provider's `retrieve` template.
@@ -356,6 +361,11 @@ pub struct SshSubject {
     /// sourced, exactly like a wrap ask's: this path has always derived
     /// provenance from `SO_PEERCRED` rather than trusting a client.
     pub callers: Vec<Caller>,
+    /// True when the walk that produced `callers` stopped at its own ceiling
+    /// with an ancestor still above the outermost frame. See
+    /// [`Ask::callers_truncated`].
+    #[serde(default)]
+    pub callers_truncated: bool,
     /// The key identity, its fingerprint, and the session a grant binds to.
     pub info: SshAskInfo,
 }
@@ -374,6 +384,27 @@ impl Ask {
             AskSubject::Wrap(w) => &w.callers,
             AskSubject::SshSign(s) => &s.callers,
             AskSubject::ScopedAgent(_) => &[],
+        }
+    }
+
+    /// Whether [`Ask::callers`] is the whole ancestry or only its innermost
+    /// part.
+    ///
+    /// `provenance`'s walk stops after a fixed number of frames. Storage is
+    /// nearest-first, so the frames it gives up are the *outermost* ones —
+    /// exactly the ones that answer "where did this ultimately come from".
+    /// The prompt draws the chain root-first and had no way to tell a real
+    /// root from the walk's stopping point, so a caller deep enough inside its
+    /// own ancestry could put the frame of its choosing at the top of the
+    /// tree and have the user read it as the origin.
+    ///
+    /// A guest ask has no chain to have walked past, so nothing can be
+    /// missing from it.
+    pub fn callers_truncated(&self) -> bool {
+        match &self.subject {
+            AskSubject::Wrap(w) => w.callers_truncated,
+            AskSubject::SshSign(s) => s.callers_truncated,
+            AskSubject::ScopedAgent(_) => false,
         }
     }
 

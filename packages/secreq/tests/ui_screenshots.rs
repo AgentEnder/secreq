@@ -240,6 +240,7 @@ fn submit(
         subject: AskSubject::Wrap(WrapSubject {
             cwd: "~/repos/acme".to_owned(),
             callers,
+            callers_truncated: false,
             secrets,
             providers: HashMap::new(),
             allow_remember: true,
@@ -274,6 +275,7 @@ fn submit_run(
         subject: AskSubject::Wrap(WrapSubject {
             cwd: "~/repos/acme".to_owned(),
             callers,
+            callers_truncated: false,
             secrets,
             providers: HashMap::new(),
             allow_remember: false,
@@ -327,6 +329,7 @@ fn submit_ssh(
         subject: AskSubject::SshSign(SshSubject {
             cwd: cwd.to_owned(),
             callers,
+            callers_truncated: false,
             info: SshAskInfo {
                 key_id: key_id.to_owned(),
                 fingerprint: fingerprint.to_owned(),
@@ -405,6 +408,7 @@ fn pending(
         subject: AskSubject::Wrap(WrapSubject {
             cwd: "~/repos/acme".to_owned(),
             callers,
+            callers_truncated: false,
             secrets,
             providers: HashMap::new(),
             allow_remember: true,

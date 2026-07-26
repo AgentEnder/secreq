@@ -1070,24 +1070,25 @@ fn adopt_peer_provenance(ask: &mut Ask, stream: &UnixStream) -> Result<()> {
     let peer = super::peercred::peer_pid(stream)
         .context("could not read the peer's pid from the consent socket")?;
 
-    let (callers, cwd) = match &mut ask.subject {
-        AskSubject::Wrap(w) => (&mut w.callers, &mut w.cwd),
+    let (callers, truncated, cwd) = match &mut ask.subject {
+        AskSubject::Wrap(w) => (&mut w.callers, &mut w.callers_truncated, &mut w.cwd),
         // An SSH sign never reaches this socket — the daemon is the agent and
         // builds its own ask from `agent.sock`'s peer — but if one ever did,
         // it has the same kernel-sourced fields a wrap ask has and is
         // corrected the same way.
-        AskSubject::SshSign(s) => (&mut s.callers, &mut s.cwd),
+        AskSubject::SshSign(s) => (&mut s.callers, &mut s.callers_truncated, &mut s.cwd),
         AskSubject::ScopedAgent(_) => return Ok(()),
     };
 
     let chain = crate::provenance::caller_chain_from_pid(peer);
-    let parent = chain.first().context(
+    let parent = chain.frames.first().context(
         "the requesting process has no visible parent; refusing to prompt for an ask \
          whose provenance cannot be established",
     )?;
     let (parent_pid, parent_start_time) = (parent.pid, parent.start_time);
 
     *callers = chain
+        .frames
         .iter()
         .map(|c| super::proto::Caller {
             pid: c.pid,
@@ -1097,6 +1098,10 @@ fn adopt_peer_provenance(ask: &mut Ask, stream: &UnixStream) -> Result<()> {
             exe: c.exe.clone(),
         })
         .collect();
+    // Replaced alongside the chain it describes: a client that under-reported
+    // its own depth would otherwise leave the prompt claiming to show a whole
+    // ancestry the daemon had just re-walked and found longer.
+    *truncated = chain.truncated;
     // A cwd we cannot read is rendered as absent rather than guessed at, and
     // the client's claim is not a fallback — it is the thing being replaced.
     *cwd = crate::provenance::cwd_for_pid(peer).unwrap_or_default();
@@ -1533,6 +1538,7 @@ mod tests {
                 },
                 subject: AskSubject::Wrap(WrapSubject {
                     cwd: "/work".to_owned(),
+                    callers_truncated: false,
                     callers: vec![],
                     secrets: vec![],
                     providers: std::collections::HashMap::new(),
@@ -1795,6 +1801,7 @@ mod tests {
             },
             subject: AskSubject::Wrap(WrapSubject {
                 cwd: "/somewhere/the/attacker/named".to_owned(),
+                callers_truncated: false,
                 callers: vec![super::super::proto::Caller {
                     pid: FORGED_PID,
                     name: "zsh".to_owned(),

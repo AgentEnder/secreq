@@ -193,6 +193,11 @@ pub(crate) fn build_ask(
         },
         subject: proto::AskSubject::Wrap(proto::WrapSubject {
             cwd: cwd.display().to_string(),
+            // The daemon re-walks from the socket peer and replaces both this
+            // chain and this flag (`adopt_peer_provenance`), because a
+            // client's account of its own ancestry is a claim. Nothing a
+            // client writes here is ever what the prompt renders.
+            callers_truncated: false,
             callers: callers
                 .iter()
                 .map(|c| proto::Caller {

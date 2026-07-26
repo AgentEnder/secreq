@@ -204,7 +204,8 @@ fn signing_context_with_seeded_approval(
     // Compute the anchor exactly as the SIGN handler will, then seed a
     // session grant for it that won't expire during the test.
     let chain = secreq::provenance::caller_chain_from_pid(std::process::id());
-    let anchor = secreq::provenance::select_anchor(&chain).expect("an anchor in the test's chain");
+    let anchor =
+        secreq::provenance::select_anchor(&chain.frames).expect("an anchor in the test's chain");
     let far_future = u64::MAX;
     let state = Arc::new(Mutex::new(State::new()));
     state.lock().unwrap().remember_ssh_grant(SshGrant {

@@ -328,7 +328,7 @@ fn handle_sign(
     // a sign request has no such field, so we read it off the connecting
     // process. Best-effort — an unreadable cwd renders as absent.
     let cwd = crate::provenance::cwd_for_pid(peer_pid).unwrap_or_default();
-    let Some(anchor) = crate::provenance::select_anchor(&chain) else {
+    let Some(anchor) = crate::provenance::select_anchor(&chain.frames) else {
         super::log::log_at(
             "ssh-agent",
             format_args!(
@@ -362,7 +362,7 @@ fn handle_sign(
     let decision = match decide_sign(state, identity, anchor, &chain, &cwd, data) {
         Some(d) if d.approved() => d,
         Some(deny) => {
-            audit_sign(identity, &chain, &cwd, deny);
+            audit_sign(identity, &chain.frames, &cwd, deny);
             super::log::log_at(
                 "ssh-agent",
                 format_args!(
@@ -413,7 +413,7 @@ fn handle_sign(
             // carries the decision that authorized it (`ApproveCached` on a
             // cache hit, or whatever the user chose). The signature bytes are
             // never recorded; the row holds only the key id + fingerprint.
-            audit_sign(identity, &chain, &cwd, decision);
+            audit_sign(identity, &chain.frames, &cwd, decision);
             super::log::log_at(
                 "ssh-agent",
                 format_args!(
@@ -452,7 +452,7 @@ fn decide_sign(
     state: &SharedState,
     identity: &PreparedIdentity,
     anchor: crate::consent::SshAnchor,
-    chain: &[crate::provenance::Caller],
+    chain: &crate::provenance::CallerChain,
     cwd: &str,
     data: &[u8],
 ) -> Option<Decision> {
@@ -520,7 +520,7 @@ fn decide_sign_on_miss(
     state: &SharedState,
     identity: &PreparedIdentity,
     anchor: crate::consent::SshAnchor,
-    chain: &[crate::provenance::Caller],
+    chain: &crate::provenance::CallerChain,
     cwd: &str,
     data: &[u8],
     gui_available: bool,
@@ -642,12 +642,12 @@ fn grant_scope_for(decision: Decision, key_id: &str) -> Option<SshGrantScope> {
 fn sign_ask(
     identity: &PreparedIdentity,
     anchor: crate::consent::SshAnchor,
-    chain: &[crate::provenance::Caller],
+    chain: &crate::provenance::CallerChain,
     cwd: &str,
     data: &[u8],
 ) -> Ask {
     let wrap = format!("ssh:{}", identity.key_id);
-    let anchor_frame = crate::provenance::select_anchor(chain);
+    let anchor_frame = crate::provenance::select_anchor(&chain.frames);
     debug_assert!(
         anchor_frame.is_none_or(|c| c.pid == anchor.pid),
         "the session named in the prompt must be the session the grant keys on"
@@ -672,7 +672,13 @@ fn sign_ask(
         // which is exactly what the scoped-agent path cannot have.
         subject: AskSubject::SshSign(SshSubject {
             cwd: cwd.to_owned(),
+            // The chain and "is that all of it" travel together from the walk
+            // to the prompt. Carried as one value rather than two arguments
+            // because they are one fact: a suffix of an ancestry, plus the
+            // only thing that distinguishes it from a whole one.
+            callers_truncated: chain.truncated,
             callers: chain
+                .frames
                 .iter()
                 .map(|c| Caller {
                     pid: c.pid,
@@ -878,7 +884,7 @@ mod tests {
             },
             reason: None,
         };
-        let chain: Vec<crate::provenance::Caller> = Vec::new();
+        let chain = whole_chain(Vec::new());
 
         let decision = decide_sign_on_miss(
             &state,
@@ -935,16 +941,26 @@ mod tests {
         }
     }
 
+    /// An ancestry the walk saw all of — what these fixtures mean unless one
+    /// says otherwise. The truncation half is exercised where it is decided
+    /// (`provenance::walk`) and where it is read (`prompt_ui`).
+    fn whole_chain(frames: Vec<crate::provenance::Caller>) -> crate::provenance::CallerChain {
+        crate::provenance::CallerChain {
+            frames,
+            truncated: false,
+        }
+    }
+
     /// The prompt's "Approve for 30 min" buttons bind a grant to the anchor,
     /// not to the command in the header — so the ask has to say which session
     /// that is, or the user is approving something the prompt never named.
     #[test]
     fn sign_ask_names_the_session_the_grant_would_bind_to() {
-        let chain = vec![
+        let chain = whole_chain(vec![
             test_caller(8120, "git", Some("/usr/bin/git")),
             test_caller(7926, "-zsh", Some("/bin/zsh")),
-        ];
-        let anchor = crate::provenance::select_anchor(&chain).expect("anchor");
+        ]);
+        let anchor = crate::provenance::select_anchor(&chain.frames).expect("anchor");
         let ask = sign_ask(
             &test_identity("github"),
             SshAnchor {
@@ -974,12 +990,12 @@ mod tests {
     fn the_named_session_is_the_one_the_grant_keys_on() {
         // The attacker sits under the shell and calls itself `zsh`; the
         // anchor must resolve past it, and the label must follow.
-        let chain = vec![
+        let chain = whole_chain(vec![
             test_caller(8120, "git", Some("/usr/bin/git")),
             test_caller(8000, "zsh", Some("/tmp/.hidden/payload")),
             test_caller(7926, "-zsh", Some("/bin/zsh")),
-        ];
-        let anchor = crate::provenance::select_anchor(&chain).expect("anchor");
+        ]);
+        let anchor = crate::provenance::select_anchor(&chain.frames).expect("anchor");
         let ask = sign_ask(
             &test_identity("github"),
             SshAnchor {
@@ -1048,7 +1064,7 @@ mod tests {
         .expect("save rules");
         let state: SharedState = Arc::new(Mutex::new(State::with_rules_path(path)));
         let identity = test_identity("github");
-        let chain: Vec<crate::provenance::Caller> = Vec::new();
+        let chain = whole_chain(Vec::new());
 
         let decision = decide_sign(
             &state,
@@ -1091,7 +1107,7 @@ mod tests {
         .expect("save rules");
         let state: SharedState = Arc::new(Mutex::new(State::with_rules_path(path)));
         let identity = test_identity("github");
-        let chain: Vec<crate::provenance::Caller> = Vec::new();
+        let chain = whole_chain(Vec::new());
 
         let decision = decide_sign(
             &state,
@@ -1195,7 +1211,7 @@ mod tests {
     #[test]
     fn two_signs_over_different_payloads_do_not_share_a_dedupe_key() {
         let identity = test_identity("github");
-        let chain: Vec<crate::provenance::Caller> = Vec::new();
+        let chain = whole_chain(Vec::new());
 
         let a = sign_ask(
             &identity,
@@ -1232,7 +1248,7 @@ mod tests {
     #[test]
     fn two_signs_over_the_same_payload_still_coalesce() {
         let identity = test_identity("github");
-        let chain: Vec<crate::provenance::Caller> = Vec::new();
+        let chain = whole_chain(Vec::new());
 
         let a = sign_ask(
             &identity,
@@ -1263,7 +1279,7 @@ mod tests {
     #[test]
     fn the_payload_digest_stays_out_of_the_rule_facing_wrap() {
         let identity = test_identity("github");
-        let chain: Vec<crate::provenance::Caller> = Vec::new();
+        let chain = whole_chain(Vec::new());
         let ask = sign_ask(
             &identity,
             SshAnchor {
