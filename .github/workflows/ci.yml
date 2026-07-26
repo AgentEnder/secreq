@@ -30,6 +30,23 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+  # The JS/TS/CSS half of the same gate. Without it these files drift: before
+  # this job existed nothing checked them, and 60 of the 61 files under
+  # docs-site had wandered into their own shape.
+  web:
+    name: oxfmt + oxlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run format:check
+      - run: pnpm run lint
+
   test:
     name: build / clippy / test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

@@ -10,20 +10,20 @@
 // `npm test` (as-pect). See docs/wasm-rules.md at the repo root for the
 // full authoring guide.
 
-import { RuleCtx, Decision, approve, pass, deny } from "secreq-rule";
+import { RuleCtx, Decision, approve, pass, deny } from 'secreq-rule';
 
 /** Publishes are only auto-approved from checkouts under this tree. */
-const PUBLISH_ROOT = "/home/me/oss/";
+const PUBLISH_ROOT = '/home/me/oss/';
 
 /** Case-insensitive needle for agent sessions in the caller chain. */
-const AGENT_NEEDLE = "claude";
+const AGENT_NEEDLE = 'claude';
 
 export function decide(ctx: RuleCtx): Decision {
   // Only the npm wrap, only `npm publish …`. Anything else is not this
   // rule's call to make.
-  if (ctx.wrap != "npm") return pass();
+  if (ctx.wrap != 'npm') return pass();
   const argv = ctx.joinedArgv;
-  if (argv != "npm publish" && !argv.startsWith("npm publish ")) {
+  if (argv != 'npm publish' && !argv.startsWith('npm publish ')) {
     return pass();
   }
 
@@ -37,16 +37,13 @@ export function decide(ctx: RuleCtx): Decision {
       c.command.toLowerCase().includes(AGENT_NEEDLE)
     ) {
       return deny(
-        "npm publish from an AI-agent session is never auto-approved " +
-          "(caller: " +
-          c.name +
-          ")",
+        'npm publish from an AI-agent session is never auto-approved ' + '(caller: ' + c.name + ')',
       );
     }
   }
 
   // Publishes from the canonical checkout tree ride through silently.
-  if (ctx.cwd == "/home/me/oss" || ctx.cwd.startsWith(PUBLISH_ROOT)) {
+  if (ctx.cwd == '/home/me/oss' || ctx.cwd.startsWith(PUBLISH_ROOT)) {
     return approve();
   }
 

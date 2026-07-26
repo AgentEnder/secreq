@@ -3,12 +3,18 @@
   "version": "0.0.0",
   "private": true,
   "license": "MIT",
-  "packageManager": "pnpm@10.33.2",
-  "scripts": {},
+  "scripts": {
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "lint": "oxlint"
+  },
   "devDependencies": {
     "@nx/js": "^22.5.0",
     "nx": "^22.5.0",
     "nx-github-pages": "^1.2.0",
+    "oxfmt": "0.60.0",
+    "oxlint": "1.75.0",
     "typescript": "^5.9.2"
-  }
+  },
+  "packageManager": "pnpm@10.33.2"
 }

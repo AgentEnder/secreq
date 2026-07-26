@@ -5,7 +5,7 @@
 // skips unknown fields so a newer host can add ctx fields without breaking
 // already-compiled rules. Malformed input aborts (host sees a clean trap).
 
-import { Caller, RuleCtx } from "./ctx";
+import { Caller, RuleCtx } from './ctx';
 
 /** Escape `s` as a JSON string literal, including the surrounding quotes. */
 export function quoteJson(s: string): string {
@@ -15,19 +15,19 @@ export function quoteJson(s: string): string {
     if (c == 0x22) {
       out += '\\"';
     } else if (c == 0x5c) {
-      out += "\\\\";
+      out += '\\\\';
     } else if (c == 0x08) {
-      out += "\\b";
+      out += '\\b';
     } else if (c == 0x09) {
-      out += "\\t";
+      out += '\\t';
     } else if (c == 0x0a) {
-      out += "\\n";
+      out += '\\n';
     } else if (c == 0x0c) {
-      out += "\\f";
+      out += '\\f';
     } else if (c == 0x0d) {
-      out += "\\r";
+      out += '\\r';
     } else if (c < 0x20) {
-      out += "\\u" + c.toString(16).padStart(4, "0");
+      out += '\\u' + c.toString(16).padStart(4, '0');
     } else {
       out += String.fromCharCode(c);
     }
@@ -45,7 +45,7 @@ class Parser {
   }
 
   fail(what: string): void {
-    abort("secreq-rule: malformed ctx JSON: " + what);
+    abort('secreq-rule: malformed ctx JSON: ' + what);
   }
 
   skipWs(): void {
@@ -60,13 +60,13 @@ class Parser {
   }
 
   peek(): i32 {
-    if (this.pos >= this.text.length) this.fail("unexpected end of input");
+    if (this.pos >= this.text.length) this.fail('unexpected end of input');
     return this.text.charCodeAt(this.pos);
   }
 
   expect(c: i32): void {
     if (this.peek() != c) {
-      this.fail("expected `" + String.fromCharCode(c) + "`");
+      this.fail('expected `' + String.fromCharCode(c) + '`');
     }
     this.pos++;
   }
@@ -74,7 +74,7 @@ class Parser {
   parseString(): string {
     this.skipWs();
     this.expect(0x22); // `"`
-    let out = "";
+    let out = '';
     while (true) {
       const c = this.peek();
       this.pos++;
@@ -88,15 +88,15 @@ class Parser {
       const e = this.peek();
       this.pos++;
       if (e == 0x22) out += '"';
-      else if (e == 0x5c) out += "\\";
-      else if (e == 0x2f) out += "/";
-      else if (e == 0x62) out += "\b";
-      else if (e == 0x66) out += "\f";
-      else if (e == 0x6e) out += "\n";
-      else if (e == 0x72) out += "\r";
-      else if (e == 0x74) out += "\t";
+      else if (e == 0x5c) out += '\\';
+      else if (e == 0x2f) out += '/';
+      else if (e == 0x62) out += '\b';
+      else if (e == 0x66) out += '\f';
+      else if (e == 0x6e) out += '\n';
+      else if (e == 0x72) out += '\r';
+      else if (e == 0x74) out += '\t';
       else if (e == 0x75) out += String.fromCharCode(this.parseHex4());
-      else this.fail("bad escape");
+      else this.fail('bad escape');
     }
   }
 
@@ -109,7 +109,7 @@ class Parser {
       if (c >= 0x30 && c <= 0x39) d = c - 0x30;
       else if (c >= 0x61 && c <= 0x66) d = c - 0x61 + 10;
       else if (c >= 0x41 && c <= 0x46) d = c - 0x41 + 10;
-      else this.fail("bad \\u escape");
+      else this.fail('bad \\u escape');
       v = (v << 4) | d;
     }
     return v;
@@ -130,7 +130,7 @@ class Parser {
       const c = this.peek();
       this.pos++;
       if (c == 0x5d) return out; // `]`
-      if (c != 0x2c) this.fail("expected `,` or `]`"); // `,`
+      if (c != 0x2c) this.fail('expected `,` or `]`'); // `,`
     }
   }
 
@@ -147,14 +147,14 @@ class Parser {
       const key = this.parseString();
       this.skipWs();
       this.expect(0x3a); // `:`
-      if (key == "name") caller.name = this.parseString();
-      else if (key == "command") caller.command = this.parseString();
+      if (key == 'name') caller.name = this.parseString();
+      else if (key == 'command') caller.command = this.parseString();
       else this.skipValue();
       this.skipWs();
       const c = this.peek();
       this.pos++;
       if (c == 0x7d) return caller; // `}`
-      if (c != 0x2c) this.fail("expected `,` or `}`");
+      if (c != 0x2c) this.fail('expected `,` or `}`');
     }
   }
 
@@ -173,7 +173,7 @@ class Parser {
       const c = this.peek();
       this.pos++;
       if (c == 0x5d) return out;
-      if (c != 0x2c) this.fail("expected `,` or `]`");
+      if (c != 0x2c) this.fail('expected `,` or `]`');
     }
   }
 
@@ -200,7 +200,7 @@ class Parser {
         const d = this.peek();
         this.pos++;
         if (d == 0x7d) return;
-        if (d != 0x2c) this.fail("expected `,` or `}`");
+        if (d != 0x2c) this.fail('expected `,` or `}`');
       }
     } else if (c == 0x5b) {
       // `[`
@@ -216,7 +216,7 @@ class Parser {
         const d = this.peek();
         this.pos++;
         if (d == 0x5d) return;
-        if (d != 0x2c) this.fail("expected `,` or `]`");
+        if (d != 0x2c) this.fail('expected `,` or `]`');
       }
     } else {
       // Number / true / false / null: consume the literal run.
@@ -254,17 +254,16 @@ export function parseRuleCtx(text: string): RuleCtx {
     const key = p.parseString();
     p.skipWs();
     p.expect(0x3a); // `:`
-    if (key == "wrap") ctx.wrap = p.parseString();
-    else if (key == "joined_argv") ctx.joinedArgv = p.parseString();
-    else if (key == "callers") ctx.callers = p.parseCallers();
-    else if (key == "cwd") ctx.cwd = p.parseString();
-    else if (key == "secrets")
-      ctx.secrets = p.parseStringArray();
+    if (key == 'wrap') ctx.wrap = p.parseString();
+    else if (key == 'joined_argv') ctx.joinedArgv = p.parseString();
+    else if (key == 'callers') ctx.callers = p.parseCallers();
+    else if (key == 'cwd') ctx.cwd = p.parseString();
+    else if (key == 'secrets') ctx.secrets = p.parseStringArray();
     else p.skipValue();
     p.skipWs();
     const c = p.peek();
     p.pos++;
     if (c == 0x7d) return ctx; // `}`
-    if (c != 0x2c) p.fail("expected `,` or `}`");
+    if (c != 0x2c) p.fail('expected `,` or `}`');
   }
 }

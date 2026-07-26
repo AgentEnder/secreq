@@ -13,9 +13,9 @@
 // freed), so buffers returned to the host stay valid until the instance is
 // dropped — the host uses one instance per evaluation.
 
-import { RuleCtx } from "./ctx";
-import { Decision, DecisionKind } from "./decision";
-import { parseRuleCtx, quoteJson } from "./json";
+import { RuleCtx } from './ctx';
+import { Decision, DecisionKind } from './decision';
+import { parseRuleCtx, quoteJson } from './json';
 
 /** Backing for the exported `alloc`: hand out raw heap bytes. */
 export function allocBytes(len: i32): usize {
@@ -35,7 +35,7 @@ export function encodeDecision(d: Decision): u64 {
   } else if (d.kind == DecisionKind.Pass) {
     json = '"pass"';
   } else {
-    json = '{"deny":' + quoteJson(d.reason) + "}";
+    json = '{"deny":' + quoteJson(d.reason) + '}';
   }
   const buf = String.UTF8.encode(json);
   const ptr = changetype<usize>(buf);

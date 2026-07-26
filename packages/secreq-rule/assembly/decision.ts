@@ -20,12 +20,12 @@ export class Decision {
 
 /** Auto-approve the ask without prompting. */
 export function approve(): Decision {
-  return new Decision(DecisionKind.Approve, "");
+  return new Decision(DecisionKind.Approve, '');
 }
 
 /** No opinion — fall through to declarative rules / the consent prompt. */
 export function pass(): Decision {
-  return new Decision(DecisionKind.Pass, "");
+  return new Decision(DecisionKind.Pass, '');
 }
 
 /** Auto-deny the ask. `reason` is shown to the user. */

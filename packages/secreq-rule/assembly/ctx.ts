@@ -5,21 +5,21 @@
 /** One entry of the caller chain, nearest-first. */
 export class Caller {
   /** Short process name (executable basename, e.g. `zsh`, `Cursor`). */
-  name: string = "";
+  name: string = '';
   /** Full joined command line of the caller. */
-  command: string = "";
+  command: string = '';
 }
 
 /** Everything a rule can see about one live ask. */
 export class RuleCtx {
   /** The wrap name being asked for (e.g. `gh`). */
-  wrap: string = "";
+  wrap: string = '';
   /** Joined argv of the wrapped command (e.g. `gh api --get /repos/x`). */
-  joinedArgv: string = "";
+  joinedArgv: string = '';
   /** Caller chain, nearest-first. */
   callers: Caller[] = [];
   /** Working directory of the requesting process. */
-  cwd: string = "";
+  cwd: string = '';
   /**
    * What the ask would release, by name. Env-var names for a wrap run
    * (`GITHUB_TOKEN`); for an SSH sign, the single identity `ssh:<key_id>`

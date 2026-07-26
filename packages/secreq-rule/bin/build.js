@@ -16,15 +16,15 @@
 // `--raw` skips the generated entry and compiles the file as-is — for
 // modules that hand-implement the ABI (used by secreq's own test fixtures).
 
-"use strict";
+'use strict';
 
-const { execFileSync } = require("node:child_process");
-const fs = require("node:fs");
-const path = require("node:path");
+const { execFileSync } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
 
 function usage(msg) {
   if (msg) console.error(`secreq-rule-build: ${msg}`);
-  console.error("usage: secreq-rule-build [--raw] <rule.ts> -o <rule.wasm>");
+  console.error('usage: secreq-rule-build [--raw] <rule.ts> -o <rule.wasm>');
   process.exit(2);
 }
 
@@ -34,14 +34,14 @@ function parseArgs(argv) {
   let output = null;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--raw") raw = true;
-    else if (arg === "-o" || arg === "--output") output = argv[++i];
-    else if (arg.startsWith("-")) usage(`unknown flag ${arg}`);
+    if (arg === '--raw') raw = true;
+    else if (arg === '-o' || arg === '--output') output = argv[++i];
+    else if (arg.startsWith('-')) usage(`unknown flag ${arg}`);
     else if (input === null) input = arg;
-    else usage("more than one input file");
+    else usage('more than one input file');
   }
-  if (!input) usage("missing input rule file");
-  if (!output) usage("missing -o <rule.wasm>");
+  if (!input) usage('missing input rule file');
+  if (!output) usage('missing -o <rule.wasm>');
   return { raw, input: path.resolve(input), output: path.resolve(output) };
 }
 
@@ -51,7 +51,7 @@ function parseArgs(argv) {
 // cwd), falling back to this package's own install (the in-repo fixture
 // case, where rebuild.sh installs here).
 function resolveAsc() {
-  return require.resolve("assemblyscript/bin/asc.js", {
+  return require.resolve('assemblyscript/bin/asc.js', {
     paths: [process.cwd(), __dirname],
   });
 }
@@ -59,9 +59,9 @@ function resolveAsc() {
 // Relative import specifier from `fromDir` to ts file `to`, extension
 // stripped, forward slashes (what asc's resolver expects).
 function importSpecifier(fromDir, to) {
-  let rel = path.relative(fromDir, to).replace(/\\/g, "/");
-  rel = rel.replace(/\.ts$/, "");
-  if (!rel.startsWith(".")) rel = "./" + rel;
+  let rel = path.relative(fromDir, to).replace(/\\/g, '/');
+  rel = rel.replace(/\.ts$/, '');
+  if (!rel.startsWith('.')) rel = './' + rel;
   return rel;
 }
 
@@ -76,11 +76,11 @@ function importSpecifier(fromDir, to) {
 function abiSpecifier(ruleDir, abiPath) {
   try {
     const viaPackage = path.dirname(
-      require.resolve("secreq-rule/package.json", { paths: [ruleDir] })
+      require.resolve('secreq-rule/package.json', { paths: [ruleDir] }),
     );
-    const thisPackage = path.join(__dirname, "..");
+    const thisPackage = path.join(__dirname, '..');
     if (fs.realpathSync(viaPackage) === fs.realpathSync(thisPackage)) {
-      return "secreq-rule/assembly/abi";
+      return 'secreq-rule/assembly/abi';
     }
   } catch (err) {
     // No resolvable secreq-rule package from the rule's directory — the
@@ -88,7 +88,7 @@ function abiSpecifier(ruleDir, abiPath) {
     // that hides ./package.json) must stay loud: falling back to a
     // relative specifier here would recreate the nominal-identity split
     // this function exists to prevent.
-    if (err && err.code !== "MODULE_NOT_FOUND") throw err;
+    if (err && err.code !== 'MODULE_NOT_FOUND') throw err;
   }
   return importSpecifier(ruleDir, abiPath);
 }
@@ -98,13 +98,13 @@ function main() {
   if (!fs.existsSync(input)) usage(`input not found: ${input}`);
 
   const ascFlags = [
-    "--runtime",
-    "stub",
-    "--optimizeLevel",
-    "2",
-    "--shrinkLevel",
-    "0",
-    "--outFile",
+    '--runtime',
+    'stub',
+    '--optimizeLevel',
+    '2',
+    '--shrinkLevel',
+    '0',
+    '--outFile',
     output,
   ];
 
@@ -112,8 +112,8 @@ function main() {
   let generated = null;
   if (!raw) {
     const ruleDir = path.dirname(input);
-    const base = path.basename(input, ".ts");
-    const abi = path.join(__dirname, "..", "assembly", "abi.ts");
+    const base = path.basename(input, '.ts');
+    const abi = path.join(__dirname, '..', 'assembly', 'abi.ts');
     // pid-suffixed so concurrent builds of the same rule can't delete each
     // other's entry mid-compile.
     generated = path.join(ruleDir, `.secreq-entry.${base}.${process.pid}.ts`);
@@ -130,17 +130,13 @@ export function alloc(len: i32): usize {
 export function decide(ptr: usize, len: i32): u64 {
   return encodeDecision(rule(readCtx(ptr, len)));
 }
-`
+`,
     );
     entry = generated;
   }
 
   try {
-    execFileSync(
-      process.execPath,
-      [resolveAsc(), entry, ...ascFlags],
-      { stdio: "inherit" }
-    );
+    execFileSync(process.execPath, [resolveAsc(), entry, ...ascFlags], { stdio: 'inherit' });
   } finally {
     if (generated) fs.rmSync(generated, { force: true });
   }

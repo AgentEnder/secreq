@@ -9,13 +9,13 @@ secreq daemon runs it before the consent prompt.
 A rule is a single AssemblyScript file exporting `decide`:
 
 ```ts
-import { RuleCtx, Decision, approve, pass, deny } from "secreq-rule";
+import { RuleCtx, Decision, approve, pass, deny } from 'secreq-rule';
 
 export function decide(ctx: RuleCtx): Decision {
-  if (ctx.wrap == "gh" && ctx.joinedArgv.startsWith("gh repo delete")) {
-    return deny("repo deletes are never auto-approved");
+  if (ctx.wrap == 'gh' && ctx.joinedArgv.startsWith('gh repo delete')) {
+    return deny('repo deletes are never auto-approved');
   }
-  if (ctx.wrap == "gh" && ctx.joinedArgv.startsWith("gh api --get ")) {
+  if (ctx.wrap == 'gh' && ctx.joinedArgv.startsWith('gh api --get ')) {
     return approve();
   }
   return pass(); // fall through to declarative rules / the prompt

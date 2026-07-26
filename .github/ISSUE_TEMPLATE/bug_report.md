@@ -1,9 +1,9 @@
 ---
 name: Bug report
 about: Report incorrect or unexpected behavior
-title: ""
+title: ''
 labels: bug
-assignees: ""
+assignees: ''
 ---
 
 <!--

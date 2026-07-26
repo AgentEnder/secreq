@@ -9,12 +9,12 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
+      - 'v*'
   # Manual re-run against an already-pushed tag (e.g. to re-upload assets).
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to (re-)release, e.g. v0.1.0"
+        description: 'Existing tag to (re-)release, e.g. v0.1.0'
         required: true
 
 concurrency:

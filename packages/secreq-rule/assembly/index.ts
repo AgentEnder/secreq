@@ -12,5 +12,5 @@
 // Compile it with `secreq-rule-build` (see ../bin/build.js), which layers
 // the wasm ABI glue from ./abi.ts around the author's `decide`.
 
-export { Caller, RuleCtx } from "./ctx";
-export { Decision, DecisionKind, approve, pass, deny } from "./decision";
+export { Caller, RuleCtx } from './ctx';
+export { Decision, DecisionKind, approve, pass, deny } from './decision';

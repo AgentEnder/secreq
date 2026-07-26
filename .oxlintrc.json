@@ -1,0 +1,12 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "deny"
+  },
+  "ignorePatterns": [
+    "dist/**",
+    "**/.generated/**",
+    "**/dev-docs/**",
+    "packages/secreq/tests/fixtures/**"
+  ]
+}

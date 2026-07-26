@@ -28,7 +28,7 @@ Closes #
 - [ ] No secret values added to logs, prompts, the audit log, or the
       approvals cache.
 - [ ] Cache scope unchanged (or the change to `(wrap, ppid,
-      parent_start_time)` is intentional and explained above).
+parent_start_time)` is intentional and explained above).
 
 ## Checklist
 
