@@ -95,9 +95,17 @@ consent**. Nobody else covers all three.
 - Approval is scoped to the direct parent. An approved `gh` in your zsh does
   not extend to `gh` spawned by an npm postinstall, and the key includes the
   parent's start time, so a recycled pid cannot inherit a grant.
-- Injected secrets are visible to the child, and to anything that can read
-  `ps eww` or `/proc/<pid>/environ`. Masking, zeroizing and the audit log
-  narrow that; putting secrets in an environment does not make it go away.
+- A token wrap injects the secret into the child's environment, where any
+  **same-UID** process can read it (`/proc/<pid>/environ` on Linux; macOS has
+  no `/proc`, so `ps -E` or `sysctl KERN_PROCARGS2`), as can root. Other users
+  cannot, and neither can the world. So a same-UID adversary, say a script you
+  were tricked into running, can lift a live token and use it outside secreq's
+  consent and audit entirely. Rules and consent gate the wrap *invocation*,
+  not the credential once it is injected. Masking, zeroizing and the audit log
+  narrow this; an environment variable does not stop being readable. SSH
+  sidesteps the whole problem, because the key never enters an environment and
+  the agent signs over a socket. Tokens have no equivalent capability channel
+  yet; a keyring front-end that gives them one is tracked work.
 - SSH key custody is downgraded: the key is resolved into the daemon's
   memory to sign and then zeroized, where 1Password's sealed agent never
   releases it at all.
