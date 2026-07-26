@@ -11,7 +11,7 @@ the docs site consumes. For docs aimed at people **using** `secreq`, see
 | [`ui-screenshots/`](./ui-screenshots/) | Generated PNGs of the consent-window UI in representative states, one folder per fixture, each carrying the `layout.json` that guards its renders and holds the caption the docs site publishes. |
 | [`cli-transcripts/`](./cli-transcripts/) | Recorded pty sessions for the interactive CLI flows (`init`, `wrap`, `ssh setup`, the bare picker), replayed by the docs site via `::term{id=…}`. |
 
-Both are regenerated, never hand-edited — see each directory's `README.md`
+Both are regenerated, never hand-edited. See each directory's `README.md`
 for the recipe, and [`../CLAUDE.md`](../CLAUDE.md) for when regeneration is
 mandatory.
 
@@ -39,6 +39,6 @@ Rough map of the old paths:
 | `dev-docs/launch-checklist.md` | `areas/secreq/launch-checklist.md` |
 | `dev-docs/plans/*.md` | `areas/secreq/design/*.md` |
 
-Source comments and docs in this repo cite those by their brain path — e.g.
-`brain: areas/secreq/design/2026-06-02-auto-rules.md` — which
+Source comments and docs in this repo cite those by their brain path, e.g.
+`brain: areas/secreq/design/2026-06-02-auto-rules.md`, which
 `brain read`/`brain graph` resolve directly.

@@ -1,7 +1,7 @@
 # Troubleshooting
 
 The snags a first-week `secreq` user actually hits. This assumes you have
-`secreq` installed and at least one wrap configured — if not, start with
+`secreq` installed and at least one wrap configured. If not, start with
 [getting-started](./getting-started.md).
 
 ## Start here
@@ -41,7 +41,7 @@ to draw. (macOS always has a window server in an interactive login, so the
 check doesn't apply there.)
 
 This bites over SSH without forwarding, in cron/CI/systemd units and bare
-TTYs, and in a multiplexer that dropped the variables — check with
+TTYs, and in a multiplexer that dropped the variables. Check with
 `echo "$DISPLAY $WAYLAND_DISPLAY"` inside `tmux`.
 
 For scripted runs, approve without a prompt:
@@ -51,8 +51,8 @@ secreq x --sq-yes gh repo list     # the x / shim path
 secreq run --yes -- ./deploy.sh    # the run path
 ```
 
-`secreq read` has **no** `--yes` bypass on purpose — it prints a value to
-stdout, so it stays daemon-gated.
+`secreq read` has **no** `--yes` bypass. It prints a value to stdout, so it
+stays daemon-gated.
 
 ### The daemon is running a stale build
 
@@ -83,7 +83,7 @@ different schema level than your installed release against that same home
 goes wrong two ways:
 
 - A newer dev build migrates your live config and bumps the level. Your
-  installed release then reads that as a *downgrade* and refuses to run
+  installed release then reads that as a _downgrade_ and refuses to run
   anything until you `secreq migrate restore <level>`.
 - Worse, a test that pins only `$SECREQ_HOME` but leaves `$HOME` pointing at
   your real home makes the migration's legacy probe aim at your **real**
@@ -91,7 +91,7 @@ goes wrong two ways:
   deleted moments later. This has actually happened during a `cargo test`.
 
 **Isolate every dev build.** `$SECREQ_HOME` alone is not enough: migrations
-resolve the *pre-migration* locations through frozen XDG logic, and the
+resolve the _pre-migration_ locations through frozen XDG logic, and the
 socket directory prefers `$XDG_RUNTIME_DIR` over the root.
 
 ```sh
@@ -105,15 +105,15 @@ export XDG_STATE_HOME="$SECREQ_HOME/state"
 cargo run -- doctor        # now safely sandboxed
 ```
 
-Pinning `$HOME` is what makes a *forgotten* pin harmless rather than
-destructive. The project's own integration tests do exactly this — see
+Pinning `$HOME` is what makes a _forgotten_ pin harmless rather than
+destructive. The project's own integration tests do this; see
 `tests/ssh_agent.rs::isolate_paths`.
 
 ## `which gh` points at the wrong binary
 
 For a wrap to fire, the **first** thing `execvp("gh", …)` finds on `$PATH`
 must be secreq's shim. If another directory earlier on `$PATH` has a `gh`, it
-shadows the shim and the wrap never runs — no consent, no injection, just
+shadows the shim and the wrap never runs: no consent, no injection, just
 the bare binary. `doctor` names the culprit directly:
 
 ```
@@ -125,14 +125,14 @@ The fix is to make your shim dir come **before** the shadowing entry.
 ### The zsh + Homebrew ordering gotcha
 
 `brew shellenv` prepends `/opt/homebrew/bin` to `$PATH`, and it does so
-*after* secreq's block if the two land in the wrong startup files. On zsh,
-`init` can write its block to `~/.zshenv` — but `.zshenv` runs **before**
+_after_ secreq's block if the two land in the wrong startup files. On zsh,
+`init` can write its block to `~/.zshenv`, but `.zshenv` runs **before**
 `.zprofile`, where `brew shellenv` usually lives, so Homebrew's prepend wins
 and shadows every shim.
 
 If `doctor` shows Homebrew (or asdf, pyenv, any path-prepending tool)
 shadowing your shims, move the secreq `export PATH=…` block so it runs
-**after** that tool — for zsh, into `~/.zshrc` rather than `.zshenv`. Then
+**after** that tool: for zsh, into `~/.zshrc` rather than `.zshenv`. Then
 restart your shell and re-check `which gh`.
 
 ## `gh --help` shows gh's help, not secreq's
@@ -145,7 +145,7 @@ reach secreq's own options there, use the reserved `--sq-` prefix
 
 ## A provider is missing or locked
 
-secreq never talks to your store directly — it shells out to the provider's
+secreq never talks to your store directly; it shells out to the provider's
 CLI. Two distinct failures:
 
 **The CLI isn't on PATH.** `doctor`'s "Provider CLIs" section checks each
@@ -163,22 +163,22 @@ provider's own stderr straight through:
 secreq: error: secret `GITHUB_TOKEN` could not be resolved from `op` (exit status: 1: <op's "not signed in" message>) and has no default
 ```
 
-The fix is whatever that message says, usually unlocking the store *outside*
+The fix is whatever that message says, usually unlocking the store _outside_
 secreq (`op signin`, unlocking your keychain, `gpg-agent` for `pass`).
 secreq never signs into your store on your behalf.
 
 ## Where the logs live
 
-Everything is under the root — `$SECREQ_HOME`, else `~/.secreq/`:
+Everything is under the root (`$SECREQ_HOME`, else `~/.secreq/`):
 
-| File                     | What it is                                                                                            |
-| ------------------------ | ------------------------------------------------------------------------------------------------------- |
+| File                     | What it is                                                                                                    |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------- |
 | `~/.secreq/audit.log`    | Every decision. **Names only, never values.** See [the audit format](./consent-window.md#the-audit-log-file). |
-| `~/.secreq/daemon.log`   | The daemon's human-readable log. Print its path with `secreq daemon log-path`.                        |
-| `~/.secreq/daemon.jsonl` | The same events as one JSON object per line, for machine parsing.                                     |
+| `~/.secreq/daemon.log`   | The daemon's human-readable log. Print its path with `secreq daemon log-path`.                                |
+| `~/.secreq/daemon.jsonl` | The same events as one JSON object per line, for machine parsing.                                             |
 
 The audit log answers "did that command actually get its secret, and when?"
-— browse it with `secreq view`. To debug the daemon itself, `secreq daemon`
+Browse it with `secreq view`. To debug the daemon itself, `secreq daemon`
 follows its log live.
 
 There is **no** `RUST_LOG` knob; the daemon logs its lifecycle
@@ -186,7 +186,7 @@ unconditionally to the files above. When auto-spawned its stderr is
 discarded, so run `secreq daemon --fg` in a terminal to watch it echo.
 
 The daemon's sockets live in `$XDG_RUNTIME_DIR/secreq/` when that's set
-(preferred — mode-0700 tmpfs), otherwise `~/.secreq/run/`: `consent.sock`,
+(preferred, being mode-0700 tmpfs), otherwise `~/.secreq/run/`: `consent.sock`,
 `agent.sock` (where `SSH_AUTH_SOCK` points), plus the pidfile and spawn
 lock. If they seem stale after a crash, `secreq daemon stop` and let the
 next invocation respawn cleanly.

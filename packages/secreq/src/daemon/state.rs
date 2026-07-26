@@ -1485,8 +1485,8 @@ impl State {
             super::log::log_at(
                 "state",
                 format_args!(
-                    "WARN: wasm rule `{}` (id {}) errored evaluating wrap `{}`: {} \
-                     — treating the rule as not matching; falling through to the prompt",
+                    "WARN: wasm rule `{}` (id {}) errored evaluating wrap `{}`: {}; \
+                     treating the rule as not matching, falling through to the prompt",
                     failure.rule_name, failure.rule_id, ask.dedupe_key.wrap, failure.error,
                 ),
             );

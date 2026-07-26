@@ -2,19 +2,19 @@
 
 > **1Password Shell Plugins, but generic.** Wrap the CLIs you use every
 > day (`gh`, `aws`, `kubectl`, `psql`, …) so each invocation gets its
-> credentials from your secret store of choice — 1Password, macOS
-> Keychain, `pass`, anything with a CLI — with a provenance-aware
+> credentials from your secret store of choice (1Password, macOS
+> Keychain, `pass`, anything with a CLI) with a provenance-aware
 > consent prompt before any release, and output masking on
 > stdout/stderr.
 
 `secreq` is a **per-binary** wrap tool, scoped to your user account. For
 _project-level_ secrets management (typed `.env` schemas, framework
-integrations, type-safe access) see [varlock](https://varlock.dev/) —
+integrations, type-safe access) see [varlock](https://varlock.dev/);
 the two tools coexist; they solve different problems.
 
 ## Install
 
-One command from a clone — builds release, installs onto PATH, and runs
+One command from a clone. It builds release, installs onto PATH, and runs
 first-time setup:
 
 ```sh
@@ -24,7 +24,7 @@ bash scripts/install.sh
 Prefer to drive cargo yourself:
 
 ```sh
-# macOS / Linux — detects your platform, downloads + verifies the release binary:
+# macOS / Linux. Detects your platform, downloads + verifies the release binary:
 curl -fsSL https://secreq.dev/install.sh | sh
 
 # Homebrew (macOS / Linuxbrew):
@@ -35,7 +35,7 @@ cargo install secreq
 ```
 
 All three install the same self-contained `secreq` binary; none of them
-create any wraps — run `secreq init` afterward for that. Full matrix, including
+create any wraps; run `secreq init` afterward for that. Full matrix, including
 manual prebuilt-binary install and signature verification, in
 [`docs/install.md`](./docs/install.md).
 
@@ -87,12 +87,12 @@ aws s3 ls         # same; one biometric for both keys (retrieve_batch)
 ```
 
 For an _arbitrary_ command (no wrap entry), `secreq run` is `op run` for
-every store — it resolves `secret://` refs found in the environment (and
+every store. It resolves `secret://` refs found in the environment (and
 in any `--env-file`), then execs your command with the values injected
 and masked:
 
 ```sh
-# .env holds refs, not secrets — safe to commit:
+# .env holds refs, not secrets, so it's safe to commit:
 #   DATABASE_URL=secret://op/Work/Postgres/url
 #   STRIPE_KEY=secret://keychain/stripe-live
 secreq run --env-file .env -- ./deploy.sh
@@ -107,7 +107,7 @@ you approve once, and each command receives only its own secrets.
 | `secreq init`                         | First-time setup: pick a shim dir and (optionally) wire it into PATH.                            |
 | `secreq wrap <bin>`                   | Add a wrap entry + install the PATH shim.                                                        |
 | `secreq unwrap <bin>`                 | Remove the wrap entry + delete the shim.                                                         |
-| `secreq wraps`                        | List configured wraps (names only — no values).                                                  |
+| `secreq wraps`                        | List configured wraps (names only, no values).                                                   |
 | `secreq check` / `doctor`             | Validate config / verify provider CLIs.                                                          |
 | `secreq edit`                         | Open the config in `$EDITOR`.                                                                    |
 | `secreq x <bin> [args…]`              | Wrap-and-run path. The shim invokes this.                                                        |
@@ -116,24 +116,24 @@ you approve once, and each command receives only its own secrets.
 | `secreq` (bare, in a terminal)        | Interactive action picker over the common verbs. Non-TTY invocations print a usage hint instead. |
 
 On the `x` (wrap-and-run) path, secreq reserves the **`--sq-` prefix**
-for its own options — e.g. `--sq-yes` (skip consent), `--sq-raw`
+for its own options: `--sq-yes` (skip consent), `--sq-raw`
 (disable masking). Argv is otherwise hand-parsed pass-through:
-anything that isn't `--sq-…` — `--help`, `-y`, any flag — forwards
+anything that isn't `--sq-…` (`--help`, `-y`, any flag) forwards
 untouched to the wrapped binary, so `gh --help` through the shim shows
 gh's help, not secreq's.
 
-Built-in providers: `op` (with `retrieve_batch` — one biometric per
+Built-in providers: `op` (with `retrieve_batch`, so one biometric per
 multi-secret invocation), `keychain` (macOS), `lastpass`, `pass` (Unix).
 
 ## Why
 
 - **Multi-provider, in one config.** Mix `op` + Keychain + `pass`
   freely. The 1Password Shell Plugin is 1Password-only; aws-vault is
-  AWS-only; envchain is Keychain-only — `secreq` covers the union.
+  AWS-only; envchain is Keychain-only. `secreq` covers the union.
 - **Provenance-aware consent.** Before any provider call, you see _what
   is asking_ (the parent process chain), with the chance to deny. Cache
   is scoped to the **direct parent process** (`(wrap_name, ppid,
-parent_start_time)`) — an approval for `gh` from your shell doesn't
+parent_start_time)`), so an approval for `gh` from your shell doesn't
   extend to `npm` postinstall hooks. pid recycling can't sneak past it.
 - **PATH shim, not shell alias.** Every `execvp("gh", …)` goes through
   us, including subprocesses of `npm` / `make` / `cargo` / IDE tooling.
@@ -141,11 +141,11 @@ parent_start_time)`) — an approval for `gh` from your shell doesn't
 - **Multi-provider output masking.** Any value resolved through any
   provider gets redacted on the wrapped binary's stdout/stderr. `--sq-raw`
   opts out for `pbcopy`-style flows.
-- **Provenance-aware SSH agent.** Point `SSH_AUTH_SOCK` at secreq and each
-  key signature is gated by the same consent prompt — you see who's asking
+- **Provenance-aware SSH agent.** Point `SSH_AUTH_SOCK` at secreq and the
+  same consent prompt gates each key signature, so you see who's asking
   before `git push` signs. The private key is resolved from your provider,
   used in-process, and zeroized (a key-custody downgrade vs. 1Password's
-  sealed agent — see [`docs/ssh-agent.md`](./docs/ssh-agent.md)).
+  sealed agent; see [`docs/ssh-agent.md`](./docs/ssh-agent.md)).
 
 ## Documentation
 
@@ -153,7 +153,7 @@ End-user docs live in [`docs/`](./docs/):
 
 | Reading                                                  | For                                                                                                         |
 | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| [`docs/install.md`](./docs/install.md)                   | Every install channel — curl \| sh, Homebrew, `cargo install`, prebuilt binaries + verification             |
+| [`docs/install.md`](./docs/install.md)                   | Every install channel: curl \| sh, Homebrew, `cargo install`, prebuilt binaries + verification              |
 | [`docs/getting-started.md`](./docs/getting-started.md)   | First-time walkthrough: install → init → first wrap → first run                                             |
 | [`docs/overview.md`](./docs/overview.md)                 | What `secreq` is + mental model                                                                             |
 | [`docs/cli.md`](./docs/cli.md)                           | Every subcommand, every flag, the wrap-and-run flow                                                         |
@@ -181,12 +181,12 @@ cargo run --example gen-schema > docs/wraps.schema.json          # regen JSON sc
 
 ## Contributing & security
 
-- **[CONTRIBUTING.md](./CONTRIBUTING.md)** — dev loop, where things
+- **[CONTRIBUTING.md](./CONTRIBUTING.md)**: dev loop, where things
   live, how to author wraps and rules, how to submit a change.
-- **[SECURITY.md](./SECURITY.md)** — how to report a vulnerability
+- **[SECURITY.md](./SECURITY.md)**: how to report a vulnerability
   **privately**. `secreq` is a secrets tool; please disclose responsibly
   and never file a security issue publicly.
-- **[CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)** — the community
+- **[CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)**: the community
   standards everyone participating is expected to uphold.
 
 Bug reports and feature requests go through the

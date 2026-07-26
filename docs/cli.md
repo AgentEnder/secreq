@@ -4,7 +4,7 @@
 `rules`, `daemon`, …) and **two run verbs** that actually release secrets:
 
 ```
-secreq x    <WRAP> [ARGS...]        # a wrapped binary — what a PATH shim calls
+secreq x    <WRAP> [ARGS...]        # a wrapped binary; what a PATH shim calls
 secreq run  -- <CMD> [ARGS...]      # any command, resolving ambient secret:// refs
 ```
 
@@ -15,13 +15,13 @@ flag list: why there are two run verbs, why `x` forwards every flag you
 give it, and what each one does between your keystroke and the child
 process.
 
-## `x` — wrap-and-run
+## Wrap-and-run: `x`
 
 `x` runs a binary you have wrapped. You rarely type it: `secreq wrap gh`
 drops a five-line shim at `<shim_dir>/gh` whose body is
-`exec secreq x gh "$@"`, so anything that resolves `gh` through `PATH` —
-your shell, `npm`, `make`, your IDE — routes through secreq without
-knowing it.
+`exec secreq x gh "$@"`, so anything that resolves `gh` through `PATH`
+(your shell, `npm`, `make`, your IDE) routes through secreq without knowing
+it.
 
 ### The argv contract
 
@@ -44,8 +44,8 @@ before or after the wrap name:
 | `--`                 | Stop `--sq-` recognition; everything after a literal `--` forwards as-is. |
 
 These are the one part of the CLI that clap never sees. They're parsed by
-hand, precisely so `<wrap> --help` can reach the binary, which is why they
-are listed here rather than in the generated reference.
+hand, so that `<wrap> --help` can reach the binary. That is why they are
+listed here rather than in the generated reference.
 
 An unrecognized `--sq-*` argument is an error (exit 2), not a forward: the
 prefix is reserved so a typo can't hand the flag to the wrong process. The
@@ -61,7 +61,7 @@ before the wrap name is rejected with a hint to use the `--sq-` form.
    decided what it needs.
 3. **Drop `env` entries the environment already satisfies.** A variable
    already set to a non-empty, non-`secret://` value needs no injection;
-   the child inherits it. If *every* entry is satisfied, the run passes
+   the child inherits it. If _every_ entry is satisfied, the run passes
    through with no prompt at all, because secreq is releasing nothing.
    Gate-only wraps are exempt; with no `env` to satisfy, they always gate.
 4. Walk the parent process tree, then hand off to the consent daemon
@@ -76,22 +76,22 @@ before the wrap name is rejected with a hint to use the `--sq-` form.
 
 ### Exit codes
 
-| Code    | Meaning                                                                  |
-| ------- | ------------------------------------------------------------------------ |
-| 0       | Child exited cleanly.                                                    |
-| 1       | Consent denied, or provider resolution failed.                           |
-| 2       | Usage error: no wrap name, or an unknown `--sq-*` option.                |
-| child's | Otherwise the child's own exit code propagates.                          |
+| Code    | Meaning                                                   |
+| ------- | --------------------------------------------------------- |
+| 0       | Child exited cleanly.                                     |
+| 1       | Consent denied, or provider resolution failed.            |
+| 2       | Usage error: no wrap name, or an unknown `--sq-*` option. |
+| child's | Otherwise the child's own exit code propagates.           |
 
-## `run` — ambient references
+## Ambient references: `run`
 
-Where `x` injects a *declared* env map for a *known binary*, `run` resolves
-`secret://provider/locator` references it finds *in the environment* for an
-*arbitrary* command. Nothing needs configuring first, because the
+Where `x` injects a _declared_ env map for a _known binary_, `run` resolves
+`secret://provider/locator` references it finds _in the environment_ for an
+_arbitrary_ command. Nothing needs configuring first, because the
 references describe the secrets inline:
 
 ```sh
-# A committable, refs-only .env — no plaintext secrets:
+# A committable, refs-only .env. No plaintext secrets:
 #   DATABASE_URL=secret://op/Work/Postgres/url
 #   STRIPE_KEY=secret://keychain/stripe-live
 secreq run --env-file .env -- ./deploy.sh
@@ -99,7 +99,7 @@ secreq run --env-file .env -- ./deploy.sh
 
 `--env-file` entries layer **under** the inherited environment (inherited
 wins on conflict, matching `op run --env-file`). A value that starts with
-`secret://` but doesn't parse is a hard error *before* the command runs, so
+`secret://` but doesn't parse is a hard error _before_ the command runs, so
 a literal `secret://…` never reaches the child. With no references at all,
 `run` execs directly, with no daemon and no prompt.
 
@@ -109,12 +109,12 @@ a literal `secret://…` never reaches the child. With no references at all,
 approval would over-match wildly: approving one `run` would approve every
 later one from that shell. It therefore never persists approvals.
 
-The re-prompt is deliberately cheap: all `run` invocations share one
+The re-prompt is cheap: all `run` invocations share one
 value-cache bucket, so a reference that's already resolved is served
 without a provider call and without a biometric. The prompt is one click,
 not an unlock. A rule on the Rules view can remove even that.
 
-Two consequences worth knowing:
+Two consequences follow:
 
 - **Nested `run` needs no special handling.** The outer run already
   replaced every reference with a plain value, so the inner one sees no
@@ -122,7 +122,7 @@ Two consequences worth knowing:
 - **Concurrent runs in one process tree share one prompt.** The daemon
   unions their requests into a single card, annotating each secret with the
   command that asked for it. You approve once, and each command receives
-  **only its own** secrets — never a sibling's.
+  **only its own** secrets, never a sibling's.
 
 ::shot{id=run-session-card}
 
@@ -132,11 +132,10 @@ Exit codes match `x`.
 
 `secreq read <REF>…` resolves references and prints them as a JSON object
 keyed by each ref exactly as typed, so it pipes into `jq`. Every read goes
-through the consent daemon, so it is prompted and audited. There is
-deliberately **no `--yes` bypass**: the value lands on stdout, where masking
-cannot help you.
+through the consent daemon, so it is prompted and audited. There is **no
+`--yes` bypass**: the value lands on stdout, where masking cannot help you.
 
-`secreq resolve` is a different thing that looks similar: it is the *guest*
+`secreq resolve` is a different thing that looks similar: it is the _guest_
 half of a sandbox socket, asking a **host** secreq to release something.
 See [secret-agent](./secret-agent.md).
 
@@ -160,17 +159,17 @@ and why it has no TTL, is in [wraps](./wraps.md#how-approval-is-scoped).
 
 ## Environment variables
 
-| Variable                      | When                                                                                                                                                        |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `SECREQ_HOME`                 | Root for everything secreq owns — config, `audit.log`, `daemon.log`, registered rule modules. Falls back to `~/.secreq`.                                     |
-| `SECREQ_SOCK`                 | Read by `secreq resolve`: the scoped agent socket to ask, mirroring `SSH_AUTH_SOCK`. See [secret-agent](./secret-agent.md).                                  |
-| `SECREQ_NO_DAEMON`            | Any non-empty value disables the daemon entirely; consent fails closed unless `--sq-yes` / `--yes` is used. For tests and headless automation.               |
-| `SECREQ_NO_WAIT_INDICATOR`    | Silences the "waiting for approval" indicator for one invocation, regardless of the `$wait_indicator` config setting.                                        |
-| `XDG_RUNTIME_DIR`             | Preferred home for the daemon's sockets and pidfile — it is mode-0700 tmpfs. Falls back to `<root>/run`.                                                     |
-| `XDG_CONFIG_HOME`             | Legacy config location the first-run migration copies into the root. No longer used for discovery.                                                           |
-| `SHELL`                       | `init` reads this to choose which shell config to edit.                                                                                                     |
-| `EDITOR` / `VISUAL`           | Used by `secreq edit`.                                                                                                                                      |
-| `DISPLAY` / `WAYLAND_DISPLAY` | Linux/BSD: with neither set, secreq fails closed rather than spawning a daemon that can't render.                                                             |
+| Variable                      | When                                                                                                                                           |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SECREQ_HOME`                 | Root for everything secreq owns: config, `audit.log`, `daemon.log`, registered rule modules. Falls back to `~/.secreq`.                        |
+| `SECREQ_SOCK`                 | Read by `secreq resolve`: the scoped agent socket to ask, mirroring `SSH_AUTH_SOCK`. See [secret-agent](./secret-agent.md).                    |
+| `SECREQ_NO_DAEMON`            | Any non-empty value disables the daemon entirely; consent fails closed unless `--sq-yes` / `--yes` is used. For tests and headless automation. |
+| `SECREQ_NO_WAIT_INDICATOR`    | Silences the "waiting for approval" indicator for one invocation, regardless of the `$wait_indicator` config setting.                          |
+| `XDG_RUNTIME_DIR`             | Preferred home for the daemon's sockets and pidfile; it is mode-0700 tmpfs. Falls back to `<root>/run`.                                        |
+| `XDG_CONFIG_HOME`             | Legacy config location the first-run migration copies into the root. No longer used for discovery.                                             |
+| `SHELL`                       | `init` reads this to choose which shell config to edit.                                                                                        |
+| `EDITOR` / `VISUAL`           | Used by `secreq edit`.                                                                                                                         |
+| `DISPLAY` / `WAYLAND_DISPLAY` | Linux/BSD: with neither set, secreq fails closed rather than spawning a daemon that can't render.                                              |
 
 ## Next
 

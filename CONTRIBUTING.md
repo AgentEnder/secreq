@@ -1,6 +1,6 @@
 # Contributing to secreq
 
-Thanks for your interest in `secreq` — a per-binary CLI wrapper that
+Thanks for your interest in `secreq`, a per-binary CLI wrapper that
 injects credentials from your secret store of choice behind a
 provenance-aware consent prompt. Because this is a **secrets tool**,
 contributions are held to a slightly higher bar than usual: a bug here
@@ -28,15 +28,15 @@ Without mise, install those versions yourself; nothing else assumes it.
 
 ## Ways to contribute
 
-- **Report a bug** — open an issue with a reproduction (see the bug
+- **Report a bug**: open an issue with a reproduction (see the bug
   template). Never paste real secret values, tokens, or `secret://`
   refs that point at live credentials.
-- **Request a feature** — open an issue describing the problem first,
-  then the proposed shape. `secreq` deliberately does _not_ do some
-  things (project-scope config, cloud sync, rotation); check
+- **Request a feature**: open an issue describing the problem first,
+  then the proposed shape. `secreq` does _not_ do some things
+  (project-scope config, cloud sync, rotation); check
   [`docs/overview.md`](./docs/overview.md) for the scope before
   proposing.
-- **Send a patch** — small, focused PRs are easiest to review. For
+- **Send a patch**: small, focused PRs are easiest to review. For
   anything that touches the trust model, the wire protocol, or rule
   semantics, open an issue to align on the design first.
 
@@ -53,7 +53,7 @@ cargo build
 
 ## The dev loop
 
-Run all four of these before you push — CI enforces every one:
+Run all four of these before you push. CI enforces every one:
 
 ```sh
 cargo test                                                       # unit + integration + schema drift
@@ -83,14 +83,14 @@ Notes:
   Then update the table in
   [`dev-docs/ui-screenshots/README.md`](./dev-docs/ui-screenshots/README.md).
   The screenshot tests are `#[ignore]`-gated (they need wgpu), so a
-  normal `cargo test` won't run them — but CI does.
+  normal `cargo test` won't run them, but CI does.
 
 ## Where things live
 
 The mental model in one line: a shim on your `PATH` intercepts a wrapped
 command, asks the consent daemon (which knows _who_ is asking, by walking
 the caller chain), and only on approval fetches the secrets and execs the
-real binary with them in its environment — masking them back out of its
+real binary with them in its environment, masking them back out of its
 output.
 
 | Looking for…                       | File                |
@@ -124,7 +124,7 @@ output.
 3. **Fail closed.** No daemon and no `--yes` ⇒ deny. No graphical
    environment and no `--yes` ⇒ deny. A required secret missing with no
    default ⇒ hard error before exec. Integration tests pin each.
-4. **The approvals cache is scoped to the direct parent only** —
+4. **The approvals cache is scoped to the direct parent only:**
    `(wrap_name, ppid, parent_start_time)`. A postinstall hook has a
    different ppid; a recycled pid has a different start time. Both
    re-prompt.
@@ -139,7 +139,7 @@ output.
 
 If your change materially alters the trust model, the wire protocol, or
 rule semantics, open an issue to align on the design **before** the code
-lands — see [`CLAUDE.md`](./CLAUDE.md) for the conventions that go with
+lands. See [`CLAUDE.md`](./CLAUDE.md) for the conventions that go with
 each of those surfaces.
 
 ## Authoring rules
@@ -148,11 +148,11 @@ Auto-rules let the daemon answer recurring asks without prompting.
 There are two flavors, and the docs walk through each:
 
 - **Declarative rules** (a match clause + a fixed approve/deny, created
-  from the Rules tab in `secreq view`) — the default; prefer them
+  from the Rules view in `secreq view`): the default; prefer them
   whenever one can express the policy. Wire format and JSON Schema:
   [`docs/auto-rules.schema.json`](./docs/auto-rules.schema.json).
 - **Programmable wasm rules** (a rule written as code, compiled to a
-  sandboxed WebAssembly module) — reach for these only when a match
+  sandboxed WebAssembly module): reach for these only when a match
   clause can't express the policy. Full authoring, testing, compiling,
   and `rules add-wasm` registration walkthrough:
   [`docs/wasm-rules.md`](./docs/wasm-rules.md).
@@ -173,13 +173,13 @@ tests`).
   `op` invocation, to avoid triggering biometric prompts in CI.
 
 Every behavior change should come with a test. New fail-closed paths in
-particular must be pinned by a test — that's how we keep the security
+particular must be pinned by a test. That's how we keep the security
 invariants honest.
 
 ## Submitting a change
 
 1. Branch off `main` (never commit to `main` directly).
-2. Keep the change focused — one logical change per PR.
+2. Keep the change focused: one logical change per PR.
 3. Make the full dev loop green locally (tests, clippy, fmt, schema).
 4. Fill in the PR template, including the security checklist.
 5. Update docs alongside code: user-facing behavior → `docs/`;

@@ -5,7 +5,7 @@ from my store."
 
 ## Before you start
 
-- **A secret store with a CLI on your `$PATH`** — built-ins exist for
+- **A secret store with a CLI on your `$PATH`**: built-ins exist for
   [1Password (`op`)](https://developer.1password.com/docs/cli/),
   [macOS Keychain](https://ss64.com/mac/security.html),
   [LastPass](https://github.com/lastpass/lastpass-cli) and
@@ -13,7 +13,7 @@ from my store."
   [providers](./providers.md).
 - **A login session for that store** (`op signin`, an unlocked keychain, a
   `gpg-agent` for `pass`). secreq never signs into your store for you.
-- **A graphical session, on Linux/BSD** — the consent prompt is a native
+- **A graphical session, on Linux/BSD**: the consent prompt is a native
   window, so it needs `$DISPLAY` or `$WAYLAND_DISPLAY`. macOS always has
   one. Headless machines use `--sq-yes`; see
   [platform-support](./platform-support.md#headless-use).
@@ -38,9 +38,9 @@ secreq init
 
 ::term{id=init}
 
-`init` picks a **shim directory** (`~/.secreq/shims` by default — a
-dedicated one, so it can't collide with asdf, pip user-installs, or
-anything else), checks whether it's on `$PATH`, and offers to append a
+`init` picks a **shim directory** (`~/.secreq/shims` by default, a dedicated
+one, so it can't collide with asdf, pip user-installs, or anything else),
+checks whether it's on `$PATH`, and offers to append a
 sentinel-bracketed `export PATH=…` block to the right shell file. The block
 is shown to you in full and gated by a y/N prompt; nothing touches your
 dotfiles unconfirmed. Re-running is a no-op.
@@ -53,7 +53,7 @@ echo $PATH | tr ':' '\n' | grep secreq    # should print your shim dir
 
 ## 3. Wrap your first binary
 
-Pick a CLI you regularly hand a credential to by env var — `gh`, `aws`,
+Pick a CLI you regularly hand a credential to by env var: `gh`, `aws`,
 `kubectl`, `psql`, `terraform`. Run `wrap` with just the binary name and it
 asks for the rest:
 
@@ -87,13 +87,13 @@ which gh           # should point at <shim_dir>/gh
 
 `secret://op/Personal/GitHub/credential` is a **reference**: `op` is the
 provider, the rest is the locator, and the provider knows how to turn one
-into a value. Values never appear in your config — only references do.
+into a value. Values never appear in your config; only references do.
 
 ### Wraps that inject nothing
 
 Not every wrap carries a secret. A **gate-only** wrap injects nothing and
 exists purely to put the consent prompt in front of a command that already
-holds its own credentials — `op` itself being the obvious case:
+holds its own credentials. `op` itself is the obvious case:
 
 ::term{id=wrap-gate-only}
 
@@ -110,17 +110,17 @@ resolves the secret and hands it back, and the real `gh` runs with
 from its output.
 
 Run it again from the same shell and nothing prompts: approving also
-remembers. The grant belongs to *that shell* — a different terminal, an
+remembers. The grant belongs to _that shell_: a different terminal, an
 editor, or an `npm` postinstall each get asked in their own right. See
 [how approval is scoped](./wraps.md#how-approval-is-scoped).
 
-## 5. Worth knowing early
+## 5. A few defaults
 
 - **Unwrapped binaries pass straight through.** Calling one that has no
   wrap entry just execs the real thing. You can put the shim dir on `PATH`
   before you've wrapped everything.
-- **`secreq view`** opens the manager window — your rules and your audit
-  log. The audit log records names, never values.
+- **`secreq view`** opens the manager window, holding your rules and your
+  audit log. The audit log records names, never values.
 - **`--sq-yes`** skips the daemon entirely and is the supported path for
   CI: `secreq x --sq-yes gh repo list`.
 - **`--sq-raw`** disables masking when you actually want the value on
@@ -129,7 +129,7 @@ editor, or an `npm` postinstall each get asked in their own right. See
 ## SSH keys, too
 
 `secreq` can act as your **SSH agent**, gating each key signature on the
-same ceremony — `git push` prompts you with the caller chain before
+same ceremony, so `git push` prompts you with the caller chain before
 signing. See [ssh-agent](./ssh-agent.md), including the key-custody
 tradeoff against 1Password's sealed agent.
 

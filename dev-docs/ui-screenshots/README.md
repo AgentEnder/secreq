@@ -6,7 +6,7 @@ which drives the real render entry points headlessly via
 
 **Each fixture owns a folder** named for its id, holding its six renders
 and the `layout.json` that guards *and* describes them. A fixture is a
-unit — everything about it changes together and should read as one hunk
+unit: everything about it changes together and should read as one hunk
 in a diff rather than as seven files scattered through an alphabetical
 listing. Every directory here is a fixture; the only loose file is this
 README.
@@ -27,7 +27,7 @@ harness mirrors that split:
 - **Badge** fixtures drive `render_badge` in its own minimal harness.
 
 **Chrome is not pinned; it is swept.** Every documented fixture renders
-**six times** — three OS flavors (`macos`, `windows`, `gnome`) by two
+**six times**: three OS flavors (`macos`, `windows`, `gnome`) by two
 appearances (`dark`, `light`):
 
 ```
@@ -38,7 +38,7 @@ appearances (`dark`, `light`):
 
 secreq's windows are natively themed and follow the host, and neither
 axis is a setting the user picks (`ThemePreference::System`). So no
-combination is the "real" one and none is a variant of another — every
+combination is the "real" one and none is a variant of another. Every
 render names both axes, including macOS dark, because a bare
 `<id>/default.png` would quietly privilege one chrome as canonical.
 
@@ -56,8 +56,8 @@ nobody will open.
 ## `<id>/layout.json`
 
 Each fixture folder holds one `layout.json`, written by the harness.
-Two of its fields are **authored** — the window kind and the caption,
-both declared on the fixture in `tests/ui_screenshots.rs` — and the
+Two of its fields are **authored** (the window kind and the caption,
+both declared on the fixture in `tests/ui_screenshots.rs`) and the
 third, `variants`, is the layout snapshot described further down:
 
 ```json
@@ -71,18 +71,18 @@ third, `variants`, is the layout snapshot described further down:
 }
 ```
 
-The authored pair comes first on purpose: they are the two lines a human
+The authored pair comes first because they are the two lines a human
 opens the file for, and burying them under a hundred kilobytes of
 geometry would make the caption feel like a generated artifact rather
 than the published sentence it is.
 
 This is what the docs site consumes, and it holds no screenshot list of
-its own. `docs-site/vite.config.ts` walks this tree — a directory is a
+its own. `docs-site/vite.config.ts` walks this tree: a directory is a
 fixture, `<os>-<appearance>.png` names its own cell of the grid,
-and the PNG header carries its own dimensions — then reads each
+and the PNG header carries its own dimensions. It then reads each
 fixture's `layout.json` for the window kind and caption. `::shot{id=…}`
 in a guide publishes the result. So a fixture that is renamed,
-re-flavoured or re-captioned needs no corresponding edit in the site —
+re-flavoured or re-captioned needs no corresponding edit in the site,
 but a fixture whose caption you change **is** changing published
 documentation, so write captions for someone using secreq, not for
 someone changing it. The tables below are the contributor-facing
@@ -91,7 +91,7 @@ counterpart, and the two intentionally read differently.
 A caption is *not* covered by the snapshot digest: re-wording one and
 re-blessing is not a claim that the UI moved, and a guard that failed on
 prose would train everyone to ignore it. The flip side is that a
-re-worded caption reaches the site only once `layout.json` is rewritten —
+re-worded caption reaches the site only once `layout.json` is rewritten,
 which the layout-only bless below does, no GPU required.
 
 There is no file above the fixture folders and nothing to prune: delete
@@ -109,20 +109,20 @@ rewrites published assets; an ordinary `cargo test` runs the same
 fixtures in *check* mode instead (see below). `--test-threads=1` keeps
 the `$SECREQ_HOME` mutation serialised across fixtures.
 
-The tables below name each fixture by its **id**, not by a filename —
+The tables below name each fixture by its **id**, not by a filename:
 one row stands for all six renders of that fixture.
 
 Each PNG is re-encoded through `oxipng` (lossless, preset 4) on the way
-out — these files are published assets that live in git forever, and the
+out, because these files are published assets that live in git forever, and the
 raw encoder output is roughly three times larger for identical pixels.
 
 ### Catching a regen that never happened
 
-Every fixture also lays its window out **on the CPU** — a plain
-`egui::Context`, no wgpu — and pins the resulting shape stream under
+Every fixture also lays its window out **on the CPU** (a plain
+`egui::Context`, no wgpu) and pins the resulting shape stream under
 `variants` in `<id>/layout.json`, one entry per cell of the chrome
-matrix. Rects, circles, lines and every text run with its position,
-baseline, size, colour and underline: the whole window as data, one line
+matrix. Rects, circles, lines, and every text run with its position,
+baseline, size, colour, and underline: the whole window as data, one line
 per painted shape.
 
 That comparison is what an ordinary `cargo test` runs. It needs no GPU
@@ -134,7 +134,7 @@ cargo test --test ui_screenshots      # lay out, compare, write nothing
 
 Change a padding constant, a colour token, a string or a font size and
 every affected fixture fails by name, quoting the first shape that
-moved. The fix is always the regen command above — which re-renders the
+moved. The fix is always the regen command above, which re-renders the
 PNGs *and* re-blesses the snapshots, so the two can't drift apart.
 
 If you cannot render (no GPU, a headless container, a driver that won't
@@ -158,8 +158,8 @@ Comparing pixels was never on the table: a wgpu render isn't
 byte-reproducible across GPUs and drivers, so a Linux runner's output
 would never match the macOS renders in git regardless of whether both
 are correct. That would mean giving up either reviewable fixtures or
-CI-verified ones. Layout has no such problem — it is integer-and-float
-arithmetic over bundled fonts, identical everywhere — which is why the
+CI-verified ones. Layout has no such problem: it is integer-and-float
+arithmetic over bundled fonts, identical everywhere, which is why the
 guard fingerprints the layout instead of the pixels.
 
 Two things are pinned so a capture depends on its fixture data and
@@ -176,22 +176,22 @@ a snapshot blessed in one hour doesn't fail in another.
 | Fixture id | Test fn | What it exercises |
 |---|---|---|
 | `01-empty-all-clear` | `empty_state` | Prompt with no asks: centred app icon + "No pending requests."; the manager link stays reachable in the footer. |
-| `02-single-pending` | `single_pending` | One wrap, one secret: the canonical prompt — header summary, evidence well (SECRET / ASKED BY / IN / HISTORY), macOS footer pair with mnemonic underlines. |
+| `02-single-pending` | `single_pending` | One wrap, one secret: the canonical prompt: header summary, evidence well (SECRET / ASKED BY / IN / HISTORY), macOS footer pair with mnemonic underlines. |
 | `03-nested-tree` | `nested_tree` | An ask with a deeper ancestry: the ASKED BY tree shows each ancestor with its argv and pid, the asking leaf in accent. |
 | `04-multi-root` | `multi_root` | Two queued asks from independent roots: the prompt focuses the oldest; the other appears only as "1 more waiting". |
 | `05-folded-run` | `folded_run` | A `gh→gh→gh→gh` self-exec chain: the coalesced ask's chain renders once per distinct process. |
-| `06-pending-denied-last` | `pending_with_deny_history` | HISTORY row when the last audit decision for this wrap+caller was a deny — the line renders in the danger tint. |
+| `06-pending-denied-last` | `pending_with_deny_history` | HISTORY row when the last audit decision for this wrap+caller was a deny; the line renders in the danger tint. |
 | `12-auto-deny-toast` | `auto_deny_toast_on_pending` | The transient auto-deny banner above the prompt content (rule name + configured deny message). |
 | `21-gate-only-pending` | `gate_only_pending` | A gate-only wrap (no secrets to inject): the well's secret row gives way to the gate-only marker. |
 | `22-pending-arrival-highlight` | `pending_arrival_highlight` | Two asks queued: the focused ask plus the "1 more waiting" queue line (the old tab-badge pulse retired with the tab bar). |
-| `23-pending-resolving` | `pending_resolving` | An authorized ask whose secret is still resolving: read-only prompt, "Resolving…" in place of the button pair — provenance for a provider biometric prompt. |
+| `23-pending-resolving` | `pending_resolving` | An authorized ask whose secret is still resolving: read-only prompt, "Resolving…" in place of the button pair, giving provenance for a provider biometric prompt. |
 | `24-ssh-sign-pending` | `ssh_sign_pending` | An SSH sign ask: SIGN WITH fingerprint row, `$reason`, caller chain, quiet session-grant buttons (30 min / all keys), Deny/Approve pair. |
-| `34-agent-scope-pending` | `agent_scope_pending` | A guest VM's ask over a scoped agent socket: the header leads with the **sandbox**, because the host-declared scope *is* the principal. The well shows SECRET / SCOPE / HISTORY — and what's absent is the point: no ASKED BY tree and no IN row, because a guest has no host process tree or cwd, and a chain-shaped widget here would imply provenance we cannot verify. This guest claimed nothing, so there is no GUEST SAYS row (contrast fixture 36). The quiet "Scope: Approve for 5 min" action is the TTL grant that anchors an approval to the sandbox; the footer's Approve stays "this request only". See `src/scoped_agent/mod.rs`. |
-| `36-agent-guest-chain-pending` | `agent_guest_chain_pending` | The same scoped-agent ask, but the guest volunteered a caller chain. Exists to show the **marker**: GUEST SAYS renders the claim dimmed, with a red "⚠ guest-reported — NOT verifiable" directly beneath it. Read the well top-to-bottom and it tells the truth in order — SECRET and SCOPE are host-declared facts, then, below and explicitly disclaimed, what the guest says about itself. The chain reaches the decision nowhere and the approval cache never (`consent::AgentGrant` has no field for it); it is here for a human to weigh and for the audit log to record as a claim. |
+| `34-agent-scope-pending` | `agent_scope_pending` | A guest VM's ask over a scoped agent socket: the header leads with the **sandbox**, because the host-declared scope *is* the principal. The well shows SECRET / SCOPE / HISTORY, and what's absent is the point: no ASKED BY tree and no IN row, because a guest has no host process tree or cwd, and a chain-shaped widget here would imply provenance we cannot verify. This guest claimed nothing, so there is no GUEST SAYS row (contrast fixture 36). The quiet "Scope: Approve for 5 min" action is the TTL grant that anchors an approval to the sandbox; the footer's Approve stays "this request only". See `src/scoped_agent/mod.rs`. |
+| `36-agent-guest-chain-pending` | `agent_guest_chain_pending` | The same scoped-agent ask, but the guest volunteered a caller chain. Exists to show the **marker**: GUEST SAYS renders the claim dimmed, with a red "⚠ guest-reported, NOT verifiable" directly beneath it. Read the well top-to-bottom and it tells the truth in order: SECRET and SCOPE are host-declared facts, then, below and explicitly disclaimed, what the guest says about itself. The chain reaches the decision nowhere and the approval cache never (`consent::AgentGrant` has no field for it); it is here for a human to weigh and for the audit log to record as a claim. |
 | `28-prompt-many-secrets` | `prompt_many_secrets` | The `secreq run` 42-vars case: count as headline, secrets grouped by locator prefix (largest group first) in a scroll-capped grid; body scrolls, footer stays pinned. |
 | `run-consent` | `run_consent_card` | A `secreq run` ask: free-form command, ambient-sourced secrets, `allow_remember = false`. |
 | `run-session-card` | `run_session_card` | A coalesced run session: three sibling asks merged, union secret list with `requested by` provenance on hover, one decision covers the session. |
-| `99-resize-*` | `resize_sweep` | The prompt at a ladder of window sizes (30×80 → 3840×2160) — layout degrades without panicking or clipping the footer. |
+| `99-resize-*` | `resize_sweep` | The prompt at a ladder of window sizes (30×80 → 3840×2160); layout degrades without panicking or clipping the footer. |
 
 ### Manager window
 
@@ -202,20 +202,20 @@ a snapshot blessed in one hour doesn't fail in another.
 | `08-rules-tab-empty` | `rules_tab_empty` | Rules view with no rules → "No rules yet" empty state. |
 | `09-rules-tab-list` | `rules_tab_list_populated` | Rules list: enabled approve, enabled deny with deny-message, disabled rule; usage footnotes and the Most used / Recent sort toggle. |
 | `10-rules-form-new` | `rules_form_new` | Blank rule form opened via "+ New rule". |
-| `11-rules-form-edit-deny` | `rules_form_edit_deny` | Edit form pre-filled from a deny rule — deny-message text area + trained-secrets chip. |
+| `11-rules-form-edit-deny` | `rules_form_edit_deny` | Edit form pre-filled from a deny rule: deny-message text area + trained-secrets chip. |
 | `37-rules-scaffold-open-in-editor` | `rules_scaffold_open_in_editor` | The "Write a programmatic rule" card in its post-scaffold state: pitch + the GitHub-style "Open in editor" split-button, defaulting to the persisted editor preference (Cursor). |
-| `38-rules-scaffold-editor-picker` | `rules_scaffold_editor_picker` | The split-button's dropdown expanded — the detected-editor picker, with the current default (Cursor) checked; picking another makes it the new default (persisted to `$editor`). |
-| `39-rules-wasm-refused` | `rules_tab_wasm_refused` | Two wasm rules, one of them refused at the daemon's last rules load: the row keeps its `wasm` badge and gains a red `refused` + `sha256 mismatch` pair, and its usage footnote stays at "No auto-fires yet" because it can never fire. The healthy rule above it is the control — the point of the fixture is that only the tampered rule is switched off, so protective rules survive an edited module. The only UI state where a rule that looks normal cannot fire. |
+| `38-rules-scaffold-editor-picker` | `rules_scaffold_editor_picker` | The split-button's dropdown expanded: the detected-editor picker, with the current default (Cursor) checked; picking another makes it the new default (persisted to `$editor`). |
+| `39-rules-wasm-refused` | `rules_tab_wasm_refused` | Two wasm rules, one of them refused at the daemon's last rules load: the row keeps its `wasm` badge and gains a red `refused` + `sha256 mismatch` pair, and its usage footnote stays at "No auto-fires yet" because it can never fire. The healthy rule above it is the control; the point of the fixture is that only the tampered rule is switched off, so protective rules survive an edited module. The only UI state where a rule that looks normal cannot fire. |
 | `13-rules-tab-suggestions` | `rules_tab_suggestions` | Suggestion cards from the recommendation engine (cluster counts + recency lines). |
-| `14-audit-tab-with-pending` | `audit_tab_with_pending` | Audit view while an ask is still queued — browsing history in the manager while the prompt window holds the decision. |
+| `14-audit-tab-with-pending` | `audit_tab_with_pending` | Audit view while an ask is still queued: browsing history in the manager while the prompt window holds the decision. |
 | `15-audit-tab-search-filtering` | `audit_tab_search_filtering` | Header search populated (`gh`): filtered rows + "N of M" count. |
 | `16-audit-tab-search-no-matches` | `audit_tab_search_no_matches` | A query matching nothing → centred "No matching entries" state. |
-| `17-audit-tab-search-multi-term` | `audit_tab_search_multi_term` | Two-term query (`gh auth`) narrowing to one row — each term may hit a different field. |
+| `17-audit-tab-search-multi-term` | `audit_tab_search_multi_term` | Two-term query (`gh auth`) narrowing to one row; each term may hit a different field. |
 | `18-rules-tab-suggestions-by-recency` | `rules_tab_suggestions_by_recency` | Suggestions sorted by Recent where count and recency disagree. |
 | `19-rules-tab-by-recency` | `rules_tab_by_recency` | Rules sorted by Recent where count and recency disagree. |
 | `20-rules-tab-rules-and-suggestions` | `rules_tab_rules_and_suggestions` | Both sections at once: saved rules first, suggestions beneath. |
-| `27-audit-tab-abandoned` | `audit_tab_abandoned_row` | Audit view showing an `abandoned` row (`gh pr checkout 9420`) — a wrap that exited before the user decided, so the daemon reaped the ask and logged it itself. The faint dot+text "abandoned" verdict reads as a non-event, distinct from the danger-tinted "denied" on the neighbouring `aws` row and a real approve. |
-| `35-audit-tab-agent-out-of-scope` | `audit_tab_agent_out_of_scope_row` | Audit view showing a scoped agent's rows (`agent:brain-nx-t5`). The `deny+out-of-scope` row carries the "out of scope" tag: the guest asked for a ref its socket was never opened with, so it was refused **without a prompt** — distinct from the plain danger-tinted `deny` on the neighbouring `aws` row, where a ref *was* offered and the user refused it. A run of these rows is what a probing sandbox looks like. The agent rows deliberately carry no caller chain and no cwd. |
+| `27-audit-tab-abandoned` | `audit_tab_abandoned_row` | Audit view showing an `abandoned` row (`gh pr checkout 9420`): a wrap that exited before the user decided, so the daemon reaped the ask and logged it itself. The faint dot+text "abandoned" verdict reads as a non-event, distinct from the danger-tinted "denied" on the neighbouring `aws` row and a real approve. |
+| `35-audit-tab-agent-out-of-scope` | `audit_tab_agent_out_of_scope_row` | Audit view showing a scoped agent's rows (`agent:brain-nx-t5`). The `deny+out-of-scope` row carries the "out of scope" tag: the guest asked for a ref its socket was never opened with, so it was refused **without a prompt**, distinct from the plain danger-tinted `deny` on the neighbouring `aws` row, where a ref *was* offered and the user refused it. A run of these rows is what a probing sandbox looks like. The agent rows carry no caller chain and no cwd, because a guest has neither. |
 
 ### Badge
 
@@ -244,24 +244,24 @@ Each fixture:
 5. when blessing renders, runs the same frame through wgpu and saves
    the buffer to `dev-docs/ui-screenshots/<id>/<os>-<appearance>.png`.
 
-Steps 4 and 5 share one closure on purpose — a capture of some other
-drawing code would guard nothing.
+Steps 4 and 5 share one closure, because a capture of some other drawing
+code would guard nothing.
 
 ## Design language
 
 "Native Sentinel": each window reads as an OS security surface, not a
-web app. All colors come from semantic tokens in `daemon/theme.rs` —
+web app. All colors come from semantic tokens in `daemon/theme.rs`:
 one token set per `(OsFlavor, appearance)`, ported from the approved
 drafts in `dev-docs/design-drafts/consent-ui/`.
 
 - **The mark is the Gate Monogram.** Two brackets (the gate) in the
-  theme foreground, one accent dot (the secret) — drawn from painter
+  theme foreground, one accent dot (the secret), drawn from painter
   primitives in `paint_app_icon`, master SVG in `dev-docs/brand/logo.svg`
   (which the docs site's favicon and header mark also derive from). No
   tile, no border: it reads as window chrome, not an app-store icon.
 - **Prompt = Focus Stack.** One ask rendered big; the queue is a "N
   more waiting" line. Header (the mark + "`wrap` wants to use
-  `SECRET`" + command line), then the **evidence well** — an inset
+  `SECRET`" + command line), then the **evidence well**: an inset
   `well`-filled, hairline-separated block holding SECRET(S), ASKED BY
   (the ancestry as a tree with per-process argv + pid, full string on
   hover, asking leaf in accent), IN, and HISTORY.

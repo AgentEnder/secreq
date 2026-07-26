@@ -2,8 +2,8 @@
 
 `secreq` doubles as a **provenance-aware SSH agent**. When `ssh`, `git`,
 or any SSH client asks it to sign with one of your keys, `secreq` shows
-_who is asking_ — the caller process chain plus the key's fingerprint —
-and gates the signature on your consent. It's the consent ceremony you
+_who is asking_ (the caller process chain plus the key's fingerprint) and
+gates the signature on your consent. It's the consent ceremony you
 already get for wrapped binaries, applied to SSH key use.
 
 If you want the mental model for the rest of `secreq` first, read
@@ -25,7 +25,7 @@ If you want the mental model for the rest of `secreq` first, read
 
 ## Configure
 
-> **The short way is `secreq ssh setup`** — it declares the identity,
+> **The short way is `secreq ssh setup`.** It declares the identity,
 > offers to keep the daemon alive, and wires your SSH clients, showing you
 > every file it wants to touch first. See [Onboarding](#onboarding). This
 > section describes the config it writes, for when you'd rather write it
@@ -49,11 +49,11 @@ the consent prompt.
 }
 ```
 
-- `public_key` — the full OpenSSH public-key line. Answers identity
+- `public_key`: the full OpenSSH public-key line. Answers identity
   listings directly.
-- `private_key` — a `secret://<provider>/<locator>` reference. Resolved
+- `private_key`: a `secret://<provider>/<locator>` reference. Resolved
   fresh at every sign; never cached.
-- `$reason` — optional human label, shown in the consent prompt.
+- `$reason`: optional human label, shown in the consent prompt.
 
 ## The `op`-export requirement
 
@@ -67,7 +67,7 @@ op read "op://Private/gh-key/private key"
 must print a `-----BEGIN OPENSSH PRIVATE KEY-----` block. Store the key so
 that field holds the exported private key text. If the provider returns
 anything else, signing fails (the key can't be parsed). Listing still
-works — listing never resolves the reference.
+works; listing never resolves the reference.
 
 ## Onboarding
 
@@ -104,16 +104,16 @@ Omit `--public-key` or `--private-key` and `secreq` resolves the missing
 pieces interactively. When 1Password's `op` is on `PATH` it offers
 **op-assisted discovery**: it lists your SSH-Key items, you pick one, and
 it derives the private-key reference (`secret://op/<vault>/<title>/private
-key`) — and fetches the public key too if you didn't supply one. Without
+key`), and fetches the public key too if you didn't supply one. Without
 `op`, it prompts for the reference manually. You can also skip the
 command entirely and hand-edit the `ssh` block (see [Configure](#configure)).
 
 ### 2. Keep the daemon running
 
 The agent socket only exists **while the daemon runs**. Wraps auto-spawn
-the daemon on demand, but nothing spawns it for an _incoming_ SSH sign —
-so `SSH_AUTH_SOCK` points at a dead socket unless a daemon already
-happens to be up. Install a per-user login service to fix that:
+the daemon on demand, but nothing spawns it for an _incoming_ SSH sign, so
+`SSH_AUTH_SOCK` points at a dead socket unless a daemon already happens to
+be up. Install a per-user login service to fix that:
 
 ```sh
 secreq daemon install
@@ -134,7 +134,7 @@ every login. What it writes, per platform:
 - **Linux:** a systemd `--user` unit at
   `~/.config/systemd/user/secreq.service` running `secreq daemon --fg`
   with `Restart=on-failure`. systemd `--user` inherits your login
-  environment, so no `PATH` is pinned — but **`op` (and any other provider
+  environment, so no `PATH` is pinned, but **`op` (and any other provider
   binary) must be reachable on your user systemd `PATH`** for the daemon to
   resolve secrets.
 
@@ -174,7 +174,7 @@ secreq ssh setup --undo
 directly:
 
 - **`ssh-config`** prepends a `Host *` / `IdentityAgent` stanza to
-  `~/.ssh/config`. Scoped to SSH only — it doesn't touch other clients'
+  `~/.ssh/config`. Scoped to SSH only; it doesn't touch other clients'
   environments. (It's prepended because ssh applies the _first_
   `IdentityAgent` it finds for a host.) secreq creates `~/.ssh` as
   `0700` and keeps the config `0600`, which ssh requires.
@@ -184,7 +184,7 @@ directly:
 
 After it writes, restart your shell (`exec $SHELL`) or open a new SSH
 session so the change takes effect. With the login service from step 2
-in place, the daemon is already running — the new session just picks up
+in place, the daemon is already running, so the new session just picks up
 the socket.
 
 **Or add it by hand.** If you'd rather not let secreq edit your dotfiles,
@@ -204,7 +204,7 @@ Host *
 
 ### One agent only
 
-`secreq` _is_ your agent now — it resolves keys through your provider. Do
+`secreq` _is_ your agent now, resolving keys through your provider. Do
 **not** also point `SSH_AUTH_SOCK` or `IdentityAgent` at 1Password's SSH
 agent (or any other agent). Pick one. Running both means SSH talks to
 whichever it finds first, and you lose secreq's consent gating for keys
@@ -219,14 +219,14 @@ secreq ssh validate github     # test just one
 
 `ssh validate` proves the wiring end to end: it connects to the agent socket,
 asks the agent to sign a fixed test message with the key, and verifies the
-returned signature against the key's public half — the same
+returned signature against the key's public half: the same
 consent → resolve → sign path a real `git push` takes. A passing run prints
 `✓ <name>: agent signed; signature verifies`.
 
 Because it performs a **real** signature, it needs the daemon running (it
 talks to the live socket) and **may prompt for consent** the first time
 (answer the prompt if the window appears). If the socket is unreachable, the
-daemon probably isn't running yet — `secreq daemon install` sets it to start
+daemon probably isn't running yet. `secreq daemon install` sets it to start
 at login.
 
 You don't have to run it by hand: both `secreq ssh setup` (the guided flow)
@@ -238,10 +238,10 @@ things up.
 - **First sign prompts.** The first signature per anchor opens the consent
   window with the caller chain and the key's fingerprint. `ssh` itself is
   treated as a transport frame and skipped, so the prompt anchors on the
-  real initiator — your git command, shell, or IDE.
+  real initiator: your git command, shell, or IDE.
 - **Approvals cache per anchor, with a TTL.** Approving "remember" caches
   the _decision_ (not the key) for that anchor for about five minutes.
-  Subsequent signs within the window sign silently — each still resolves
+  Subsequent signs within the window sign silently; each still resolves
   the key fresh and zeroizes it. Unlike the wrap cache, which lives as long
   as the parent process, the SSH approval cache is clock-bounded: an anchor
   (shell/IDE/git session) can live for hours, so the approval expires on a
@@ -250,7 +250,7 @@ things up.
   never touch a provider.
 - **Every sign is audited.** Each signature (approved, cached, or denied)
   is recorded in the audit log with the key id, fingerprint, decision, and
-  caller chain — never the key or the signature bytes. (For SSH signs the
+  caller chain, never the key or the signature bytes. (For SSH signs the
   daemon writes the audit row itself, since there's no wrap client in the
   loop.)
 
@@ -260,7 +260,7 @@ This is the important tradeoff. **Unlike 1Password's sealed SSH agent,
 secreq's agent resolves the private key into the daemon's memory to sign,
 then zeroizes it.** 1Password's agent keeps the key hardware-sealed: the
 key never leaves 1Password, and a signature is produced inside the sealed
-boundary. secreq cannot do that — it signs in-process, so the key is
+boundary. secreq cannot do that: it signs in-process, so the key is
 briefly decrypted in the daemon's RAM.
 
 What you gain is provenance-aware consent (you see who's asking, and can
@@ -270,5 +270,5 @@ process memory, keep using 1Password's sealed agent for those keys and
 don't route them through secreq.
 
 Mitigations on the secreq side: the resolved key is zeroized immediately
-after signing, it is never sent to a client, and every use is gated by
-consent and recorded in the audit log.
+after signing, it is never sent to a client, and consent gates every use,
+which the audit log then records.

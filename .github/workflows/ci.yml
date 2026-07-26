@@ -50,6 +50,12 @@ jobs:
       # guide that teaches a package nobody publishes.
       - run: pnpm --filter @secreq/docs-site run typecheck-docs
 
+      # Prose linting. Errors fail the build; warnings and suggestions do not,
+      # so a rule can be tightened without turning every open PR red. See
+      # .vale.ini for scope and .vale/styles/Secreq/ for the rules.
+      - name: Vale (published prose)
+        run: mise run docs
+
   test:
     name: build / clippy / test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

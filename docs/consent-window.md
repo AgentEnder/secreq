@@ -7,8 +7,8 @@ windows**, and they have different jobs:
 - **The prompt** is transient. It holds exactly one request and exists to
   get an answer out of you. It appears on its own and goes away on its own.
 - **The manager** is persistent. It holds your rules and your audit
-  history — everything you browse rather than decide. You open it
-  deliberately and close it yourself.
+  history, everything you browse rather than decide. You open it yourself,
+  and close it yourself.
 
 They are split so that the window which interrupts you only ever asks one
 question, and the window you go looking for never interrupts you at all.
@@ -18,7 +18,7 @@ question, and the window you go looking for never interrupts you at all.
 ::shot{id=02-single-pending}
 
 The header says what wants what, with the command underneath. Below it is
-the **evidence well** — the facts you need in order to answer, in the order
+the **evidence well**: the facts you need in order to answer, in the order
 you need them. Then the decision.
 
 **SECRET** names the environment variable being released and the locator it
@@ -58,7 +58,7 @@ histories.
 
 **Approve** releases the secret. **Deny** aborts the run; the wrapped binary
 never starts. <kbd>A</kbd> or <kbd>Enter</kbd> approves, <kbd>D</kbd> or
-<kbd>Esc</kbd> denies — the buttons carry the same letters as underlined
+<kbd>Esc</kbd> denies. The buttons carry the same letters as underlined
 mnemonics. Keys are live only while a decision is actually pending, and the
 prompt has no text fields, so bare letters are safe to press.
 
@@ -106,7 +106,7 @@ declared when you opened the socket is the principal. See
 
 ::shot{id=34-agent-scope-pending}
 
-**Gate-only wraps.** A wrap with no secrets still asks — the SECRET row
+**Gate-only wraps.** A wrap with no secrets still asks; the SECRET row
 gives way to a gate-only marker. See
 [wraps](./wraps.md#gate-only-wraps).
 
@@ -124,7 +124,7 @@ Open it from the prompt's `Open Manager…` link, or with `secreq view`, which
 lands on Audit. A segmented control switches between the two views, and the
 header's search field binds to whichever is active.
 
-The manager never holds a pending decision — that's the prompt's job — so
+The manager never holds a pending decision (that is the prompt's job), so
 browsing your history never blocks a waiting request:
 
 ::shot{id=14-audit-tab-with-pending}
@@ -154,7 +154,7 @@ For decisions pattern matching can't express, see
 
 ### Audit
 
-Every decision, newest first — what asked, what it wanted, where from, and
+Every decision, newest first: what asked, what it wanted, where from, and
 how it went. Your answers, rule auto-fires, refused sandbox requests and
 abandoned requests all land in the same list.
 
@@ -193,12 +193,12 @@ jq -c 'select(.decision | startswith("deny"))' ~/.secreq/audit.log
 }
 ```
 
-`secrets` holds **names only, never values** — that is the invariant the
+`secrets` holds **names only, never values**. That is the invariant the
 whole file rests on. Three fields appear only when they apply: `rule_id` on
 auto-decisions, `fingerprint` (of the **public** key) on SSH sign rows, and
-`unverified_guest_chain` for a chain a sandbox guest reported about itself —
-a claim, not evidence, deliberately kept out of `callers` and never read by
-rule matching.
+`unverified_guest_chain` for a chain a sandbox guest reported about itself.
+That last one is a claim rather than evidence, so it is kept out of `callers`
+and never read by rule matching.
 
 The `decision` values distinguish what you did from what happened without
 you:
@@ -207,8 +207,8 @@ you:
 | ------------------------- | -------------------------------------------------------------------------------- |
 | `approve`                 | You approved this run only.                                                      |
 | `approve+remember`        | You approved and the parent scope was cached.                                    |
-| `approve+cached`          | Released without asking — the cache already had a matching grant.                |
-| `approve+auto`            | Released by a matching approve rule. Carries `rule_id`.                           |
+| `approve+cached`          | Released without asking; the cache already had a matching grant.                 |
+| `approve+auto`            | Released by a matching approve rule. Carries `rule_id`.                          |
 | `approve+ssh-session`     | You approved a signature and granted this key for the session.                   |
 | `approve+ssh-session-all` | You approved a signature and granted every key for the session.                  |
 | `approve+agent-session`   | You approved a sandbox request and granted its scope for the TTL.                |
@@ -224,11 +224,11 @@ something it was never offered."
 
 ::shot{id=27-audit-tab-abandoned}
 
-The log is written by the **wrap client** after the daemon replies, not by
-the daemon — so a grant is recorded with full attribution even if the daemon
-dies between the decision and the write. Two cases have no client to do it
-and are written by the daemon itself: SSH signatures, where the daemon *is*
-the agent, and abandoned requests, where the client is already gone.
+The **wrap client** writes the log after the daemon replies; the daemon does
+not. A grant is therefore recorded with full attribution even if the daemon
+dies between the decision and the write. Two cases have no client to do it,
+so the daemon writes them itself: SSH signatures, where the daemon _is_ the
+agent, and abandoned requests, where the client is already gone.
 
 ## The daemon behind them
 
@@ -236,9 +236,9 @@ Closing either window leaves the daemon running and your approvals cache
 intact. The prompt also hides itself a couple of seconds after the queue
 drains. To actually stop it:
 
-- `secreq daemon stop` — graceful; clears the cache.
-- `secreq daemon stop --force` — SIGKILL, for when it is wedged.
-- Do nothing — it idle-exits after two hours with an empty queue.
+- `secreq daemon stop`: graceful; clears the cache.
+- `secreq daemon stop --force`: SIGKILL, for when it is wedged.
+- Do nothing; it idle-exits after two hours with an empty queue.
 
 On macOS the daemon runs with the `Accessory` activation policy, so it stays
 out of the Dock and out of Cmd-Tab while no window is showing.

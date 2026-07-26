@@ -1,7 +1,7 @@
 # Authoring `wraps.json5`
 
 > **You may not need this page.** `secreq wrap <binary>` asks for everything
-> a wrap needs and writes the entry for you — and unlike hand-editing, it
+> a wrap needs and writes the entry for you. Unlike hand-editing, it
 > resolves the locator against your store before saving, so a typo fails
 > while you're still looking at it. Read this when you want to know what a
 > field means, hand-edit something the prompts don't cover, or check a
@@ -10,7 +10,7 @@
 ::term{id=wrap-gh}
 
 The config lives at `~/.secreq/wraps.json5` (or `$SECREQ_HOME/wraps.json5`).
-It's JSON5 — comments, unquoted keys, trailing commas, single quotes. Point
+It's JSON5: comments, unquoted keys, trailing commas, single quotes. Point
 your editor at [`wraps.schema.json`](./wraps.schema.json) for completion:
 
 ```json5
@@ -44,13 +44,13 @@ binary. `$`-prefixed keys are settings.
 
 ## Settings
 
-| Key               | Meaning                                                                                                                                                                                                             |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `$shim_dir`       | Where `secreq wrap` drops PATH shims. `~/` is expanded. Set by `secreq init`.                                                                                                                                        |
-| `$wait_indicator` | Default `true`. Whether a blocked wrap prints a "waiting for approval" indicator to stderr — a spinner on a TTY, a timestamped line every 30s on a pipe. `SECREQ_NO_WAIT_INDICATOR` silences it per-invocation.      |
-| `$editor`         | Editor id (`code`, `cursor`, `zed`, `nvim`) the rule editor's "Open in editor" button defaults to. Written when you pick one in the manager's Rules view.                                                            |
-| `$schema`         | Editor pointer; ignored at runtime.                                                                                                                                                                                 |
-| `providers`       | Provider definitions. Optional — see [providers](./providers.md).                                                                                                                                                    |
+| Key               | Meaning                                                                                                                                                                                                        |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `$shim_dir`       | Where `secreq wrap` drops PATH shims. `~/` is expanded. Set by `secreq init`.                                                                                                                                  |
+| `$wait_indicator` | Default `true`. Whether a blocked wrap prints a "waiting for approval" indicator to stderr: a spinner on a TTY, a timestamped line every 30s on a pipe. `SECREQ_NO_WAIT_INDICATOR` silences it per-invocation. |
+| `$editor`         | Editor id (`code`, `cursor`, `zed`, `nvim`) the rule editor's "Open in editor" button defaults to. Written when you pick one in the manager's Rules view.                                                      |
+| `$schema`         | Editor pointer; ignored at runtime.                                                                                                                                                                            |
+| `providers`       | Provider definitions. Optional; see [providers](./providers.md).                                                                                                                                               |
 
 Other `$`-prefixed keys are reserved. A per-wrap `$description` parses but
 does nothing yet.
@@ -58,9 +58,9 @@ does nothing yet.
 ## Wraps
 
 | Setting   | Type              | Meaning                                                                                                                                                     |
-| --------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| --------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `$reason` | string            | Rationale shown in the consent prompt.                                                                                                                      |
-| `env`     | object (optional) | Environment variables to inject. Each value is a full `secret://provider/locator` reference — bare locators aren't accepted here. Omit for a gate-only wrap. |
+| `env`     | object (optional) | Environment variables to inject. Each value is a full `secret://provider/locator` reference. Bare locators aren't accepted here. Omit for a gate-only wrap. |
 
 A reference is `secret://<provider>/<locator>`: the provider is a scheme
 name (built-in or declared in `providers`), and the locator is everything
@@ -75,7 +75,7 @@ there.
 If every entry is satisfied this way the run needs no consent at all and
 passes straight through, because secreq is releasing nothing. A partially
 satisfied wrap prompts only for what's missing. This is what keeps wrapped
-binaries cheap inside environments that pre-inject credentials — CI, a
+binaries cheap inside environments that pre-inject credentials: CI, a
 shell where you exported the token yourself, a nested `secreq run`.
 
 ### Gate-only wraps
@@ -94,7 +94,7 @@ op: {
 ::shot{id=21-gate-only-pending}
 
 Now every `op read …` pauses for a prompt showing the full command, the
-working directory and the caller tree — the "why am I getting this?"
+working directory and the caller tree, the "why am I getting this?"
 context the tool's own prompt omits. The evidence well's secret row gives
 way to a gate-only marker.
 
@@ -103,10 +103,10 @@ the interactive flow offers it as the second option on the first question:
 
 ::term{id=wrap-gate-only}
 
-**Wrapping a provider CLI is safe.** If you gate `op` *and* use it as a
+**Wrapping a provider CLI is safe.** If you gate `op` _and_ use it as a
 `secret://op/...` provider, secreq won't double-prompt: it runs the provider
 with an internal marker that makes the wrapped `op` pass straight through.
-Only the `op` calls *you* make are gated, never the ones secreq makes to
+Only the `op` calls _you_ make are gated, never the ones secreq makes to
 fetch a value for another wrap.
 
 ## How approval is scoped
@@ -114,12 +114,12 @@ fetch a value for another wrap.
 When you approve a wrap invocation, the decision is cached against the
 **direct parent process**, keyed on `(wrap, ppid, parent start time)`.
 
-| Scenario                                                     | Outcome                             |
-| ------------------------------------------------------------ | ----------------------------------- |
-| Run `gh` from your zsh, approve, run `gh` again from that zsh | Cache hit → no prompt.              |
-| Open a new terminal and run `gh` there                        | Different ppid → prompt.            |
-| An `npm` postinstall hook invokes `gh` through the shim       | Different ppid (`npm`) → prompt.    |
-| A pid is recycled after the original shell died               | Different start time → prompt.      |
+| Scenario                                                      | Outcome                          |
+| ------------------------------------------------------------- | -------------------------------- |
+| Run `gh` from your zsh, approve, run `gh` again from that zsh | Cache hit → no prompt.           |
+| Open a new terminal and run `gh` there                        | Different ppid → prompt.         |
+| An `npm` postinstall hook invokes `gh` through the shim       | Different ppid (`npm`) → prompt. |
+| A pid is recycled after the original shell died               | Different start time → prompt.   |
 
 Descendants of a process you already approved for ride the same grant.
 
@@ -135,7 +135,7 @@ its start time, so the entry becomes unreachable. When the daemon exits
 cache goes with it. Nothing artificial expires entries in between, and a
 daemon restart is always the clean reset.
 
-Two kinds of request deliberately never remember: `secreq run`, whose
+Two kinds of request never remember: `secreq run`, whose
 identity is fixed and would over-match, and SSH signatures, which have
 their own clock-bounded [session grants](./ssh-agent.md).
 

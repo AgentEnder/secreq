@@ -1,7 +1,7 @@
 # Installing secreq
 
 `secreq` is a single self-contained binary. Every channel below installs the
-same executable, and none of them create wraps or shims — that's
+same executable, and none of them create wraps or shims. That is
 [`secreq init`](#after-installing).
 
 | Channel                                 | Best for                     | One-liner                                        |
@@ -13,7 +13,7 @@ same executable, and none of them create wraps or shims — that's
 
 Prebuilt binaries ship for `{x86_64,aarch64}-unknown-linux-gnu` and
 `{x86_64,aarch64}-apple-darwin`. On any other platform use
-[`cargo install`](#cargo-install), which builds from source — see
+[`cargo install`](#cargo-install), which builds from source. See
 [platform-support](./platform-support.md) for what "supported" means per OS.
 
 ## curl | sh
@@ -27,7 +27,7 @@ release tarball, **verifies its SHA-256 against the release's `SHA256SUMS`
 manifest**, and drops `secreq` into `~/.local/bin`. It refuses to install a
 binary it can't verify.
 
-Read it before piping it to a shell — it's [`dist/install.sh`](../dist/install.sh).
+Read it before piping it to a shell; it's [`dist/install.sh`](../dist/install.sh).
 Knobs, all optional:
 
 | Env var              | Effect                                   | Default        |
@@ -60,7 +60,7 @@ cargo install secreq
 ```
 
 Builds from the [crates.io](https://crates.io/crates/secreq) release into
-`~/.cargo/bin`. This is the portable path — it works on any target Rust
+`~/.cargo/bin`. This is the portable path: it works on any target Rust
 supports, including ones with no prebuilt binary. It needs a recent stable
 toolchain and the platform GUI libraries the consent window links: on Linux
 `libwayland`, `libxkbcommon` and the XCB dev packages; on macOS the native
@@ -107,8 +107,8 @@ install "secreq-$VERSION-$TARGET/secreq" ~/.local/bin/secreq
 A downloaded tarball also carries its own `install.sh`, if you'd rather not
 place the binary by hand.
 
-To verify the manifest's provenance before trusting it — `SHA256SUMS` is
-signed with [cosign](https://github.com/sigstore/cosign) keyless:
+`SHA256SUMS` is signed with [cosign](https://github.com/sigstore/cosign)
+keyless, so you can verify its provenance before trusting it:
 
 ```sh
 cosign verify-blob --certificate SHA256SUMS.pem --signature SHA256SUMS.sig \

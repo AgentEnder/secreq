@@ -2,15 +2,15 @@
 
 `secreq` is a **Unix tool at its core.** It leans on peer-credential lookup
 over unix-domain sockets (`SO_PEERCRED` / `LOCAL_PEERPID`), process-tree
-walking, PATH shims and `execvp` — none of which have a first-class Windows
+walking, PATH shims and `execvp`, none of which have a first-class Windows
 equivalent.
 
-| Platform                             | Status                      | Login service                                                      | Consent window needs                              |
-| ------------------------------------ | --------------------------- | -------------------------------------------------------------------- | --------------------------------------------------- |
-| **macOS**                            | ✅ First-class              | launchd LaunchAgent (`~/Library/LaunchAgents/com.secreq.daemon.plist`) | Nothing — the WindowServer is always present.     |
-| **Linux**                            | ✅ First-class              | systemd `--user` unit (`~/.config/systemd/user/secreq.service`)     | `$DISPLAY` (X11) or `$WAYLAND_DISPLAY` (Wayland). |
-| **\*BSD** (FreeBSD, OpenBSD, NetBSD) | ⚠️ Best-effort, unsupported | None — no systemd `--user` manager and no plist.                     | Same as Linux. **Known compile gap, below.**      |
-| **Windows**                          | ❌ Not supported            | —                                                                     | —                                                 |
+| Platform                             | Status                      | Login service                                                          | Consent window needs                              |
+| ------------------------------------ | --------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------- |
+| **macOS**                            | ✅ First-class              | launchd LaunchAgent (`~/Library/LaunchAgents/com.secreq.daemon.plist`) | Nothing; the WindowServer is always present.      |
+| **Linux**                            | ✅ First-class              | systemd `--user` unit (`~/.config/systemd/user/secreq.service`)        | `$DISPLAY` (X11) or `$WAYLAND_DISPLAY` (Wayland). |
+| **\*BSD** (FreeBSD, OpenBSD, NetBSD) | ⚠️ Best-effort, unsupported | None: no systemd `--user` manager, no plist.                           | Same as Linux. **Known compile gap, below.**      |
+| **Windows**                          | ❌ Not supported            | —                                                                      | —                                                 |
 
 **x86_64 and aarch64 are both supported wherever the OS is.** The gating is
 the OS, not the CPU; there are no arch-specific code paths.
@@ -44,7 +44,7 @@ Everything works out of the box.
 
 ## \*BSD
 
-Most of secreq is portable to the BSDs in principle — unix sockets, PATH
+Most of secreq is portable to the BSDs in principle: unix sockets, PATH
 shims, `execvp`, the provider CLIs. Two things stop them being first-class:
 
 1. **A compile gap.** The SSH-agent peer-credential lookup
@@ -67,7 +67,7 @@ ones `npm` and your IDE spawn, and process-tree provenance walked with Unix
 pid semantics.
 
 You may notice a `windows` arm in the consent UI's theme flavors and Windows
-screenshots in the docs. **Those do not imply Windows support** — they exist
+screenshots in the docs. **Those do not imply Windows support.** They exist
 so the theming code and the screenshot harness stay total, and so the docs
 can show a reader chrome they recognize. There is no working Windows build,
 login service, or socket path.
