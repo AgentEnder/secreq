@@ -579,6 +579,13 @@ fn agent_ask(scope: &Scope, reference: &Reference, guest_chain: &GuestChain) -> 
             scope: scope.name.clone(),
             reference: reference.to_string(),
             guest_chain: guest_chain.display().map(str::to_owned),
+            // Left empty on purpose. The daemon reads the socket peer and
+            // fills this in (`server::adopt_peer_provenance`), overwriting
+            // anything a client writes — which is what makes the row worth
+            // reading, and is why the genuine client does not try to be
+            // helpful here. Writing our own pid would be a claim; the row is
+            // supposed to be the kernel's answer.
+            declared_by: None,
         }),
     }
 }

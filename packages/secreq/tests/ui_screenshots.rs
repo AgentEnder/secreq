@@ -414,6 +414,7 @@ fn submit_agent(
     scope: &str,
     reference: &str,
     guest_chain: Option<&str>,
+    declared_by: Option<secreq::daemon::proto::LocalPeer>,
 ) -> mpsc::Receiver<secreq::daemon::state::WaiterReply> {
     let dedupe_key = DedupeKey {
         wrap: format!("agent:{scope}:{reference}"),
@@ -430,6 +431,12 @@ fn submit_agent(
             scope: scope.to_owned(),
             reference: reference.to_owned(),
             guest_chain: guest_chain.map(str::to_owned),
+            // In production this is stamped by the daemon from the socket
+            // peer, never by the client — `server::adopt_peer_provenance`.
+            // A fixture supplies it directly because it has no socket, which
+            // is also what lets one fixture show the genuine peer and another
+            // show a forger's.
+            declared_by,
         }),
     };
     let (tx, rx) = mpsc::channel();
@@ -1558,11 +1565,18 @@ fn agent_scope_pending() {
     // This guest claimed nothing, so there is no GUEST SAYS row either
     // (contrast `36-agent-guest-chain-pending`). The "Scope: Approve for 5
     // min" action is the TTL grant that anchors an approval to the sandbox.
+    //
+    // DECLARED BY is the genuine case: the socket peer is a `secreq agent
+    // open` the user started, in the executable they installed. Contrast
+    // `42-agent-declared-by-impostor`, which is the same prompt when the peer
+    // is anything else.
     render_prompt_fixture(
         Shot::new("34-agent-scope-pending").caption(
             "A request from a guest VM. The headline is the <b>sandbox</b>, because a \
              guest has no host process tree — the scope you declared is the principal, \
-             and there is deliberately no caller chain to read.",
+             and there is deliberately no caller chain to read. <b>DECLARED BY</b> is \
+             the local process that opened the socket, which here is the \
+             <code>secreq agent open</code> you started.",
         ),
         vec![],
         |state| {
@@ -1571,6 +1585,69 @@ fn agent_scope_pending() {
                 "brain-nx-t5",
                 "secret://op/Dev/gh/token",
                 None,
+                Some(agent_open_peer()),
+            )]
+        },
+    );
+}
+
+/// The socket peer of a *genuine* scoped-agent ask: the `secreq agent open`
+/// the user ran to declare the scope, at the path they installed it to.
+fn agent_open_peer() -> secreq::daemon::proto::LocalPeer {
+    secreq::daemon::proto::LocalPeer {
+        pid: 4711,
+        name: "secreq".to_owned(),
+        command: "secreq agent open --scope brain-nx-t5 --allow secret://op/Dev/gh/token"
+            .to_owned(),
+        exe: Some("/usr/local/bin/secreq".to_owned()),
+    }
+}
+
+#[test]
+fn agent_declared_by_impostor_pending() {
+    // The kind-forgery residue, rendered. Any local process can send an ask
+    // claiming the scoped-agent kind — a guest ask and a wrap ask arrive as
+    // the same message on the same socket, and `SO_PEERCRED` answers for the
+    // sender, not for a guest that may not exist. It can no longer carry
+    // secrets or a forged caller chain (`AskSubject` closed that), but until
+    // now it could still *decline to say who it is*: with no ASKED BY row, a
+    // forgery looked exactly like the design working as intended.
+    //
+    // Everything above DECLARED BY here is the forger's to write — the scope
+    // name, the ref, its own `comm`, its own argv. The executable path is
+    // not, and neither is the fact that a row appears at all. Set this beside
+    // `34-agent-scope-pending`, which is the same prompt with a real
+    // `agent open` on the socket, and the two are no longer the same picture.
+    //
+    // secreq does not refuse this ask. Refusing would mean deciding which
+    // executables may speak for a guest, which is fail-closed, breaks a
+    // `cargo run` daemon talking to an installed `agent open`, and needs an
+    // exception list that is a hole with a nicer name.
+    render_prompt_fixture(
+        Shot::new("42-agent-declared-by-impostor").caption(
+            "Any local program can send a request that claims to be a sandbox. It cannot \
+             carry secrets and it cannot invent a caller chain — and now it cannot be \
+             anonymous either. <b>DECLARED BY</b> names the process that actually opened \
+             the socket, with the executable path it is running from, which is the one \
+             line on this prompt the sender did not choose.",
+        ),
+        vec![],
+        |state| {
+            vec![submit_agent(
+                state,
+                "brain-nx-t5",
+                "secret://op/Dev/gh/token",
+                None,
+                Some(secreq::daemon::proto::LocalPeer {
+                    pid: 9931,
+                    // A name and an argv it picked to look like the real
+                    // thing. Both render; neither is checked.
+                    name: "secreq".to_owned(),
+                    command: "secreq agent open --scope brain-nx-t5".to_owned(),
+                    // The kernel's answer, and the only one it could not
+                    // write for itself.
+                    exe: Some("/tmp/.build-cache/postinstall".to_owned()),
+                }),
             )]
         },
     );
@@ -1603,6 +1680,7 @@ fn agent_guest_chain_pending() {
                 "brain-nx-t5",
                 "secret://op/Dev/gh/token",
                 Some("node → pnpm → postinstall"),
+                Some(agent_open_peer()),
             )]
         },
     );

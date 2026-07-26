@@ -606,6 +606,58 @@ pub struct AgentAskInfo {
     /// crosses this socket it is a label, and handing it back the shape of a
     /// caller list would only invite code to treat it like one.
     pub guest_chain: Option<String>,
+    /// The local process that spoke this ask onto `consent.sock`, as the
+    /// kernel reports it.
+    ///
+    /// **Stamped by the daemon, never by the client.**
+    /// `server::adopt_peer_provenance` overwrites whatever arrives here
+    /// before the prompt sees it, exactly as it overwrites a wrap ask's
+    /// `callers` — the field is on the client's payload struct only because
+    /// that is where the variant's data lives, not because a client may fill
+    /// it in.
+    ///
+    /// This is the whole of the kind-forgery remainder. The daemon cannot
+    /// tell a genuine `secreq agent open` from a local process claiming the
+    /// guest kind — both arrive as the same `ClientMsg::Ask` on the same
+    /// socket — so it does not try. It states what it *does* know: which
+    /// local process is on the other end. A genuine ask names an `agent open`
+    /// the user started; a forger names itself. Neither is refused, and the
+    /// reader decides.
+    ///
+    /// **It is not the principal and must never become one.** The scope stays
+    /// the gating identity, the grant anchor and the audit label, per the
+    /// provenance section of
+    /// `brain: areas/secreq/design/2026-07-16-remote-secret-agent.md`. This is a
+    /// display fact about a *host* socket — `consent.sock`, which is
+    /// per-user, `0600` and never forwarded — and says nothing whatever about
+    /// the guest, which is in another kernel and behind whatever tunnel the
+    /// scoped socket runs over.
+    ///
+    /// `None` when the peer could not be read at all (it exited between the
+    /// `SO_PEERCRED` call and the lookup). Rendered as a refusal to guess,
+    /// never as absence.
+    #[serde(default)]
+    pub declared_by: Option<LocalPeer>,
+}
+
+/// A local process as the kernel describes it, for a prompt that has to name
+/// who is on the other end of a socket.
+///
+/// Deliberately not a [`Caller`]: a caller frame is part of an *ancestry*,
+/// which is what `rules.rs` matches on and what `ASKED BY` renders. This is
+/// one process on one socket, it reaches no rule and no cache key, and giving
+/// it the shape of a chain frame would be an invitation to treat it as one.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LocalPeer {
+    pub pid: u32,
+    /// Sanitized `comm` — which the process chose for itself.
+    pub name: String,
+    /// Sanitized command line — which the process also chose for itself.
+    pub command: String,
+    /// Absolute path to the executable, when the kernel will say. **The only
+    /// field here the process did not pick**, which is why the prompt renders
+    /// it on its own line rather than folding it into the name.
+    pub exe: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]

@@ -1,13 +1,13 @@
 {
   "window": "prompt",
-  "caption": "The same request when the guest volunteers a caller chain. It renders dimmed under <b>GUEST SAYS</b> and marked <b>not verifiable</b> — recorded as a claim, never used to make the decision.",
+  "caption": "Any local program can send a request that claims to be a sandbox. It cannot carry secrets and it cannot invent a caller chain — and now it cannot be anonymous either. <b>DECLARED BY</b> names the process that actually opened the socket, with the executable path it is running from, which is the one line on this prompt the sender did not choose.",
   "variants": {
     "gnome-dark": {
-      "digest": "6bde99655236e06b47431168597bf313888278017f2e11349fc732ee67efcaa5",
+      "digest": "92fdb015c4258424534d60ad70062e516ccb41f3ebdca0477001a8a6b87754f0",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#383838ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,510.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
-        {"blur":0.0,"clip":[0.0,0.0,500.0,321.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,327.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
-        {"blur":0.0,"clip":[0.0,0.0,500.0,321.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,327.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,500.0,321.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,250.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,500.0,321.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,250.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {"a":[28.78,20.69],"b":[24.09,20.69],"clip":[0.0,0.0,500.0,321.0],"k":"line","stroke":[3.28,"#ffffffff"]},
         {"a":[24.09,19.05],"b":[24.09,42.95],"clip":[0.0,0.0,500.0,321.0],"k":"line","stroke":[3.28,"#ffffffff"]},
         {"a":[24.09,41.31],"b":[28.78,41.31],"clip":[0.0,0.0,500.0,321.0],"k":"line","stroke":[3.28,"#ffffffff"]},
@@ -51,7 +51,7 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,0.0,500.0,321.0],"fill":"#303030ff","k":"rect","radius":[12,12,12,12],"rect":[18.0,101.0,482.0,327.0],"stroke":[1.0,"#14141414"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,500.0,321.0],"fill":"#303030ff","k":"rect","radius":[12,12,12,12],"rect":[18.0,101.0,482.0,250.0],"stroke":[1.0,"#14141414"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,0.0,500.0,321.0],
           "k": "text",
@@ -143,9 +143,9 @@
           "pos": [126.91,215.53],
           "rows": [
             {
-              "rect": [0.0,0.0,145.41,13.0],
+              "rect": [0.0,0.0,200.78,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#ffffffff","family":"monospace","size":11.5,"text":"/usr/local/bin/secreq","underline":[0.0,"#00000000"],"x":[0.0,144.92]}
+                {"baseline":10.0,"color":"#ffffffff","family":"monospace","size":11.5,"text":"/tmp/.build-cache/postinstall","underline":[0.0,"#00000000"],"x":[0.0,199.92]}
               ]
             }
           ],
@@ -154,61 +154,17 @@
         {
           "clip": [0.0,0.0,500.0,321.0],
           "k": "text",
-          "pos": [278.31,215.5],
+          "pos": [333.69,215.5],
           "rows": [
             {
               "rect": [0.0,0.0,25.94,13.0],
               "runs": [
-                {"baseline":11.0,"color":"#77767bff","family":"proportional","size":11.5,"text":"4711","underline":[0.0,"#00000000"],"x":[0.0,25.49]}
+                {"baseline":11.0,"color":"#77767bff","family":"proportional","size":11.5,"text":"9931","underline":[0.0,"#00000000"],"x":[0.0,25.49]}
               ]
             }
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"a":[31.0,245.0],"b":[469.0,245.0],"clip":[0.0,0.0,500.0,321.0],"k":"line","stroke":[1.0,"#14141414"]},
-        {
-          "clip": [0.0,0.0,500.0,321.0],
-          "k": "text",
-          "pos": [31.0,254.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,57.0,12.0],
-              "runs": [
-                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":10.5,"text":"GUEST SAYS","underline":[0.0,"#00000000"],"x":[0.0,56.43]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,0.0,500.0,321.0],
-          "k": "text",
-          "pos": [31.0,274.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,188.16,15.0],
-              "runs": [
-                {"baseline":12.0,"color":"#9a9996ff","family":"monospace","size":12.5,"text":"node → pnpm → postinstall","underline":[0.0,"#00000000"],"x":[0.0,187.53]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,0.0,500.0,321.0],
-          "k": "text",
-          "pos": [31.0,295.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,182.63,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#ff7b63ff","family":"proportional","size":11.5,"text":"⚠ guest-reported — NOT verifiable","underline":[0.0,"#00000000"],"x":[0.0,182.3]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"clip":[0.0,0.0,500.0,321.0],"k":"mesh"},
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,321.0,500.0,422.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#303030ff","k":"rect","radius":[12,12,12,12],"rect":[18.0,325.0,482.0,391.0],"stroke":[1.0,"#14141414"],"stroke_kind":"Inside"},
         {
@@ -320,11 +276,11 @@
       "size": [500.0,510.0]
     },
     "gnome-light": {
-      "digest": "f01a5e1c5be82b198f671ad350254fe7802b26a6eb673586faf233468730db0e",
+      "digest": "6656010e491ebf795189eee671e43af574b3e0ecb6ef9b356ed225fd24281dc4",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#fafafaff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,510.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
-        {"blur":0.0,"clip":[0.0,0.0,500.0,321.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,327.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
-        {"blur":0.0,"clip":[0.0,0.0,500.0,321.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,327.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,500.0,321.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,250.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,500.0,321.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,250.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {"a":[28.78,20.69],"b":[24.09,20.69],"clip":[0.0,0.0,500.0,321.0],"k":"line","stroke":[3.28,"#26262bff"]},
         {"a":[24.09,19.05],"b":[24.09,42.95],"clip":[0.0,0.0,500.0,321.0],"k":"line","stroke":[3.28,"#26262bff"]},
         {"a":[24.09,41.31],"b":[28.78,41.31],"clip":[0.0,0.0,500.0,321.0],"k":"line","stroke":[3.28,"#26262bff"]},
@@ -368,7 +324,7 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,0.0,500.0,321.0],"fill":"#ffffffff","k":"rect","radius":[12,12,12,12],"rect":[18.0,101.0,482.0,327.0],"stroke":[1.0,"#00000017"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,500.0,321.0],"fill":"#ffffffff","k":"rect","radius":[12,12,12,12],"rect":[18.0,101.0,482.0,250.0],"stroke":[1.0,"#00000017"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,0.0,500.0,321.0],
           "k": "text",
@@ -460,9 +416,9 @@
           "pos": [126.91,215.53],
           "rows": [
             {
-              "rect": [0.0,0.0,145.41,13.0],
+              "rect": [0.0,0.0,200.78,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#26262bff","family":"monospace","size":11.5,"text":"/usr/local/bin/secreq","underline":[0.0,"#00000000"],"x":[0.0,144.92]}
+                {"baseline":10.0,"color":"#26262bff","family":"monospace","size":11.5,"text":"/tmp/.build-cache/postinstall","underline":[0.0,"#00000000"],"x":[0.0,199.92]}
               ]
             }
           ],
@@ -471,61 +427,17 @@
         {
           "clip": [0.0,0.0,500.0,321.0],
           "k": "text",
-          "pos": [278.31,215.5],
+          "pos": [333.69,215.5],
           "rows": [
             {
               "rect": [0.0,0.0,25.94,13.0],
               "runs": [
-                {"baseline":11.0,"color":"#a4a3a8ff","family":"proportional","size":11.5,"text":"4711","underline":[0.0,"#00000000"],"x":[0.0,25.49]}
+                {"baseline":11.0,"color":"#a4a3a8ff","family":"proportional","size":11.5,"text":"9931","underline":[0.0,"#00000000"],"x":[0.0,25.49]}
               ]
             }
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"a":[31.0,245.0],"b":[469.0,245.0],"clip":[0.0,0.0,500.0,321.0],"k":"line","stroke":[1.0,"#00000017"]},
-        {
-          "clip": [0.0,0.0,500.0,321.0],
-          "k": "text",
-          "pos": [31.0,254.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,57.0,12.0],
-              "runs": [
-                {"baseline":10.0,"color":"#a4a3a8ff","family":"proportional","size":10.5,"text":"GUEST SAYS","underline":[0.0,"#00000000"],"x":[0.0,56.43]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,0.0,500.0,321.0],
-          "k": "text",
-          "pos": [31.0,274.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,188.16,15.0],
-              "runs": [
-                {"baseline":12.0,"color":"#77767bff","family":"monospace","size":12.5,"text":"node → pnpm → postinstall","underline":[0.0,"#00000000"],"x":[0.0,187.53]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,0.0,500.0,321.0],
-          "k": "text",
-          "pos": [31.0,295.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,182.63,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#c01c28ff","family":"proportional","size":11.5,"text":"⚠ guest-reported — NOT verifiable","underline":[0.0,"#00000000"],"x":[0.0,182.3]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"clip":[0.0,0.0,500.0,321.0],"k":"mesh"},
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,321.0,500.0,422.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#ffffffff","k":"rect","radius":[12,12,12,12],"rect":[18.0,325.0,482.0,391.0],"stroke":[1.0,"#00000017"],"stroke_kind":"Inside"},
         {
@@ -637,11 +549,11 @@
       "size": [500.0,510.0]
     },
     "macos-dark": {
-      "digest": "8de0a81b0c9232a139a06f06621c0b3f7124e81f028b22a7b5930225d9029ed9",
+      "digest": "9629bcdd3fb8d01e0f92a386bde87ab2e15b62cb291ea47ae06687f3310925cf",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#2b2b2dff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,510.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
-        {"blur":0.0,"clip":[0.0,0.0,500.0,353.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,318.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
-        {"blur":0.0,"clip":[0.0,0.0,500.0,353.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,318.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,500.0,353.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,243.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,500.0,353.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,243.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {"a":[28.78,20.69],"b":[24.09,20.69],"clip":[0.0,0.0,500.0,353.0],"k":"line","stroke":[3.28,"#e9e9ebff"]},
         {"a":[24.09,19.05],"b":[24.09,42.95],"clip":[0.0,0.0,500.0,353.0],"k":"line","stroke":[3.28,"#e9e9ebff"]},
         {"a":[24.09,41.31],"b":[28.78,41.31],"clip":[0.0,0.0,500.0,353.0],"k":"line","stroke":[3.28,"#e9e9ebff"]},
@@ -685,7 +597,7 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,0.0,500.0,353.0],"fill":"#232325ff","k":"rect","radius":[8,8,8,8],"rect":[18.0,98.0,482.0,318.0],"stroke":[1.0,"#3a3a3eff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,500.0,353.0],"fill":"#232325ff","k":"rect","radius":[8,8,8,8],"rect":[18.0,98.0,482.0,243.0],"stroke":[1.0,"#3a3a3eff"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,0.0,500.0,353.0],
           "k": "text",
@@ -777,9 +689,9 @@
           "pos": [123.28,208.53],
           "rows": [
             {
-              "rect": [0.0,0.0,139.06,13.0],
+              "rect": [0.0,0.0,192.06,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#e9e9ebff","family":"monospace","size":11.0,"text":"/usr/local/bin/secreq","underline":[0.0,"#00000000"],"x":[0.0,138.62]}
+                {"baseline":10.0,"color":"#e9e9ebff","family":"monospace","size":11.0,"text":"/tmp/.build-cache/postinstall","underline":[0.0,"#00000000"],"x":[0.0,191.62]}
               ]
             }
           ],
@@ -788,55 +700,12 @@
         {
           "clip": [0.0,0.0,500.0,353.0],
           "k": "text",
-          "pos": [268.34,208.5],
+          "pos": [321.34,208.5],
           "rows": [
             {
               "rect": [0.0,0.0,24.81,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#6a6a70ff","family":"proportional","size":11.0,"text":"4711","underline":[0.0,"#00000000"],"x":[0.0,24.2]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"a":[31.0,238.0],"b":[469.0,238.0],"clip":[0.0,0.0,500.0,353.0],"k":"line","stroke":[1.0,"#3a3a3eff"]},
-        {
-          "clip": [0.0,0.0,500.0,353.0],
-          "k": "text",
-          "pos": [31.0,247.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,54.31,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#6a6a70ff","family":"proportional","size":10.0,"text":"GUEST SAYS","underline":[0.0,"#00000000"],"x":[0.0,54.17]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,0.0,500.0,353.0],
-          "k": "text",
-          "pos": [31.0,266.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,180.63,14.0],
-              "runs": [
-                {"baseline":11.0,"color":"#98989dff","family":"monospace","size":12.0,"text":"node → pnpm → postinstall","underline":[0.0,"#00000000"],"x":[0.0,180.22]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,0.0,500.0,353.0],
-          "k": "text",
-          "pos": [31.0,286.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,174.69,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#e0705fff","family":"proportional","size":11.0,"text":"⚠ guest-reported — NOT verifiable","underline":[0.0,"#00000000"],"x":[0.0,174.03]}
+                {"baseline":10.0,"color":"#6a6a70ff","family":"proportional","size":11.0,"text":"9931","underline":[0.0,"#00000000"],"x":[0.0,24.2]}
               ]
             }
           ],
@@ -952,11 +821,11 @@
       "size": [500.0,510.0]
     },
     "macos-light": {
-      "digest": "eaba3cb9bf0cce79af005b9bb83121d64b02e1d6ddf0c2973eb52d54636173fc",
+      "digest": "2ae00142240b5695272f8f4585e5d08a6187715cd8266a8f091dded145e58dc3",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#f5f5f7ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,510.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
-        {"blur":0.0,"clip":[0.0,0.0,500.0,353.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,318.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
-        {"blur":0.0,"clip":[0.0,0.0,500.0,353.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,318.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,500.0,353.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,243.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,500.0,353.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,243.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {"a":[28.78,20.69],"b":[24.09,20.69],"clip":[0.0,0.0,500.0,353.0],"k":"line","stroke":[3.28,"#1d1d1fff"]},
         {"a":[24.09,19.05],"b":[24.09,42.95],"clip":[0.0,0.0,500.0,353.0],"k":"line","stroke":[3.28,"#1d1d1fff"]},
         {"a":[24.09,41.31],"b":[28.78,41.31],"clip":[0.0,0.0,500.0,353.0],"k":"line","stroke":[3.28,"#1d1d1fff"]},
@@ -1000,7 +869,7 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,0.0,500.0,353.0],"fill":"#ececefff","k":"rect","radius":[8,8,8,8],"rect":[18.0,98.0,482.0,318.0],"stroke":[1.0,"#dcdce1ff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,500.0,353.0],"fill":"#ececefff","k":"rect","radius":[8,8,8,8],"rect":[18.0,98.0,482.0,243.0],"stroke":[1.0,"#dcdce1ff"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,0.0,500.0,353.0],
           "k": "text",
@@ -1092,9 +961,9 @@
           "pos": [123.28,208.53],
           "rows": [
             {
-              "rect": [0.0,0.0,139.06,13.0],
+              "rect": [0.0,0.0,192.06,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#1d1d1fff","family":"monospace","size":11.0,"text":"/usr/local/bin/secreq","underline":[0.0,"#00000000"],"x":[0.0,138.62]}
+                {"baseline":10.0,"color":"#1d1d1fff","family":"monospace","size":11.0,"text":"/tmp/.build-cache/postinstall","underline":[0.0,"#00000000"],"x":[0.0,191.62]}
               ]
             }
           ],
@@ -1103,55 +972,12 @@
         {
           "clip": [0.0,0.0,500.0,353.0],
           "k": "text",
-          "pos": [268.34,208.5],
+          "pos": [321.34,208.5],
           "rows": [
             {
               "rect": [0.0,0.0,24.81,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#9d9da3ff","family":"proportional","size":11.0,"text":"4711","underline":[0.0,"#00000000"],"x":[0.0,24.2]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"a":[31.0,238.0],"b":[469.0,238.0],"clip":[0.0,0.0,500.0,353.0],"k":"line","stroke":[1.0,"#dcdce1ff"]},
-        {
-          "clip": [0.0,0.0,500.0,353.0],
-          "k": "text",
-          "pos": [31.0,247.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,54.31,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#9d9da3ff","family":"proportional","size":10.0,"text":"GUEST SAYS","underline":[0.0,"#00000000"],"x":[0.0,54.17]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,0.0,500.0,353.0],
-          "k": "text",
-          "pos": [31.0,266.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,180.63,14.0],
-              "runs": [
-                {"baseline":11.0,"color":"#6e6e73ff","family":"monospace","size":12.0,"text":"node → pnpm → postinstall","underline":[0.0,"#00000000"],"x":[0.0,180.22]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,0.0,500.0,353.0],
-          "k": "text",
-          "pos": [31.0,286.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,174.69,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#c4392eff","family":"proportional","size":11.0,"text":"⚠ guest-reported — NOT verifiable","underline":[0.0,"#00000000"],"x":[0.0,174.03]}
+                {"baseline":10.0,"color":"#9d9da3ff","family":"proportional","size":11.0,"text":"9931","underline":[0.0,"#00000000"],"x":[0.0,24.2]}
               ]
             }
           ],
@@ -1267,11 +1093,11 @@
       "size": [500.0,510.0]
     },
     "windows-dark": {
-      "digest": "bf54fe3bc8d1280b3ce6ec8b39a7b32ebd312b8ea0e352a745d26f517ba0771d",
+      "digest": "bb7d91e59e1f5f5f211a6c01564319d2d7d77c555748f39063eef424d46f34b4",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#2b2b2bff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,510.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
-        {"blur":0.0,"clip":[0.0,0.0,500.0,314.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,331.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
-        {"blur":0.0,"clip":[0.0,0.0,500.0,314.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,331.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,500.0,314.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,252.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,500.0,314.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,252.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {"a":[28.78,20.69],"b":[24.09,20.69],"clip":[0.0,0.0,500.0,314.0],"k":"line","stroke":[3.28,"#ffffffff"]},
         {"a":[24.09,19.05],"b":[24.09,42.95],"clip":[0.0,0.0,500.0,314.0],"k":"line","stroke":[3.28,"#ffffffff"]},
         {"a":[24.09,41.31],"b":[28.78,41.31],"clip":[0.0,0.0,500.0,314.0],"k":"line","stroke":[3.28,"#ffffffff"]},
@@ -1315,7 +1141,7 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,0.0,500.0,314.0],"fill":"#323232ff","k":"rect","radius":[4,4,4,4],"rect":[18.0,101.0,482.0,331.0],"stroke":[1.0,"#1f1f1fff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,500.0,314.0],"fill":"#323232ff","k":"rect","radius":[4,4,4,4],"rect":[18.0,101.0,482.0,252.0],"stroke":[1.0,"#1f1f1fff"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,0.0,500.0,314.0],
           "k": "text",
@@ -1407,9 +1233,9 @@
           "pos": [130.56,217.03],
           "rows": [
             {
-              "rect": [0.0,0.0,151.72,14.0],
+              "rect": [0.0,0.0,209.5,14.0],
               "runs": [
-                {"baseline":11.0,"color":"#ffffffff","family":"monospace","size":12.0,"text":"/usr/local/bin/secreq","underline":[0.0,"#00000000"],"x":[0.0,151.22]}
+                {"baseline":11.0,"color":"#ffffffff","family":"monospace","size":12.0,"text":"/tmp/.build-cache/postinstall","underline":[0.0,"#00000000"],"x":[0.0,209.22]}
               ]
             }
           ],
@@ -1418,61 +1244,17 @@
         {
           "clip": [0.0,0.0,500.0,314.0],
           "k": "text",
-          "pos": [288.28,217.0],
+          "pos": [346.06,217.0],
           "rows": [
             {
               "rect": [0.0,0.0,27.06,14.0],
               "runs": [
-                {"baseline":11.0,"color":"#6d6d6dff","family":"proportional","size":12.0,"text":"4711","underline":[0.0,"#00000000"],"x":[0.0,26.77]}
+                {"baseline":11.0,"color":"#6d6d6dff","family":"proportional","size":12.0,"text":"9931","underline":[0.0,"#00000000"],"x":[0.0,26.77]}
               ]
             }
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"a":[31.0,247.0],"b":[469.0,247.0],"clip":[0.0,0.0,500.0,314.0],"k":"line","stroke":[1.0,"#1f1f1fff"]},
-        {
-          "clip": [0.0,0.0,500.0,314.0],
-          "k": "text",
-          "pos": [31.0,256.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,59.72,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#6d6d6dff","family":"proportional","size":11.0,"text":"GUEST SAYS","underline":[0.0,"#00000000"],"x":[0.0,59.69]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,0.0,500.0,314.0],
-          "k": "text",
-          "pos": [31.0,277.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,195.66,15.0],
-              "runs": [
-                {"baseline":12.0,"color":"#9d9d9dff","family":"monospace","size":13.0,"text":"node → pnpm → postinstall","underline":[0.0,"#00000000"],"x":[0.0,194.83]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,0.0,500.0,314.0],
-          "k": "text",
-          "pos": [31.0,298.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,190.56,14.0],
-              "runs": [
-                {"baseline":11.0,"color":"#ff99a4ff","family":"proportional","size":12.0,"text":"⚠ guest-reported — NOT verifiable","underline":[0.0,"#00000000"],"x":[0.0,190.58]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"clip":[0.0,0.0,500.0,314.0],"k":"mesh"},
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,314.0,500.0,418.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#323232ff","k":"rect","radius":[4,4,4,4],"rect":[18.0,318.0,482.0,386.0],"stroke":[1.0,"#1f1f1fff"],"stroke_kind":"Inside"},
         {
@@ -1585,11 +1367,11 @@
       "size": [500.0,510.0]
     },
     "windows-light": {
-      "digest": "0e6080e6fc60f4326c65ca9093489d69a2abc5cd7194fd28ce4620b5805027a8",
+      "digest": "bc28051e789b7eca27de2b05098e456988c43d40595ea8ab23a47ee6c66ad3da",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#fbfbfbff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,510.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
-        {"blur":0.0,"clip":[0.0,0.0,500.0,314.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,331.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
-        {"blur":0.0,"clip":[0.0,0.0,500.0,314.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,331.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,500.0,314.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,252.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,500.0,314.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,252.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {"a":[28.78,20.69],"b":[24.09,20.69],"clip":[0.0,0.0,500.0,314.0],"k":"line","stroke":[3.28,"#1b1b1bff"]},
         {"a":[24.09,19.05],"b":[24.09,42.95],"clip":[0.0,0.0,500.0,314.0],"k":"line","stroke":[3.28,"#1b1b1bff"]},
         {"a":[24.09,41.31],"b":[28.78,41.31],"clip":[0.0,0.0,500.0,314.0],"k":"line","stroke":[3.28,"#1b1b1bff"]},
@@ -1633,7 +1415,7 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,0.0,500.0,314.0],"fill":"#f6f6f6ff","k":"rect","radius":[4,4,4,4],"rect":[18.0,101.0,482.0,331.0],"stroke":[1.0,"#e5e5e5ff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,500.0,314.0],"fill":"#f6f6f6ff","k":"rect","radius":[4,4,4,4],"rect":[18.0,101.0,482.0,252.0],"stroke":[1.0,"#e5e5e5ff"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,0.0,500.0,314.0],
           "k": "text",
@@ -1725,9 +1507,9 @@
           "pos": [130.56,217.03],
           "rows": [
             {
-              "rect": [0.0,0.0,151.72,14.0],
+              "rect": [0.0,0.0,209.5,14.0],
               "runs": [
-                {"baseline":11.0,"color":"#1b1b1bff","family":"monospace","size":12.0,"text":"/usr/local/bin/secreq","underline":[0.0,"#00000000"],"x":[0.0,151.22]}
+                {"baseline":11.0,"color":"#1b1b1bff","family":"monospace","size":12.0,"text":"/tmp/.build-cache/postinstall","underline":[0.0,"#00000000"],"x":[0.0,209.22]}
               ]
             }
           ],
@@ -1736,61 +1518,17 @@
         {
           "clip": [0.0,0.0,500.0,314.0],
           "k": "text",
-          "pos": [288.28,217.0],
+          "pos": [346.06,217.0],
           "rows": [
             {
               "rect": [0.0,0.0,27.06,14.0],
               "runs": [
-                {"baseline":11.0,"color":"#9b9b9bff","family":"proportional","size":12.0,"text":"4711","underline":[0.0,"#00000000"],"x":[0.0,26.77]}
+                {"baseline":11.0,"color":"#9b9b9bff","family":"proportional","size":12.0,"text":"9931","underline":[0.0,"#00000000"],"x":[0.0,26.77]}
               ]
             }
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"a":[31.0,247.0],"b":[469.0,247.0],"clip":[0.0,0.0,500.0,314.0],"k":"line","stroke":[1.0,"#e5e5e5ff"]},
-        {
-          "clip": [0.0,0.0,500.0,314.0],
-          "k": "text",
-          "pos": [31.0,256.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,59.72,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#9b9b9bff","family":"proportional","size":11.0,"text":"GUEST SAYS","underline":[0.0,"#00000000"],"x":[0.0,59.69]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,0.0,500.0,314.0],
-          "k": "text",
-          "pos": [31.0,277.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,195.66,15.0],
-              "runs": [
-                {"baseline":12.0,"color":"#5f5f5fff","family":"monospace","size":13.0,"text":"node → pnpm → postinstall","underline":[0.0,"#00000000"],"x":[0.0,194.83]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,0.0,500.0,314.0],
-          "k": "text",
-          "pos": [31.0,298.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,190.56,14.0],
-              "runs": [
-                {"baseline":11.0,"color":"#c42b1cff","family":"proportional","size":12.0,"text":"⚠ guest-reported — NOT verifiable","underline":[0.0,"#00000000"],"x":[0.0,190.58]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"clip":[0.0,0.0,500.0,314.0],"k":"mesh"},
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,314.0,500.0,418.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#f6f6f6ff","k":"rect","radius":[4,4,4,4],"rect":[18.0,318.0,482.0,386.0],"stroke":[1.0,"#e5e5e5ff"],"stroke_kind":"Inside"},
         {

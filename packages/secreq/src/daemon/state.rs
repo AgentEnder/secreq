@@ -4805,6 +4805,7 @@ mod tests {
             scope: "sandbox".to_owned(),
             reference: "secret://op/Prod/aws/root_key".to_owned(),
             guest_chain: None,
+            declared_by: None,
         });
 
         let mut state = State::new();

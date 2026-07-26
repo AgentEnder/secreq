@@ -19,7 +19,7 @@ use eframe::egui;
 
 use crate::consent::Decision;
 
-use super::proto::{AskSubject, Caller, SecretAsk, SshAnchorInfo, SshAskInfo};
+use super::proto::{AskSubject, Caller, LocalPeer, SecretAsk, SshAnchorInfo, SshAskInfo};
 use super::state::{QueueRow, QueueSnapshot};
 use super::theme::{OsFlavor, Theme};
 use super::ui::{
@@ -407,16 +407,14 @@ fn render_evidence_well(
                         )
                         .truncate(),
                     );
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(
-                                "host-declared · the guest's callers are not visible",
-                            )
-                            .size(th.body_size - 2.0)
-                            .color(th.dim),
-                        )
-                        .truncate(),
-                    );
+                    // This line used to read "host-declared · the guest's
+                    // callers are not visible". It was the one thing on the
+                    // prompt that vouched for the ask: the daemon never
+                    // checked that any host declared this scope, because it
+                    // cannot — a local process claiming the guest kind
+                    // reaches it as the same message a real `agent open`
+                    // does. It now names the process that said so instead.
+                    render_scope_declarant(ui, th, agent.declared_by.as_ref());
                 });
             });
 
@@ -592,6 +590,102 @@ fn render_forwarded_by(ui: &mut egui::Ui, th: &Theme, anchor: &SshAnchorInfo) {
                 .color(th.danger),
             ));
         });
+    });
+}
+
+/// The local process that put this scope name on the wire.
+///
+/// A guest ask legitimately has no `ASKED BY` row — there is no host process
+/// behind the request, and a chain-shaped widget here would imply a check
+/// that never happened. That absence was the last of the kind-forgery
+/// problem: a local process could claim the guest kind and inherit it, so
+/// declining to say who you are looked exactly like the design working as
+/// intended.
+///
+/// This line is the difference. It is not the caller chain and not the
+/// principal — the scope still gates, and no ancestry is walked — it is the
+/// one thing the socket knows for certain: which process spoke. A genuine
+/// request names a `secreq agent open` the user started, at the path they
+/// installed. A forger names itself, in its own executable, and reads as a
+/// process declining to be an agent rather than as a sandbox with no callers.
+///
+/// The daemon shows this instead of *refusing* an unrecognised peer, which
+/// was the other option and the worse one: refusing is fail-closed, it breaks
+/// a `cargo run` daemon talking to an installed `agent open`, and the escape
+/// hatch it would need is a hole with a nicer name. Showing costs nothing and
+/// leaves the judgement where the evidence is.
+///
+/// **It belongs to the `SCOPE` row rather than to a row of its own**, for two
+/// reasons that agree. It reads as the sentence it is — "`brain-nx-t5`, named
+/// by `secreq` at `/usr/local/bin/secreq`" — which binds the claim to its
+/// claimant instead of leaving a reader to pair two labelled blocks. And it
+/// costs the well no height: a separate row pushed `GUEST SAYS` and its "not
+/// verifiable" marker clean out of the opening viewport on the taller
+/// chromes, and a warning below the fold is not a warning.
+///
+/// The two identities sit side by side because that is where their value is.
+/// `name` is `comm`, which the process chose, and a convincing forgery will
+/// choose it convincingly; `exe` is what the kernel loaded. `secreq` beside
+/// `/tmp/.build-cache/postinstall` is a contradiction nobody has to go
+/// looking for. The peer's argv is deliberately absent — it restates the
+/// scope, and it is the sender's to write.
+fn render_scope_declarant(ui: &mut egui::Ui, th: &Theme, declared: Option<&LocalPeer>) {
+    let Some(declared) = declared else {
+        // The peer exited between `SO_PEERCRED` and the lookup. Said out
+        // loud, because a prompt that looks identical whether or not it
+        // checked is the failure this line exists to fix.
+        ui.add(egui::Label::new(
+            egui::RichText::new("\u{26a0} secreq could not read the process that named it")
+                .size(th.body_size - 2.0)
+                .color(th.danger),
+        ));
+        return;
+    };
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.label(
+            egui::RichText::new("named by")
+                .size(th.body_size - 2.0)
+                .color(th.faint),
+        );
+        ui.label(
+            egui::RichText::new(&declared.name)
+                .size(th.body_size - 2.0)
+                .strong()
+                .color(th.fg),
+        );
+        let pid_text = declared.pid.to_string();
+        let exe_width = (ui.available_width() - 44.0).max(40.0);
+        let row_height = ui.text_style_height(&egui::TextStyle::Body);
+        ui.allocate_ui_with_layout(
+            egui::vec2(exe_width, row_height),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.set_max_width(exe_width);
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(
+                            declared
+                                .exe
+                                .as_deref()
+                                .map_or_else(|| "executable unknown".to_owned(), abbreviate_home),
+                        )
+                        .monospace()
+                        .size(th.body_size - 2.0)
+                        // Full weight rather than the caller tree's dim argv
+                        // colour: here the path is the evidence, not the
+                        // annotation.
+                        .color(th.fg),
+                    )
+                    .truncate(),
+                );
+            },
+        );
+        ui.label(
+            egui::RichText::new(pid_text)
+                .size(th.body_size - 2.0)
+                .color(th.faint),
+        );
     });
 }
 

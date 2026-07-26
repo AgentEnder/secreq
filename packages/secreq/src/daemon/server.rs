@@ -1072,7 +1072,17 @@ fn adopt_peer_provenance(ask: &mut Ask, stream: &UnixStream) -> Result<()> {
         // it has the same kernel-sourced fields a wrap ask has and is
         // corrected the same way.
         AskSubject::SshSign(s) => (&mut s.callers, &mut s.callers_truncated, &mut s.cwd),
-        AskSubject::ScopedAgent(_) => return Ok(()),
+        AskSubject::ScopedAgent(agent) => {
+            // Still no chain, no cwd, no re-derived dedupe identity: the
+            // principal is the host-declared scope and nothing below this
+            // point applies to it. What the daemon *can* say is which local
+            // process is on the other end of this socket, and it says it
+            // rather than leaving the row blank — see `AgentAskInfo::
+            // declared_by`. Overwritten unconditionally, including with
+            // `None`, so a client cannot supply a flattering one.
+            agent.declared_by = describe_local_peer(peer);
+            return Ok(());
+        }
     };
 
     let chain = crate::provenance::caller_chain_from_pid(peer);
@@ -1120,6 +1130,26 @@ fn adopt_peer_provenance(ask: &mut Ask, stream: &UnixStream) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Describe the process on the other end of `consent.sock`, for a prompt that
+/// would otherwise have nothing at all to say about who is asking.
+///
+/// **Not provenance, and not a principal.** No ancestry is walked: a chain
+/// answers "where did this ultimately come from", and for a scoped-agent ask
+/// that question has no host-side answer worth showing — the peer's parent is
+/// whatever shell started the sandbox, which has nothing to do with the guest.
+/// One process on one socket is a smaller and truer statement.
+///
+/// `None` when the process is gone. A row that says so is the point; the
+/// alternative is a prompt that looks the same whether it checked or not.
+fn describe_local_peer(peer: u32) -> Option<super::proto::LocalPeer> {
+    crate::provenance::describe_pid(peer).map(|p| super::proto::LocalPeer {
+        pid: p.caller.pid,
+        name: p.caller.name,
+        command: p.caller.command,
+        exe: p.caller.exe,
+    })
 }
 
 fn handle_ask_connection(
@@ -1904,6 +1934,16 @@ mod tests {
                 scope: "sandbox".to_owned(),
                 reference: "secret://op/a/b".to_owned(),
                 guest_chain: None,
+                // What a forger would like the prompt to say about it. The
+                // genuine client sends `None` here and the daemon fills it
+                // in; a forger can send anything, so the test sends the
+                // worst thing.
+                declared_by: Some(super::super::proto::LocalPeer {
+                    pid: FORGED_PID,
+                    name: "secreq".to_owned(),
+                    command: "secreq agent open --scope sandbox".to_owned(),
+                    exe: Some("/usr/local/bin/secreq".to_owned()),
+                }),
             }),
             ..forged_ask("agent:sandbox:secret://op/a/b")
         }
@@ -1984,6 +2024,54 @@ mod tests {
             !ask.allow_remember(),
             "and must not persist an approval that would serve the next one"
         );
+    }
+
+    /// **The kind-forgery remainder, closed by rendering rather than by
+    /// refusing.** A forged guest ask cannot obtain a secret or claim a
+    /// caller chain — `AskSubject` closed that — but it could still take the
+    /// scoped-agent shape and thereby render with no `ASKED BY` row at all,
+    /// which reads as the *design* (a guest genuinely has no host ancestry)
+    /// rather than as a process declining to identify itself.
+    ///
+    /// The daemon now stamps the socket peer onto every guest ask. It still
+    /// cannot tell a genuine `agent open` from an impostor and does not try —
+    /// peer *authentication* was rejected: it is fail-closed, it breaks a
+    /// `cargo run` daemon talking to an installed `agent open`, and its
+    /// escape hatch would be a hole with a nicer name. What changes is that a
+    /// forger can no longer be silent. It appears on the prompt as itself.
+    #[test]
+    fn a_scoped_agent_ask_cannot_choose_what_it_is_called() {
+        let (server_conn, _client) = connected_pair();
+        let mut ask = forged_agent_ask();
+
+        adopt_peer_provenance(&mut ask, &server_conn).expect("provenance");
+
+        let AskSubject::ScopedAgent(agent) = &ask.subject else {
+            panic!("still a scoped-agent ask");
+        };
+        let declared = agent
+            .declared_by
+            .as_ref()
+            .expect("the peer of a unix socket pair is this test process");
+        assert_eq!(
+            declared.pid,
+            std::process::id(),
+            "the prompt must name the process actually on the socket"
+        );
+        assert_ne!(
+            declared.pid, FORGED_PID,
+            "the client's own account of itself must not survive"
+        );
+        assert_ne!(
+            declared.exe.as_deref(),
+            Some("/usr/local/bin/secreq"),
+            "nor may it choose the executable path the user is asked to recognise"
+        );
+        // And the principal is untouched: the scope still gates, and no host
+        // ancestry has been attached to a guest.
+        assert_eq!(agent.scope, "sandbox");
+        assert!(ask.callers().is_empty());
+        assert!(ask.cwd().is_empty());
     }
 
     /// `--no-remember` was parsed into `WrapRunOpts` and then read by
