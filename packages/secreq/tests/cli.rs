@@ -13,6 +13,7 @@ use common::Sandbox;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// Write a config with a single wrap using a fake "echo" provider whose
 /// retrieve template prints the locator back. Useful for non-biometric
@@ -920,6 +921,169 @@ fn init_writes_config_with_shim_dir() {
             "stderr should mention the terminal requirement: {stderr}"
         );
     }
+}
+
+/// Every directory beneath `root`, including `root` itself, deepest last.
+fn dirs_under(root: &Path) -> Vec<PathBuf> {
+    let mut found = vec![root.to_path_buf()];
+    let mut queue = vec![root.to_path_buf()];
+    while let Some(dir) = queue.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            // `symlink_metadata`: a symlink into the tree is not a directory
+            // we created and its target's mode is not ours to judge.
+            if fs::symlink_metadata(&path).unwrap().is_dir() {
+                found.push(path.clone());
+                queue.push(path);
+            }
+        }
+    }
+    found
+}
+
+/// A fresh install must not leave a directory anyone else can write to under
+/// `$SECREQ_HOME` — not for a moment, and least of all for the stretch
+/// between `init` finishing and the daemon first starting.
+///
+/// `paths::ensure_private_dir` narrows the root, but it was only ever reached
+/// from the audit writer, the daemon's log and the socket bind — so the
+/// narrowing was *lazy*. Everything that ran before one of those (the
+/// migration runner, `init` writing `wraps.json5`) created the root with a
+/// bare `create_dir_all`, which takes the umask's answer: 0755 under the
+/// common 022 and **0777** under the `umask 000` that CI and container images
+/// routinely set. That directory holds the audit log, the auto-rules and the
+/// wrap config, so anyone on the box could add a rule that approves their own
+/// command.
+///
+/// Two deliberate choices, both of which an earlier version of this kind of
+/// test got wrong:
+///
+/// - **The child runs under `umask 000`.** A developer whose shell sets 077
+///   gets 0700 from `create_dir_all` for free, and the assertion would pass
+///   while proving nothing.
+/// - **The mode is asserted exactly.** `mode & 0o022 == 0` is satisfied by
+///   the 0755 a umask-022 machine hands out, which is the bug wearing a
+///   passing test.
+#[test]
+fn a_fresh_init_leaves_no_directory_others_can_write_under_the_root() {
+    let sb = Sandbox::new();
+    // A root that does not exist yet. `Sandbox` pre-creates its own, which
+    // would hide the half of this that is about *creating* the directory.
+    let root = sb.path().join("fresh-root");
+
+    let mut cmd = sb.cmd(&["init"]);
+    cmd.env("SECREQ_HOME", &root);
+    // SAFETY: `umask` is async-signal-safe and touches only the child.
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            libc::umask(0);
+            Ok(())
+        });
+    }
+
+    let mut run = common::pty::PtyRun::spawn_with(cmd);
+    // The sandbox strips `$SHELL`, so `init` takes its unrecognized-shell
+    // branch and prints the export line instead of prompting to append it.
+    // That leaves two prompts: the shim dir, and the SSH-agent offer.
+    run.wait_for(
+        "Where should secreq drop PATH shims?",
+        Duration::from_secs(30),
+    );
+    run.press_enter();
+    run.wait_for(
+        "Also set up secreq as your SSH agent?",
+        Duration::from_secs(30),
+    );
+    run.write_bytes(b"n"); // a cliclack confirm submits on y/n
+    let status = run.wait_exit(Duration::from_secs(30));
+    assert!(
+        status.success(),
+        "init exited with {status:?}; output:\n{}",
+        String::from_utf8_lossy(&run.output_so_far())
+    );
+
+    assert!(root.is_dir(), "init should have created {}", root.display());
+    let dirs = dirs_under(&root);
+    // The default shim dir lives in the root, so a run that only made the
+    // root means the flow did not get as far as this test believes.
+    assert!(
+        dirs.len() >= 2,
+        "expected the root and at least the shim dir, got {dirs:?}"
+    );
+    for dir in dirs {
+        let mode = fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "{} is {mode:o}", dir.display());
+    }
+}
+
+/// The window opens before `init` does. `cli::run` runs the pending
+/// migrations first, and on a fresh install that is what creates the root —
+/// so a user whose first command is `secreq wrap gh` never reaches `init`'s
+/// hardening. The mode the migration runner leaves is the mode the root has.
+#[test]
+fn the_root_a_first_command_creates_is_owner_only() {
+    let sb = Sandbox::new();
+    let root = sb.path().join("fresh-root");
+
+    let mut cmd = sb.cmd(&["check"]);
+    cmd.env("SECREQ_HOME", &root);
+    // SAFETY: `umask` is async-signal-safe and touches only the child.
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            libc::umask(0);
+            Ok(())
+        });
+    }
+    // Whether `check` itself succeeds without a config is beside the point:
+    // the root is created before any command sees control.
+    cmd.output().unwrap();
+
+    assert!(
+        root.is_dir(),
+        "nothing created {} — the migration runner is no longer the first \
+         thing to make the root, so this test no longer pins anything",
+        root.display()
+    );
+    let mode = fs::metadata(&root).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o700, "{} is {mode:o}", root.display());
+}
+
+/// The other half of the same finding: an install that predates any of this
+/// already has a root at whatever its creator left, and nothing narrows it
+/// until the first audit write or daemon start. `init` is the command a user
+/// runs to fix their setup, so it is the one that has to repair the mode
+/// rather than only get it right on a fresh directory.
+#[test]
+fn init_narrows_a_root_that_already_exists_too_permissively() {
+    let sb = Sandbox::new();
+    let root = sb.path().join("legacy-root");
+    fs::create_dir(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut cmd = sb.cmd(&["init"]);
+    cmd.env("SECREQ_HOME", &root);
+    let mut run = common::pty::PtyRun::spawn_with(cmd);
+    run.wait_for(
+        "Where should secreq drop PATH shims?",
+        Duration::from_secs(30),
+    );
+    run.press_enter();
+    run.wait_for(
+        "Also set up secreq as your SSH agent?",
+        Duration::from_secs(30),
+    );
+    run.write_bytes(b"n");
+    let status = run.wait_exit(Duration::from_secs(30));
+    assert!(
+        status.success(),
+        "init exited with {status:?}; output:\n{}",
+        String::from_utf8_lossy(&run.output_so_far())
+    );
+
+    let mode = fs::metadata(&root).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o700, "{} is {mode:o}", root.display());
 }
 
 // ── ssh setup ─────────────────────────────────────────────────────────────

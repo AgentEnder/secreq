@@ -196,7 +196,21 @@ pub fn run_pending_in(ctx: &Ctx) -> Result<()> {
         return Ok(());
     }
 
-    std::fs::create_dir_all(&ctx.root).with_context(|| format!("create {}", ctx.root.display()))?;
+    // On a fresh install this is the *first* thing that creates the root — it
+    // runs from `cli::run` before any command sees control, so whatever mode
+    // it lands here is the mode `~/.secreq` has while `init` is still asking
+    // questions. `create_dir_all` takes the umask's answer, which is 0755
+    // under the common 022 and **0777** under the `umask 000` CI and container
+    // images set, and the root goes on to hold `audit.log`, `auto-rules.json5`
+    // and `wraps.json5`. Inlined at [`OWNER_ONLY_DIR`] rather than routed
+    // through `paths::ensure_private_dir` for the same reason as the snapshot
+    // dir below: migrations resolve nothing through `paths`, and the mode is a
+    // constant rather than a location, so no frozen history is at stake.
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(OWNER_ONLY_DIR)
+        .create(&ctx.root)
+        .with_context(|| format!("create {}", ctx.root.display()))?;
     let _lock = acquire_lock(&ctx.root)?;
 
     // Re-read under the lock. On first upgrade a burst of wraps all observe

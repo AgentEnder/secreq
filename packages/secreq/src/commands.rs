@@ -810,6 +810,23 @@ fn render_read_json(pairs: &[(String, String)]) -> String {
 pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Result<i32> {
     let config_path = resolve_config_path(config_path)?;
 
+    // The root has to be owner-only from the moment it exists, and `init` is
+    // the one command that can promise it: `paths::ensure_private_dir` is
+    // otherwise reached only *lazily* — from the audit writer, the daemon's
+    // log and the socket bind — so every install predating that lands here
+    // with whatever mode its creator left, and a fresh `umask 000` install had
+    // a world-writable `~/.secreq` from the end of `init` until the daemon
+    // first started. `audit.log`, `auto-rules.json5` and `wraps.json5` all
+    // live in there; a rule someone else can write is a rule that approves
+    // their own command.
+    //
+    // Here rather than in `secreq_root()`, which nearly every code path calls
+    // and which should stay a path resolver rather than doing I/O and a
+    // possible chmod on each one.
+    let root = crate::paths::secreq_root()?;
+    crate::paths::ensure_private_dir(&root)
+        .with_context(|| format!("could not make {} owner-only", root.display()))?;
+
     crate::term::soft_reset();
     cliclack::intro("secreq init — first-time setup")?;
 
