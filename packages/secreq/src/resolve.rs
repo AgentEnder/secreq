@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 
-use crate::manifest::Manifest;
+use crate::manifest::{Group, Manifest};
 use crate::provider::{self, RetrieveOutcome};
 use crate::reference::Reference;
 use crate::secret::SecretValue;
@@ -75,8 +75,7 @@ pub fn build_plan(
     let mut seen_names: Vec<String> = Vec::new();
 
     // (1) Eager set: required secrets from the selected groups.
-    for group_name in &selected {
-        let group = &manifest.groups[group_name];
+    for group in &selected {
         for secret in group.secrets.values() {
             if !secret.required {
                 continue;
@@ -190,10 +189,10 @@ pub fn resolve_all(
     let mut stats = ResolveStats::default();
     for (provider_name, reqs) in &by_provider {
         let provider = manifest.providers.get(*provider_name).with_context(|| {
-            format!(
-                "secret `{}` uses unknown provider scheme `{}`",
-                reqs[0].name, provider_name
-            )
+            // Every value in `by_provider` was pushed to, so `first` is the
+            // request that put this scheme in the map.
+            let culprit = reqs.first().map_or("", |req| req.name.as_str());
+            format!("secret `{culprit}` uses unknown provider scheme `{provider_name}`")
         })?;
 
         // Try batch when it pays off: ≥2 requests AND a batch capability
@@ -295,14 +294,18 @@ pub fn resolve_all(
     Ok((resolved, stats))
 }
 
-/// Resolve which groups are in scope, validating any `--only` names.
-fn select_groups(manifest: &Manifest, only: Option<&[String]>) -> Result<Vec<String>> {
+/// The groups in scope, validating any `--only` names.
+///
+/// Returns the groups themselves rather than their names: a name has to be
+/// looked back up in `manifest.groups` by the caller, and that lookup is only
+/// infallible because of the `contains_key` check down here.
+fn select_groups<'m>(manifest: &'m Manifest, only: Option<&[String]>) -> Result<Vec<&'m Group>> {
     match only {
-        None => Ok(manifest.groups.keys().cloned().collect()),
+        None => Ok(manifest.groups.values().collect()),
         Some(names) => {
             let mut out = Vec::with_capacity(names.len());
             for name in names {
-                if !manifest.groups.contains_key(name) {
+                let Some(group) = manifest.groups.get(name) else {
                     let available: Vec<&str> = manifest.groups.keys().map(String::as_str).collect();
                     bail!(
                         "unknown group `{name}` in --only (available: {})",
@@ -312,8 +315,8 @@ fn select_groups(manifest: &Manifest, only: Option<&[String]>) -> Result<Vec<Str
                             available.join(", ")
                         }
                     );
-                }
-                out.push(name.clone());
+                };
+                out.push(group);
             }
             Ok(out)
         }
