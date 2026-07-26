@@ -86,7 +86,6 @@ pub mod proto;
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -830,15 +829,8 @@ pub fn open(
     if let Some(parent) = socket_path.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
-    let listener = UnixListener::bind(socket_path)
-        .with_context(|| format!("bind scoped agent socket {}", socket_path.display()))?;
+    let listener = bind_private(socket_path)?;
     install_signal_cleanup(socket_path)?;
-    // 0600 — same trust boundary as the daemon's own sockets: the socket is
-    // the capability, so only this user may dial it. (A forwarded socket's
-    // guest-side end is governed by SSH; see the design's transport section.)
-    let mut perms = std::fs::metadata(socket_path)?.permissions();
-    perms.set_mode(0o600);
-    std::fs::set_permissions(socket_path, perms)?;
 
     log(
         &scope,
@@ -866,6 +858,109 @@ pub fn open(
     );
     drop(guard);
     Ok(())
+}
+
+/// 0600 — same trust boundary as the daemon's own sockets: the socket is the
+/// capability, so only this user may dial it. (A forwarded socket's
+/// guest-side end is governed by SSH; see the design's transport section.)
+const SOCKET_MODE: u32 = 0o600;
+
+/// Create a fresh owner-only directory beside `parent` to bind in.
+///
+/// Fresh, because two `agent open`s can share a `--sock` directory and the
+/// second must not bind over the first's in-flight socket; the pid separates
+/// processes and the counter separates one process's own opens. The name is
+/// short on purpose: it is a component of the path handed to `bind(2)`, which
+/// is capped at 104 bytes on macOS, and this keeps the staged path no longer
+/// than the published one for any realistic socket name.
+fn create_staging_dir(parent: &Path) -> Result<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    let mut last = None;
+    for _ in 0..16 {
+        let dir = parent.join(format!(".sq{}.{}", std::process::id(), next_seq()));
+        match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+            Ok(()) => {
+                // `DirBuilder::mode` is masked by the umask, which can only
+                // clear bits — but an owner bit cleared there would leave a
+                // directory we cannot bind in, so say it unmasked.
+                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+                    .with_context(|| format!("set mode 0700 on {}", dir.display()))?;
+                return Ok(dir);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(dir),
+            Err(e) => return Err(e).with_context(|| format!("create {}", dir.display())),
+        }
+    }
+    bail!(
+        "could not find a free staging directory beside {} (last tried {})",
+        parent.display(),
+        last.map(|p| p.display().to_string()).unwrap_or_default(),
+    )
+}
+
+fn next_seq() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Bind the scoped listener and publish it at `socket_path`, owner-only —
+/// with no moment at which the published path is dialable by anyone else.
+///
+/// `bind(2)` creates the socket at `0777 & ~umask` and the chmod that narrows
+/// it lands on the *next* syscall. A unix socket's permissions are consulted
+/// at `connect(2)` only, so a peer that dials inside those two syscalls keeps
+/// a usable fd no matter what the mode becomes afterwards — and under the
+/// 002/000 umask that container and CI images set, it is dialable for the
+/// whole window.
+///
+/// The daemon's own sockets close this with a second lock, a peer-uid check
+/// (`daemon::peercred`). **That answer is unavailable here by design**: over a
+/// forwarded socket the peer is the tunnel (sshd), not the asker, so this
+/// module never asks the kernel who its peer is (see the module docs and the
+/// design's provenance section). Narrowing the socket's directory is not
+/// available either — the directory is the caller's (`--sock /tmp/…`) and
+/// chmodding it would be actively wrong.
+///
+/// So the window is removed rather than guarded: bind inside a 0700 directory
+/// of our own that no other user can traverse, narrow the socket there, and
+/// publish the finished socket with `rename`. The path the guest is handed
+/// only ever exists 0600. `rename` also replaces the destination without
+/// following a symlink at it, so a planted link cannot redirect the publish.
+fn bind_private(socket_path: &Path) -> Result<UnixListener> {
+    let parent = match socket_path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    let staging = create_staging_dir(parent)?;
+    let staged = staging.join("s");
+
+    let result = bind_staged(&staged, socket_path);
+
+    // On success the socket has been renamed away and only the directory is
+    // left; on failure both may be. Neither is anything to fail the open over.
+    let _ = std::fs::remove_file(&staged);
+    let _ = std::fs::remove_dir(&staging);
+    result
+}
+
+/// Bind at `staged` (inside the 0700 directory), narrow it, publish it.
+fn bind_staged(staged: &Path, socket_path: &Path) -> Result<UnixListener> {
+    use std::os::unix::fs::PermissionsExt;
+    let listener = UnixListener::bind(staged)
+        .with_context(|| format!("bind scoped agent socket for {}", socket_path.display()))?;
+    // Unmasked, and before the rename: the socket reaches the published path
+    // already narrowed, which is the whole point of staging it.
+    std::fs::set_permissions(staged, std::fs::Permissions::from_mode(SOCKET_MODE))
+        .with_context(|| format!("set mode {SOCKET_MODE:o} on {}", staged.display()))?;
+    std::fs::rename(staged, socket_path).with_context(|| {
+        format!(
+            "publish scoped agent socket at {} (bound at {})",
+            socket_path.display(),
+            staged.display()
+        )
+    })?;
+    Ok(listener)
 }
 
 /// Unlink the socket on the way out so a scope's socket never outlives the
@@ -1247,6 +1342,119 @@ mod tests {
             "error should name the live owner, got: {err:#}"
         );
         assert!(path.exists(), "the live socket must be left alone");
+    }
+
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).expect("stat").permissions().mode() & 0o777
+    }
+
+    /// The published socket is dialable and owner-only — the shape the guest
+    /// side depends on, unchanged by how it got there.
+    #[test]
+    fn bind_private_publishes_an_owner_only_socket() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("scope.sock");
+
+        let _listener = bind_private(&path).expect("bind");
+
+        assert_eq!(mode_of(&path), 0o600, "the published socket must be 0600");
+        UnixStream::connect(&path).expect("the published path must be dialable");
+    }
+
+    /// **The window.** `bind(2)` creates the socket at `0777 & ~umask` and the
+    /// chmod lands on the *next* syscall; a unix socket's permissions are
+    /// checked at `connect(2)` only, so a peer that dials inside that window
+    /// keeps a usable fd whatever the mode becomes afterwards.
+    ///
+    /// The daemon's sockets close this with a peer-uid check; this one may
+    /// never ask who the peer is (over a forward it is sshd, not the asker),
+    /// so it closes the window by construction instead: the socket is bound
+    /// somewhere the published path is not, and only *arrives* there — by
+    /// rename, already 0600 — once it is safe to dial.
+    ///
+    /// A second user racing the window is not reachable from a unit test, so
+    /// what is asserted is the construction: `getsockname` still names the
+    /// staging path, proving the published path was never the bind target.
+    #[test]
+    fn bind_private_never_binds_at_the_published_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("scope.sock");
+
+        let listener = bind_private(&path).expect("bind");
+
+        let bound = listener
+            .local_addr()
+            .expect("local_addr")
+            .as_pathname()
+            .expect("a pathname socket")
+            .to_path_buf();
+        assert_ne!(
+            bound, path,
+            "the socket must be bound out of reach and renamed into place, \
+             not bound at the path the guest is handed"
+        );
+    }
+
+    /// The directory the socket is bound in is the whole fix: 0700 means the
+    /// window between `bind` and `chmod` is inside a directory no other user
+    /// can traverse, so there is no moment at which anyone else could dial.
+    #[test]
+    fn the_staging_directory_is_owner_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let staging = create_staging_dir(dir.path()).expect("staging dir");
+
+        assert_eq!(
+            mode_of(&staging),
+            0o700,
+            "the socket is bound in here; anything wider reopens the window"
+        );
+    }
+
+    /// Two openers on one directory must not collide onto one staging name —
+    /// the second would bind over the first's in-flight socket.
+    #[test]
+    fn staging_directories_are_unique() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let first = create_staging_dir(dir.path()).expect("first");
+        let second = create_staging_dir(dir.path()).expect("second");
+        assert_ne!(first, second);
+    }
+
+    /// Staging is an implementation detail: nothing of it may survive beside
+    /// the socket, or the next `agent open` inherits litter it can't explain.
+    #[test]
+    fn bind_private_leaves_no_staging_litter() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("scope.sock");
+
+        let _listener = bind_private(&path).expect("bind");
+
+        let names: Vec<String> = std::fs::read_dir(dir.path())
+            .expect("read_dir")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["scope.sock".to_string()]);
+    }
+
+    /// The socket's parent is the *caller's* choice (`--sock /tmp/…`), so it
+    /// is not ours to narrow — the reason `1adfb15` left this socket alone.
+    /// Closing the window must not become a chmod of someone's `/tmp`.
+    #[test]
+    fn bind_private_does_not_narrow_the_parent_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let parent = dir.path().join("shared");
+        std::fs::create_dir(&parent).expect("mkdir");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        let _listener = bind_private(&parent.join("scope.sock")).expect("bind");
+
+        assert_eq!(
+            mode_of(&parent),
+            0o755,
+            "the caller's directory is not ours"
+        );
     }
 
     /// A free path is a no-op — the common case.
