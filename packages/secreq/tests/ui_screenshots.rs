@@ -2860,6 +2860,43 @@ fn rules_tab_pattern_refused() {
     );
 }
 
+/// The form refusing the glob fixture 45 shows already saved — which is the
+/// point of having both. Fixture 45 is what a refused pattern looks like once
+/// it is in the ruleset: a badge on a row, correct and honest and reached only
+/// by someone who went back to look. This is the same typo caught where it is
+/// still free, with the parser's own complaint under the field that has it and
+/// Save greyed out until it is gone.
+///
+/// The draft is a **deny**, because that is the direction where a refused
+/// pattern is dangerous: the line under the field says the asks this rule
+/// would have blocked now come to the consent window rather than being
+/// released by some other rule's approve. An approve is refused by the same
+/// check and says the milder thing.
+#[test]
+fn rules_form_bad_glob() {
+    let rule = sample_rule(
+        "7d4f1b3c54a6",
+        "Block repo secret writes",
+        RuleDecision::Deny,
+        // The same unterminated character class fixture 45 carries.
+        Some("gh api /repos/*/actions/secrets*["),
+    );
+    render_manager_fixture(
+        Shot::new("47-rules-form-bad-glob").caption(
+            "A match pattern that is not a valid glob cannot be saved. secreq \
+             refuses the same patterns here that it refuses when it reads the \
+             rules back, so a rule that saves is a rule that runs — and on a \
+             <b>deny</b>, where a pattern it cannot evaluate would send every ask \
+             to this window, the form says so before you save it.",
+        ),
+        Vec::new(),
+        ManagerExtras {
+            window_state: Some(Box::new(move |ws| ws.open_edit_rule_form(&rule))),
+            ..ManagerExtras::default()
+        },
+    );
+}
+
 #[test]
 fn rules_tab_by_recency() {
     // The Rules list with the sort toggle flipped to "Recent". The two

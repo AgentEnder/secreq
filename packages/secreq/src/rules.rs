@@ -421,6 +421,32 @@ impl PatternRefusal {
     }
 }
 
+/// What a refused pattern costs the operator, which is not the same
+/// thing for the two decisions — and the operator is the one who has to
+/// act on the difference.
+///
+/// A broken **deny** fails open: secreq cannot tell whether the block
+/// applies, so the ask goes to the human rather than to a competing
+/// approve. A broken **approve** fails closed: it simply never fires.
+///
+/// Shared with the rule form in `daemon::ui`, which refuses the same
+/// patterns at authoring time and quotes this same sentence — the two
+/// surfaces disagreeing about what a broken glob costs would be worse
+/// than either of them saying nothing.
+pub fn refused_pattern_consequence(decision: RuleDecision) -> &'static str {
+    match decision {
+        RuleDecision::Deny => {
+            "this rule cannot be evaluated, so every ask it might have \
+             denied now goes to the consent prompt instead of being \
+             released by another rule's approve"
+        }
+        RuleDecision::Approve => {
+            "this rule never fires; asks it was meant to approve prompt \
+             as they did before it was written"
+        }
+    }
+}
+
 /// Every refused pattern across `rules`, in rule order and then clause
 /// order.
 ///
@@ -446,19 +472,7 @@ pub fn pattern_refusals(rules: &[Rule]) -> Vec<PatternRefusal> {
             let Some(err) = pattern.invalid_reason() else {
                 continue;
             };
-            // The consequence is not the same for the two decisions, and
-            // the operator is the one who has to act on the difference.
-            let consequence = match decide.decision() {
-                RuleDecision::Deny => {
-                    "this rule cannot be evaluated, so every ask it might have \
-                     denied now goes to the consent prompt instead of being \
-                     released by another rule's approve"
-                }
-                RuleDecision::Approve => {
-                    "this rule never fires; asks it was meant to approve prompt \
-                     as they did before it was written"
-                }
-            };
+            let consequence = refused_pattern_consequence(decide.decision());
             out.push(PatternRefusal {
                 rule_id: rule.id.clone(),
                 field,

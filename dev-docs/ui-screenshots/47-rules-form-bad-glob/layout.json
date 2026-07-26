@@ -1,0 +1,2446 @@
+{
+  "window": "manager",
+  "caption": "A match pattern that is not a valid glob cannot be saved. secreq refuses the same patterns here that it refuses when it reads the rules back, so a rule that saves is a rule that runs — and on a <b>deny</b>, where a pattern it cannot evaluate would send every ask to this window, the form says so before you save it.",
+  "variants": {
+    "gnome-dark": {
+      "digest": "cb24c13f003f345859cd31accf584c508efa29fcccf91bb5bcb36358c35a7ba6",
+      "shapes": [
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#383838ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#303030ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#45454aff","k":"rect","radius":[7,7,7,7],"rect":[340.0,9.0,560.0,37.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[7,7,7,7],"rect":[340.0,9.0,560.0,37.0],"stroke":[1.0,"#14141414"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#383838ff","k":"rect","radius":[6,6,6,6],"rect":[342.0,11.0,450.0,35.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[342.0,11.0,450.0,35.0],"stroke":[1.0,"#1a1a1a1a"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [380.28,15.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,31.44,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"Rules","underline":[0.0,"#00000000"],"x":[0.0,30.56]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [488.3,15.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,31.41,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#9a9996ff","family":"proportional","size":13.0,"text":"Audit","underline":[0.0,"#00000000"],"x":[0.0,31.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#303030ff","k":"rect","radius":[8,8,8,8],"rect":[680.0,10.0,880.0,36.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[8,8,8,8],"rect":[680.0,10.0,880.0,36.0],"stroke":[1.0,"#1a1a1a1a"],"stroke_kind":"Inside"},
+        {"center":[694.0,22.0],"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"circle","radius":4.5,"stroke":[1.5,"#9a9996ff"]},
+        {"a":[697.18,25.18],"b":[700.68,28.68],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.5,"#9a9996ff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[713.0,15.5,874.0,30.5],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [713.0,15.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,74.34,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#99999999","family":"proportional","size":13.0,"text":"Filter rules…","underline":[0.0,"#00000000"],"x":[0.0,73.95]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [712.0,14.5,788.34,31.5],
+          "k": "text",
+          "pos": [713.0,15.5],
+          "rows": [
+            {"rect":[0.0,0.0,0.0,15.0],"runs":[]}
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"a":[0.0,45.5],"b":[900.0,45.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#1a1a1a1a"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,52.0,900.0,597.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [20.0,66.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,59.78,18.0],
+              "runs": [
+                {"baseline":15.0,"color":"#ffffffff","family":"proportional","size":16.0,"text":"Edit rule","underline":[0.0,"#00000000"],"x":[0.0,59.77]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2e16122e","k":"rect","radius":[6,6,6,6],"rect":[95.78,66.0,144.91,90.0],"stroke":[1.0,"#ff7b63ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [103.78,74.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#ff7b63ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [113.0,71.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,23.91,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#ff7b63ff","family":"proportional","size":11.0,"text":"deny","underline":[0.0,"#00000000"],"x":[0.0,23.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,106.0,880.0,909.94],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#303030ff","k":"rect","radius":[12,12,12,12],"rect":[20.0,106.0,880.0,286.0],"stroke":[1.0,"#14141414"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,119.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,36.19,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":10.5,"text":"BASICS","underline":[0.0,"#00000000"],"x":[0.0,35.43]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,145.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,31.56,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#ffffffff","family":"proportional","size":12.0,"text":"Name","underline":[0.0,"#00000000"],"x":[0.0,31.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#303030ff","k":"rect","radius":[6,6,6,6],"rect":[35.0,168.0,865.0,187.0],"stroke":[1.0,"#45454aff"],"stroke_kind":"Inside"},
+        {
+          "clip": [38.0,169.0,178.94,186.0],
+          "k": "text",
+          "pos": [39.0,170.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,138.94,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"Block repo secret writes","underline":[0.0,"#00000000"],"x":[0.0,138.56]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,201.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,36.94,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#ffffffff","family":"proportional","size":12.0,"text":"Decide","underline":[0.0,"#00000000"],"x":[0.0,36.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#424242ff","k":"rect","radius":[6,6,6,6],"rect":[35.0,224.0,110.75,252.0],"stroke":[1.0,"#14141414"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [50.0,231.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,45.75,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#9a9996ff","family":"proportional","size":12.5,"text":"approve","underline":[0.0,"#00000000"],"x":[0.0,45.85]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#2e16122e","k":"rect","radius":[6,6,6,6],"rect":[124.75,224.0,181.94,252.0],"stroke":[1.0,"#ff7b63ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [139.75,231.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,27.19,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#ffffffff","family":"proportional","size":12.5,"text":"deny","underline":[0.0,"#00000000"],"x":[0.0,26.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,261.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,447.63,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":10.5,"text":"Deny rules win over approves when both match. Among approves, the most-specific match fires.","underline":[0.0,"#00000000"],"x":[0.0,447.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#303030ff","k":"rect","radius":[12,12,12,12],"rect":[20.0,302.0,880.0,682.0],"stroke":[1.0,"#14141414"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,315.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,120.38,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":10.5,"text":"WHEN THIS RULE FIRES","underline":[0.0,"#00000000"],"x":[0.0,120.43]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,341.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,28.66,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#ffffffff","family":"proportional","size":12.0,"text":"Wrap","underline":[0.0,"#00000000"],"x":[0.0,28.0]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#303030ff","k":"rect","radius":[6,6,6,6],"rect":[35.0,364.0,865.0,383.0],"stroke":[1.0,"#45454aff"],"stroke_kind":"Inside"},
+        {
+          "clip": [38.0,365.0,55.06,382.0],
+          "k": "text",
+          "pos": [39.0,366.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,15.06,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ffffffff","family":"monospace","size":12.5,"text":"gh","underline":[0.0,"#00000000"],"x":[0.0,14.53]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,392.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,206.06,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":10.5,"text":"Exact match against the wrap (binary) name.","underline":[0.0,"#00000000"],"x":[0.0,205.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,418.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,67.84,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#ffffffff","family":"proportional","size":12.0,"text":"Argv pattern","underline":[0.0,"#00000000"],"x":[0.0,67.83]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#303030ff","k":"rect","radius":[6,6,6,6],"rect":[35.0,441.0,865.0,460.0],"stroke":[1.0,"#45454aff"],"stroke_kind":"Inside"},
+        {
+          "clip": [38.0,442.0,288.34,459.0],
+          "k": "text",
+          "pos": [39.0,443.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,248.34,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ffffffff","family":"monospace","size":12.5,"text":"gh api /repos/*/actions/secrets*[","underline":[0.0,"#00000000"],"x":[0.0,247.53]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,470.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,803.41,12.0],
+              "runs": [
+                {"baseline":9.0,"color":"#ff7b63ff","family":"proportional","size":10.5,"text":"⚠ Pattern syntax error near position 32: invalid range pattern — this rule cannot be evaluated, so every ask it might have denied now goes to the consent prompt instead of ","underline":[0.0,"#00000000"],"x":[0.0,803.39]}
+              ]
+            },
+            {
+              "rect": [0.0,12.0,190.75,24.0],
+              "runs": [
+                {"baseline":10.0,"color":"#ff7b63ff","family":"proportional","size":10.5,"text":"being released by another rule's approve","underline":[0.0,"#00000000"],"x":[0.0,190.75]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,503.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,410.91,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":10.5,"text":"Matched against the joined argv of the wrap. Glob (* ? [abc]) or literal-prefix. Blank = any.","underline":[0.0,"#00000000"],"x":[0.0,410.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#303030ff","k":"rect","radius":[6,6,6,6],"rect":[35.0,552.0,865.0,571.0],"stroke":[1.0,"#45454aff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#303030ff","k":"rect","radius":[6,6,6,6],"rect":[35.0,629.0,865.0,648.0],"stroke":[1.0,"#45454aff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [39.0,631.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,145.09,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#99999999","family":"proportional","size":13.0,"text":"e.g. ~/work/myproject/**","underline":[0.0,"#00000000"],"x":[0.0,145.14]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#303030ff","k":"rect","radius":[6,6,6,6],"rect":[35.0,794.0,865.0,827.94],"stroke":[1.0,"#45454aff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[878.59,106.0,880.0,500.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[878.59,106.0,880.0,299.09],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"clip":[0.0,0.0,900.0,600.0],"k":"mesh"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#1a1a1a1a","k":"rect","radius":[0,0,0,0],"rect":[20.0,500.0,880.0,501.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2e16122e","k":"rect","radius":[6,6,6,6],"rect":[20.0,510.0,257.72,539.0],"stroke":[1.0,"#ff7b63ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [33.0,518.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,211.72,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#ffffffff","family":"proportional","size":11.5,"text":"Can't save: argv pattern is not a valid glob","underline":[0.0,"#00000000"],"x":[0.0,211.7]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#424242ff","k":"rect","radius":[6,6,6,6],"rect":[20.0,553.0,116.0,583.0],"stroke":[1.0,"#45454aff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [55.16,561.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,25.69,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#9a9996ff","family":"proportional","size":12.5,"text":"Save","underline":[0.0,"#00000000"],"x":[0.0,24.85]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#424242ff","k":"rect","radius":[6,6,6,6],"rect":[130.0,553.0,226.0,583.0],"stroke":[1.0,"#45454aff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [159.56,561.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,36.88,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#ffffffff","family":"proportional","size":12.5,"text":"Cancel","underline":[0.0,"#00000000"],"x":[0.0,36.19]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        }
+      ],
+      "size": [900.0,600.0]
+    },
+    "gnome-light": {
+      "digest": "d36369ab01fe4ddfbedc649924d668bc2a08b147fd7aa4e75667e0b9fa61308d",
+      "shapes": [
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fafafaff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f0f0f0ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#eaeaecff","k":"rect","radius":[7,7,7,7],"rect":[340.0,9.0,560.0,37.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[7,7,7,7],"rect":[340.0,9.0,560.0,37.0],"stroke":[1.0,"#00000017"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fafafaff","k":"rect","radius":[6,6,6,6],"rect":[342.0,11.0,450.0,35.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[342.0,11.0,450.0,35.0],"stroke":[1.0,"#0000001c"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [380.28,15.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,31.44,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#26262bff","family":"proportional","size":13.0,"text":"Rules","underline":[0.0,"#00000000"],"x":[0.0,30.56]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [488.3,15.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,31.41,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#77767bff","family":"proportional","size":13.0,"text":"Audit","underline":[0.0,"#00000000"],"x":[0.0,31.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#ffffffff","k":"rect","radius":[8,8,8,8],"rect":[680.0,10.0,880.0,36.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[8,8,8,8],"rect":[680.0,10.0,880.0,36.0],"stroke":[1.0,"#0000001c"],"stroke_kind":"Inside"},
+        {"center":[694.0,22.0],"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"circle","radius":4.5,"stroke":[1.5,"#77767bff"]},
+        {"a":[697.18,25.18],"b":[700.68,28.68],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.5,"#77767bff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[713.0,15.5,874.0,30.5],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [713.0,15.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,74.34,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#17171a99","family":"proportional","size":13.0,"text":"Filter rules…","underline":[0.0,"#00000000"],"x":[0.0,73.95]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [712.0,14.5,788.34,31.5],
+          "k": "text",
+          "pos": [713.0,15.5],
+          "rows": [
+            {"rect":[0.0,0.0,0.0,15.0],"runs":[]}
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"a":[0.0,45.5],"b":[900.0,45.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#0000001c"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,52.0,900.0,597.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [20.0,66.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,59.78,18.0],
+              "runs": [
+                {"baseline":15.0,"color":"#26262bff","family":"proportional","size":16.0,"text":"Edit rule","underline":[0.0,"#00000000"],"x":[0.0,59.77]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2305072e","k":"rect","radius":[6,6,6,6],"rect":[95.78,66.0,144.91,90.0],"stroke":[1.0,"#c01c28ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [103.78,74.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#c01c28ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [113.0,71.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,23.91,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#c01c28ff","family":"proportional","size":11.0,"text":"deny","underline":[0.0,"#00000000"],"x":[0.0,23.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,106.0,880.0,909.94],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#ffffffff","k":"rect","radius":[12,12,12,12],"rect":[20.0,106.0,880.0,286.0],"stroke":[1.0,"#00000017"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,119.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,36.19,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#a4a3a8ff","family":"proportional","size":10.5,"text":"BASICS","underline":[0.0,"#00000000"],"x":[0.0,35.43]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,145.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,31.56,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#26262bff","family":"proportional","size":12.0,"text":"Name","underline":[0.0,"#00000000"],"x":[0.0,31.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#ffffffff","k":"rect","radius":[6,6,6,6],"rect":[35.0,168.0,865.0,187.0],"stroke":[1.0,"#eaeaecff"],"stroke_kind":"Inside"},
+        {
+          "clip": [38.0,169.0,178.94,186.0],
+          "k": "text",
+          "pos": [39.0,170.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,138.94,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#26262bff","family":"proportional","size":13.0,"text":"Block repo secret writes","underline":[0.0,"#00000000"],"x":[0.0,138.56]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,201.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,36.94,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#26262bff","family":"proportional","size":12.0,"text":"Decide","underline":[0.0,"#00000000"],"x":[0.0,36.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#f0f0f0ff","k":"rect","radius":[6,6,6,6],"rect":[35.0,224.0,110.75,252.0],"stroke":[1.0,"#00000017"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [50.0,231.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,45.75,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#77767bff","family":"proportional","size":12.5,"text":"approve","underline":[0.0,"#00000000"],"x":[0.0,45.85]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#2305072e","k":"rect","radius":[6,6,6,6],"rect":[124.75,224.0,181.94,252.0],"stroke":[1.0,"#c01c28ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [139.75,231.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,27.19,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#26262bff","family":"proportional","size":12.5,"text":"deny","underline":[0.0,"#00000000"],"x":[0.0,26.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,261.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,447.63,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#a4a3a8ff","family":"proportional","size":10.5,"text":"Deny rules win over approves when both match. Among approves, the most-specific match fires.","underline":[0.0,"#00000000"],"x":[0.0,447.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#ffffffff","k":"rect","radius":[12,12,12,12],"rect":[20.0,302.0,880.0,682.0],"stroke":[1.0,"#00000017"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,315.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,120.38,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#a4a3a8ff","family":"proportional","size":10.5,"text":"WHEN THIS RULE FIRES","underline":[0.0,"#00000000"],"x":[0.0,120.43]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,341.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,28.66,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#26262bff","family":"proportional","size":12.0,"text":"Wrap","underline":[0.0,"#00000000"],"x":[0.0,28.0]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#ffffffff","k":"rect","radius":[6,6,6,6],"rect":[35.0,364.0,865.0,383.0],"stroke":[1.0,"#eaeaecff"],"stroke_kind":"Inside"},
+        {
+          "clip": [38.0,365.0,55.06,382.0],
+          "k": "text",
+          "pos": [39.0,366.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,15.06,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#26262bff","family":"monospace","size":12.5,"text":"gh","underline":[0.0,"#00000000"],"x":[0.0,14.53]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,392.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,206.06,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#a4a3a8ff","family":"proportional","size":10.5,"text":"Exact match against the wrap (binary) name.","underline":[0.0,"#00000000"],"x":[0.0,205.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,418.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,67.84,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#26262bff","family":"proportional","size":12.0,"text":"Argv pattern","underline":[0.0,"#00000000"],"x":[0.0,67.83]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#ffffffff","k":"rect","radius":[6,6,6,6],"rect":[35.0,441.0,865.0,460.0],"stroke":[1.0,"#eaeaecff"],"stroke_kind":"Inside"},
+        {
+          "clip": [38.0,442.0,288.34,459.0],
+          "k": "text",
+          "pos": [39.0,443.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,248.34,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#26262bff","family":"monospace","size":12.5,"text":"gh api /repos/*/actions/secrets*[","underline":[0.0,"#00000000"],"x":[0.0,247.53]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,470.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,803.41,12.0],
+              "runs": [
+                {"baseline":9.0,"color":"#c01c28ff","family":"proportional","size":10.5,"text":"⚠ Pattern syntax error near position 32: invalid range pattern — this rule cannot be evaluated, so every ask it might have denied now goes to the consent prompt instead of ","underline":[0.0,"#00000000"],"x":[0.0,803.39]}
+              ]
+            },
+            {
+              "rect": [0.0,12.0,190.75,24.0],
+              "runs": [
+                {"baseline":10.0,"color":"#c01c28ff","family":"proportional","size":10.5,"text":"being released by another rule's approve","underline":[0.0,"#00000000"],"x":[0.0,190.75]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,503.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,410.91,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#a4a3a8ff","family":"proportional","size":10.5,"text":"Matched against the joined argv of the wrap. Glob (* ? [abc]) or literal-prefix. Blank = any.","underline":[0.0,"#00000000"],"x":[0.0,410.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#ffffffff","k":"rect","radius":[6,6,6,6],"rect":[35.0,552.0,865.0,571.0],"stroke":[1.0,"#eaeaecff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#ffffffff","k":"rect","radius":[6,6,6,6],"rect":[35.0,629.0,865.0,648.0],"stroke":[1.0,"#eaeaecff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [39.0,631.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,145.09,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#17171a99","family":"proportional","size":13.0,"text":"e.g. ~/work/myproject/**","underline":[0.0,"#00000000"],"x":[0.0,145.14]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#ffffffff","k":"rect","radius":[6,6,6,6],"rect":[35.0,794.0,865.0,827.94],"stroke":[1.0,"#eaeaecff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[878.59,106.0,880.0,500.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[878.59,106.0,880.0,299.09],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"clip":[0.0,0.0,900.0,600.0],"k":"mesh"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#0000001c","k":"rect","radius":[0,0,0,0],"rect":[20.0,500.0,880.0,501.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2305072e","k":"rect","radius":[6,6,6,6],"rect":[20.0,510.0,257.72,539.0],"stroke":[1.0,"#c01c28ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [33.0,518.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,211.72,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#26262bff","family":"proportional","size":11.5,"text":"Can't save: argv pattern is not a valid glob","underline":[0.0,"#00000000"],"x":[0.0,211.7]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f0f0f0ff","k":"rect","radius":[6,6,6,6],"rect":[20.0,553.0,116.0,583.0],"stroke":[1.0,"#eaeaecff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [55.16,561.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,25.69,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#77767bff","family":"proportional","size":12.5,"text":"Save","underline":[0.0,"#00000000"],"x":[0.0,24.85]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f0f0f0ff","k":"rect","radius":[6,6,6,6],"rect":[130.0,553.0,226.0,583.0],"stroke":[1.0,"#eaeaecff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [159.56,561.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,36.88,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#26262bff","family":"proportional","size":12.5,"text":"Cancel","underline":[0.0,"#00000000"],"x":[0.0,36.19]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        }
+      ],
+      "size": [900.0,600.0]
+    },
+    "macos-dark": {
+      "digest": "e29ba2bc790fd75f59863b6d382e667e99506e82ddf238cd80591bbe9e80d11a",
+      "shapes": [
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2dff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2dff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#232325ff","k":"rect","radius":[7,7,7,7],"rect":[350.0,10.0,550.0,36.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[7,7,7,7],"rect":[350.0,10.0,550.0,36.0],"stroke":[1.0,"#3a3a3eff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#48484cff","k":"rect","radius":[6,6,6,6],"rect":[352.0,12.0,450.0,34.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[352.0,12.0,450.0,34.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [385.89,16.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,30.22,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#e9e9ebff","family":"proportional","size":12.5,"text":"Rules","underline":[0.0,"#00000000"],"x":[0.0,30.35]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [483.89,16.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,30.22,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#98989dff","family":"proportional","size":12.5,"text":"Audit","underline":[0.0,"#00000000"],"x":[0.0,29.84]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#232325ff","k":"rect","radius":[8,8,8,8],"rect":[670.0,10.0,880.0,36.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[8,8,8,8],"rect":[670.0,10.0,880.0,36.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
+        {"center":[684.0,22.0],"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"circle","radius":4.5,"stroke":[1.5,"#98989dff"]},
+        {"a":[687.18,25.18],"b":[690.68,28.68],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.5,"#98989dff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[703.0,15.5,874.0,30.5],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [703.0,15.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,74.34,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#8c8c8d99","family":"proportional","size":13.0,"text":"Filter rules…","underline":[0.0,"#00000000"],"x":[0.0,73.95]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [702.0,14.5,778.34,31.5],
+          "k": "text",
+          "pos": [703.0,15.5],
+          "rows": [
+            {"rect":[0.0,0.0,0.0,14.0],"runs":[]}
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"a":[0.0,45.5],"b":[900.0,45.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#3c3c40ff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,52.0,900.0,597.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [20.0,66.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,59.78,18.0],
+              "runs": [
+                {"baseline":15.0,"color":"#e9e9ebff","family":"proportional","size":16.0,"text":"Edit rule","underline":[0.0,"#00000000"],"x":[0.0,59.77]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2814112e","k":"rect","radius":[6,6,6,6],"rect":[95.78,66.0,144.91,90.0],"stroke":[1.0,"#e0705fff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [103.78,74.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#e0705fff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [113.0,71.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,23.91,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#e0705fff","family":"proportional","size":11.0,"text":"deny","underline":[0.0,"#00000000"],"x":[0.0,23.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,106.0,880.0,909.94],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#232325ff","k":"rect","radius":[8,8,8,8],"rect":[20.0,106.0,880.0,286.0],"stroke":[1.0,"#3a3a3eff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,119.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,36.19,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6a6a70ff","family":"proportional","size":10.5,"text":"BASICS","underline":[0.0,"#00000000"],"x":[0.0,35.43]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,145.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,31.56,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#e9e9ebff","family":"proportional","size":12.0,"text":"Name","underline":[0.0,"#00000000"],"x":[0.0,31.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#232325ff","k":"rect","radius":[6,6,6,6],"rect":[35.0,168.0,865.0,187.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [38.0,169.0,178.94,186.0],
+          "k": "text",
+          "pos": [39.0,170.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,138.94,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#e9e9ebff","family":"proportional","size":13.0,"text":"Block repo secret writes","underline":[0.0,"#00000000"],"x":[0.0,138.56]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,201.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,36.94,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#e9e9ebff","family":"proportional","size":12.0,"text":"Decide","underline":[0.0,"#00000000"],"x":[0.0,36.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#333336ff","k":"rect","radius":[6,6,6,6],"rect":[35.0,224.0,110.75,252.0],"stroke":[1.0,"#3a3a3eff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [50.0,231.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,45.75,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#98989dff","family":"proportional","size":12.5,"text":"approve","underline":[0.0,"#00000000"],"x":[0.0,45.85]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#2814112e","k":"rect","radius":[6,6,6,6],"rect":[124.75,224.0,181.94,252.0],"stroke":[1.0,"#e0705fff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [139.75,231.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,27.19,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#e9e9ebff","family":"proportional","size":12.5,"text":"deny","underline":[0.0,"#00000000"],"x":[0.0,26.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,261.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,447.63,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6a6a70ff","family":"proportional","size":10.5,"text":"Deny rules win over approves when both match. Among approves, the most-specific match fires.","underline":[0.0,"#00000000"],"x":[0.0,447.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#232325ff","k":"rect","radius":[8,8,8,8],"rect":[20.0,302.0,880.0,682.0],"stroke":[1.0,"#3a3a3eff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,315.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,120.38,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6a6a70ff","family":"proportional","size":10.5,"text":"WHEN THIS RULE FIRES","underline":[0.0,"#00000000"],"x":[0.0,120.43]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,341.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,28.66,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#e9e9ebff","family":"proportional","size":12.0,"text":"Wrap","underline":[0.0,"#00000000"],"x":[0.0,28.0]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#232325ff","k":"rect","radius":[6,6,6,6],"rect":[35.0,364.0,865.0,383.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [38.0,365.0,55.06,382.0],
+          "k": "text",
+          "pos": [39.0,366.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,15.06,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#e9e9ebff","family":"monospace","size":12.5,"text":"gh","underline":[0.0,"#00000000"],"x":[0.0,14.53]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,392.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,206.06,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6a6a70ff","family":"proportional","size":10.5,"text":"Exact match against the wrap (binary) name.","underline":[0.0,"#00000000"],"x":[0.0,205.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,418.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,67.84,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#e9e9ebff","family":"proportional","size":12.0,"text":"Argv pattern","underline":[0.0,"#00000000"],"x":[0.0,67.83]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#232325ff","k":"rect","radius":[6,6,6,6],"rect":[35.0,441.0,865.0,460.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [38.0,442.0,288.34,459.0],
+          "k": "text",
+          "pos": [39.0,443.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,248.34,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#e9e9ebff","family":"monospace","size":12.5,"text":"gh api /repos/*/actions/secrets*[","underline":[0.0,"#00000000"],"x":[0.0,247.53]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,470.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,803.41,12.0],
+              "runs": [
+                {"baseline":9.0,"color":"#e0705fff","family":"proportional","size":10.5,"text":"⚠ Pattern syntax error near position 32: invalid range pattern — this rule cannot be evaluated, so every ask it might have denied now goes to the consent prompt instead of ","underline":[0.0,"#00000000"],"x":[0.0,803.39]}
+              ]
+            },
+            {
+              "rect": [0.0,12.0,190.75,24.0],
+              "runs": [
+                {"baseline":10.0,"color":"#e0705fff","family":"proportional","size":10.5,"text":"being released by another rule's approve","underline":[0.0,"#00000000"],"x":[0.0,190.75]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,503.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,410.91,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6a6a70ff","family":"proportional","size":10.5,"text":"Matched against the joined argv of the wrap. Glob (* ? [abc]) or literal-prefix. Blank = any.","underline":[0.0,"#00000000"],"x":[0.0,410.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#232325ff","k":"rect","radius":[6,6,6,6],"rect":[35.0,552.0,865.0,571.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#232325ff","k":"rect","radius":[6,6,6,6],"rect":[35.0,629.0,865.0,648.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [39.0,631.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,145.09,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#8c8c8d99","family":"proportional","size":13.0,"text":"e.g. ~/work/myproject/**","underline":[0.0,"#00000000"],"x":[0.0,145.14]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#232325ff","k":"rect","radius":[6,6,6,6],"rect":[35.0,794.0,865.0,827.94],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[878.59,106.0,880.0,500.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[878.59,106.0,880.0,299.09],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"clip":[0.0,0.0,900.0,600.0],"k":"mesh"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#3c3c40ff","k":"rect","radius":[0,0,0,0],"rect":[20.0,500.0,880.0,501.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2814112e","k":"rect","radius":[6,6,6,6],"rect":[20.0,510.0,257.72,539.0],"stroke":[1.0,"#e0705fff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [33.0,518.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,211.72,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#e9e9ebff","family":"proportional","size":11.5,"text":"Can't save: argv pattern is not a valid glob","underline":[0.0,"#00000000"],"x":[0.0,211.7]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#333336ff","k":"rect","radius":[6,6,6,6],"rect":[20.0,553.0,116.0,583.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [55.16,561.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,25.69,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#98989dff","family":"proportional","size":12.5,"text":"Save","underline":[0.0,"#00000000"],"x":[0.0,24.85]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#333336ff","k":"rect","radius":[6,6,6,6],"rect":[130.0,553.0,226.0,583.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [159.56,561.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,36.88,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#e9e9ebff","family":"proportional","size":12.5,"text":"Cancel","underline":[0.0,"#00000000"],"x":[0.0,36.19]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        }
+      ],
+      "size": [900.0,600.0]
+    },
+    "macos-light": {
+      "digest": "068dcc8bc571cda34e71d62ee93b41d584115fa01c3df9f1bd732f6472ad2137",
+      "shapes": [
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f5f5f7ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f5f5f7ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#ececefff","k":"rect","radius":[7,7,7,7],"rect":[350.0,10.0,550.0,36.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[7,7,7,7],"rect":[350.0,10.0,550.0,36.0],"stroke":[1.0,"#dcdce1ff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#ffffffff","k":"rect","radius":[6,6,6,6],"rect":[352.0,12.0,450.0,34.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[352.0,12.0,450.0,34.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [385.89,16.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,30.22,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#1d1d1fff","family":"proportional","size":12.5,"text":"Rules","underline":[0.0,"#00000000"],"x":[0.0,30.35]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [483.89,16.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,30.22,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#6e6e73ff","family":"proportional","size":12.5,"text":"Audit","underline":[0.0,"#00000000"],"x":[0.0,29.84]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#ececefff","k":"rect","radius":[8,8,8,8],"rect":[670.0,10.0,880.0,36.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[8,8,8,8],"rect":[670.0,10.0,880.0,36.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
+        {"center":[684.0,22.0],"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"circle","radius":4.5,"stroke":[1.5,"#6e6e73ff"]},
+        {"a":[687.18,25.18],"b":[690.68,28.68],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.5,"#6e6e73ff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[703.0,15.5,874.0,30.5],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [703.0,15.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,74.34,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#11111399","family":"proportional","size":13.0,"text":"Filter rules…","underline":[0.0,"#00000000"],"x":[0.0,73.95]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [702.0,14.5,778.34,31.5],
+          "k": "text",
+          "pos": [703.0,15.5],
+          "rows": [
+            {"rect":[0.0,0.0,0.0,14.0],"runs":[]}
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"a":[0.0,45.5],"b":[900.0,45.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#d2d2d7ff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,52.0,900.0,597.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [20.0,66.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,59.78,18.0],
+              "runs": [
+                {"baseline":15.0,"color":"#1d1d1fff","family":"proportional","size":16.0,"text":"Edit rule","underline":[0.0,"#00000000"],"x":[0.0,59.77]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#230a082e","k":"rect","radius":[6,6,6,6],"rect":[95.78,66.0,144.91,90.0],"stroke":[1.0,"#c4392eff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [103.78,74.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#c4392eff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [113.0,71.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,23.91,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#c4392eff","family":"proportional","size":11.0,"text":"deny","underline":[0.0,"#00000000"],"x":[0.0,23.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,106.0,880.0,909.94],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#ececefff","k":"rect","radius":[8,8,8,8],"rect":[20.0,106.0,880.0,286.0],"stroke":[1.0,"#dcdce1ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,119.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,36.19,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9d9da3ff","family":"proportional","size":10.5,"text":"BASICS","underline":[0.0,"#00000000"],"x":[0.0,35.43]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,145.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,31.56,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#1d1d1fff","family":"proportional","size":12.0,"text":"Name","underline":[0.0,"#00000000"],"x":[0.0,31.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#ececefff","k":"rect","radius":[6,6,6,6],"rect":[35.0,168.0,865.0,187.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [38.0,169.0,178.94,186.0],
+          "k": "text",
+          "pos": [39.0,170.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,138.94,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#1d1d1fff","family":"proportional","size":13.0,"text":"Block repo secret writes","underline":[0.0,"#00000000"],"x":[0.0,138.56]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,201.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,36.94,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#1d1d1fff","family":"proportional","size":12.0,"text":"Decide","underline":[0.0,"#00000000"],"x":[0.0,36.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#e4e4e8ff","k":"rect","radius":[6,6,6,6],"rect":[35.0,224.0,110.75,252.0],"stroke":[1.0,"#dcdce1ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [50.0,231.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,45.75,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#6e6e73ff","family":"proportional","size":12.5,"text":"approve","underline":[0.0,"#00000000"],"x":[0.0,45.85]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#230a082e","k":"rect","radius":[6,6,6,6],"rect":[124.75,224.0,181.94,252.0],"stroke":[1.0,"#c4392eff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [139.75,231.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,27.19,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#1d1d1fff","family":"proportional","size":12.5,"text":"deny","underline":[0.0,"#00000000"],"x":[0.0,26.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,261.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,447.63,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9d9da3ff","family":"proportional","size":10.5,"text":"Deny rules win over approves when both match. Among approves, the most-specific match fires.","underline":[0.0,"#00000000"],"x":[0.0,447.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#ececefff","k":"rect","radius":[8,8,8,8],"rect":[20.0,302.0,880.0,682.0],"stroke":[1.0,"#dcdce1ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,315.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,120.38,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9d9da3ff","family":"proportional","size":10.5,"text":"WHEN THIS RULE FIRES","underline":[0.0,"#00000000"],"x":[0.0,120.43]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,341.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,28.66,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#1d1d1fff","family":"proportional","size":12.0,"text":"Wrap","underline":[0.0,"#00000000"],"x":[0.0,28.0]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#ececefff","k":"rect","radius":[6,6,6,6],"rect":[35.0,364.0,865.0,383.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [38.0,365.0,55.06,382.0],
+          "k": "text",
+          "pos": [39.0,366.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,15.06,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#1d1d1fff","family":"monospace","size":12.5,"text":"gh","underline":[0.0,"#00000000"],"x":[0.0,14.53]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,392.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,206.06,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9d9da3ff","family":"proportional","size":10.5,"text":"Exact match against the wrap (binary) name.","underline":[0.0,"#00000000"],"x":[0.0,205.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,418.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,67.84,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#1d1d1fff","family":"proportional","size":12.0,"text":"Argv pattern","underline":[0.0,"#00000000"],"x":[0.0,67.83]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#ececefff","k":"rect","radius":[6,6,6,6],"rect":[35.0,441.0,865.0,460.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [38.0,442.0,288.34,459.0],
+          "k": "text",
+          "pos": [39.0,443.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,248.34,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#1d1d1fff","family":"monospace","size":12.5,"text":"gh api /repos/*/actions/secrets*[","underline":[0.0,"#00000000"],"x":[0.0,247.53]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,470.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,803.41,12.0],
+              "runs": [
+                {"baseline":9.0,"color":"#c4392eff","family":"proportional","size":10.5,"text":"⚠ Pattern syntax error near position 32: invalid range pattern — this rule cannot be evaluated, so every ask it might have denied now goes to the consent prompt instead of ","underline":[0.0,"#00000000"],"x":[0.0,803.39]}
+              ]
+            },
+            {
+              "rect": [0.0,12.0,190.75,24.0],
+              "runs": [
+                {"baseline":10.0,"color":"#c4392eff","family":"proportional","size":10.5,"text":"being released by another rule's approve","underline":[0.0,"#00000000"],"x":[0.0,190.75]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,503.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,410.91,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9d9da3ff","family":"proportional","size":10.5,"text":"Matched against the joined argv of the wrap. Glob (* ? [abc]) or literal-prefix. Blank = any.","underline":[0.0,"#00000000"],"x":[0.0,410.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#ececefff","k":"rect","radius":[6,6,6,6],"rect":[35.0,552.0,865.0,571.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#ececefff","k":"rect","radius":[6,6,6,6],"rect":[35.0,629.0,865.0,648.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,103.0,900.0,503.0],
+          "k": "text",
+          "pos": [39.0,631.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,145.09,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#11111399","family":"proportional","size":13.0,"text":"e.g. ~/work/myproject/**","underline":[0.0,"#00000000"],"x":[0.0,145.14]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#ececefff","k":"rect","radius":[6,6,6,6],"rect":[35.0,794.0,865.0,827.94],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[878.59,106.0,880.0,500.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[878.59,106.0,880.0,299.09],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"clip":[0.0,0.0,900.0,600.0],"k":"mesh"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#d2d2d7ff","k":"rect","radius":[0,0,0,0],"rect":[20.0,500.0,880.0,501.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#230a082e","k":"rect","radius":[6,6,6,6],"rect":[20.0,510.0,257.72,539.0],"stroke":[1.0,"#c4392eff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [33.0,518.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,211.72,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#1d1d1fff","family":"proportional","size":11.5,"text":"Can't save: argv pattern is not a valid glob","underline":[0.0,"#00000000"],"x":[0.0,211.7]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#e4e4e8ff","k":"rect","radius":[6,6,6,6],"rect":[20.0,553.0,116.0,583.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [55.16,561.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,25.69,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#6e6e73ff","family":"proportional","size":12.5,"text":"Save","underline":[0.0,"#00000000"],"x":[0.0,24.85]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#e4e4e8ff","k":"rect","radius":[6,6,6,6],"rect":[130.0,553.0,226.0,583.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [159.56,561.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,36.88,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#1d1d1fff","family":"proportional","size":12.5,"text":"Cancel","underline":[0.0,"#00000000"],"x":[0.0,36.19]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        }
+      ],
+      "size": [900.0,600.0]
+    },
+    "windows-dark": {
+      "digest": "84c7a431d05ac09c9d4a9ab78412ad98acc66d609008bff692e260460059e127",
+      "shapes": [
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2bff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2bff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,58.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [20.0,6.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,78.28,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#9d9d9dff","family":"proportional","size":11.0,"text":"secreq Manager","underline":[0.0,"#00000000"],"x":[0.0,78.11]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [24.0,30.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,33.84,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#ffffffff","family":"proportional","size":14.0,"text":"Rules","underline":[0.0,"#00000000"],"x":[0.0,32.99]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [24.3,30.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,33.84,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#ffffffff","family":"proportional","size":14.0,"text":"Rules","underline":[0.0,"#00000000"],"x":[0.0,32.99]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#60cdffff","k":"rect","radius":[2,2,2,2],"rect":[22.0,48.0,59.84,51.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [79.84,30.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,33.84,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#9d9d9dff","family":"proportional","size":14.0,"text":"Audit","underline":[0.0,"#00000000"],"x":[0.0,33.42]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#323232ff","k":"rect","radius":[6,6,6,6],"rect":[670.0,25.0,880.0,51.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[670.0,25.0,880.0,51.0],"stroke":[1.0,"#383838ff"],"stroke_kind":"Inside"},
+        {"center":[684.0,37.0],"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"circle","radius":4.5,"stroke":[1.5,"#9d9d9dff"]},
+        {"a":[687.18,40.18],"b":[690.68,43.68],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.5,"#9d9d9dff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[703.0,30.25,874.0,45.78],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [703.0,30.25],
+          "rows": [
+            {
+              "rect": [0.0,0.0,74.34,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#99999999","family":"proportional","size":13.0,"text":"Filter rules…","underline":[0.0,"#00000000"],"x":[0.0,73.95]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [702.0,29.25,778.34,46.25],
+          "k": "text",
+          "pos": [703.0,30.25],
+          "rows": [
+            {"rect":[0.0,0.0,0.0,16.0],"runs":[]}
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"a":[0.0,57.5],"b":[900.0,57.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#383838ff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,64.0,900.0,597.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [20.0,78.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,59.78,18.0],
+              "runs": [
+                {"baseline":15.0,"color":"#ffffffff","family":"proportional","size":16.0,"text":"Edit rule","underline":[0.0,"#00000000"],"x":[0.0,59.77]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2e1c1e2e","k":"rect","radius":[6,6,6,6],"rect":[95.78,78.0,144.91,102.0],"stroke":[1.0,"#ff99a4ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [103.78,86.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#ff99a4ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [113.0,83.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,23.91,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#ff99a4ff","family":"proportional","size":11.0,"text":"deny","underline":[0.0,"#00000000"],"x":[0.0,23.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,118.0,880.0,921.94],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#323232ff","k":"rect","radius":[4,4,4,4],"rect":[20.0,118.0,880.0,298.0],"stroke":[1.0,"#1f1f1fff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,131.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,36.19,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6d6d6dff","family":"proportional","size":10.5,"text":"BASICS","underline":[0.0,"#00000000"],"x":[0.0,35.43]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,157.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,31.56,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#ffffffff","family":"proportional","size":12.0,"text":"Name","underline":[0.0,"#00000000"],"x":[0.0,31.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#323232ff","k":"rect","radius":[4,4,4,4],"rect":[35.0,180.0,865.0,199.0],"stroke":[1.0,"#454545ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [38.0,181.0,178.94,198.0],
+          "k": "text",
+          "pos": [39.0,182.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,138.94,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"Block repo secret writes","underline":[0.0,"#00000000"],"x":[0.0,138.56]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,213.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,36.94,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#ffffffff","family":"proportional","size":12.0,"text":"Decide","underline":[0.0,"#00000000"],"x":[0.0,36.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#383838ff","k":"rect","radius":[6,6,6,6],"rect":[35.0,236.0,110.75,264.0],"stroke":[1.0,"#1f1f1fff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [50.0,243.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,45.75,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#9d9d9dff","family":"proportional","size":12.5,"text":"approve","underline":[0.0,"#00000000"],"x":[0.0,45.85]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#2e1c1e2e","k":"rect","radius":[6,6,6,6],"rect":[124.75,236.0,181.94,264.0],"stroke":[1.0,"#ff99a4ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [139.75,243.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,27.19,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#ffffffff","family":"proportional","size":12.5,"text":"deny","underline":[0.0,"#00000000"],"x":[0.0,26.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,273.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,447.63,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6d6d6dff","family":"proportional","size":10.5,"text":"Deny rules win over approves when both match. Among approves, the most-specific match fires.","underline":[0.0,"#00000000"],"x":[0.0,447.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#323232ff","k":"rect","radius":[4,4,4,4],"rect":[20.0,314.0,880.0,694.0],"stroke":[1.0,"#1f1f1fff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,327.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,120.38,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6d6d6dff","family":"proportional","size":10.5,"text":"WHEN THIS RULE FIRES","underline":[0.0,"#00000000"],"x":[0.0,120.43]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,353.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,28.66,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#ffffffff","family":"proportional","size":12.0,"text":"Wrap","underline":[0.0,"#00000000"],"x":[0.0,28.0]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#323232ff","k":"rect","radius":[4,4,4,4],"rect":[35.0,376.0,865.0,395.0],"stroke":[1.0,"#454545ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [38.0,377.0,55.06,394.0],
+          "k": "text",
+          "pos": [39.0,378.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,15.06,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ffffffff","family":"monospace","size":12.5,"text":"gh","underline":[0.0,"#00000000"],"x":[0.0,14.53]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,404.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,206.06,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6d6d6dff","family":"proportional","size":10.5,"text":"Exact match against the wrap (binary) name.","underline":[0.0,"#00000000"],"x":[0.0,205.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,430.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,67.84,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#ffffffff","family":"proportional","size":12.0,"text":"Argv pattern","underline":[0.0,"#00000000"],"x":[0.0,67.83]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#323232ff","k":"rect","radius":[4,4,4,4],"rect":[35.0,453.0,865.0,472.0],"stroke":[1.0,"#454545ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [38.0,454.0,288.34,471.0],
+          "k": "text",
+          "pos": [39.0,455.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,248.34,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ffffffff","family":"monospace","size":12.5,"text":"gh api /repos/*/actions/secrets*[","underline":[0.0,"#00000000"],"x":[0.0,247.53]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,482.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,803.41,12.0],
+              "runs": [
+                {"baseline":9.0,"color":"#ff99a4ff","family":"proportional","size":10.5,"text":"⚠ Pattern syntax error near position 32: invalid range pattern — this rule cannot be evaluated, so every ask it might have denied now goes to the consent prompt instead of ","underline":[0.0,"#00000000"],"x":[0.0,803.39]}
+              ]
+            },
+            {
+              "rect": [0.0,12.0,190.75,24.0],
+              "runs": [
+                {"baseline":10.0,"color":"#ff99a4ff","family":"proportional","size":10.5,"text":"being released by another rule's approve","underline":[0.0,"#00000000"],"x":[0.0,190.75]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#323232ff","k":"rect","radius":[4,4,4,4],"rect":[35.0,564.0,865.0,583.0],"stroke":[1.0,"#454545ff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#323232ff","k":"rect","radius":[4,4,4,4],"rect":[35.0,641.0,865.0,660.0],"stroke":[1.0,"#454545ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [39.0,643.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,145.09,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#99999999","family":"proportional","size":13.0,"text":"e.g. ~/work/myproject/**","underline":[0.0,"#00000000"],"x":[0.0,145.14]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#323232ff","k":"rect","radius":[4,4,4,4],"rect":[35.0,806.0,865.0,839.94],"stroke":[1.0,"#454545ff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[4,4,4,4],"rect":[878.59,118.0,880.0,500.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[4,4,4,4],"rect":[878.59,118.0,880.0,299.51],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"clip":[0.0,0.0,900.0,600.0],"k":"mesh"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#383838ff","k":"rect","radius":[0,0,0,0],"rect":[20.0,500.0,880.0,501.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2e1c1e2e","k":"rect","radius":[6,6,6,6],"rect":[20.0,510.0,257.72,539.0],"stroke":[1.0,"#ff99a4ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [33.0,518.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,211.72,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#ffffffff","family":"proportional","size":11.5,"text":"Can't save: argv pattern is not a valid glob","underline":[0.0,"#00000000"],"x":[0.0,211.7]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#383838ff","k":"rect","radius":[4,4,4,4],"rect":[20.0,553.0,116.0,583.0],"stroke":[1.0,"#454545ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [55.16,561.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,25.69,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#9d9d9dff","family":"proportional","size":12.5,"text":"Save","underline":[0.0,"#00000000"],"x":[0.0,24.85]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#383838ff","k":"rect","radius":[4,4,4,4],"rect":[130.0,553.0,226.0,583.0],"stroke":[1.0,"#454545ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [159.56,561.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,36.88,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#ffffffff","family":"proportional","size":12.5,"text":"Cancel","underline":[0.0,"#00000000"],"x":[0.0,36.19]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        }
+      ],
+      "size": [900.0,600.0]
+    },
+    "windows-light": {
+      "digest": "a57f78450055f0df41cc784024418528dbbf91a20c1d5ee96fa431e31c84465d",
+      "shapes": [
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fbfbfbff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fbfbfbff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,58.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [20.0,6.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,78.28,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#5f5f5fff","family":"proportional","size":11.0,"text":"secreq Manager","underline":[0.0,"#00000000"],"x":[0.0,78.11]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [24.0,30.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,33.84,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#1b1b1bff","family":"proportional","size":14.0,"text":"Rules","underline":[0.0,"#00000000"],"x":[0.0,32.99]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [24.3,30.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,33.84,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#1b1b1bff","family":"proportional","size":14.0,"text":"Rules","underline":[0.0,"#00000000"],"x":[0.0,32.99]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#005fb8ff","k":"rect","radius":[2,2,2,2],"rect":[22.0,48.0,59.84,51.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [79.84,30.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,33.84,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#5f5f5fff","family":"proportional","size":14.0,"text":"Audit","underline":[0.0,"#00000000"],"x":[0.0,33.42]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f6f6f6ff","k":"rect","radius":[6,6,6,6],"rect":[670.0,25.0,880.0,51.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[670.0,25.0,880.0,51.0],"stroke":[1.0,"#e5e5e5ff"],"stroke_kind":"Inside"},
+        {"center":[684.0,37.0],"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"circle","radius":4.5,"stroke":[1.5,"#5f5f5fff"]},
+        {"a":[687.18,40.18],"b":[690.68,43.68],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.5,"#5f5f5fff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[703.0,30.25,874.0,45.78],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [703.0,30.25],
+          "rows": [
+            {
+              "rect": [0.0,0.0,74.34,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#10101099","family":"proportional","size":13.0,"text":"Filter rules…","underline":[0.0,"#00000000"],"x":[0.0,73.95]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [702.0,29.25,778.34,46.25],
+          "k": "text",
+          "pos": [703.0,30.25],
+          "rows": [
+            {"rect":[0.0,0.0,0.0,16.0],"runs":[]}
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"a":[0.0,57.5],"b":[900.0,57.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#e5e5e5ff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,64.0,900.0,597.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [20.0,78.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,59.78,18.0],
+              "runs": [
+                {"baseline":15.0,"color":"#1b1b1bff","family":"proportional","size":16.0,"text":"Edit rule","underline":[0.0,"#00000000"],"x":[0.0,59.77]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2308052e","k":"rect","radius":[6,6,6,6],"rect":[95.78,78.0,144.91,102.0],"stroke":[1.0,"#c42b1cff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [103.78,86.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#c42b1cff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [113.0,83.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,23.91,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#c42b1cff","family":"proportional","size":11.0,"text":"deny","underline":[0.0,"#00000000"],"x":[0.0,23.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,118.0,880.0,921.94],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#f6f6f6ff","k":"rect","radius":[4,4,4,4],"rect":[20.0,118.0,880.0,298.0],"stroke":[1.0,"#e5e5e5ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,131.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,36.19,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9b9b9bff","family":"proportional","size":10.5,"text":"BASICS","underline":[0.0,"#00000000"],"x":[0.0,35.43]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,157.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,31.56,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#1b1b1bff","family":"proportional","size":12.0,"text":"Name","underline":[0.0,"#00000000"],"x":[0.0,31.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#f6f6f6ff","k":"rect","radius":[4,4,4,4],"rect":[35.0,180.0,865.0,199.0],"stroke":[1.0,"#d1d1d1ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [38.0,181.0,178.94,198.0],
+          "k": "text",
+          "pos": [39.0,182.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,138.94,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#1b1b1bff","family":"proportional","size":13.0,"text":"Block repo secret writes","underline":[0.0,"#00000000"],"x":[0.0,138.56]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,213.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,36.94,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#1b1b1bff","family":"proportional","size":12.0,"text":"Decide","underline":[0.0,"#00000000"],"x":[0.0,36.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#efefefff","k":"rect","radius":[6,6,6,6],"rect":[35.0,236.0,110.75,264.0],"stroke":[1.0,"#e5e5e5ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [50.0,243.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,45.75,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#5f5f5fff","family":"proportional","size":12.5,"text":"approve","underline":[0.0,"#00000000"],"x":[0.0,45.85]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#2308052e","k":"rect","radius":[6,6,6,6],"rect":[124.75,236.0,181.94,264.0],"stroke":[1.0,"#c42b1cff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [139.75,243.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,27.19,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#1b1b1bff","family":"proportional","size":12.5,"text":"deny","underline":[0.0,"#00000000"],"x":[0.0,26.92]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,273.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,447.63,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9b9b9bff","family":"proportional","size":10.5,"text":"Deny rules win over approves when both match. Among approves, the most-specific match fires.","underline":[0.0,"#00000000"],"x":[0.0,447.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#f6f6f6ff","k":"rect","radius":[4,4,4,4],"rect":[20.0,314.0,880.0,694.0],"stroke":[1.0,"#e5e5e5ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,327.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,120.38,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9b9b9bff","family":"proportional","size":10.5,"text":"WHEN THIS RULE FIRES","underline":[0.0,"#00000000"],"x":[0.0,120.43]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,353.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,28.66,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#1b1b1bff","family":"proportional","size":12.0,"text":"Wrap","underline":[0.0,"#00000000"],"x":[0.0,28.0]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#f6f6f6ff","k":"rect","radius":[4,4,4,4],"rect":[35.0,376.0,865.0,395.0],"stroke":[1.0,"#d1d1d1ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [38.0,377.0,55.06,394.0],
+          "k": "text",
+          "pos": [39.0,378.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,15.06,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#1b1b1bff","family":"monospace","size":12.5,"text":"gh","underline":[0.0,"#00000000"],"x":[0.0,14.53]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,404.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,206.06,12.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9b9b9bff","family":"proportional","size":10.5,"text":"Exact match against the wrap (binary) name.","underline":[0.0,"#00000000"],"x":[0.0,205.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,430.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,67.84,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#1b1b1bff","family":"proportional","size":12.0,"text":"Argv pattern","underline":[0.0,"#00000000"],"x":[0.0,67.83]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#f6f6f6ff","k":"rect","radius":[4,4,4,4],"rect":[35.0,453.0,865.0,472.0],"stroke":[1.0,"#d1d1d1ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [38.0,454.0,288.34,471.0],
+          "k": "text",
+          "pos": [39.0,455.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,248.34,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#1b1b1bff","family":"monospace","size":12.5,"text":"gh api /repos/*/actions/secrets*[","underline":[0.0,"#00000000"],"x":[0.0,247.53]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [35.0,482.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,803.41,12.0],
+              "runs": [
+                {"baseline":9.0,"color":"#c42b1cff","family":"proportional","size":10.5,"text":"⚠ Pattern syntax error near position 32: invalid range pattern — this rule cannot be evaluated, so every ask it might have denied now goes to the consent prompt instead of ","underline":[0.0,"#00000000"],"x":[0.0,803.39]}
+              ]
+            },
+            {
+              "rect": [0.0,12.0,190.75,24.0],
+              "runs": [
+                {"baseline":10.0,"color":"#c42b1cff","family":"proportional","size":10.5,"text":"being released by another rule's approve","underline":[0.0,"#00000000"],"x":[0.0,190.75]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#f6f6f6ff","k":"rect","radius":[4,4,4,4],"rect":[35.0,564.0,865.0,583.0],"stroke":[1.0,"#d1d1d1ff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#f6f6f6ff","k":"rect","radius":[4,4,4,4],"rect":[35.0,641.0,865.0,660.0],"stroke":[1.0,"#d1d1d1ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,115.0,900.0,503.0],
+          "k": "text",
+          "pos": [39.0,643.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,145.09,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#10101099","family":"proportional","size":13.0,"text":"e.g. ~/work/myproject/**","underline":[0.0,"#00000000"],"x":[0.0,145.14]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#f6f6f6ff","k":"rect","radius":[4,4,4,4],"rect":[35.0,806.0,865.0,839.94],"stroke":[1.0,"#d1d1d1ff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[4,4,4,4],"rect":[878.59,118.0,880.0,500.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[4,4,4,4],"rect":[878.59,118.0,880.0,299.51],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"clip":[0.0,0.0,900.0,600.0],"k":"mesh"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#e5e5e5ff","k":"rect","radius":[0,0,0,0],"rect":[20.0,500.0,880.0,501.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2308052e","k":"rect","radius":[6,6,6,6],"rect":[20.0,510.0,257.72,539.0],"stroke":[1.0,"#c42b1cff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [33.0,518.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,211.72,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#1b1b1bff","family":"proportional","size":11.5,"text":"Can't save: argv pattern is not a valid glob","underline":[0.0,"#00000000"],"x":[0.0,211.7]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#efefefff","k":"rect","radius":[4,4,4,4],"rect":[20.0,553.0,116.0,583.0],"stroke":[1.0,"#d1d1d1ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [55.16,561.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,25.69,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#5f5f5fff","family":"proportional","size":12.5,"text":"Save","underline":[0.0,"#00000000"],"x":[0.0,24.85]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#efefefff","k":"rect","radius":[4,4,4,4],"rect":[130.0,553.0,226.0,583.0],"stroke":[1.0,"#d1d1d1ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [159.56,561.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,36.88,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#1b1b1bff","family":"proportional","size":12.5,"text":"Cancel","underline":[0.0,"#00000000"],"x":[0.0,36.19]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        }
+      ],
+      "size": [900.0,600.0]
+    }
+  }
+}

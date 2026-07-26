@@ -165,6 +165,15 @@ you wrote it. A refused **deny** is the one that would otherwise go wrong:
 rather than let another rule's approve carry an ask your deny was written
 to stop, secreq asks you.
 
+The form holds a rule to the same standard while you write it, so a rule
+that saves is a rule that runs. A pattern that will not compile blocks
+the save, with the glob parser's complaint under the field and the cost
+spelled out beside it: a broken deny sends its asks here, a broken
+approve fires never. The field your cursor is in is left alone until you
+ask to save: `[` is a legal thing to have typed so far.
+
+::shot{id=47-rules-form-bad-glob}
+
 ### Audit
 
 Every decision, newest first: what asked, what it wanted, where from, and

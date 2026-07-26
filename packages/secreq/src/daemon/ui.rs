@@ -27,7 +27,9 @@ use crate::audit::{self, AuditCaller, AuditEntry};
 use crate::consent::Decision;
 use crate::recommendations::{Suggestion, SuggestionDecision, SuggestionSort};
 use crate::rule_scaffold::{self, Editor};
-use crate::rules::{Pattern, Rule, RuleBody, RuleDecision, RuleMatch, StaticDecision};
+use crate::rules::{
+    Pattern, PatternField, Rule, RuleBody, RuleDecision, RuleMatch, StaticDecision,
+};
 
 use super::manager_ui::ManagerView;
 use super::proto::DedupeKey;
@@ -76,10 +78,14 @@ pub struct PendingAction {
     pub scope: ProcessIdentity,
 }
 
-/// Form-state for the rule create/edit modal. Holds raw strings so
-/// the user can incrementally type into match-pattern fields without
-/// the [`Pattern`] re-parser firing on every keystroke; on Save it
+/// Form-state for the rule create/edit modal. Holds raw strings so the
+/// user can incrementally type into match-pattern fields; on Save it
 /// converts to a [`Rule`] and emits a [`RuleAction`].
+///
+/// The patterns are re-parsed every frame ([`RuleDraft::problems`]) so a
+/// glob the loader would refuse cannot leave the form, but the field the
+/// caret is in is exempt until the user asks to save — see
+/// [`RuleDraft::problems`] for why.
 ///
 /// `id == None` ⇒ creating; `id == Some` ⇒ editing an existing rule.
 #[derive(Debug, Clone, Default)]
@@ -99,6 +105,37 @@ pub(crate) struct RuleDraft {
     /// trained-secrets guard at evaluator time. UI displays this as
     /// a read-only chip with a tooltip explaining the guard.
     trained_secrets: std::collections::BTreeSet<String>,
+    /// Set once a Save has been refused. From then on a broken pattern
+    /// is reported wherever the caret is: the user has said they are
+    /// finished typing, and a Save that neither saves nor explains
+    /// itself is the silence this validation exists to remove.
+    save_attempted: bool,
+}
+
+/// One reason the rule form will not save the draft.
+#[derive(Debug, Clone, PartialEq)]
+struct FormProblem {
+    /// The match-pattern input it belongs to, when it belongs to one —
+    /// which is what lets the form draw the message under that input as
+    /// well as in the bottom banner.
+    field: Option<PatternField>,
+    /// One clause, for the banner, which is one line tall.
+    summary: String,
+    /// What the mistake costs, drawn under the field where there is
+    /// room for it. `None` when the summary already says everything.
+    detail: Option<String>,
+}
+
+impl FormProblem {
+    /// A field the form has always required, whose whole story is its
+    /// own summary.
+    fn required(summary: &str) -> FormProblem {
+        FormProblem {
+            field: None,
+            summary: summary.to_owned(),
+            detail: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -178,6 +215,7 @@ impl RuleDraft {
             cwd: entry.cwd.clone(),
             deny_message: String::new(),
             trained_secrets,
+            save_attempted: false,
         }
     }
 
@@ -205,6 +243,7 @@ impl RuleDraft {
             cwd: s.cwd.clone().unwrap_or_default(),
             deny_message: String::new(),
             trained_secrets: s.trained_secrets.clone(),
+            save_attempted: false,
         }
     }
 
@@ -230,21 +269,92 @@ impl RuleDraft {
             cwd: pattern_str(r#match.cwd.as_ref()),
             deny_message: decide.deny_message().unwrap_or_default().to_owned(),
             trained_secrets: rule.trained_secrets.clone(),
+            save_attempted: false,
         }
+    }
+
+    /// Record that a Save was refused, so the next frame stops
+    /// withholding the reason.
+    fn note_refused_save(&mut self) {
+        self.save_attempted = true;
+    }
+
+    /// Every reason the form will not save this draft, in the order the
+    /// fields appear. Empty ⇒ Save is live.
+    ///
+    /// **Patterns are held to what the loader will accept.** A glob
+    /// `glob::Pattern` refuses is refused here too, because
+    /// [`crate::rules::pattern_refusals`] will refuse it the moment the
+    /// rule is read back — saving it produces a rule that matches
+    /// nothing and says so only in a badge the author has already
+    /// navigated away from. The check is [`Pattern::invalid_reason`],
+    /// the loader's own, so the two cannot come to disagree about what
+    /// "broken" means.
+    ///
+    /// **Both decisions are refused, for different stated reasons.** A
+    /// broken deny fails open and a broken approve fails closed, but
+    /// neither is the rule its author meant to write, so the form
+    /// blocks both and quotes
+    /// [`crate::rules::refused_pattern_consequence`] to say which one
+    /// you are holding.
+    ///
+    /// `focus` names the pattern input the caret is in, if any. A
+    /// broken glob there is withheld: `[` is a legal thing to have
+    /// typed so far, and a form that goes red between the `[` and the
+    /// `]` teaches the user to type through its warnings. The exemption
+    /// ends at the first refused Save (`save_attempted`), which is the
+    /// point at which the user has claimed to be done.
+    fn problems(&self, focus: Option<PatternField>) -> Vec<FormProblem> {
+        let mut out = Vec::new();
+        if self.name.trim().is_empty() {
+            out.push(FormProblem::required("name is required"));
+        }
+        if self.wrap.trim().is_empty() {
+            out.push(FormProblem::required("wrap is required"));
+        }
+        let typing = if self.save_attempted { None } else { focus };
+        for (field, raw) in [
+            (PatternField::Argv, &self.argv),
+            (PatternField::Ancestor, &self.ancestor),
+            (PatternField::Cwd, &self.cwd),
+        ] {
+            if typing == Some(field) {
+                continue;
+            }
+            let raw = raw.trim();
+            if raw.is_empty() {
+                continue;
+            }
+            let pattern = Pattern::parse(raw);
+            let Some(err) = pattern.invalid_reason() else {
+                continue;
+            };
+            out.push(FormProblem {
+                field: Some(field),
+                summary: format!("{} pattern is not a valid glob", field.as_str()),
+                detail: Some(format!(
+                    "{err} — {}",
+                    crate::rules::refused_pattern_consequence(RuleDecision::from(self.decide))
+                )),
+            });
+        }
+        out
     }
 
     /// Convert to a [`Rule`]. Returns `Err(reason)` if the draft is
     /// not savable; the UI surfaces the message inline so the user
     /// sees why Save is refusing.
-    fn into_rule(self) -> Result<Rule, &'static str> {
+    ///
+    /// Validates with no caret exemption — this is the only path from
+    /// the form to a saved rule, so it is where "a user must not be
+    /// able to save what the loader will refuse" is actually true,
+    /// rather than merely likely.
+    fn into_rule(self) -> Result<Rule, String> {
+        if let Some(problem) = self.problems(None).into_iter().next() {
+            return Err(problem.summary);
+        }
         let name = self.name.trim();
-        if name.is_empty() {
-            return Err("name is required");
-        }
         let wrap = self.wrap.trim();
-        if wrap.is_empty() {
-            return Err("wrap is required");
-        }
         let optional_pattern = |s: &str| -> Option<Pattern> {
             let s = s.trim();
             if s.is_empty() {
@@ -1770,10 +1880,13 @@ fn render_rule_form(
     //    rather than relying on `bottom_up`, which would reverse the
     //    intra-row order of labels and inputs.
     //
-    // Dry-run conversion every frame so Save's enabled state and
-    // the banner reflect the current draft.
-    let validation = draft.clone().into_rule();
-    let action_bar_h = if validation.is_err() {
+    // Re-validate every frame so Save's enabled state, the banner and
+    // the per-field messages all reflect the current draft. The caret's
+    // position is read from egui's memory rather than from the inputs'
+    // responses because the body's rect depends on whether the banner
+    // shows, so validation has to happen before the inputs are laid out.
+    let problems = draft.problems(focused_pattern_field(ui.ctx()));
+    let action_bar_h = if !problems.is_empty() {
         // banner (~32) + spacing (8) + buttons (30) + padding
         86.0
     } else {
@@ -1796,7 +1909,7 @@ fn render_rule_form(
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                render_rule_form_body(ui, &mut draft);
+                render_rule_form_body(ui, &mut draft, &problems);
             });
     });
 
@@ -1809,12 +1922,12 @@ fn render_rule_form(
         );
         ui.painter().rect_filled(sep_rect, 0.0, th.rule);
         ui.add_space(10.0);
-        if let Err(msg) = &validation {
-            render_form_error_banner(ui, msg);
+        if let Some(problem) = problems.first() {
+            render_form_error_banner(ui, &problem.summary);
             ui.add_space(8.0);
         }
         ui.horizontal(|ui| {
-            let save_enabled = validation.is_ok();
+            let save_enabled = problems.is_empty();
             let save_resp = render_primary_button(ui, "Save", save_enabled);
             if save_resp.clicked() && save_enabled {
                 save_clicked = true;
@@ -1838,9 +1951,12 @@ fn render_rule_form(
             }
             return; // success → close form
         } else {
-            // Defense-in-depth: render_primary_button's gating
-            // should have suppressed the click, but if it didn't,
-            // we still refuse to ship an invalid rule.
+            // Defense-in-depth: render_primary_button's gating should
+            // have suppressed the click, but if it didn't — a glob
+            // withheld because the caret was still in it is exactly
+            // that case — we refuse to ship the rule and drop the
+            // exemption, so the next frame says why.
+            draft.note_refused_save();
             *draft_slot = Some(draft);
             return;
         }
@@ -1849,12 +1965,53 @@ fn render_rule_form(
     *draft_slot = Some(draft);
 }
 
+/// The stable [`egui::Id`] of one match-pattern input. Explicit rather
+/// than derived from the widget's position, because
+/// [`focused_pattern_field`] has to ask which input holds the caret
+/// before any of them have been added to the frame.
+fn pattern_field_id(field: PatternField) -> egui::Id {
+    egui::Id::new(("rule-form-pattern", field.as_str()))
+}
+
+/// Which match-pattern input holds the keyboard caret, if any. Focus
+/// lives in egui's memory and survives across frames, so this answers
+/// for the current frame before the inputs are laid out.
+fn focused_pattern_field(ctx: &egui::Context) -> Option<PatternField> {
+    let focused = ctx.memory(egui::Memory::focused)?;
+    [
+        PatternField::Argv,
+        PatternField::Ancestor,
+        PatternField::Cwd,
+    ]
+    .into_iter()
+    .find(|field| pattern_field_id(*field) == focused)
+}
+
+/// The message under a match-pattern input whose glob will not compile.
+///
+/// The banner at the foot of the form says a rule cannot be saved; this
+/// says which pattern and what it would have cost, next to the text the
+/// user would have to change. That is the moment the mistake is free to
+/// fix — after a save it costs a trip through the Rules list and a
+/// badge nobody is looking at.
+fn render_pattern_problem(ui: &mut egui::Ui, problem: Option<&FormProblem>) {
+    let Some(problem) = problem else { return };
+    let th = Theme::of(ui.ctx());
+    ui.add_space(4.0);
+    let text = match &problem.detail {
+        Some(detail) => format!("\u{26a0} {detail}"),
+        None => format!("\u{26a0} {}", problem.summary),
+    };
+    ui.label(egui::RichText::new(text).color(th.danger).size(10.5));
+}
+
 /// The scrollable middle of the rule form. Renders three section
 /// cards: Basics (name + decide), Match (wrap + patterns), Outcome
 /// (enabled + deny_message + trained-on chip). Kept as its own
 /// function so the parent can compose it with a pinned action bar.
-fn render_rule_form_body(ui: &mut egui::Ui, draft: &mut RuleDraft) {
+fn render_rule_form_body(ui: &mut egui::Ui, draft: &mut RuleDraft, problems: &[FormProblem]) {
     let th = Theme::of(ui.ctx());
+    let problem_for = |field: PatternField| problems.iter().find(|p| p.field == Some(field));
     // ── Section 1: Basics ──────────────────────────────────
     render_form_section_card(ui, "Basics", |ui| {
         render_form_field(ui, "Name", None, |ui| {
@@ -1902,12 +2059,15 @@ fn render_rule_form_body(ui: &mut egui::Ui, draft: &mut RuleDraft) {
                  Glob (* ? [abc]) or literal-prefix. Blank = any.",
             ),
             |ui| {
-                ui.add(
+                let resp = ui.add(
                     egui::TextEdit::singleline(&mut draft.argv)
+                        .id(pattern_field_id(PatternField::Argv))
                         .hint_text("e.g. gh api --get /repos/*/pulls*")
                         .font(egui::FontId::monospace(12.5))
                         .desired_width(f32::INFINITY),
-                )
+                );
+                render_pattern_problem(ui, problem_for(PatternField::Argv));
+                resp
             },
         );
         ui.add_space(8.0);
@@ -1919,12 +2079,15 @@ fn render_rule_form_body(ui: &mut egui::Ui, draft: &mut RuleDraft) {
                  process name AND full command line. Hits if any ancestor matches.",
             ),
             |ui| {
-                ui.add(
+                let resp = ui.add(
                     egui::TextEdit::singleline(&mut draft.ancestor)
+                        .id(pattern_field_id(PatternField::Ancestor))
                         .hint_text("e.g. Cursor.app")
                         .font(egui::FontId::monospace(12.5))
                         .desired_width(f32::INFINITY),
-                )
+                );
+                render_pattern_problem(ui, problem_for(PatternField::Ancestor));
+                resp
             },
         );
         ui.add_space(8.0);
@@ -1933,12 +2096,15 @@ fn render_rule_form_body(ui: &mut egui::Ui, draft: &mut RuleDraft) {
             "Working directory",
             Some("Glob or literal-prefix, matched against the requesting cwd."),
             |ui| {
-                ui.add(
+                let resp = ui.add(
                     egui::TextEdit::singleline(&mut draft.cwd)
+                        .id(pattern_field_id(PatternField::Cwd))
                         .hint_text("e.g. ~/work/myproject/**")
                         .font(egui::FontId::monospace(12.5))
                         .desired_width(f32::INFINITY),
-                )
+                );
+                render_pattern_problem(ui, problem_for(PatternField::Cwd));
+                resp
             },
         );
     });
@@ -3202,6 +3368,179 @@ mod tests {
             );
             assert!(v.tag.is_some(), "{granted} must say what was granted");
         }
+    }
+
+    // ── the rule form's glob validation ──────────────────────────
+
+    fn draft_with(decide: RuleDecisionDraft, argv: &str) -> RuleDraft {
+        RuleDraft {
+            name: "a rule".to_owned(),
+            wrap: "gh".to_owned(),
+            decide,
+            argv: argv.to_owned(),
+            ..RuleDraft::fresh()
+        }
+    }
+
+    /// The gap this closes: the loader refuses a glob it cannot compile, and
+    /// the form — the path a user actually authors rules on — took the same
+    /// text without a word and handed back a rule that does nothing. Being
+    /// told at the moment you can still fix it for free is the whole point of
+    /// refusing at all.
+    #[test]
+    fn a_glob_the_loader_would_refuse_cannot_be_saved_from_the_form() {
+        let draft = draft_with(RuleDecisionDraft::Deny, "gh api /repos/*/actions/secrets*[");
+        let err = draft
+            .clone()
+            .into_rule()
+            .expect_err("a rule the loader will refuse must not leave the form");
+        assert!(err.contains("argv"), "{err}");
+        assert!(err.contains("glob"), "{err}");
+        assert!(!draft.problems(None).is_empty());
+    }
+
+    /// One compile check, not two. The form asking `glob` a different question
+    /// than `rules::pattern_refusals` does is how a rule ends up rejected in
+    /// one place and accepted in the other, which is worse than either
+    /// answer on its own.
+    #[test]
+    fn the_form_and_the_loader_agree_on_which_patterns_are_broken() {
+        for pattern in [
+            "gh api /repos/*/pulls*",
+            "gh repo delete",
+            "",
+            "gh api /repos/*/actions/secrets*[",
+            "gh [a-",
+            "**/[",
+        ] {
+            let loader_refuses = Pattern::parse(pattern).is_invalid();
+            let form_refuses = draft_with(RuleDecisionDraft::Approve, pattern)
+                .problems(None)
+                .iter()
+                .any(|p| p.field == Some(PatternField::Argv));
+            assert_eq!(
+                loader_refuses, form_refuses,
+                "form and loader disagree about `{pattern}`"
+            );
+        }
+    }
+
+    /// Both directions are refused — a rule secreq cannot evaluate is not the
+    /// rule its author meant to write either way — but they do not cost the
+    /// same thing, and the form says which one you are holding. The sentence
+    /// is `rules::refused_pattern_consequence`'s, so the form and the Rules
+    /// tab badge cannot come to describe the damage differently.
+    #[test]
+    fn a_broken_deny_and_a_broken_approve_are_refused_for_different_reasons() {
+        let broken = "gh api /repos/*/actions/secrets*[";
+        let deny = draft_with(RuleDecisionDraft::Deny, broken).problems(None);
+        let approve = draft_with(RuleDecisionDraft::Approve, broken).problems(None);
+        let (deny_detail, approve_detail) = (
+            deny[0]
+                .detail
+                .clone()
+                .expect("a refused deny says what it costs"),
+            approve[0]
+                .detail
+                .clone()
+                .expect("a refused approve says what it costs"),
+        );
+        assert_ne!(deny_detail, approve_detail);
+        assert!(
+            deny_detail.contains(crate::rules::refused_pattern_consequence(
+                RuleDecision::Deny
+            )),
+            "{deny_detail}"
+        );
+        assert!(
+            approve_detail.contains(crate::rules::refused_pattern_consequence(
+                RuleDecision::Approve
+            )),
+            "{approve_detail}"
+        );
+        // The banner line stays one clause; the consequence goes under the
+        // field, where there is room for it.
+        assert!(
+            deny[0].summary.len() < deny_detail.len(),
+            "{}",
+            deny[0].summary
+        );
+    }
+
+    /// `[` is a legal thing to have typed so far. Flagging it before the `]`
+    /// arrives turns a form that validates into a form that nags, and a
+    /// warning a user has learned to type through is not a warning.
+    #[test]
+    fn the_field_the_caret_is_in_is_not_flagged_mid_glob() {
+        let draft = draft_with(RuleDecisionDraft::Deny, "gh api /repos/[");
+        assert!(
+            draft.problems(Some(PatternField::Argv)).is_empty(),
+            "the field being typed into is left alone"
+        );
+        assert!(
+            !draft.problems(Some(PatternField::Cwd)).is_empty(),
+            "a different field's caret withholds nothing"
+        );
+        assert!(
+            !draft.problems(None).is_empty(),
+            "and neither does no caret"
+        );
+    }
+
+    /// Withholding it while the caret sits there must not survive the user
+    /// saying they are done. A Save that neither saves nor explains itself is
+    /// the silence this change exists to remove.
+    #[test]
+    fn asking_to_save_stops_withholding_the_error() {
+        let mut draft = draft_with(RuleDecisionDraft::Deny, "gh api /repos/[");
+        assert!(draft.problems(Some(PatternField::Argv)).is_empty());
+        draft.note_refused_save();
+        assert!(
+            !draft.problems(Some(PatternField::Argv)).is_empty(),
+            "after a refused save the reason shows wherever the caret is"
+        );
+    }
+
+    /// A rule with two typos has two things wrong with it, named in field
+    /// order — the same per-clause accounting `rules::pattern_refusals` does,
+    /// so fixing one does not hide the other.
+    #[test]
+    fn every_broken_pattern_field_is_named_separately() {
+        let draft = RuleDraft {
+            ancestor: "Cursor[".to_owned(),
+            cwd: "~/work/[".to_owned(),
+            ..draft_with(RuleDecisionDraft::Approve, "gh *[")
+        };
+        let fields: Vec<Option<PatternField>> =
+            draft.problems(None).iter().map(|p| p.field).collect();
+        assert_eq!(
+            fields,
+            vec![
+                Some(PatternField::Argv),
+                Some(PatternField::Ancestor),
+                Some(PatternField::Cwd)
+            ]
+        );
+    }
+
+    /// The pre-existing refusals still come first: an unnamed rule is a
+    /// blocker whatever its patterns look like.
+    #[test]
+    fn a_missing_name_still_blocks_the_save() {
+        let draft = RuleDraft {
+            name: String::new(),
+            ..draft_with(RuleDecisionDraft::Approve, "gh api *")
+        };
+        let problems = draft.problems(None);
+        assert_eq!(problems[0].field, None);
+        assert!(
+            problems[0].summary.contains("name"),
+            "{}",
+            problems[0].summary
+        );
+        assert!(draft_with(RuleDecisionDraft::Approve, "gh api *")
+            .problems(None)
+            .is_empty());
     }
 
     // ── the audit tree's completeness marker ─────────────────────
