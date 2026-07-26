@@ -112,6 +112,12 @@ cache:
 
 ::shot{id=36-agent-guest-chain-pending}
 
+The audit view draws it under the same caveat, so a claim never reads back
+as ancestry secreq established. A `gh` row's tree is what the host walked; a
+`guest says` line is what a sandbox sent over a socket.
+
+::shot{id=46-audit-guest-chain}
+
 Three shorter rules apply to every socket:
 
 - Approving for 5 minutes anchors the decision to that `(scope, ref)`, and

@@ -2453,6 +2453,76 @@ fn audit_tab_agent_declared_by() {
     );
 }
 
+/// Attach a chain the guest claimed about itself. Separate from
+/// [`agent_audit_line`] because most guest rows carry none, and a helper that
+/// made every fixture pass `None` would make the claim look ordinary.
+fn with_guest_chain(mut entry: AuditEntry, chain: &str) -> AuditEntry {
+    entry.unverified_guest_chain = Some(chain.to_owned());
+    entry
+}
+
+/// A guest's claimed chain in the audit view, above a wrap row whose chain the
+/// host actually walked.
+///
+/// The audit counterpart to fixture 36, which shows the same claim live on the
+/// prompt. It was written, documented and asserted for a long time before
+/// anything drew it, so a guest's story was visible on the prompt and invisible
+/// in the log — the review surface silently disagreeing with the consent UI
+/// about what happened.
+///
+/// The wrap row beneath it is the substance rather than filler. The hazard in
+/// drawing a guest's claim at all is that it reads as ancestry, and the only
+/// way to show that it does not is to put real ancestry directly under it: one
+/// is a tree the kernel answered for, the other is a line of text a sandbox
+/// sent over a socket with a red caveat under it. A reader who sees them
+/// adjacent never has to be told which is which.
+#[test]
+fn audit_tab_guest_chain() {
+    let audit = vec![
+        audit_line_traced(
+            60 * 60 * 3,
+            "gh",
+            &["api", "/repos/acme/web/issues"],
+            &[
+                (52318, "node", "node ./scripts/publish.js"),
+                (52317, "make", "make ci-deploy"),
+            ],
+            &["GITHUB_TOKEN"],
+            "approve",
+        ),
+        with_guest_chain(
+            agent_audit_line(
+                60 * 4,
+                "brain-nx-t5",
+                "secret://op/Dev/gh/token",
+                Decision::Approve,
+                genuine_agent_peer(),
+            ),
+            // A postinstall script reaching for a token is the shape worth
+            // recording: useful if the guest is honest, interesting if it is
+            // not, and evidence either way it is not.
+            "node → pnpm → postinstall",
+        ),
+    ];
+    render_manager_fixture(
+        Shot::new("46-audit-guest-chain").caption(
+            "A sandbox can volunteer what it says was running inside it. secreq \
+             writes the claim down and marks it, because nothing on the host can \
+             check it: a guest that wanted to name a different ancestry would say \
+             exactly this. The <code>gh</code> row below it carries the other kind \
+             of chain, the one secreq walked itself. Never read the marked one as \
+             the unmarked one.",
+        ),
+        audit,
+        ManagerExtras {
+            window_state: Some(Box::new(
+                secreq::daemon::manager_ui::ManagerWindowState::focus_audit_view,
+            )),
+            ..ManagerExtras::default()
+        },
+    );
+}
+
 #[test]
 fn audit_tab_forwarded_sign() {
     // The two things an SSH sign row can say about agent forwarding that a

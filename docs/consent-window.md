@@ -242,7 +242,9 @@ more fields appear only when they apply: `rule_id` on
 auto-decisions, `fingerprint` (of the **public** key) and `sign_anchor` on SSH
 sign rows, and `declared_by` plus `unverified_guest_chain` on sandbox rows.
 That last one is a claim rather than evidence, so it is kept out of `callers`
-and never read by rule matching.
+and never read by rule matching. The audit view draws it beside the caveat
+the prompt uses, on its own line and never truncated
+(see [secret-agent](./secret-agent.md)).
 
 `sign_anchor` names the process the signature was granted against, and its
 `kind` is `forwarded_ssh` when the request came through an agent you forwarded

@@ -689,6 +689,14 @@ fn render_scope_declarant(ui: &mut egui::Ui, th: &Theme, declared: Option<&Local
     });
 }
 
+/// The caveat that rides every rendering of a guest-reported chain, here and
+/// in the audit view (`ui::render_guest_chain_row`).
+///
+/// One string rather than one per surface, deliberately. The prompt and the
+/// log are read by the same person about the same event, and two phrasings of
+/// "do not believe this" invite the reading that they mean different things.
+pub(crate) const GUEST_CHAIN_CAVEAT: &str = "\u{26a0} guest-reported — NOT verifiable";
+
 /// The guest's self-reported caller chain, and the marker that says not to
 /// believe it.
 ///
@@ -720,7 +728,7 @@ fn render_guest_chain(ui: &mut egui::Ui, th: &Theme, chain: &str) {
                 .wrap(),
             );
             ui.add(egui::Label::new(
-                egui::RichText::new("⚠ guest-reported — NOT verifiable")
+                egui::RichText::new(GUEST_CHAIN_CAVEAT)
                     .size(th.body_size - 2.0)
                     .color(th.danger),
             ));

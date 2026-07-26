@@ -2377,6 +2377,16 @@ fn render_audit_row_body(ui: &mut egui::Ui, entry: &AuditEntry, now: u64) {
         render_scope_declarant_row(ui, &th, &row);
     }
 
+    // ── What the guest said about itself, on a row that carries a claim ──
+    //
+    // Below the declarant for the reason the prompt puts `GUEST SAYS` below
+    // `SCOPE`: the reading order is "here's what we know, and here's what
+    // we've merely been told", never the reverse.
+    if let Some(chain) = guest_chain_claim(entry) {
+        ui.add_space(6.0);
+        render_guest_chain_row(ui, &th, chain);
+    }
+
     // ── The forwarding marker, on a sign row that needs one ──
     //
     // Below the tree because that is where the frame it names belongs and
@@ -2514,6 +2524,68 @@ fn render_scope_declarant_row(ui: &mut egui::Ui, th: &Theme, row: &ScopeDeclaran
             .on_hover_text(&peer.command);
         }
     }
+}
+
+use super::prompt_ui::GUEST_CHAIN_CAVEAT;
+
+const GUEST_CHAIN_CAVEAT_HOVER: &str =
+    "The sandbox volunteered this chain about itself. No host process was\n\
+     walked to produce it and nothing checked it — a guest that wanted to\n\
+     claim a different ancestry would say exactly this. It is recorded\n\
+     because it is useful when the guest is honest and interesting when it\n\
+     is not, never because it is evidence.";
+
+/// The chain a guest claimed about itself on this row, if it claimed one.
+///
+/// Unlike [`scope_declarant_row`] and [`forwarded_sign_marker`], this needs no
+/// `wrap`-prefix gate and draws no caveat for absence, because absence here has
+/// only ever meant one thing: **the guest volunteered nothing**. The field
+/// arrived with the guest-chain wire field itself, so no row exists that could
+/// have carried a claim and does not — there was no version in which a guest
+/// could report a chain and the log would drop it.
+///
+/// What the rendering must never do is let the claim pass for the caller tree
+/// above it. `callers` is what the host walked; this is what the guest said,
+/// and a log that draws them the same way has laundered the second into the
+/// first. Hence [`GUEST_CHAIN_CAVEAT`], on its own line, never truncated.
+fn guest_chain_claim(entry: &AuditEntry) -> Option<&str> {
+    entry.unverified_guest_chain.as_deref()
+}
+
+/// Draw the guest's claim, then the caveat under it.
+///
+/// The chain truncates to the row's width and keeps the full text on hover;
+/// the caveat does not truncate and is not on the same line as anything that
+/// does. A warning a long enough chain can push out of view is not a warning,
+/// which is the same rule `prompt_ui` states for the prompt's copy.
+fn render_guest_chain_row(ui: &mut egui::Ui, th: &Theme, chain: &str) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 5.0;
+        ui.label(
+            egui::RichText::new("\u{b7}")
+                .font(egui::FontId::monospace(11.0))
+                .color(th.faint),
+        );
+        // "guest says", not "from" or "named by": the neighbouring lines earn
+        // those verbs by being kernel-sourced, and reusing one here would
+        // imply a check that never happened.
+        ui.label(egui::RichText::new("guest says").size(10.0).color(th.faint));
+        let font = egui::FontId::monospace(11.5);
+        let avail = (ui.available_width() - 4.0).max(40.0);
+        let shown = truncate_to_width(ui, chain, &font, avail);
+        let resp = ui.label(egui::RichText::new(&shown).font(font).color(th.dim));
+        if shown != chain {
+            resp.on_hover_text(chain);
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.add(egui::Label::new(
+            egui::RichText::new(GUEST_CHAIN_CAVEAT)
+                .size(11.0)
+                .color(th.danger),
+        ))
+        .on_hover_text(GUEST_CHAIN_CAVEAT_HOVER);
+    });
 }
 
 /// What (if anything) to say about agent forwarding under a sign row's caller
@@ -3285,6 +3357,43 @@ mod tests {
             scope_declarant_row(&not_read_row).is_none(),
             "a release the daemon was never asked about says so with its verdict"
         );
+    }
+
+    /// The gap this closes: the claim was written, documented and asserted,
+    /// and the audit view drew nothing. A guest's story visible on the prompt
+    /// and invisible in the log is the log quietly disagreeing with the UI
+    /// about what happened.
+    #[test]
+    fn a_guest_row_draws_the_chain_the_guest_claimed() {
+        let mut entry = agent_row(Some(crate::audit::ScopeDeclarant::NotRead));
+        entry.unverified_guest_chain = Some("node → pnpm → postinstall".to_owned());
+        assert_eq!(guest_chain_claim(&entry), Some("node → pnpm → postinstall"));
+    }
+
+    /// The claim never renders bare. It is the one thing on an audit row the
+    /// host did not establish, and a log that draws a claim and a fact the
+    /// same way has turned itself into a forgery surface. The string is the
+    /// prompt's own, imported rather than copied, so the two surfaces cannot
+    /// drift into saying the same thing two ways.
+    #[test]
+    fn the_guest_chain_carries_the_same_caveat_the_prompt_does() {
+        assert!(
+            GUEST_CHAIN_CAVEAT.contains("NOT verifiable"),
+            "{GUEST_CHAIN_CAVEAT}"
+        );
+        assert!(
+            GUEST_CHAIN_CAVEAT.contains("guest-reported"),
+            "{GUEST_CHAIN_CAVEAT}"
+        );
+    }
+
+    /// Absence means the guest volunteered nothing, and has never meant
+    /// anything else — so unlike an unrecorded `declared_by`, it draws no
+    /// caveat of its own.
+    #[test]
+    fn a_guest_row_with_no_claim_draws_nothing() {
+        assert!(guest_chain_claim(&agent_row(None)).is_none());
+        assert!(guest_chain_claim(&mk_audit(1000, "gh", "zsh", "approve")).is_none());
     }
 
     /// A row that declared no scope has nothing to name.
