@@ -18,7 +18,6 @@
 //! [`remove`] that strips the block for `--undo`.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -252,16 +251,13 @@ pub(crate) fn block_in_file(config_file: &Path) -> Option<String> {
 
 fn apply_ssh_config(plan: &SshSetupPlan) -> Result<bool> {
     // Ensure ~/.ssh exists with 0700 — ssh refuses a group/world-accessible
-    // config dir.
+    // config dir. `create_dir_all` followed by a chmod left it at the umask's
+    // answer (0777 under the `umask 000` CI images set) for the stretch in
+    // between; `ensure_private_dir` asks for 0700 on the creating call and
+    // narrows an existing directory, which is the pair this needs.
     if let Some(parent) = plan.config_file.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("could not create {}", parent.display()))?;
-        let mut perms = fs::metadata(parent)
-            .with_context(|| format!("could not stat {}", parent.display()))?
-            .permissions();
-        perms.set_mode(0o700);
-        fs::set_permissions(parent, perms)
-            .with_context(|| format!("could not set mode 0700 on {}", parent.display()))?;
+        crate::paths::ensure_private_dir(parent)
+            .with_context(|| format!("could not make {} owner-only", parent.display()))?;
     }
     // Prepend the block above existing content: ssh applies the first
     // IdentityAgent it obtains for a host, so ours must come first.
@@ -271,15 +267,17 @@ fn apply_ssh_config(plan: &SshSetupPlan) -> Result<bool> {
     } else {
         format!("{}\n\n{existing}", plan.block)
     };
-    fs::write(&plan.config_file, to_write)
-        .with_context(|| format!("could not write {}", plan.config_file.display()))?;
-    // ssh refuses a group/world-readable config.
-    let mut perms = fs::metadata(&plan.config_file)
-        .with_context(|| format!("could not stat {}", plan.config_file.display()))?
-        .permissions();
-    perms.set_mode(0o600);
-    fs::set_permissions(&plan.config_file, perms)
-        .with_context(|| format!("could not set mode 0600 on {}", plan.config_file.display()))?;
+    // `Mode::Exactly`, the one place in this module that forces a mode: ssh
+    // refuses a group- or world-readable config outright, so the *reader*
+    // dictates it and a file the user left at 0644 is one ssh will ignore.
+    // Writing at 0600 also retires the old write-then-chmod pair, which
+    // published the file at `0666 & !umask` until the chmod landed.
+    crate::atomic::replace(
+        &plan.config_file,
+        to_write.as_bytes(),
+        crate::atomic::Mode::Exactly(0o600),
+    )
+    .with_context(|| format!("could not write {}", plan.config_file.display()))?;
     Ok(true)
 }
 
@@ -294,8 +292,16 @@ fn apply_shell_rc(plan: &SshSetupPlan) -> Result<bool> {
     let needs_leading_newline = !existing.is_empty() && !existing.ends_with('\n');
     let prefix = if needs_leading_newline { "\n" } else { "" };
     let to_write = format!("{existing}{prefix}{}\n", plan.block);
-    fs::write(&plan.config_file, to_write)
-        .with_context(|| format!("could not write {}", plan.config_file.display()))?;
+    // `Mode::Like`, not `Exactly`: this is the user's own `.zshrc`, and
+    // `path_setup::apply` — which writes the *same file* — reached the same
+    // answer. It preserves a mode they chose and falls back to 0600 for a file
+    // we are creating, which is both halves in one expression.
+    crate::atomic::replace(
+        &plan.config_file,
+        to_write.as_bytes(),
+        crate::atomic::Mode::Like(&plan.config_file),
+    )
+    .with_context(|| format!("could not write {}", plan.config_file.display()))?;
     Ok(true)
 }
 
@@ -319,8 +325,15 @@ pub fn remove(home: &Path, method: Method, shell: Shell) -> Result<bool> {
     let Some(stripped) = strip_block(&existing) else {
         return Ok(false);
     };
-    fs::write(&config_file, stripped)
-        .with_context(|| format!("could not write {}", config_file.display()))?;
+    // `Mode::Like`: `--undo` is putting the file back the way it was, so it is
+    // the one write here that should decide nothing about the mode. The file
+    // necessarily exists — we just read it — so the fallback never applies.
+    crate::atomic::replace(
+        &config_file,
+        stripped.as_bytes(),
+        crate::atomic::Mode::Like(&config_file),
+    )
+    .with_context(|| format!("could not write {}", config_file.display()))?;
     Ok(true)
 }
 
@@ -420,6 +433,8 @@ fn shell_rc_block(shell: &Shell, agent_sock: &Path, home: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use super::*;
 
     fn mode_of(path: &Path) -> u32 {
@@ -800,6 +815,91 @@ mod tests {
         assert!(!after.contains(BEGIN_SENTINEL));
         assert!(!after.contains(END_SENTINEL));
         assert_eq!(after, preexisting);
+    }
+
+    /// The three writers that are not `rewrite_in_place` edit the same
+    /// dotfiles it does, and `path_setup::apply` writes two of them as well —
+    /// so before this they disagreed about whether a crash could truncate a
+    /// user's `~/.zshrc`. A `fs::write` that dies after truncating leaves a
+    /// login shell that will not start, and an `~/.ssh/config` whose `Host`
+    /// stanzas are gone. Replacing the inode is what makes a reader see either
+    /// the old file or the new one.
+    #[test]
+    fn every_writer_replaces_the_inode_rather_than_truncating_it() {
+        use std::os::unix::fs::MetadataExt;
+
+        let home = tempfile::tempdir().unwrap();
+        let sock = home.path().join("agent.sock");
+        let ssh_dir = home.path().join(".ssh");
+        fs::create_dir_all(&ssh_dir).unwrap();
+        let config = ssh_dir.join("config");
+        fs::write(&config, "Host example\n  User me\n").unwrap();
+        let zshrc = home.path().join(".zshrc");
+        fs::write(&zshrc, "# my rc\n").unwrap();
+
+        // `apply_ssh_config` — prepending above the user's existing stanzas.
+        let before = fs::metadata(&config).unwrap().ino();
+        let p = plan(home.path(), Method::SshConfig, Shell::Zsh, &sock).unwrap();
+        apply(&p).unwrap();
+        assert_ne!(fs::metadata(&config).unwrap().ino(), before, "ssh config");
+
+        // `apply_shell_rc` — appending below it.
+        let before = fs::metadata(&zshrc).unwrap().ino();
+        let p = plan(home.path(), Method::ShellRc, Shell::Zsh, &sock).unwrap();
+        apply(&p).unwrap();
+        assert_ne!(fs::metadata(&zshrc).unwrap().ino(), before, "shell rc");
+
+        // `remove` — `ssh setup --undo`, which rewrites the whole file too.
+        let before = fs::metadata(&zshrc).unwrap().ino();
+        assert!(remove(home.path(), Method::ShellRc, Shell::Zsh).unwrap());
+        assert_ne!(fs::metadata(&zshrc).unwrap().ino(), before, "remove");
+
+        // And no staging file is left for the user to wonder about.
+        for dir in [home.path(), ssh_dir.as_path()] {
+            for entry in fs::read_dir(dir).unwrap() {
+                let name = entry.unwrap().file_name();
+                let name = name.to_string_lossy();
+                assert!(!name.ends_with(".tmp"), "left {name} behind in {dir:?}");
+            }
+        }
+    }
+
+    /// A guard, not a repro: `fs::write` preserves an existing inode's mode,
+    /// so this passed before the move to stage-and-rename and has to keep
+    /// passing after it. Staging publishes a **new** inode, which is how
+    /// migration 0001 republished everyone's `wraps.json5` at 0644 — and the
+    /// naive reading of "secreq's files are owner-only" would narrow a
+    /// `.zshrc` the user deliberately left group-readable. `Mode::Like` is
+    /// what gets both halves; nobody should simplify it to `Exactly(0o600)`.
+    #[test]
+    fn apply_shell_rc_keeps_the_mode_of_an_rc_the_user_already_had() {
+        let home = tempfile::tempdir().unwrap();
+        let sock = home.path().join("agent.sock");
+        let zshrc = home.path().join(".zshrc");
+        fs::write(&zshrc, "# my rc\n").unwrap();
+        fs::set_permissions(&zshrc, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let p = plan(home.path(), Method::ShellRc, Shell::Zsh, &sock).unwrap();
+        apply(&p).unwrap();
+        assert_eq!(mode_of(&zshrc), 0o644, "an rc the user owns keeps its mode");
+
+        assert!(remove(home.path(), Method::ShellRc, Shell::Zsh).unwrap());
+        assert_eq!(mode_of(&zshrc), 0o644, "and `--undo` does not narrow it");
+    }
+
+    /// An rc file secreq creates has no mode to preserve, and the umask's
+    /// answer is 0644 under the common 022 and **0666** under the `umask 000`
+    /// CI and container images set. `Mode::Like`'s missing-source fallback is
+    /// what answers this half of the same expression.
+    #[test]
+    fn an_rc_file_ssh_setup_creates_is_owner_only() {
+        let home = tempfile::tempdir().unwrap();
+        let sock = home.path().join("agent.sock");
+
+        let p = plan(home.path(), Method::ShellRc, Shell::Zsh, &sock).unwrap();
+        apply(&p).unwrap();
+
+        assert_eq!(mode_of(&home.path().join(".zshrc")), 0o600);
     }
 
     #[test]
