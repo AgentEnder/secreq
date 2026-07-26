@@ -147,15 +147,15 @@ Forward the socket into a VM the way `ssh -A` forwards an agent:
 
 ```sh
 secreq agent open --scope my-vm --allow secret://op/Dev/gh/token \
-  --sock /tmp/secreq-my-vm.sock &
-ssh -R /run/secreq.sock:/tmp/secreq-my-vm.sock my-vm
+  --sock "$HOME/.secreq/run/my-vm.sock" &
+ssh -R /run/secreq.sock:"$HOME/.secreq/run/my-vm.sock" my-vm
 ```
 
 | Flag | Meaning |
 | --- | --- |
 | `--scope <NAME>` | The scope name shown in the consent prompt as the principal, typically the sandbox / VM name |
 | `--allow <secret://…>…` | A `secret://provider/locator` ref this socket may resolve. Repeatable; at least one is required. Matched exactly: there is no prefix or wildcard form, by design |
-| `--sock <PATH>` | Where to bind the socket. Must not already exist. Defaults to `scope-<name>.sock` in secreq's socket dir (`$XDG_RUNTIME_DIR/secreq`, else `<$SECREQ_HOME>/run`), beside the consent and SSH-agent sockets. Pass this to bind elsewhere, e.g. at a path you are about to `ssh -R` into a guest. |
+| `--sock <PATH>` | Where to bind the socket. Must not already exist. Defaults to `scope-<name>.sock` in secreq's socket dir (`$XDG_RUNTIME_DIR/secreq`, else `<$SECREQ_HOME>/run`), beside the consent and SSH-agent sockets. Pass this to bind elsewhere, e.g. at a path you are about to `ssh -R` into a guest. Pick a directory only you can write. The socket is owner-only from the moment it exists, but in a shared one like `/tmp` anyone can plant a file at the path first and break the bind. |
 
 ## `secreq check`
 

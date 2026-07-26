@@ -312,8 +312,8 @@ enum AgentAction {
     /// Forward the socket into a VM the way `ssh -A` forwards an agent:
     ///
     ///   secreq agent open --scope my-vm --allow secret://op/Dev/gh/token \
-    ///     --sock /tmp/secreq-my-vm.sock &
-    ///   ssh -R /run/secreq.sock:/tmp/secreq-my-vm.sock my-vm
+    ///     --sock "$HOME/.secreq/run/my-vm.sock" &
+    ///   ssh -R /run/secreq.sock:"$HOME/.secreq/run/my-vm.sock" my-vm
     //
     // Without `verbatim_doc_comment` clap rewraps the whole comment as
     // prose, which folds the `\`-continued line onto its head and prints an
@@ -336,6 +336,10 @@ enum AgentAction {
         /// (`$XDG_RUNTIME_DIR/secreq`, else `<$SECREQ_HOME>/run`), beside the
         /// consent and SSH-agent sockets. Pass this to bind elsewhere, e.g.
         /// at a path you are about to `ssh -R` into a guest.
+        ///
+        /// Pick a directory only you can write. The socket is owner-only from
+        /// the moment it exists, but in a shared one like `/tmp` anyone can
+        /// plant a file at the path first and break the bind.
         #[arg(long, value_name = "PATH")]
         sock: Option<PathBuf>,
     },
