@@ -264,9 +264,9 @@ fn find_rule<'a>(rules: &'a [crate::rules::Rule], target: &str) -> Result<&'a cr
         return Ok(by_id);
     }
     let by_name: Vec<&crate::rules::Rule> = rules.iter().filter(|r| r.name == target).collect();
-    match by_name.len() {
-        0 => anyhow::bail!("no rule with id or name `{target}`"),
-        1 => Ok(by_name[0]),
+    match by_name.as_slice() {
+        [] => anyhow::bail!("no rule with id or name `{target}`"),
+        [only] => Ok(only),
         _ => {
             let ids = by_name
                 .iter()

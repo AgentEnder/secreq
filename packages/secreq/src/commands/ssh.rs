@@ -120,8 +120,8 @@ fn ssh_setup_self_test_step(config_path: Option<&Path>) -> Result<()> {
         return Ok(());
     }
 
-    let chosen = if names.len() == 1 {
-        names[0].clone()
+    let chosen = if let [only] = names.as_slice() {
+        only.clone()
     } else {
         let mut select = cliclack::select::<String>("Which identity should I test?");
         for name in &names {
@@ -633,9 +633,10 @@ fn op_assisted_identity(want_public_key: bool) -> Result<Option<OpIdentity>> {
     for (idx, item) in items.iter().enumerate() {
         select = select.item(idx, item.title.as_str(), item.vault.as_str());
     }
-    let chosen = if let Ok(idx) = select.interact() {
-        &items[idx]
-    } else {
+    // The index comes back out of `select`, so it indexes `items` — but
+    // resolving it with `get` keeps that between these two lines instead of
+    // depending on what cliclack promises to return.
+    let Some(chosen) = select.interact().ok().and_then(|idx| items.get(idx)) else {
         cliclack::log::info("No selection made; entering the reference manually.").ok();
         return Ok(None);
     };

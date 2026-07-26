@@ -329,8 +329,8 @@ fn title_job(ui: &egui::Ui, th: &Theme, row: &QueueRow) -> egui::text::LayoutJob
         AskSubject::Wrap(wrap) => {
             job.append(&row.key.wrap, 0.0, subject.clone());
             job.append(" wants to use ", 0.0, prose);
-            if wrap.secrets.len() == 1 {
-                job.append(&wrap.secrets[0].name, 0.0, subject);
+            if let [only] = wrap.secrets.as_slice() {
+                job.append(&only.name, 0.0, subject);
             } else {
                 job.append(&format!("{} secrets", wrap.secrets.len()), 0.0, subject);
             }
