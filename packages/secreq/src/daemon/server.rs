@@ -1048,6 +1048,22 @@ fn handle_ask(ask: Ask, state: SharedState) -> AskDisposition {
 /// plausible-looking chain attached to the wrong principal, which is worse
 /// than the empty one the prompt shows today. The host-declared scope is the
 /// principal on that path (see `scoped_agent`).
+///
+/// That used to be an early `return Ok(())` keyed on `ask.agent.is_some()`,
+/// and **any local process could claim it**: the daemon cannot tell a
+/// `secreq agent open` peer from an impostor, because both reach it as an
+/// ordinary `ClientMsg::Ask` on the same `consent.sock`. Claiming the kind
+/// therefore kept the client's own `callers`, `cwd` and dedupe identity
+/// intact — an exemption written for a principal with no host pid, taken by
+/// one that has one.
+///
+/// [`AskSubject::ScopedAgent`] carries no chain, no cwd, no secret and no
+/// provider, so the match arm below has nothing to write and the claim buys
+/// nothing. It is still a claim the socket cannot check, and the residue is
+/// on the prompt rather than on the wire: a forged guest ask renders with no
+/// `ASKED BY` row, so a local process can still decline to say who it is.
+/// Closing that needs the peer *authenticated*, not the ask retyped — see
+/// `a_forged_kind_claim_wins_no_provenance_and_no_payload`.
 fn adopt_peer_provenance(ask: &mut Ask, stream: &UnixStream) -> Result<()> {
     // Read the peer *before* looking at what the ask claims to be, so the
     // shape of the request cannot decide whether the kernel gets consulted.
@@ -1874,8 +1890,10 @@ mod tests {
     }
 
     /// A scoped-agent ask, built the way `scoped_agent::agent_ask` builds
-    /// one, but keeping the forged dedupe identity so the assertions below
-    /// can tell "left alone" from "re-derived".
+    /// one — but also what a *local* process sends to claim the guest kind,
+    /// because the socket cannot tell those two apart. The forged dedupe
+    /// identity is kept so the assertions can tell "left alone" from
+    /// "re-derived".
     fn forged_agent_ask() -> Ask {
         Ask {
             subject: AskSubject::ScopedAgent(super::super::proto::AgentAskInfo {
@@ -1904,6 +1922,64 @@ mod tests {
         );
         assert!(ask.cwd().is_empty());
         assert_eq!(ask.dedupe_key.ppid, FORGED_PID);
+    }
+
+    /// **Kind forgery, the residue and the closure.** The exemption above is
+    /// written for a principal with no host pid, and any local process can
+    /// claim it: a guest ask and a wrap ask arrive as the same
+    /// `ClientMsg::Ask` on the same socket, and `SO_PEERCRED` on the
+    /// scoped-agent path answers for the `agent open` process, not for the
+    /// guest behind it. No type can make the *claim* unforgeable. What a type
+    /// can do is make it worthless.
+    ///
+    /// Before `AskSubject`, claiming the kind was a provenance bypass with a
+    /// payload attached: `adopt_peer_provenance` returned early, so the
+    /// process kept its own `callers` (naming the user's shell), its own
+    /// `cwd` (naming the user's project), and its own `secrets` list — and
+    /// the daemon still resolved that list and shipped the values back on an
+    /// approve, under a prompt reading "sandbox `<whatever>` wants …" with no
+    /// `ASKED BY` row to contradict it. Verified against `551c211`: this test
+    /// written there fails on the first assertion, `forged chain survived`.
+    ///
+    /// Now the same ask cannot be *written*. `ScopedAgent` has no field for a
+    /// chain, a cwd, a secret or a provider, so a forger who takes the
+    /// exemption gives up exactly what the exemption used to protect, and the
+    /// assertions below hold by the shape of the value rather than by
+    /// anything this function remembered to do.
+    ///
+    /// **Not closed:** the prompt still renders no `ASKED BY` row for a
+    /// forged guest ask, so a local process can decline to say who it is.
+    /// That half needs the peer authenticated — the daemon deciding the kind
+    /// from something the kernel says rather than believing the ask — and is
+    /// a separate change with its own failure modes.
+    #[test]
+    fn a_forged_kind_claim_wins_no_provenance_and_no_payload() {
+        let (server_conn, _client) = connected_pair();
+        let mut ask = forged_agent_ask();
+
+        adopt_peer_provenance(&mut ask, &server_conn).expect("provenance");
+
+        assert!(
+            !ask.callers().iter().any(|c| c.pid == FORGED_PID),
+            "the frame the attacker named must not reach the prompt"
+        );
+        assert!(
+            ask.callers().is_empty(),
+            "and no chain at all may be attached to a principal that has none"
+        );
+        assert_eq!(
+            ask.cwd(),
+            "",
+            "the attacker-named cwd must not reach the prompt"
+        );
+        assert!(
+            ask.secrets().is_empty(),
+            "an ask that skips provenance must give the daemon nothing to resolve"
+        );
+        assert!(
+            !ask.allow_remember(),
+            "and must not persist an approval that would serve the next one"
+        );
     }
 
     /// `--no-remember` was parsed into `WrapRunOpts` and then read by
