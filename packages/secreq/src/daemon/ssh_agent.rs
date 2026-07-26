@@ -551,11 +551,17 @@ fn decide_sign_on_miss(
     // the consent UI and the audit row have the identity, the caller chain,
     // and the anchor scope to render.
     let ask = sign_ask(identity, anchor, chain, cwd, data);
+    let key = ask.dedupe_key.clone();
     let (tx, rx) = mpsc::channel();
-    {
+    // Keep the waiter id. The wrap path uses it to reap an ask whose client
+    // vanished; this path used to throw it away, so an abandoned sign left
+    // the entry in the queue forever — a card the user could not dismiss
+    // except by deciding it, a parked thread, and no `abandoned` audit row.
+    let waiter_id = {
         let mut guard = state.lock().expect("state mutex");
-        guard.submit_ask(ask, tx);
-    }
+        let (_, waiter_id) = guard.submit_ask(ask, tx);
+        waiter_id
+    };
     // Raise the consent window so the user can decide. Best-effort: a
     // failure here just means the window doesn't pop, and the wait below
     // will block until the user acts through some other attached window or
@@ -576,15 +582,46 @@ fn decide_sign_on_miss(
         );
     }
 
-    match rx.recv() {
+    // Bounded, unlike the wrap path — which watches its socket for EOF and
+    // reaps on hang-up. This thread is blocked on the channel, not on the
+    // socket, so it cannot see the peer leave; the timeout is what stops an
+    // abandoned sign from parking a thread and an undismissable card for the
+    // daemon's lifetime. Generous enough that a user reading the prompt is
+    // never the one who hits it: `ssh` itself gives up long before.
+    match rx.recv_timeout(SIGN_DECISION_TIMEOUT) {
         Ok(WaiterReply::Decision { decision, .. }) => Some(decision),
         // A resolve error on the wrap path can't happen here (the sign ask
         // carries no secrets for the daemon to resolve — we resolve the key
         // ourselves, fresh), and a dropped sender means the daemon went down
         // under us. Neither is a decision, so both fail closed.
-        Ok(WaiterReply::Err { .. }) | Err(_) => None,
+        Ok(WaiterReply::Err { .. }) | Err(mpsc::RecvTimeoutError::Disconnected) => None,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            // Withdraw exactly this waiter, which clears the card when it was
+            // the last one and writes the `abandoned` audit row the wrap path
+            // has always written. Fails closed: no decision, no signature.
+            state
+                .lock()
+                .expect("state mutex")
+                .withdraw_waiter(&key, waiter_id);
+            super::log::log_at(
+                "ssh-agent",
+                format_args!(
+                    "← SIGN_REQUEST for {:?} went undecided for {}s; withdrawing the ask and answering FAILURE",
+                    identity.key_id,
+                    SIGN_DECISION_TIMEOUT.as_secs()
+                ),
+            );
+            None
+        }
     }
 }
+
+/// How long a sign request waits for the user before it is withdrawn.
+///
+/// Not a policy on how fast someone must decide — `ssh` has given up well
+/// before this — but a bound on how long an *abandoned* request can hold a
+/// queue entry, a card and a thread.
+const SIGN_DECISION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Map an approved [`Decision`] to the session-grant scope it should
 /// remember, or `None` for a one-shot approval that grants nothing.
