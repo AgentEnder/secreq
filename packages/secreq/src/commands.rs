@@ -831,9 +831,9 @@ pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Re
     )?;
     let shim_dir = expand_tilde(&shim_dir_input);
 
-    // 2. Ensure the dir exists.
-    std::fs::create_dir_all(&shim_dir)
-        .with_context(|| format!("could not create {}", shim_dir.display()))?;
+    // 2. Ensure the dir exists — and is not a directory anyone else can write
+    // to, since step 3 puts it on PATH permanently.
+    shim::ensure_shim_dir(&shim_dir)?;
 
     // 3. Plan the shell-PATH block. We always run this — being "on PATH"
     // somewhere is necessary but not sufficient. What actually matters is

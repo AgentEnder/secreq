@@ -33,6 +33,10 @@ pub const SENTINEL: &str = "secreq-managed-shim";
 pub fn install(shim_dir: &Path, wrap_name: &str) -> Result<PathBuf> {
     validate_wrap_name(wrap_name)?;
     let exe = secreq_exe()?;
+    // Before the shim, not only when we create the directory: a `$shim_dir`
+    // left 0777 by an older secreq is repaired by the next `wrap` or `doctor`
+    // refresh rather than waiting for a brand-new name.
+    ensure_shim_dir(shim_dir)?;
     let path = shim_dir.join(wrap_name);
 
     if path.exists() {
@@ -51,10 +55,6 @@ pub fn install(shim_dir: &Path, wrap_name: &str) -> Result<PathBuf> {
         );
     }
 
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("could not create shim dir {}", parent.display()))?;
-    }
     fs::write(&path, body(&exe, wrap_name))
         .with_context(|| format!("could not write shim to {}", path.display()))?;
     make_executable(&path)?;
@@ -191,6 +191,68 @@ fn body(exe: &Path, wrap_name: &str) -> String {
     )
 }
 
+/// Owner-only, for a shim dir secreq creates itself.
+const SHIM_DIR_MODE: u32 = 0o700;
+
+/// Create `$shim_dir` if it is missing, and refuse to leave a group- or
+/// world-**writable** directory on the user's `PATH`.
+///
+/// `init` prepends this directory to `PATH` in a shell rc file and never
+/// revisits the decision, so its mode is an arbitrary-code-execution control
+/// for every command the user runs from then on: anyone who can create a file
+/// there owns `gh`, `npm`, `ssh`. `create_dir_all` asks for 0777 and lets the
+/// umask decide, which is 0755 under the common 022 and **0777** under the
+/// `umask 000` that CI and container images routinely set — and nothing ever
+/// looked at the result.
+///
+/// Two different rules, because they answer to different owners:
+///
+/// - **A directory we create** is ours, so it gets [`SHIM_DIR_MODE`]. Nothing
+///   but the user's own processes resolves `PATH`, so no other principal needs
+///   to traverse it, and the shim *names* alone say which commands the user
+///   wrapped — the same reason `paths::ensure_private_dir` exists.
+/// - **A directory the user already had** — `$shim_dir` may well be a shared
+///   `~/.local/bin` — keeps its read and traverse bits. Narrowing that to 0700
+///   would break every other tool that reads it, and read access was never the
+///   finding. Only `g+w`/`o+w` come off, which cannot break a lookup.
+///
+/// Write access we cannot remove (a directory owned by someone else) is a hard
+/// error: the alternative is prepending it to PATH anyway.
+pub fn ensure_shim_dir(dir: &Path) -> Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    let created = !dir.exists();
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(SHIM_DIR_MODE)
+        .create(dir)
+        .with_context(|| format!("could not create shim dir {}", dir.display()))?;
+
+    // `DirBuilder::mode` is masked by the umask and applies only to directories
+    // it creates, so neither the creating call nor a pre-existing directory can
+    // be taken on trust.
+    let current = fs::metadata(dir)
+        .with_context(|| format!("could not stat shim dir {}", dir.display()))?
+        .permissions()
+        .mode()
+        & 0o777;
+    let wanted = if created {
+        SHIM_DIR_MODE
+    } else {
+        current & !0o022
+    };
+    if current != wanted {
+        fs::set_permissions(dir, fs::Permissions::from_mode(wanted)).with_context(|| {
+            format!(
+                "{} is group- or world-writable ({current:o}) and secreq could not narrow it; \
+                 anyone who can write there controls every command on your PATH",
+                dir.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 fn make_executable(path: &Path) -> Result<()> {
     let mut perms = fs::metadata(path)?.permissions();
     perms.set_mode(0o755);
@@ -202,6 +264,10 @@ fn make_executable(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mode_of(path: &Path) -> u32 {
+        fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
 
     #[test]
     fn install_creates_executable_shim_with_sentinel() {
@@ -383,6 +449,57 @@ mod tests {
         )
         .unwrap();
         assert!(!is_current(dir.path(), "gh"));
+    }
+
+    // ── S2: the shim dir is on PATH, so its mode is a code-execution control ──
+
+    /// `create_dir_all` asks for 0777 and lets the umask decide, so the
+    /// directory `init` prepends to PATH forever lands 0755 under the usual
+    /// 022 and **0777** under the `umask 000` that CI and container images
+    /// commonly set. Pinning the mode is what removes the umask from the
+    /// answer; asserting the exact 0700 is what makes a regression visible
+    /// under any umask, including the one this test happens to run with.
+    #[test]
+    fn a_shim_dir_secreq_creates_is_owner_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("nested/shims");
+
+        install(&dir, "gh").unwrap();
+
+        assert_eq!(mode_of(&dir), 0o700, "mode {:o}", mode_of(&dir));
+        // The intermediate parent we conjured is ours too.
+        let parent = tmp.path().join("nested");
+        assert_eq!(mode_of(&parent) & 0o022, 0, "mode {:o}", mode_of(&parent));
+    }
+
+    /// Creating it right is only half of it: every install that predates this
+    /// left a 0777 directory behind, and a user-chosen `$shim_dir` may have
+    /// been made by something else entirely.
+    #[test]
+    fn an_existing_world_writable_shim_dir_is_narrowed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("bin");
+        fs::create_dir(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o777)).unwrap();
+
+        install(&dir, "gh").unwrap();
+
+        assert_eq!(mode_of(&dir) & 0o022, 0, "mode {:o}", mode_of(&dir));
+    }
+
+    /// A directory the user already had is theirs. We clear the bits that
+    /// make it an execution vector and leave the rest — narrowing a shared
+    /// `~/.local/bin` to 0700 would break every other tool that reads it.
+    #[test]
+    fn narrowing_an_existing_dir_keeps_its_read_and_traverse_bits() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("bin");
+        fs::create_dir(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o775)).unwrap();
+
+        ensure_shim_dir(&dir).unwrap();
+
+        assert_eq!(mode_of(&dir), 0o755, "mode {:o}", mode_of(&dir));
     }
 
     /// A freshly installed shim is current by construction; an unowned file
