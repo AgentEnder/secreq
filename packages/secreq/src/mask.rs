@@ -94,15 +94,24 @@ impl Masker {
         let mut i = 0;
 
         while i < len {
+            // Hold back BEFORE matching, not after. `match_at` is longest-first
+            // only among secrets already fully present in `buf`; when a shorter
+            // secret ends exactly at the buffer's end and a longer one starting
+            // with it is still arriving, matching first would commit to the
+            // short one and then emit the longer secret's tail verbatim on the
+            // next push. Asking `is_secret_prefix` first defers that position
+            // until the bytes that disambiguate it have landed.
+            //
+            // This cannot over-hold: `is_secret_prefix` requires
+            // `s.len() > slice.len()`, so a position whose match is already
+            // complete at full length is never deferred.
+            if !eof && len - i < self.max_len && self.is_secret_prefix(&buf[i..]) {
+                break; // hold back from i
+            }
             if let Some(match_len) = self.match_at(&buf[i..]) {
                 out.extend_from_slice(&self.mask);
                 i += match_len;
                 continue;
-            }
-            // No complete match here. Near the end of a non-final chunk this
-            // position may be the start of a secret finished by a later push.
-            if !eof && len - i < self.max_len && self.is_secret_prefix(&buf[i..]) {
-                break; // hold back from i
             }
             out.push(buf[i]);
             i += 1;
@@ -179,6 +188,23 @@ mod tests {
         let mut m = Masker::new(["token", "tokenABC"]);
         let out = mask_all(&mut m, &[b"x tokenABC y"]);
         assert_eq!(out, b"x ******** y");
+    }
+
+    /// The chunk-boundary half of `prefers_the_longer_overlapping_secret`.
+    ///
+    /// When the read splits exactly where the *shorter* secret ends, the
+    /// masker must not commit to it — the longer secret's remaining bytes
+    /// would then be emitted verbatim. Masking must not depend on where the
+    /// kernel happened to split the child's output.
+    #[test]
+    fn longer_overlapping_secret_survives_a_split_at_the_shorter_one() {
+        let mut split = Masker::new(["token", "tokenABC"]);
+        let out = mask_all(&mut split, &[b"x token", b"ABC y"]);
+        assert_eq!(out, b"x ******** y");
+
+        // ...and the result is identical to the unsplit stream.
+        let mut whole = Masker::new(["token", "tokenABC"]);
+        assert_eq!(out, mask_all(&mut whole, &[b"x tokenABC y"]));
     }
 
     #[test]
