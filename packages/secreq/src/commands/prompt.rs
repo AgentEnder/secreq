@@ -134,7 +134,10 @@ fn locator_resolves(provider: &crate::manifest::Provider, locator: &str) -> Resu
         Ok(crate::provider::RetrieveOutcome::NotFound { status, stderr }) => {
             spinner.stop("Locator did not resolve");
             let detail = if stderr.is_empty() { status } else { stderr };
-            cliclack::log::warning(format!("provider `{}`: {detail}", provider.name))?;
+            cliclack::log::warning(crate::term::wrap_log_text(&format!(
+                "provider `{}`: {detail}",
+                provider.name
+            )))?;
             cliclack::confirm("Use this locator anyway?")
                 .initial_value(false)
                 .interact()
@@ -144,7 +147,9 @@ fn locator_resolves(provider: &crate::manifest::Provider, locator: &str) -> Resu
         // not evidence about the locator, so don't block on it.
         Err(err) => {
             spinner.stop("Skipped the resolvability check");
-            cliclack::log::info(format!("couldn't check this locator ({err:#})"))?;
+            cliclack::log::info(crate::term::wrap_log_text(&format!(
+                "couldn't check this locator ({err:#})"
+            )))?;
             Ok(true)
         }
     }
@@ -253,12 +258,16 @@ pub(super) fn interactive_wrap_envs(
                 // into `op://"op://…"` and fails only at run time.
                 let locator = crate::provider::normalize_pasted_locator(provider_def, &raw);
                 if locator != raw.trim() {
-                    cliclack::log::info(format!("Reading that as locator `{locator}`"))?;
+                    cliclack::log::info(crate::term::wrap_log_text(&format!(
+                        "Reading that as locator `{locator}`"
+                    )))?;
                 }
 
                 let ref_str = format!("secret://{provider}/{locator}");
                 if Reference::parse(&ref_str).is_none() {
-                    cliclack::log::warning(format!("invalid ref `{ref_str}`; try again"))?;
+                    cliclack::log::warning(crate::term::wrap_log_text(&format!(
+                        "invalid ref `{ref_str}`; try again"
+                    )))?;
                     continue;
                 }
 

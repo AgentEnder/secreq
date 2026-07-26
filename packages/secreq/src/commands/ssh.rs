@@ -77,15 +77,15 @@ pub(super) fn ssh_setup_core(
     if !scripted && !undo {
         // Step 1: identity. Non-fatal — warn and continue on any error.
         if let Err(err) = ssh_setup_identity_step(config_path) {
-            cliclack::log::warning(format!(
+            cliclack::log::warning(crate::term::wrap_log_text(&format!(
                 "skipped the identity step: {err:#}. Add one later with `secreq ssh add`."
-            ))?;
+            )))?;
         }
         // Step 2: auto-start. Non-fatal — warn and continue on any error.
         if let Err(err) = ssh_setup_autostart_step(assume_yes) {
-            cliclack::log::warning(format!(
+            cliclack::log::warning(crate::term::wrap_log_text(&format!(
                 "skipped the auto-start step: {err:#}. Install it later with `secreq daemon install`."
-            ))?;
+            )))?;
         }
     }
 
@@ -97,9 +97,9 @@ pub(super) fn ssh_setup_core(
     // the exit status.
     if !scripted && !undo {
         if let Err(err) = ssh_setup_self_test_step(config_path) {
-            cliclack::log::warning(format!(
+            cliclack::log::warning(crate::term::wrap_log_text(&format!(
                 "skipped the self-test: {err:#}. Run `secreq ssh validate` later to verify signing."
-            ))?;
+            )))?;
         }
     }
 
@@ -142,15 +142,17 @@ fn ssh_setup_self_test_step(config_path: Option<&Path>) -> Result<()> {
 fn ssh_setup_identity_step(config_path: Option<&Path>) -> Result<()> {
     let config = load_config_or_default(config_path)?;
     if config.ssh.is_empty() {
-        cliclack::log::warning(
+        cliclack::log::warning(crate::term::wrap_log_text(
             "No SSH identities configured yet — the agent has nothing to serve until you add one.",
-        )?;
+        ))?;
         if prompt::confirm_default_yes("Add an SSH identity now?")? {
             ssh_add_core(SshAddArgs::default(), false, config_path)?;
         }
     } else {
         let names = config.ssh.keys().cloned().collect::<Vec<_>>().join(", ");
-        cliclack::log::info(format!("Configured SSH identities: {names}."))?;
+        cliclack::log::info(crate::term::wrap_log_text(&format!(
+            "Configured SSH identities: {names}."
+        )))?;
         if cliclack::confirm("Add another identity?")
             .initial_value(false)
             .interact()
@@ -198,15 +200,15 @@ fn ssh_setup_wiring_step(
     // that there's nothing to serve yet.
     match load_config_or_default(config_path) {
         Ok(config) if config.ssh.is_empty() => {
-            cliclack::log::warning(
+            cliclack::log::warning(crate::term::wrap_log_text(
                 "No SSH identities configured yet — setup will still wire the agent, but add an `ssh` block to wraps.json5 for it to serve keys.",
-            )?;
+            ))?;
         }
         Ok(_) => {}
         Err(err) => {
-            cliclack::log::warning(format!(
+            cliclack::log::warning(crate::term::wrap_log_text(&format!(
                 "couldn't read your config ({err:#}); wiring the agent anyway."
-            ))?;
+            )))?;
         }
     }
 
@@ -529,15 +531,16 @@ fn offer_self_test(key_id: &str, config_path: Option<&Path>) {
                 identity
             } else {
                 // The identity we just wrote is somehow gone — warn, don't fail.
-                let _ = cliclack::log::warning(format!(
+                let _ = cliclack::log::warning(crate::term::wrap_log_text(&format!(
                     "couldn't find `{key_id}` in the config to self-test; skipping."
-                ));
+                )));
                 return;
             }
         }
         Err(err) => {
-            let _ =
-                cliclack::log::warning(format!("couldn't read the config to self-test: {err:#}"));
+            let _ = cliclack::log::warning(crate::term::wrap_log_text(&format!(
+                "couldn't read the config to self-test: {err:#}"
+            )));
             return;
         }
     };
@@ -545,9 +548,9 @@ fn offer_self_test(key_id: &str, config_path: Option<&Path>) {
     let agent_sock = match crate::daemon::ssh_agent::default_agent_socket_path() {
         Ok(path) => path,
         Err(err) => {
-            let _ = cliclack::log::warning(format!(
+            let _ = cliclack::log::warning(crate::term::wrap_log_text(&format!(
                 "couldn't determine the agent socket to self-test: {err:#}"
-            ));
+            )));
             return;
         }
     };
@@ -558,9 +561,9 @@ fn offer_self_test(key_id: &str, config_path: Option<&Path>) {
         // The socket isn't there at all: the daemon almost certainly isn't
         // running yet (the most common case right after onboarding). Give a
         // friendly hint rather than an alarming ✗.
-        let _ = cliclack::log::info(format!(
+        let _ = cliclack::log::info(crate::term::wrap_log_text(&format!(
             "couldn't reach the agent yet — make sure the daemon is running (`secreq daemon install`), then `secreq ssh validate {key_id}`."
-        ));
+        )));
         return;
     }
     print_self_test_result(key_id, &result);
@@ -618,9 +621,9 @@ fn op_assisted_identity(want_public_key: bool) -> Result<Option<OpIdentity>> {
     let items = match op_list_ssh_keys() {
         Some(items) if !items.is_empty() => items,
         _ => {
-            cliclack::log::info(
+            cliclack::log::info(crate::term::wrap_log_text(
                 "1Password `op` found no SSH-Key items (or couldn't list them); entering the reference manually.",
-            )
+            ))
             .ok();
             return Ok(None);
         }
@@ -652,9 +655,9 @@ fn op_assisted_identity(want_public_key: bool) -> Result<Option<OpIdentity>> {
             Some(raw) => match validate_openssh_public_key(raw.trim()) {
                 Ok(pk) => Some(pk),
                 Err(err) => {
-                    cliclack::log::warning(format!(
+                    cliclack::log::warning(crate::term::wrap_log_text(&format!(
                         "op returned a public key that didn't parse ({err:#}); you'll be prompted for it."
-                    ))
+                    )))
                     .ok();
                     None
                 }

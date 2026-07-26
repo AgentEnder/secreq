@@ -122,16 +122,24 @@ pub fn wrap(args: WrapArgs, config_path: Option<&Path>) -> Result<i32> {
         crate::daemon::ui::abbreviate_home(&shim_path.display().to_string())
     );
     if interactive {
-        cliclack::outro(format!("Wrapped `{}`{kind}.\n  {summary}", args.binary))?;
+        // Only the headline goes through the wrapper. The two `summary` rows
+        // are an indented label-and-path layout, and both paths are already
+        // abbreviated — reflowing them would buy nothing and could strand the
+        // indent. `println!` needs no wrapping at all: stdout is not a
+        // cliclack surface, and the terminal reflows it correctly.
+        cliclack::outro(format!(
+            "{}\n  {summary}",
+            crate::term::wrap_log_text(&format!("Wrapped `{}`{kind}.", args.binary))
+        ))?;
     } else {
         println!("Wrapped `{}`{kind}.\n  {summary}", args.binary);
     }
 
     if !path_setup::path_includes(&shim_dir) {
-        cliclack::log::warning(format!(
+        cliclack::log::warning(crate::term::wrap_log_text(&format!(
             "{} isn't on your current PATH. The shim is installed but new shells won't find it until you source your shell config (or open a new terminal). Run `secreq init` to wire up PATH.",
-            shim_dir.display()
-        ))?;
+            crate::daemon::ui::abbreviate_home(&shim_dir.display().to_string())
+        )))?;
     }
     Ok(0)
 }

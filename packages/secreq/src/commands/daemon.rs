@@ -162,12 +162,15 @@ pub(super) fn daemon_install_core(undo: bool, assume_yes: bool) -> Result<()> {
         // Best-effort unload first; an unloaded-already service isn't an error
         // we should stop on.
         if let Err(err) = autostart::unload_service(platform, &service_file) {
-            cliclack::log::warning(format!(
+            cliclack::log::warning(crate::term::wrap_log_text(&format!(
                 "couldn't unload the service (it may not have been loaded): {err:#}"
-            ))?;
+            )))?;
         }
         if autostart::remove(&home, platform)? {
-            cliclack::log::success(format!("Removed {}.", service_file.display()))?;
+            cliclack::log::success(crate::term::wrap_log_text(&format!(
+                "Removed {}.",
+                crate::daemon::ui::abbreviate_home(&service_file.display().to_string())
+            )))?;
         } else {
             cliclack::log::info("No secreq login service found — nothing to remove.")?;
         }
@@ -196,9 +199,9 @@ pub(super) fn daemon_install_core(undo: bool, assume_yes: bool) -> Result<()> {
         ),
     )?;
     if plan.already_installed {
-        cliclack::log::info(
+        cliclack::log::info(crate::term::wrap_log_text(
             "A service file already exists; it'll be rewritten (the exe path may have changed).",
-        )?;
+        ))?;
     }
 
     let proceed = assume_yes || prompt::confirm_default_yes("Write and load it?")?;
@@ -209,13 +212,16 @@ pub(super) fn daemon_install_core(undo: bool, assume_yes: bool) -> Result<()> {
     }
 
     let changed = autostart::apply(&plan)?;
+    let service_display =
+        crate::daemon::ui::abbreviate_home(&plan.service_file.display().to_string());
     if changed {
-        cliclack::log::success(format!("wrote {}.", plan.service_file.display()))?;
+        cliclack::log::success(crate::term::wrap_log_text(&format!(
+            "wrote {service_display}."
+        )))?;
     } else {
-        cliclack::log::info(format!(
-            "{} was already up to date.",
-            plan.service_file.display()
-        ))?;
+        cliclack::log::info(crate::term::wrap_log_text(&format!(
+            "{service_display} was already up to date."
+        )))?;
     }
 
     match autostart::load_service(platform, &plan.service_file) {
@@ -232,7 +238,9 @@ pub(super) fn daemon_install_core(undo: bool, assume_yes: bool) -> Result<()> {
         Err(err) => {
             // Don't hard-fail after writing — the file is in place; tell the
             // user how to load it manually.
-            cliclack::log::warning(format!("couldn't load the service automatically: {err:#}"))?;
+            cliclack::log::warning(crate::term::wrap_log_text(&format!(
+                "couldn't load the service automatically: {err:#}"
+            )))?;
             let manual = match platform {
                 autostart::Platform::Macos => format!(
                     "launchctl bootstrap gui/$(id -u) {}",
@@ -243,8 +251,16 @@ pub(super) fn daemon_install_core(undo: bool, assume_yes: bool) -> Result<()> {
                         .to_owned()
                 }
             };
+            // Only the sentence is wrapped. `manual` is a command the reader
+            // is meant to paste, and `wrap_log_text` breaks at spaces — of
+            // which a shell command has plenty — so putting it through the
+            // wrapper would publish a command that does not run. It keeps its
+            // absolute path for the same reason `path_setup::manual_export_line`
+            // does: what we hand someone to paste has to be true in whatever
+            // shell they paste it into.
             cliclack::log::info(format!(
-                "The file is written; load it by hand with:\n  {manual}"
+                "{}\n  {manual}",
+                crate::term::wrap_log_text("The file is written; load it by hand with:")
             ))?;
         }
     }

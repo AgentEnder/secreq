@@ -426,9 +426,9 @@ fn prompt_and_store_unresolved(
             Ok(provider::RetrieveOutcome::Found(_)) => {}
             Ok(provider::RetrieveOutcome::NotFound { .. }) => {
                 let ref_display = reference.to_string();
-                cliclack::log::info(format!(
+                cliclack::log::info(crate::term::wrap_log_text(&format!(
                     "`{env_name}` ({ref_display}) is not set yet — enter its value to store it."
-                ))
+                )))
                 .ok();
                 let entered = cliclack::password(format!("Value for {env_name}"))
                     .mask('•')
@@ -450,7 +450,10 @@ fn prompt_and_store_unresolved(
                     std::slice::from_ref(&ref_display),
                     Decision::Approve,
                 ));
-                cliclack::log::success(format!("Stored `{env_name}` at {ref_display}")).ok();
+                cliclack::log::success(crate::term::wrap_log_text(&format!(
+                    "Stored `{env_name}` at {ref_display}"
+                )))
+                .ok();
             }
             // The provider CLI couldn't run at all (not installed, etc.): that's
             // no evidence the locator is empty, so don't prompt. The resolution

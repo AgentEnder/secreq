@@ -218,9 +218,9 @@ pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Re
     // `init`.
     if prompt::confirm_default_yes("Also set up secreq as your SSH agent?").unwrap_or(false) {
         if let Err(err) = ssh_setup_core(None, false, false, Some(&config_path)) {
-            cliclack::log::warning(format!(
+            cliclack::log::warning(crate::term::wrap_log_text(&format!(
                 "skipped SSH-agent setup: {err:#}. Run `secreq ssh setup` later to wire it."
-            ))?;
+            )))?;
         }
     }
 
