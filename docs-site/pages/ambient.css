@@ -42,123 +42,18 @@
   contain: layout paint;
 }
 
-.ambient-graph {
-  position: absolute;
-  top: 0;
-  left: 0;
-}
+/* The canvas backend.
 
-.ambient-edge {
-  stroke: var(--sq-graph);
-  stroke-width: 1;
-}
-
-.ambient-node {
-  fill: var(--sq-graph-node);
-}
-
-/* ── Endpoints ──
-   A node with exactly one edge is where a route can only begin or end —
-   the process that made a request, or the decision it was headed for.
-   Drawn hollow so the graph says which of its dots are junctions you pass
-   through and which are somewhere a request enters or leaves. */
-.ambient-node[data-endpoint] {
-  fill: none;
-  stroke: var(--sq-graph-node);
-  stroke-width: 1.1;
-  r: 3;
-}
-
-/* ── A pulse crossing a node ──
-   One of these per *crossing*, not per node: a node two routes pass through
-   gets two, each on its own delay. Animating the node itself could only ever
-   express one arrival, which is why a second pulse used to pass through
-   silently.
-
-   A single element does the whole gesture. It starts as a solid dot the
-   size of the node — reading as the node lighting up — then drops its fill
-   and expands away as a ring. Sitting inside the node's own <g> means the
-   cursor bending the graph carries it along. */
-.ambient-arrival {
-  fill: var(--sq-pulse);
-  stroke: var(--sq-pulse);
-  stroke-width: 1.2;
-  opacity: 0;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .ambient-arrival {
-    animation: ambient-arrival 15s linear infinite;
-    animation-delay: var(--hit);
-  }
-}
-
-@keyframes ambient-arrival {
-  0% {
-    r: 2.4;
-    opacity: 1;
-    fill-opacity: 1;
-  }
-  3% {
-    fill-opacity: 0;
-  }
-  9% {
-    r: 15;
-    opacity: 0;
-    fill-opacity: 0;
-  }
-  100% {
-    r: 15;
-    opacity: 0;
-    fill-opacity: 0;
-  }
-}
-
-/* ── The pulse ──
-   A short dash walked along one route by animating `stroke-dashoffset`.
-   Using a dash rather than a moving dot is what makes it turn corners
-   correctly: the segment is *on* the path, so it takes every bend the route
-   takes without anyone computing an angle.
-
-   The dash is a fixed length in px, set inline along with a gap the size of
-   the whole route. Normalising with `pathLength` was the earlier approach
-   and it made the pulse's length proportional to the route's — so the long
-   routes the graph now produces got absurdly long pulses. */
-.ambient-pulse {
-  stroke: var(--sq-pulse);
-  stroke-width: 1.5;
-  stroke-linecap: round;
-  stroke-dashoffset: 0;
-  opacity: 0;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .ambient-pulse {
-    animation: ambient-pulse 15s cubic-bezier(0.5, 0, 0.55, 1) infinite;
-  }
-}
-
-/* Travel occupies the first 52% of the cycle — a figure `PULSE_TRAVEL` in
-   `Ambient.tsx` depends on to time the node flashes. The rest is the pause
-   that keeps this from reading as a progress bar. A negative offset walks
-   the dash forward along the path, so the pulse runs start-to-end: from the
-   node that made the request, upward. */
-@keyframes ambient-pulse {
-  0% {
-    opacity: 0;
-    stroke-dashoffset: 0;
-  }
-  6% {
-    opacity: 1;
-  }
-  46% {
-    opacity: 1;
-  }
-  52%,
-  100% {
-    opacity: 0;
-    stroke-dashoffset: var(--travel);
-  }
+   Fixed and viewport-sized, and deliberately a sibling of `.ambient` rather
+   than a child: `.ambient` carries `contain: paint`, which would make it the
+   containing block for a fixed descendant and pin the canvas to the document
+   instead of the viewport. It draws the visible slice, offset by the scroll
+   position. */
+.ambient-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
 }
 
 /* ── Grain ──
