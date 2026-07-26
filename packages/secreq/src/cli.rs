@@ -25,7 +25,7 @@ const LONG_VERSION: &str = concat!(
     ")"
 );
 
-/// `op run`, but for every secret store you own — per-binary CLI wrapping
+/// `op run`, but for every secret store you own: per-binary CLI wrapping
 /// with provenance-aware consent.
 #[derive(Parser)]
 #[command(
@@ -99,7 +99,7 @@ enum Command {
         action: SshAction,
     },
 
-    /// Manage scoped secret agent sockets — the host-side end of serving
+    /// Manage scoped secret agent sockets: the host-side end of serving
     /// `secret://` refs to a guest VM instead of copying tokens into it.
     Agent {
         #[command(subcommand)]
@@ -126,7 +126,7 @@ enum Command {
 
     /// Run or manage the consent daemon. Bare `secreq daemon` ensures a
     /// daemon is running in the background (spawning one if needed) and
-    /// then tails its log until you Ctrl-C — handy for watching the
+    /// then tails its log until you Ctrl-C, which is handy for watching the
     /// consent flow live. Use `--fg` to run the daemon in the foreground
     /// in this process instead (the form auto-spawned by wraps).
     /// `secreq daemon stop` tells a running daemon to exit, which also
@@ -146,7 +146,7 @@ enum Command {
     /// the daemon if it isn't running.
     Pending,
 
-    /// Open the manager window — the persistent surface holding your
+    /// Open the manager window: the persistent surface holding your
     /// auto-rules and the audit log. Lands on Audit; a segmented
     /// control switches to Rules. It never holds a pending decision
     /// (that is the prompt window's job, `secreq pending`), so
@@ -156,7 +156,7 @@ enum Command {
     View,
 
     /// Manage auto-approve / auto-deny rules. Declarative rules are
-    /// created from the consent window's Rules tab (or by hand-editing
+    /// created from the manager window's Rules view (or by hand-editing
     /// the rules file); compiled wasm rule modules are registered here
     /// with `add-wasm`. The CLI surface covers the headless management
     /// path: list, inspect, enable/disable, delete, add-wasm.
@@ -167,12 +167,12 @@ enum Command {
 
     /// Internal: run the consent-prompt child process. The daemon
     /// spawns one of these whenever a decision is demanded (a wrap run
-    /// or an SSH-agent sign). Not meant to be invoked by users directly
-    /// — if the daemon isn't running, this will fail to connect.
+    /// or an SSH-agent sign). Not meant to be invoked by users directly.
+    /// If the daemon isn't running, this will fail to connect.
     #[command(hide = true)]
     ConsentWindow {
         /// Open the window floating above other apps. The daemon always
-        /// sets this — the prompt exists to demand a decision.
+        /// sets this, because the prompt exists to demand a decision.
         #[arg(long)]
         always_on_top: bool,
     },
@@ -201,7 +201,7 @@ enum Command {
     /// (`exec secreq x <wrap> "$@"`). `x` owns no ordinary flags: everything
     /// after the wrap name is forwarded to the binary verbatim (so
     /// `<wrap> --help` reaches the binary, not secreq), and secreq's own
-    /// options use the reserved `--sq-` prefix — `secreq x --sq-help` lists
+    /// options use the reserved `--sq-` prefix; `secreq x --sq-help` lists
     /// them. Parsed by hand in `run_x`, never by clap; this variant exists so
     /// `secreq --help` documents the verb.
     // The args below are hidden so `secreq --help` doesn't advertise a
@@ -217,8 +217,8 @@ enum Command {
     },
 
     /// `op run`, but for every secret store: resolve every
-    /// `secret://provider/locator` reference found in the environment —
-    /// the inherited environment plus any `--env-file` — through the
+    /// `secret://provider/locator` reference found in the environment (the
+    /// inherited environment plus any `--env-file`) through the
     /// consent daemon, then run the command with the resolved values
     /// injected and its output masked. Plain `NAME=value` entries pass
     /// through unchanged. Unlike `x`, no wrap entry is required: the
@@ -231,8 +231,8 @@ enum Command {
         #[arg(long = "env-file", value_name = "PATH")]
         env_file: Vec<PathBuf>,
         /// For each `secret://` reference whose locator resolves to nothing,
-        /// prompt for the value (masked, no echo) and write it — via the
-        /// provider's `store` capability — to exactly where the locator points,
+        /// prompt for the value (masked, no echo) and write it, via the
+        /// provider's `store` capability, to exactly where the locator points,
         /// so this and every later run resolves it normally. A reference whose
         /// provider is read-only (no `store` capability) fails with a clear
         /// error instead of being silently skipped. Without this flag an
@@ -247,8 +247,8 @@ enum Command {
     /// `op read`, but for every secret store: resolve one or more secret
     /// references and print their values as a JSON object. Each reference is
     /// `secret://provider/locator` or the bare `provider/locator` shorthand.
-    /// Output is always a JSON object keyed by each ref exactly as typed —
-    /// even for a single ref — so it pipes cleanly into `jq`. Resolution
+    /// Output is always a JSON object keyed by each ref exactly as typed,
+    /// even for a single ref, so it pipes cleanly into `jq`. Resolution
     /// always goes through the consent daemon (every read is prompted and
     /// audited); there is no `--yes` bypass, by design.
     Read {
@@ -261,8 +261,8 @@ enum Command {
     /// Ask the host's secreq for one secret, from inside a sandbox.
     ///
     /// This is the guest end of a scoped agent socket (`secreq agent open`
-    /// opens the host end). It dials the socket named by `$SECREQ_SOCK` —
-    /// the same convention as `SSH_AUTH_SOCK` — so nothing is stored in the
+    /// opens the host end). It dials the socket named by `$SECREQ_SOCK`,
+    /// the same convention as `SSH_AUTH_SOCK`, so nothing is stored in the
     /// sandbox: each use is asked for, gated by consent on the host, and
     /// audited there. `$SECREQ_SOCK` is set for you inside a brain `--vm`
     /// sandbox.
@@ -284,7 +284,7 @@ enum Command {
         #[arg(value_name = "REF")]
         reference: Option<String>,
         /// Print the ref names this socket may resolve, one per line, and
-        /// exit. Free — listing never prompts and never releases a value.
+        /// exit. Free: listing never prompts and never releases a value.
         #[arg(long, conflicts_with = "reference")]
         list: bool,
     },
@@ -298,7 +298,7 @@ enum AgentAction {
     ///
     /// The scope name and the allowlist are declared **here, by you, at open
     /// time**, and are immutable for the socket's life. A ref outside the
-    /// allowlist is denied without a prompt (and audited) — so a compromised
+    /// allowlist is denied without a prompt (and audited), so a compromised
     /// guest can neither train you to click through nor enumerate your vault
     /// one prompt at a time. Every allowed request prompts for consent,
     /// showing the scope as the principal: a guest has no host process tree,
@@ -319,12 +319,12 @@ enum AgentAction {
     // reference, since both read the same string.
     #[command(verbatim_doc_comment)]
     Open {
-        /// The scope name shown in the consent prompt as the principal —
+        /// The scope name shown in the consent prompt as the principal,
         /// typically the sandbox / VM name.
         #[arg(long, value_name = "NAME")]
         scope: String,
         /// A `secret://provider/locator` ref this socket may resolve.
-        /// Repeatable; at least one is required. Matched exactly — there is
+        /// Repeatable; at least one is required. Matched exactly: there is
         /// no prefix or wildcard form, by design.
         #[arg(long = "allow", value_name = "secret://…", required = true)]
         allow: Vec<String>,
@@ -332,7 +332,7 @@ enum AgentAction {
         ///
         /// Defaults to `scope-<name>.sock` in secreq's socket dir
         /// (`$XDG_RUNTIME_DIR/secreq`, else `<$SECREQ_HOME>/run`), beside the
-        /// consent and SSH-agent sockets. Pass this to bind elsewhere — e.g.
+        /// consent and SSH-agent sockets. Pass this to bind elsewhere, e.g.
         /// at a path you are about to `ssh -R` into a guest.
         #[arg(long, value_name = "PATH")]
         sock: Option<PathBuf>,
@@ -387,7 +387,7 @@ enum SshAction {
     /// Prove the agent can sign with a configured SSH identity. Connects to
     /// the agent socket, lists identities, then asks the agent to sign a fixed
     /// test message with the key and verifies the returned signature against
-    /// its public half — exercising the real consent → resolve → sign path.
+    /// its public half, exercising the real consent → resolve → sign path.
     /// With no `<name>`, validates every configured identity. Signing is a
     /// real sign, so it may prompt for consent (and a biometric). Exits 0 only
     /// if every validated identity verifies.
@@ -449,7 +449,7 @@ enum RulesAction {
     /// Register a compiled wasm rule module (built with the
     /// `secreq-rule` SDK). The daemon vets the module in its sandbox,
     /// copies it into the canonical store under the secreq root, pins
-    /// it by sha256, and persists the rule — a failed vetting
+    /// it by sha256, and persists the rule. A failed vetting
     /// registers nothing. The module decides approve/pass/deny per
     /// ask at evaluation time.
     AddWasm {
@@ -465,7 +465,7 @@ enum RulesAction {
         #[arg(long = "secret", value_name = "NAME")]
         secret: Vec<String>,
         /// Register with NO trained-secrets snapshot: the module will
-        /// be consulted for every ask across every wrap. Dangerous —
+        /// be consulted for every ask across every wrap. Dangerous;
         /// required explicitly when no --secret is given.
         #[arg(long, conflicts_with = "secret")]
         all_secrets: bool,
@@ -474,7 +474,7 @@ enum RulesAction {
 
 #[derive(Subcommand)]
 enum DaemonAction {
-    /// Stop the running daemon. Clears the in-memory approvals cache —
+    /// Stop the running daemon. Clears the in-memory approvals cache;
     /// the next wrap invocation auto-spawns a fresh daemon.
     Stop {
         /// Skip the graceful protocol and SIGKILL the daemon outright.

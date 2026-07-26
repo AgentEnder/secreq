@@ -49,7 +49,7 @@ fn main() {
         out.push_str("## Global options\n\n");
         out.push_str(
             "These reach the admin verbs and `run`. They do **not** apply to \
-             `x`, whose argv belongs to the wrapped binary — see the \
+             `x`, whose argv belongs to the wrapped binary. See the \
              [argv contract](./cli.md#the-argv-contract) for its `--sq-` \
              equivalents.\n\n",
         );
@@ -67,16 +67,16 @@ fn main() {
 fn preamble() -> String {
     // The banner is addressed to whoever opened the file in the repo and is
     // about to fix a typo in it. On the site it reads as provenance.
-    "<!-- GENERATED FILE — DO NOT EDIT.\n     \
+    "<!-- GENERATED FILE. DO NOT EDIT.\n     \
      Source: packages/secreq/src/cli.rs (the clap tree).\n     \
      Regenerate: cargo run --example gen-cli-reference > docs/cli-reference.md\n     \
      Guarded by: packages/secreq/tests/cli_drift.rs -->\n\n\
      # All commands\n\n\
-     Every command, subcommand and flag `secreq` accepts, generated from the \
+     Every command, subcommand, and flag `secreq` accepts, generated from the \
      CLI definition itself.\n\n\
-     This is the exhaustive list. For what the commands are *for* — the two \
+     This is the exhaustive list. For what the commands are *for* (the two \
      run verbs, why `x` forwards every flag it is given, how approval is \
-     scoped — read the [CLI guide](./cli.md).\n\n"
+     scoped) read the [CLI guide](./cli.md).\n\n"
         .to_string()
 }
 

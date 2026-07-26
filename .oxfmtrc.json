@@ -1,5 +1,11 @@
 {
   "singleQuote": true,
   "printWidth": 100,
-  "ignorePatterns": ["dist/**", "**/.generated/**", "**/dev-docs/**", "docs/*.schema.json"]
+  "ignorePatterns": [
+    "dist/**",
+    "**/.generated/**",
+    "**/dev-docs/**",
+    "docs/*.schema.json",
+    "docs/cli-reference.md"
+  ]
 }

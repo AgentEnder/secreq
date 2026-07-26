@@ -1,17 +1,17 @@
-<!-- GENERATED FILE — DO NOT EDIT.
+<!-- GENERATED FILE. DO NOT EDIT.
      Source: packages/secreq/src/cli.rs (the clap tree).
      Regenerate: cargo run --example gen-cli-reference > docs/cli-reference.md
      Guarded by: packages/secreq/tests/cli_drift.rs -->
 
 # All commands
 
-Every command, subcommand and flag `secreq` accepts, generated from the CLI definition itself.
+Every command, subcommand, and flag `secreq` accepts, generated from the CLI definition itself.
 
-This is the exhaustive list. For what the commands are *for* — the two run verbs, why `x` forwards every flag it is given, how approval is scoped — read the [CLI guide](./cli.md).
+This is the exhaustive list. For what the commands are *for* (the two run verbs, why `x` forwards every flag it is given, how approval is scoped) read the [CLI guide](./cli.md).
 
 ## Global options
 
-These reach the admin verbs and `run`. They do **not** apply to `x`, whose argv belongs to the wrapped binary — see the [argv contract](./cli.md#the-argv-contract) for its `--sq-` equivalents.
+These reach the admin verbs and `run`. They do **not** apply to `x`, whose argv belongs to the wrapped binary. See the [argv contract](./cli.md#the-argv-contract) for its `--sq-` equivalents.
 
 | Flag | Meaning |
 | --- | --- |
@@ -117,7 +117,7 @@ Add (or overwrite) an SSH identity in `wraps.json5`. The agent serves this ident
 secreq ssh validate [<NAME>]
 ```
 
-Prove the agent can sign with a configured SSH identity. Connects to the agent socket, lists identities, then asks the agent to sign a fixed test message with the key and verifies the returned signature against its public half — exercising the real consent → resolve → sign path. With no `<name>`, validates every configured identity. Signing is a real sign, so it may prompt for consent (and a biometric). Exits 0 only if every validated identity verifies
+Prove the agent can sign with a configured SSH identity. Connects to the agent socket, lists identities, then asks the agent to sign a fixed test message with the key and verifies the returned signature against its public half, exercising the real consent → resolve → sign path. With no `<name>`, validates every configured identity. Signing is a real sign, so it may prompt for consent (and a biometric). Exits 0 only if every validated identity verifies
 
 | Argument | Meaning |
 | --- | --- |
@@ -129,7 +129,7 @@ Prove the agent can sign with a configured SSH identity. Connects to the agent s
 secreq agent <SUBCOMMAND>
 ```
 
-Manage scoped secret agent sockets — the host-side end of serving `secret://` refs to a guest VM instead of copying tokens into it
+Manage scoped secret agent sockets: the host-side end of serving `secret://` refs to a guest VM instead of copying tokens into it
 
 ### `secreq agent open`
 
@@ -139,7 +139,7 @@ secreq agent open [OPTIONS]
 
 Open a scoped, ephemeral socket that resolves `secret://` refs for a guest, and serve it until interrupted.
 
-The scope name and the allowlist are declared **here, by you, at open time**, and are immutable for the socket's life. A ref outside the allowlist is denied without a prompt (and audited) — so a compromised guest can neither train you to click through nor enumerate your vault one prompt at a time. Every allowed request prompts for consent, showing the scope as the principal: a guest has no host process tree, so there is no caller chain to show.
+The scope name and the allowlist are declared **here, by you, at open time**, and are immutable for the socket's life. A ref outside the allowlist is denied without a prompt (and audited), so a compromised guest can neither train you to click through nor enumerate your vault one prompt at a time. Every allowed request prompts for consent, showing the scope as the principal: a guest has no host process tree, so there is no caller chain to show.
 
 The resolved socket path is printed to stdout on its own line, so the caller can read it back rather than reconstruct it.
 
@@ -153,9 +153,9 @@ ssh -R /run/secreq.sock:/tmp/secreq-my-vm.sock my-vm
 
 | Flag | Meaning |
 | --- | --- |
-| `--scope <NAME>` | The scope name shown in the consent prompt as the principal — typically the sandbox / VM name |
-| `--allow <secret://…>…` | A `secret://provider/locator` ref this socket may resolve. Repeatable; at least one is required. Matched exactly — there is no prefix or wildcard form, by design |
-| `--sock <PATH>` | Where to bind the socket. Must not already exist. Defaults to `scope-<name>.sock` in secreq's socket dir (`$XDG_RUNTIME_DIR/secreq`, else `<$SECREQ_HOME>/run`), beside the consent and SSH-agent sockets. Pass this to bind elsewhere — e.g. at a path you are about to `ssh -R` into a guest. |
+| `--scope <NAME>` | The scope name shown in the consent prompt as the principal, typically the sandbox / VM name |
+| `--allow <secret://…>…` | A `secret://provider/locator` ref this socket may resolve. Repeatable; at least one is required. Matched exactly: there is no prefix or wildcard form, by design |
+| `--sock <PATH>` | Where to bind the socket. Must not already exist. Defaults to `scope-<name>.sock` in secreq's socket dir (`$XDG_RUNTIME_DIR/secreq`, else `<$SECREQ_HOME>/run`), beside the consent and SSH-agent sockets. Pass this to bind elsewhere, e.g. at a path you are about to `ssh -R` into a guest. |
 
 ## `secreq check`
 
@@ -211,7 +211,7 @@ Use this when a downgraded secreq refuses to run because your config was migrate
 secreq daemon [OPTIONS] <SUBCOMMAND>
 ```
 
-Run or manage the consent daemon. Bare `secreq daemon` ensures a daemon is running in the background (spawning one if needed) and then tails its log until you Ctrl-C — handy for watching the consent flow live. Use `--fg` to run the daemon in the foreground in this process instead (the form auto-spawned by wraps). `secreq daemon stop` tells a running daemon to exit, which also clears every remembered approval (the cache is in-memory only by design). `secreq daemon status` reports whether one is running. `secreq daemon log-path` prints the log file path
+Run or manage the consent daemon. Bare `secreq daemon` ensures a daemon is running in the background (spawning one if needed) and then tails its log until you Ctrl-C, which is handy for watching the consent flow live. Use `--fg` to run the daemon in the foreground in this process instead (the form auto-spawned by wraps). `secreq daemon stop` tells a running daemon to exit, which also clears every remembered approval (the cache is in-memory only by design). `secreq daemon status` reports whether one is running. `secreq daemon log-path` prints the log file path
 
 | Flag | Meaning |
 | --- | --- |
@@ -223,7 +223,7 @@ Run or manage the consent daemon. Bare `secreq daemon` ensures a daemon is runni
 secreq daemon stop [OPTIONS]
 ```
 
-Stop the running daemon. Clears the in-memory approvals cache — the next wrap invocation auto-spawns a fresh daemon
+Stop the running daemon. Clears the in-memory approvals cache; the next wrap invocation auto-spawns a fresh daemon
 
 | Flag | Meaning |
 | --- | --- |
@@ -273,7 +273,7 @@ secreq view
 
 Also spelled `secreq ui`.
 
-Open the manager window — the persistent surface holding your auto-rules and the audit log. Lands on Audit; a segmented control switches to Rules. It never holds a pending decision (that is the prompt window's job, `secreq pending`), so browsing history never blocks a waiting request. Auto-spawns the daemon if it isn't running
+Open the manager window: the persistent surface holding your auto-rules and the audit log. Lands on Audit; a segmented control switches to Rules. It never holds a pending decision (that is the prompt window's job, `secreq pending`), so browsing history never blocks a waiting request. Auto-spawns the daemon if it isn't running
 
 ## `secreq rules`
 
@@ -281,7 +281,7 @@ Open the manager window — the persistent surface holding your auto-rules and t
 secreq rules <SUBCOMMAND>
 ```
 
-Manage auto-approve / auto-deny rules. Declarative rules are created from the consent window's Rules tab (or by hand-editing the rules file); compiled wasm rule modules are registered here with `add-wasm`. The CLI surface covers the headless management path: list, inspect, enable/disable, delete, add-wasm
+Manage auto-approve / auto-deny rules. Declarative rules are created from the manager window's Rules view (or by hand-editing the rules file); compiled wasm rule modules are registered here with `add-wasm`. The CLI surface covers the headless management path: list, inspect, enable/disable, delete, add-wasm
 
 ### `secreq rules list`
 
@@ -345,7 +345,7 @@ Delete a rule by id or exact name. A wasm rule's stored module file goes with it
 secreq rules add-wasm [OPTIONS] <FILE>
 ```
 
-Register a compiled wasm rule module (built with the `secreq-rule` SDK). The daemon vets the module in its sandbox, copies it into the canonical store under the secreq root, pins it by sha256, and persists the rule — a failed vetting registers nothing. The module decides approve/pass/deny per ask at evaluation time
+Register a compiled wasm rule module (built with the `secreq-rule` SDK). The daemon vets the module in its sandbox, copies it into the canonical store under the secreq root, pins it by sha256, and persists the rule. A failed vetting registers nothing. The module decides approve/pass/deny per ask at evaluation time
 
 | Argument | Meaning |
 | --- | --- |
@@ -355,7 +355,7 @@ Register a compiled wasm rule module (built with the `secreq-rule` SDK). The dae
 | --- | --- |
 | `--name <NAME>` | Rule name shown in the UI and audit log. Defaults to the module's file stem |
 | `--secret <NAME>…` | Env-var name the rule is allowed to decide (the trained-secrets guard). Repeatable. The rule never fires for an ask requesting any name outside this set |
-| `--all-secrets` | Register with NO trained-secrets snapshot: the module will be consulted for every ask across every wrap. Dangerous — required explicitly when no --secret is given |
+| `--all-secrets` | Register with NO trained-secrets snapshot: the module will be consulted for every ask across every wrap. Dangerous; required explicitly when no --secret is given |
 
 ## `secreq x`
 
@@ -363,7 +363,7 @@ Register a compiled wasm rule module (built with the `secreq-rule` SDK). The dae
 secreq x [--sq-OPTIONS] <WRAP> [ARGS...]
 ```
 
-Run a wrapped binary through secreq: consent → inject secrets → exec the real binary with output masking. This is what the PATH shims call (`exec secreq x <wrap> "$@"`). `x` owns no ordinary flags: everything after the wrap name is forwarded to the binary verbatim (so `<wrap> --help` reaches the binary, not secreq), and secreq's own options use the reserved `--sq-` prefix — `secreq x --sq-help` lists them. Parsed by hand in `run_x`, never by clap; this variant exists so `secreq --help` documents the verb
+Run a wrapped binary through secreq: consent → inject secrets → exec the real binary with output masking. This is what the PATH shims call (`exec secreq x <wrap> "$@"`). `x` owns no ordinary flags: everything after the wrap name is forwarded to the binary verbatim (so `<wrap> --help` reaches the binary, not secreq), and secreq's own options use the reserved `--sq-` prefix; `secreq x --sq-help` lists them. Parsed by hand in `run_x`, never by clap; this variant exists so `secreq --help` documents the verb
 
 ## `secreq run`
 
@@ -371,7 +371,7 @@ Run a wrapped binary through secreq: consent → inject secrets → exec the rea
 secreq run [OPTIONS] [<COMMAND>…]
 ```
 
-`op run`, but for every secret store: resolve every `secret://provider/locator` reference found in the environment — the inherited environment plus any `--env-file` — through the consent daemon, then run the command with the resolved values injected and its output masked. Plain `NAME=value` entries pass through unchanged. Unlike `x`, no wrap entry is required: the references describe the secrets inline
+`op run`, but for every secret store: resolve every `secret://provider/locator` reference found in the environment (the inherited environment plus any `--env-file`) through the consent daemon, then run the command with the resolved values injected and its output masked. Plain `NAME=value` entries pass through unchanged. Unlike `x`, no wrap entry is required: the references describe the secrets inline
 
 | Argument | Meaning |
 | --- | --- |
@@ -380,7 +380,7 @@ secreq run [OPTIONS] [<COMMAND>…]
 | Flag | Meaning |
 | --- | --- |
 | `--env-file <PATH>…` | Load `NAME=value` lines from this file, layered *under* the inherited environment (inherited wins on conflict). Values may be `secret://provider/locator` references or plaintext. Repeatable |
-| `--prompt-unresolved` | For each `secret://` reference whose locator resolves to nothing, prompt for the value (masked, no echo) and write it — via the provider's `store` capability — to exactly where the locator points, so this and every later run resolves it normally. A reference whose provider is read-only (no `store` capability) fails with a clear error instead of being silently skipped. Without this flag an unresolved reference fails as before |
+| `--prompt-unresolved` | For each `secret://` reference whose locator resolves to nothing, prompt for the value (masked, no echo) and write it, via the provider's `store` capability, to exactly where the locator points, so this and every later run resolves it normally. A reference whose provider is read-only (no `store` capability) fails with a clear error instead of being silently skipped. Without this flag an unresolved reference fails as before |
 
 ## `secreq read`
 
@@ -388,7 +388,7 @@ secreq run [OPTIONS] [<COMMAND>…]
 secreq read <REF>…
 ```
 
-`op read`, but for every secret store: resolve one or more secret references and print their values as a JSON object. Each reference is `secret://provider/locator` or the bare `provider/locator` shorthand. Output is always a JSON object keyed by each ref exactly as typed — even for a single ref — so it pipes cleanly into `jq`. Resolution always goes through the consent daemon (every read is prompted and audited); there is no `--yes` bypass, by design
+`op read`, but for every secret store: resolve one or more secret references and print their values as a JSON object. Each reference is `secret://provider/locator` or the bare `provider/locator` shorthand. Output is always a JSON object keyed by each ref exactly as typed, even for a single ref, so it pipes cleanly into `jq`. Resolution always goes through the consent daemon (every read is prompted and audited); there is no `--yes` bypass, by design
 
 | Argument | Meaning |
 | --- | --- |
@@ -402,7 +402,7 @@ secreq resolve [OPTIONS] [<REF>]
 
 Ask the host's secreq for one secret, from inside a sandbox.
 
-This is the guest end of a scoped agent socket (`secreq agent open` opens the host end). It dials the socket named by `$SECREQ_SOCK` — the same convention as `SSH_AUTH_SOCK` — so nothing is stored in the sandbox: each use is asked for, gated by consent on the host, and audited there. `$SECREQ_SOCK` is set for you inside a brain `--vm` sandbox.
+This is the guest end of a scoped agent socket (`secreq agent open` opens the host end). It dials the socket named by `$SECREQ_SOCK`, the same convention as `SSH_AUTH_SOCK`, so nothing is stored in the sandbox: each use is asked for, gated by consent on the host, and audited there. `$SECREQ_SOCK` is set for you inside a brain `--vm` sandbox.
 
 The value goes to stdout and everything else to stderr, so it composes:
 
@@ -418,5 +418,5 @@ Exits 0 on a release, 3 when the host denies (reason on stderr, nothing on stdou
 
 | Flag | Meaning |
 | --- | --- |
-| `--list` | Print the ref names this socket may resolve, one per line, and exit. Free — listing never prompts and never releases a value |
+| `--list` | Print the ref names this socket may resolve, one per line, and exit. Free: listing never prompts and never releases a value |
 
