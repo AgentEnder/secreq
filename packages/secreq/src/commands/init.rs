@@ -79,13 +79,11 @@ pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Re
             )))?;
             // Even when we're already-configured, hint about stale blocks
             // sitting in non-canonical files (e.g. a pre-pivot .zshenv).
-            let stale = path_setup::find_stale_blocks(&home, &shell, &plan.config_file);
-            if !stale.is_empty() {
-                let list = stale
-                    .iter()
-                    .map(|p| crate::daemon::ui::abbreviate_home(&p.display().to_string()))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+            if let Some(list) = stale_block_list(&path_setup::find_stale_blocks(
+                &home,
+                &shell,
+                &plan.config_file,
+            )) {
                 cliclack::log::warning(crate::term::wrap_log_text(&format!(
                     "Found leftover secreq PATH blocks in: {list}. They're harmless but you can remove them by hand for tidiness."
                 )))?;
@@ -133,13 +131,11 @@ pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Re
             if let Some(caveat) = &plan.caveat {
                 cliclack::log::warning(crate::term::wrap_log_text(caveat))?;
             }
-            let stale = path_setup::find_stale_blocks(&home, &shell, &plan.config_file);
-            if !stale.is_empty() {
-                let list = stale
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
+            if let Some(list) = stale_block_list(&path_setup::find_stale_blocks(
+                &home,
+                &shell,
+                &plan.config_file,
+            )) {
                 cliclack::log::warning(crate::term::wrap_log_text(&format!(
                     "Found leftover secreq PATH blocks in: {list}. The new one in {config_display} will win on PATH, but you may want to remove the old blocks by hand for tidiness.",
                 )))?;
@@ -229,6 +225,28 @@ pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Re
         crate::daemon::ui::abbreviate_home(&config_path.display().to_string())
     )))?;
     Ok(0)
+}
+
+/// Render the leftover-PATH-block list for the warning, or `None` when there
+/// is nothing to warn about.
+///
+/// Both branches of the `plan` match report the same finding about the same
+/// files, so they render it the same way — one of them used to print
+/// `/Users/you/.zshenv` where the other printed `~/.zshenv`, in one command,
+/// for one thing. These are prose, not shell we're asking anyone to paste, so
+/// `abbreviate_home` is safe here in a way it is not for
+/// `path_setup::manual_export_line`.
+fn stale_block_list(stale: &[PathBuf]) -> Option<String> {
+    if stale.is_empty() {
+        return None;
+    }
+    Some(
+        stale
+            .iter()
+            .map(|p| crate::daemon::ui::abbreviate_home(&p.display().to_string()))
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
 }
 
 fn expand_tilde(raw: &str) -> PathBuf {
