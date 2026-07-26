@@ -306,8 +306,7 @@ impl Cluster {
         {
             self.argv_samples.push(argv);
         }
-        let common = common_prefix_len(self.cwd_prefix.as_bytes(), cwd.as_bytes());
-        self.cwd_prefix.truncate(common);
+        self.cwd_prefix = common_path_prefix(&self.cwd_prefix, cwd);
     }
 
     fn into_suggestion(self) -> Option<Suggestion> {
@@ -331,8 +330,34 @@ impl Cluster {
     }
 }
 
-fn common_prefix_len(a: &[u8], b: &[u8]) -> usize {
-    a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count()
+/// The longest common prefix of two paths, aligned to `/` boundaries.
+///
+/// A byte-wise common prefix is wrong for paths in two separate ways, and a
+/// suggested rule's `cwd` is where both bite:
+///
+/// 1. **It can land inside a multi-byte character.** `cwd` is the requesting
+///    process's working directory, so any process can pick it — and two
+///    sibling directories that differ inside a UTF-8 sequence (`né` vs `nê`)
+///    give a byte index that is not a char boundary. `String::truncate` then
+///    panics, in the consent-window child, which is the surface the user
+///    approves and denies from.
+/// 2. **It can land inside a segment.** `~/proj-alpha` and `~/proj-beta`
+///    share the byte prefix `~/proj-`, which names no directory — and since a
+///    literal `cwd` pattern matches by prefix, a rule built from it would also
+///    auto-approve from `~/proj-anything`, including a directory the user
+///    never blessed.
+///
+/// Comparing segment by segment fixes both: the result always ends at a real
+/// directory boundary, and `/` is single-byte so the index is always a char
+/// boundary.
+fn common_path_prefix(a: &str, b: &str) -> String {
+    let common: Vec<&str> = a
+        .split('/')
+        .zip(b.split('/'))
+        .take_while(|(x, y)| x == y)
+        .map(|(x, _)| x)
+        .collect();
+    common.join("/")
 }
 
 /// Merge a set of argv samples into a single glob pattern, aligning
@@ -1179,5 +1204,38 @@ mod tests {
             .collect();
         let s = &suggest(&entries, &[], now)[0];
         assert_eq!(s.key, "approve:gh:Cursor");
+    }
+
+    /// `cwd` is attacker-choosable — any process can `mkdir` and `chdir`.
+    /// A byte-wise common prefix landing inside a multi-byte character used
+    /// to panic `String::truncate`, and this runs in the consent-window
+    /// child, so the panic took the approve/deny surface with it.
+    #[test]
+    fn common_path_prefix_survives_a_divergence_inside_a_utf8_sequence() {
+        // `é` = C3 A9, `ê` = C3 AA — they diverge on the *second* byte.
+        assert_eq!(common_path_prefix("/Users/me/né", "/Users/me/nê"), "/Users/me");
+    }
+
+    /// A cwd constraint must name a real directory. `~/proj-alpha` and
+    /// `~/proj-beta` share the bytes `~/proj-`, which names nothing — and
+    /// since a literal `cwd` matches by prefix, a rule built from it would
+    /// auto-approve from `~/proj-anything` too.
+    #[test]
+    fn common_path_prefix_never_splits_a_directory_name() {
+        assert_eq!(
+            common_path_prefix("/Users/me/proj-alpha", "/Users/me/proj-beta"),
+            "/Users/me"
+        );
+        // A shared segment is kept whole when it really is shared.
+        assert_eq!(common_path_prefix("/a/b/c", "/a/b/d"), "/a/b");
+        // An exact match is preserved rather than backed up to its parent.
+        assert_eq!(common_path_prefix("/a/b", "/a/b"), "/a/b");
+        // A true directory prefix is preserved.
+        assert_eq!(common_path_prefix("/a/b", "/a/b/c"), "/a/b");
+        // `/a/b` is NOT a directory prefix of `/a/bc`.
+        assert_eq!(common_path_prefix("/a/b", "/a/bc"), "/a");
+        // Nothing in common but the root: empty, which `into_suggestion`
+        // renders as "no cwd constraint" rather than as `/`.
+        assert_eq!(common_path_prefix("/a", "/b"), "");
     }
 }
