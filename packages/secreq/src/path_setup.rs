@@ -106,7 +106,7 @@ pub fn find_stale_blocks(home: &Path, shell: &Shell, canonical: &Path) -> Vec<Pa
         .iter()
         .map(|name| home.join(name))
         .filter(|p| p != canonical && p.is_file())
-        .filter(|p| std::fs::read_to_string(p).is_ok_and(|s| s.contains(BEGIN_SENTINEL)))
+        .filter(|p| fs::read(p).is_ok_and(|s| contains_bytes(&s, BEGIN_SENTINEL.as_bytes())))
         .collect()
 }
 
@@ -125,8 +125,11 @@ pub fn plan(home: &Path, shell: Shell, shim_dir: &Path) -> Result<Plan> {
         )
     })?;
     let block = format_block(&shell, shim_dir, home);
-    let already_configured = match fs::read_to_string(&config_file) {
-        Ok(existing) => existing.contains(BEGIN_SENTINEL),
+    // Byte-wise, not `read_to_string`: an rc file is the user's, and one
+    // latin-1 comment anywhere in it made the UTF-8 read fail, which read as
+    // "no block here" and had `apply` append a second one.
+    let already_configured = match fs::read(&config_file) {
+        Ok(existing) => contains_bytes(&existing, BEGIN_SENTINEL.as_bytes()),
         Err(_) => false, // file doesn't exist → not configured
     };
     Ok(Plan {
@@ -146,18 +149,68 @@ pub fn apply(plan: &Plan) -> Result<bool> {
         return Ok(false);
     }
     if let Some(parent) = plan.config_file.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("could not create {}", parent.display()))?;
+        ensure_config_dir(parent)?;
     }
+    // Bytes, not a `String`. The rc file is the user's, nothing promises it is
+    // UTF-8, and the old `read_to_string(..).unwrap_or_default()` turned a
+    // single stray byte into an empty string — so the write below replaced
+    // the whole file with our three-line block and reported success.
+    let existing = match fs::read(&plan.config_file) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        // An unreadable file is not an empty one either.
+        Err(err) => {
+            return Err(err)
+                .with_context(|| format!("could not read {}", plan.config_file.display()))
+        }
+    };
+
     // Append with a leading newline if the file exists and doesn't end with
     // one — keeps us from gluing onto a previous line.
-    let existing = fs::read_to_string(&plan.config_file).unwrap_or_default();
-    let needs_leading_newline = !existing.is_empty() && !existing.ends_with('\n');
-    let prefix = if needs_leading_newline { "\n" } else { "" };
-    let to_write = format!("{existing}{prefix}{}\n", plan.block);
-    fs::write(&plan.config_file, to_write)
-        .with_context(|| format!("could not write {}", plan.config_file.display()))?;
+    let mut to_write = existing;
+    if !to_write.is_empty() && !to_write.ends_with(b"\n") {
+        to_write.push(b'\n');
+    }
+    to_write.extend_from_slice(plan.block.as_bytes());
+    to_write.push(b'\n');
+
+    // Stage and rename rather than truncate in place: a crash or a full disk
+    // partway through a `fs::write` leaves a `.zshrc` that is neither the old
+    // one nor the new one, which is a login shell that no longer starts.
+    // `Mode::Like` preserves the mode of a file the user already had and falls
+    // back to owner-only for one we are creating — a shell rc written at the
+    // umask's answer is 0666 under the `umask 000` CI images set, and a
+    // world-writable file the login shell sources is arbitrary code execution.
+    crate::atomic::replace(
+        &plan.config_file,
+        &to_write,
+        crate::atomic::Mode::Like(&plan.config_file),
+    )
+    .with_context(|| format!("could not write {}", plan.config_file.display()))?;
     Ok(true)
+}
+
+/// Create the directory a shell config lives in, without letting the umask
+/// choose its mode.
+///
+/// Only fish reaches this with anything to make — `~/.config/fish/conf.d`,
+/// every file in which fish sources at startup, so a `umask 000` install would
+/// hand fish a world-writable directory to read commands from. Directories the
+/// user already had keep their mode: `~/.config` is shared with everything
+/// else that follows the XDG layout, and narrowing it is not ours to do.
+fn ensure_config_dir(dir: &Path) -> Result<()> {
+    use std::os::unix::fs::DirBuilderExt as _;
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .with_context(|| format!("could not create {}", dir.display()))
+}
+
+/// `haystack.contains(needle)` for bytes — `[u8]` has no `contains` for a
+/// subslice, and the sentinel search must not go through UTF-8.
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    needle.len() <= haystack.len() && haystack.windows(needle.len()).any(|w| w == needle)
 }
 
 pub(crate) fn shell_config_path(home: &Path, shell: &Shell) -> Option<PathBuf> {
@@ -218,6 +271,11 @@ fn format_block(shell: &Shell, shim_dir: &Path, home: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    fn mode_of(path: &Path) -> u32 {
+        fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
 
     #[test]
     fn plan_picks_zshrc_for_zsh_so_homebrew_doesnt_shadow_us() {
@@ -312,6 +370,132 @@ mod tests {
         std::fs::write(home.path().join(".zprofile"), "# nothing to do with us\n").unwrap();
         let stale = find_stale_blocks(home.path(), &Shell::Zsh, &canonical);
         assert!(stale.is_empty(), "got {stale:?}");
+    }
+
+    // ── S4/S5: `apply` rewrites a file secreq does not own ──
+
+    /// The rc file belongs to the user, and nothing says it is UTF-8: a
+    /// latin-1 comment, a `\xff` in an alias, a stray byte from a pasted
+    /// snippet. `read_to_string(..).unwrap_or_default()` turned any of those
+    /// into an empty string, so the write that followed **replaced the entire
+    /// file** with our three-line block — and returned `Ok(true)`, so `init`
+    /// reported success over a destroyed `.zshrc`.
+    #[test]
+    fn apply_keeps_an_rc_file_that_is_not_valid_utf8() {
+        let home = tempfile::tempdir().unwrap();
+        let shim = home.path().join(".local/bin");
+        let rc = home.path().join(".zshrc");
+        let original: &[u8] = b"# caf\xe9\nalias ll='ls -l'\n";
+        fs::write(&rc, original).unwrap();
+
+        let p = plan(home.path(), Shell::Zsh, &shim).unwrap();
+        assert!(apply(&p).unwrap());
+
+        let after = fs::read(&rc).unwrap();
+        assert!(
+            after.starts_with(original),
+            "the user's rc was replaced, not appended to: {after:?}"
+        );
+        assert!(String::from_utf8_lossy(&after).contains(BEGIN_SENTINEL));
+    }
+
+    /// The same lossy read in `plan`: a non-UTF-8 rc that already carries our
+    /// block reported `already_configured == false`, so a second `init`
+    /// appended a second block.
+    #[test]
+    fn plan_finds_an_existing_block_in_an_rc_file_that_is_not_valid_utf8() {
+        let home = tempfile::tempdir().unwrap();
+        let shim = home.path().join(".local/bin");
+        let rc = home.path().join(".zshrc");
+        let mut bytes = b"# caf\xe9\n".to_vec();
+        bytes.extend_from_slice(
+            format!("{BEGIN_SENTINEL}\nexport PATH=\"/x:$PATH\"\n{END_SENTINEL}\n").as_bytes(),
+        );
+        fs::write(&rc, &bytes).unwrap();
+
+        let p = plan(home.path(), Shell::Zsh, &shim).unwrap();
+
+        assert!(p.already_configured, "sentinel missed behind a stray byte");
+        assert!(!apply(&p).unwrap());
+    }
+
+    /// A plain `fs::write` truncates in place, so a crash or a full disk
+    /// halfway through leaves the user with a `.zshrc` that is neither the old
+    /// one nor the new one — a broken login shell. Replacing by rename means a
+    /// reader sees one or the other. The new inode is the signature of that.
+    #[test]
+    fn apply_replaces_the_rc_inode_rather_than_truncating_it() {
+        use std::os::unix::fs::MetadataExt;
+        let home = tempfile::tempdir().unwrap();
+        let shim = home.path().join(".local/bin");
+        let rc = home.path().join(".zshrc");
+        fs::write(&rc, "# mine\n").unwrap();
+        let before = fs::metadata(&rc).unwrap().ino();
+
+        let p = plan(home.path(), Shell::Zsh, &shim).unwrap();
+        apply(&p).unwrap();
+
+        assert_ne!(fs::metadata(&rc).unwrap().ino(), before);
+        let leftovers: Vec<String> = fs::read_dir(home.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "staging litter: {leftovers:?}");
+    }
+
+    /// An rc file secreq creates got the umask's answer — 0644 under the
+    /// common 022, and **0666 under the `umask 000`** that CI and container
+    /// images set. A world-writable file the login shell sources is arbitrary
+    /// code execution as this user.
+    #[test]
+    fn an_rc_file_secreq_creates_is_owner_only() {
+        let home = tempfile::tempdir().unwrap();
+        let shim = home.path().join(".local/bin");
+
+        let p = plan(home.path(), Shell::Zsh, &shim).unwrap();
+        apply(&p).unwrap();
+
+        assert_eq!(mode_of(&p.config_file), 0o600);
+    }
+
+    /// An rc file the user already had keeps the mode they chose — the
+    /// stage-and-rename must not republish it at the staging file's mode, the
+    /// way migration 0001 once did to `wraps.json5`.
+    #[test]
+    fn apply_keeps_the_mode_of_an_rc_file_the_user_already_had() {
+        let home = tempfile::tempdir().unwrap();
+        let shim = home.path().join(".local/bin");
+        let rc = home.path().join(".zshrc");
+        fs::write(&rc, "# mine\n").unwrap();
+        fs::set_permissions(&rc, fs::Permissions::from_mode(0o640)).unwrap();
+
+        let p = plan(home.path(), Shell::Zsh, &shim).unwrap();
+        apply(&p).unwrap();
+
+        assert_eq!(mode_of(&rc), 0o640);
+    }
+
+    /// fish's block goes in a directory we create. `create_dir_all` asks for
+    /// 0777 and lets the umask decide, so under `umask 000` we hand fish a
+    /// world-writable `conf.d` — and fish sources every file in it at startup.
+    /// Asserting the exact mode is what makes that visible under the umask
+    /// this test actually runs with.
+    #[test]
+    fn a_config_dir_secreq_creates_is_owner_only() {
+        let home = tempfile::tempdir().unwrap();
+        let shim = home.path().join(".local/bin");
+
+        let p = plan(home.path(), Shell::Fish, &shim).unwrap();
+        apply(&p).unwrap();
+
+        let conf_d = home.path().join(".config/fish/conf.d");
+        assert_eq!(mode_of(&conf_d), 0o700, "mode {:o}", mode_of(&conf_d));
+        assert_eq!(
+            mode_of(&home.path().join(".config")),
+            0o700,
+            "an intermediate dir we created is ours too"
+        );
     }
 
     #[test]
