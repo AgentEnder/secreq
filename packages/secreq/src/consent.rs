@@ -83,17 +83,29 @@ pub enum Decision {
 }
 
 impl Decision {
+    /// Does this decision release the secret?
+    ///
+    /// Written as an exhaustive `match` rather than `matches!` so adding a
+    /// variant is a compile error here. `matches!` would keep compiling and
+    /// silently answer `false` for the new variant. That happens to be the
+    /// safe direction for this predicate, but it is luck, not design: the
+    /// same shape in a helper with the opposite polarity (`is_denial`,
+    /// `may_cache`) fails open, and the next such helper should be able to
+    /// copy this one without inheriting a hazard.
     pub fn approved(self) -> bool {
-        matches!(
-            self,
+        match self {
             Decision::Approve
-                | Decision::ApproveRemember
-                | Decision::ApproveCached
-                | Decision::ApproveAuto
-                | Decision::ApproveSshSession
-                | Decision::ApproveSshSessionAll
-                | Decision::ApproveAgentSession
-        )
+            | Decision::ApproveRemember
+            | Decision::ApproveCached
+            | Decision::ApproveAuto
+            | Decision::ApproveSshSession
+            | Decision::ApproveSshSessionAll
+            | Decision::ApproveAgentSession => true,
+            Decision::Deny
+            | Decision::DenyAuto
+            | Decision::DenyOutOfScope
+            | Decision::Abandoned => false,
+        }
     }
 
     pub fn as_str(self) -> &'static str {
