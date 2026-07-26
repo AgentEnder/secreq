@@ -2523,6 +2523,74 @@ fn audit_tab_guest_chain() {
     );
 }
 
+/// Searching the log by a process name, where one of the hits is a name only
+/// a guest claimed.
+///
+/// The gap this closes is narrow and easy to miss: fixture 46 shows the claim
+/// drawn on the row, and the search box could not reach it. A reviewer who has
+/// read an incident report types the process name, and the one row where
+/// something *said* it was that process was the one row that did not come
+/// back.
+///
+/// The picture has to be the search results rather than the claim, because the
+/// hazard lives in the results: a guest picks that string, so a guest can put
+/// its row in the results for any term it likes. The row still arrives wearing
+/// `guest says` and the red caveat — the search reads the claim through the
+/// same accessor the row draws from — and the `gh` row beside it is what a hit
+/// on a walked chain looks like for the same query.
+#[test]
+fn audit_tab_search_finds_guest_claim() {
+    let audit = vec![
+        audit_line_traced(
+            60 * 60 * 5,
+            "aws",
+            &["s3", "ls", "s3://prod-backups/"],
+            &[(52312, "zsh", "-zsh")],
+            &["AWS_ACCESS_KEY_ID"],
+            "approve",
+        ),
+        audit_line_traced(
+            60 * 60 * 2,
+            "gh",
+            &["api", "/repos/acme/web/issues"],
+            &[
+                (52318, "node", "node ./scripts/postinstall.js"),
+                (52317, "pnpm", "pnpm install"),
+            ],
+            &["GITHUB_TOKEN"],
+            "approve",
+        ),
+        with_guest_chain(
+            agent_audit_line(
+                60 * 6,
+                "brain-nx-t5",
+                "secret://op/Dev/gh/token",
+                Decision::Approve,
+                genuine_agent_peer(),
+            ),
+            "node → pnpm → postinstall",
+        ),
+    ];
+    render_manager_fixture(
+        Shot::new("48-audit-search-guest-claim").caption(
+            "Search reaches a guest's claimed chain too, so filtering the log by a \
+             process name cannot quietly skip the rows where something only said \
+             it was that process. A row found that way still arrives marked: \
+             <code>guest says</code> is a claim, the tree above it is not.",
+        ),
+        audit,
+        ManagerExtras {
+            window_state: Some(Box::new(|ws| {
+                ws.focus_audit_view();
+                // Two of the three rows hold `postinstall` — one in a chain
+                // secreq walked, one in a chain a guest sent it.
+                ws.set_audit_search("postinstall");
+            })),
+            ..ManagerExtras::default()
+        },
+    );
+}
+
 #[test]
 fn audit_tab_forwarded_sign() {
     // The two things an SSH sign row can say about agent forwarding that a

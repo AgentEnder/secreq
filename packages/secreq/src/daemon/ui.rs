@@ -950,7 +950,20 @@ fn audit_row_separator(ui: &mut egui::Ui, th: &Theme) {
 /// whitespace-separated terms; the entry matches when **every** term is
 /// a case-insensitive substring of **some** field — the wrap name, any
 /// argv token, each caller's `name`/`command`, any requested secret
-/// name, or the decision string.
+/// name, the decision string, or a guest's claimed caller chain.
+///
+/// That last field is **attacker-chosen**: a guest writes it, so a guest
+/// can put its row in the results for any term it likes. Searching it
+/// anyway is right — a reviewer who has read a report and types
+/// `postinstall` wants the rows where something *said* it was
+/// postinstall at least as much as the ones secreq walked itself, and a
+/// claim that is recorded and drawn but unfindable is worse than one
+/// never recorded. What keeps the results honest is that the claim is
+/// read here through [`guest_chain_claim`], the same accessor
+/// [`render_audit_entry`] draws from: every row a claim can pull into
+/// the results is a row that arrives carrying
+/// [`GUEST_CHAIN_CAVEAT`] under `guest says`. A hit on a forgery cannot
+/// render as a fact, because the two are the same code path.
 ///
 /// The per-term / any-field split is load-bearing: it lets `"gh auth"`
 /// match a wrap named `gh` whose argv was `auth token`, where `"gh"`
@@ -978,6 +991,9 @@ fn audit_entry_matches(entry: &AuditEntry, query: &str) -> bool {
         fields.push(caller.command.to_ascii_lowercase());
     }
     fields.extend(entry.secrets.iter().map(|s| s.to_ascii_lowercase()));
+    if let Some(claim) = guest_chain_claim(entry) {
+        fields.push(claim.to_ascii_lowercase());
+    }
 
     terms
         .iter()
@@ -3942,6 +3958,50 @@ mod tests {
         let e = audit_entry_for_search("gh", &["auth"], "Cursor", &["GITHUB_TOKEN"], "deny");
         assert!(audit_entry_matches(&e, "cursor deny"));
         assert!(audit_entry_matches(&e, "gh github_token"));
+    }
+
+    /// The gap this closes: the claim is written to the log and drawn on the
+    /// row, and the search box could not reach it. A reviewer filtering the
+    /// log by `postinstall` — the single most likely thing to type after
+    /// reading a report — got back every row secreq walked itself and none of
+    /// the rows where something *said* it was postinstall. Recorded, drawn,
+    /// and unfindable is a worse place to leave a claim than never recording
+    /// it.
+    #[test]
+    fn search_finds_a_process_the_guest_only_claimed() {
+        let mut e = audit_entry_for_search("agent:brain-nx-t5", &[], "", &[], "approve");
+        e.callers.clear();
+        e.unverified_guest_chain = Some("node → pnpm → postinstall".to_owned());
+        assert!(audit_entry_matches(&e, "postinstall"));
+        assert!(audit_entry_matches(&e, "POSTINSTALL"));
+        // AND across terms still holds: the claim is one more field, not a
+        // bypass.
+        assert!(audit_entry_matches(&e, "postinstall approve"));
+        assert!(!audit_entry_matches(&e, "postinstall kubernetes"));
+    }
+
+    /// A guest picks this string, so searching it is searching attacker-chosen
+    /// text — a claim of `gh` puts the row in the results for `gh`. That is
+    /// tolerable for exactly one reason: the row that comes back draws the
+    /// claim under `guest says` with [`GUEST_CHAIN_CAVEAT`]. The search
+    /// therefore reads the claim through [`guest_chain_claim`], the accessor
+    /// the row renders from, so a hit cannot exist that the view would not
+    /// disclaim.
+    #[test]
+    fn a_claim_is_searchable_only_through_the_accessor_that_disclaims_it() {
+        let mut e = audit_entry_for_search("agent:brain-nx-t5", &[], "", &[], "approve");
+        e.callers.clear();
+        e.unverified_guest_chain = Some("gh".to_owned());
+        assert!(audit_entry_matches(&e, "gh"));
+        assert!(
+            guest_chain_claim(&e).is_some(),
+            "a row findable by its claim is a row that draws the caveat"
+        );
+        // And a row with nothing to disclaim contributes no field, rather
+        // than an empty one that every query would match.
+        let quiet = audit_entry_for_search("gh", &["api"], "zsh", &[], "approve");
+        assert!(guest_chain_claim(&quiet).is_none());
+        assert!(!audit_entry_matches(&quiet, "postinstall"));
     }
 
     #[test]

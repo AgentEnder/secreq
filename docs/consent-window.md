@@ -215,6 +215,13 @@ the row where both are true.
 
 ::shot{id=15-audit-tab-search-filtering}
 
+That includes a sandbox's claimed chain, so filtering by a process name
+does not skip the rows where something only said it was that process. A
+row found that way arrives marked the way it always is: `guest says` is a
+claim, the tree above it is not.
+
+::shot{id=48-audit-search-guest-claim}
+
 Up to 200 rows render at once; the cache holds a soft ceiling of 5,000.
 
 ## The audit log file
