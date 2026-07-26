@@ -9,6 +9,81 @@ use std::path::Path;
 
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
+/// Longest a rendered process name or command line may be.
+///
+/// A command line is unbounded, and the consent prompt's caller tree lays each
+/// one out in a scrolling body. An argv of a few thousand characters scrolls
+/// the genuine frames and the `IN <cwd>` row out of the initial viewport,
+/// which is a cheap way to make the prompt say less than it appears to.
+const MAX_DISPLAY_CHARS: usize = 300;
+
+/// True for a character that renders as nothing, or that reorders what
+/// follows it.
+///
+/// `char::is_control` covers only Unicode category Cc. The bidi overrides and
+/// isolates and the zero-width formatting characters are category Cf, and they
+/// are the ones that make a rendered string differ from the string that was
+/// read.
+pub fn is_invisible_or_reordering(c: char) -> bool {
+    c.is_control()
+        || matches!(c,
+            '\u{200B}'..='\u{200F}'   // zero-width space/joiners, LRM, RLM
+            | '\u{202A}'..='\u{202E}' // bidi embeddings and overrides
+            | '\u{2060}'..='\u{2064}' // word joiner, invisible operators
+            | '\u{2066}'..='\u{2069}' // bidi isolates
+            | '\u{FEFF}'              // BOM / zero-width no-break space
+        )
+}
+
+/// Make one process-supplied string safe to render and to match on.
+///
+/// A process picks its own `comm` and argv, and both are rendered in the
+/// consent prompt — the surface whose entire job is telling the user
+/// accurately who is asking. Two things a raw string can do there:
+///
+/// - **A newline becomes a row.** The caller tree lays each name out in its
+///   own label, and a label given `"node\n└ zsh"` renders *two* rows of bold
+///   text in the name column: the attacker's frame plus a fabricated ancestor
+///   the user reads as real. Whitespace runs are collapsed to single spaces,
+///   so a name occupies exactly one row.
+/// - **A bidi override reverses what follows it.** Trojan-Source in a widget
+///   the user is reading to make a security decision.
+///
+/// Sanitized here, at the walk, rather than at each render site: there are
+/// several (the prompt tree, the audit view, the SSH title), and the audit log
+/// keeps these strings for later reading too.
+fn sanitize_display(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len().min(MAX_DISPLAY_CHARS));
+    let mut last_was_space = false;
+    for c in raw.chars() {
+        // Whitespace first, and deliberately before the invisible-character
+        // filter: a newline is category Cc, so filtering it as "invisible"
+        // would *delete* it and silently join the tokens it separated
+        // (`"node\n└ zsh"` → `"node└ zsh"`). Turning it into a space keeps the
+        // name to one row while still showing the reader two tokens.
+        if c.is_whitespace() {
+            if !last_was_space && !out.is_empty() {
+                out.push(' ');
+                last_was_space = true;
+            }
+            continue;
+        }
+        if is_invisible_or_reordering(c) {
+            continue;
+        }
+        last_was_space = false;
+        out.push(c);
+        if out.chars().count() >= MAX_DISPLAY_CHARS {
+            out.push('…');
+            break;
+        }
+    }
+    while out.ends_with(' ') {
+        out.pop();
+    }
+    out
+}
+
 /// One process in the caller chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Caller {
@@ -191,8 +266,8 @@ fn walk(
         let Some(proc) = sys.process(pid) else { break };
         let caller = Caller {
             pid: pid.as_u32(),
-            name: proc.name().to_string_lossy().into_owned(),
-            command: join_cmd(proc.cmd()),
+            name: sanitize_display(&proc.name().to_string_lossy()),
+            command: sanitize_display(&join_cmd(proc.cmd())),
             exe: proc.exe().map(|p| p.display().to_string()),
             start_time: proc.start_time(),
         };
@@ -377,5 +452,53 @@ mod tests {
         assert!(is_self_frame(&secreq, None));
         let other = mk_caller(101, "bash", Some("/bin/bash"));
         assert!(!is_self_frame(&other, None));
+    }
+
+    /// The caller tree lays each name out in its own label, so a newline in a
+    /// process name renders as an extra *row* — the attacker's frame plus a
+    /// fabricated ancestor the user reads as real. A process picks its own
+    /// `comm`, so this is a name it can simply choose.
+    #[test]
+    fn a_newline_in_a_process_name_cannot_become_a_second_row() {
+        let forged = sanitize_display("node\n└ zsh");
+        assert!(!forged.contains('\n'), "{forged:?}");
+        assert_eq!(forged, "node └ zsh");
+    }
+
+    /// Trojan-Source in the widget the user is reading to make a security
+    /// decision. `char::is_control` is category Cc only and misses these.
+    #[test]
+    fn bidi_and_zero_width_characters_are_stripped() {
+        for bad in ['\u{202E}', '\u{200B}', '\u{2066}', '\u{FEFF}'] {
+            let out = sanitize_display(&format!("gh{bad}api"));
+            assert!(!out.contains(bad), "{bad:?} survived: {out:?}");
+        }
+    }
+
+    /// An argv is unbounded, and the prompt's body scrolls: a long enough one
+    /// pushes the genuine frames and the cwd row out of the initial viewport.
+    #[test]
+    fn an_overlong_command_is_truncated() {
+        let out = sanitize_display(&"A".repeat(5_000));
+        assert!(
+            out.chars().count() <= MAX_DISPLAY_CHARS + 1,
+            "{}",
+            out.chars().count()
+        );
+        assert!(out.ends_with('…'));
+    }
+
+    /// Ordinary command lines must survive intact — this runs on every frame
+    /// of every ask, and mangling them would make the prompt less accurate,
+    /// not more.
+    #[test]
+    fn an_ordinary_command_line_is_unchanged() {
+        assert_eq!(
+            sanitize_display("/Applications/Cursor.app/Contents/MacOS/Cursor --psn_0_12345"),
+            "/Applications/Cursor.app/Contents/MacOS/Cursor --psn_0_12345"
+        );
+        assert_eq!(sanitize_display("-zsh"), "-zsh");
+        // Runs of whitespace collapse, which is what keeps a name to one row.
+        assert_eq!(sanitize_display("gh   api"), "gh api");
     }
 }

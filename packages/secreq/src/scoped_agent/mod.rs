@@ -251,27 +251,6 @@ impl GuestChain {
     }
 }
 
-/// True for a character that renders as nothing, or that reorders what
-/// follows it.
-///
-/// `char::is_control` covers only Unicode category Cc. The bidi overrides and
-/// isolates and the zero-width formatting characters are category Cf, and
-/// they are precisely the ones that make a rendered string differ from the
-/// string that was sent: `U+202E` reverses the text after it, so a guest can
-/// hand the prompt a chain that reads as something other than what it
-/// claimed. The prompt's whole job on that row is showing the reader an
-/// accurate copy of an untrusted string.
-fn is_invisible_or_reordering(c: char) -> bool {
-    c.is_control()
-        || matches!(c,
-            '\u{200B}'..='\u{200F}'   // zero-width space/joiners, LRM, RLM
-            | '\u{202A}'..='\u{202E}' // bidi embeddings and overrides
-            | '\u{2060}'..='\u{2064}' // word joiner, invisible operators
-            | '\u{2066}'..='\u{2069}' // bidi isolates
-            | '\u{FEFF}'              // BOM / zero-width no-break space
-        )
-}
-
 /// Render a guest-supplied reference for the daemon log and the audit row.
 ///
 /// `Reference::parse` imposes no character restrictions, so
@@ -290,7 +269,7 @@ fn display_ref(reference: &Reference) -> String {
     let rendered: String = reference
         .to_string()
         .chars()
-        .filter(|c| !is_invisible_or_reordering(*c))
+        .filter(|c| !crate::provenance::is_invisible_or_reordering(*c))
         .take(MAX_REF_DISPLAY_CHARS)
         .collect();
     if rendered.chars().count() == MAX_REF_DISPLAY_CHARS {
@@ -303,7 +282,7 @@ fn display_ref(reference: &Reference) -> String {
 /// One link of a claimed chain: visible characters only, trimmed, capped.
 fn sanitize_link(link: &str) -> String {
     link.chars()
-        .filter(|c| !is_invisible_or_reordering(*c))
+        .filter(|c| !crate::provenance::is_invisible_or_reordering(*c))
         .take(MAX_GUEST_CHAIN_LINK_CHARS)
         .collect::<String>()
         .trim()
