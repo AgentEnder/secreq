@@ -19,7 +19,7 @@ use eframe::egui;
 
 use crate::consent::Decision;
 
-use super::proto::SecretAsk;
+use super::proto::{Caller, SecretAsk};
 use super::state::{ApprovalScope, QueueRow, QueueSnapshot};
 use super::theme::{OsFlavor, Theme};
 use super::ui::{
@@ -719,14 +719,62 @@ fn secret_name_label(ui: &mut egui::Ui, th: &Theme, s: &SecretAsk) {
     resp.on_hover_text(hover);
 }
 
+/// How many ancestry frames the tree draws before it starts counting
+/// instead. Matches the audit view's `MAX_DEPTH`, deliberately: the two
+/// surfaces show the same chain, and a reader who learns the `… N more` row
+/// in one should not meet a different rule in the other.
+const CALLER_TREE_MAX_DEPTH: usize = 6;
+
+/// Split a chain into the frames the tree draws and the frames the
+/// `… N more` row stands in for, both still in storage order
+/// (nearest-first).
+///
+/// The elided frames come out of the **middle**. A consent prompt is read
+/// from both ends — the outermost frame answers "where did this come from"
+/// (your terminal, or a launch daemon you never started) and the leaf
+/// answers "what is asking right now" — so those are the two the tree keeps
+/// when it can't keep everything.
+fn caller_tree_split(callers: &[Caller]) -> (&[Caller], &[Caller]) {
+    let hidden_len = callers.len().saturating_sub(CALLER_TREE_MAX_DEPTH);
+    let (hidden, shown) = callers.split_at(hidden_len);
+    (shown, hidden)
+}
+
+/// One line per elided frame for the overflow row's hover, outermost-first
+/// so the hover continues the tree's reading order rather than reversing it.
+fn caller_overflow_summary(hidden: &[Caller]) -> String {
+    hidden
+        .iter()
+        .rev()
+        .map(|c| {
+            let args = caller_args(&c.name, &c.command);
+            if args.is_empty() {
+                format!("{} (pid {})", c.name, c.pid)
+            } else {
+                format!("{} (pid {})  {}", c.name, c.pid, args)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The ancestry, root-first, each process with its argv and pid; the
 /// asking leaf is the ask's own command, set in the accent so the eye
 /// lands on who is actually asking. Truncated argv shows the full
 /// string on hover.
+///
+/// A chain deeper than [`CALLER_TREE_MAX_DEPTH`] collapses its middle into a
+/// single `… N more` row whose hover lists what it replaced — the same
+/// indicator the audit view uses. Drawing every frame instead meant the
+/// surface the decision is *made* on quietly claimed to be showing the whole
+/// ancestry while `provenance::caller_chain` had already stopped walking at
+/// 16, and the surface the decision is *reviewed* on was the only one that
+/// said so.
 fn render_caller_tree(ui: &mut egui::Ui, th: &Theme, row: &QueueRow) {
     let ask = &row.representative;
+    let (shown, hidden) = caller_tree_split(&ask.callers);
     let mut depth = 0usize;
-    for caller in ask.callers.iter().rev() {
+    for caller in shown.iter().rev() {
         caller_row(
             ui,
             th,
@@ -736,6 +784,10 @@ fn render_caller_tree(ui: &mut egui::Ui, th: &Theme, row: &QueueRow) {
             Some(caller.pid),
             false,
         );
+        depth += 1;
+    }
+    if !hidden.is_empty() {
+        caller_overflow_row(ui, th, depth, hidden);
         depth += 1;
     }
     let leaf_argv = ask.command.join(" ");
@@ -760,6 +812,33 @@ fn render_caller_tree(ui: &mut egui::Ui, th: &Theme, row: &QueueRow) {
         None,
         true,
     );
+}
+
+/// The `… N more` row standing in for the elided middle of the chain.
+///
+/// Rendered in `th.faint` at the tree's own indent so it reads as a gap in
+/// the ancestry rather than as another process. The hover carries every
+/// frame it replaced, which is what keeps this an honest summary instead of
+/// a second way to hide something.
+fn caller_overflow_row(ui: &mut egui::Ui, th: &Theme, depth: usize, hidden: &[Caller]) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        if depth > 0 {
+            ui.add_space((depth as f32 - 1.0) * 14.0);
+            ui.label(
+                egui::RichText::new("└")
+                    .monospace()
+                    .size(th.body_size - 2.0)
+                    .color(th.faint),
+            );
+        }
+        ui.label(
+            egui::RichText::new(format!("\u{2026} {} more", hidden.len()))
+                .size(th.body_size - 2.0)
+                .color(th.faint),
+        )
+        .on_hover_text(caller_overflow_summary(hidden));
+    });
 }
 
 fn caller_row(
@@ -1411,4 +1490,87 @@ pub const PROMPT_DEFAULT_SIZE: [f32; 2] = [500.0, 470.0];
 /// Small helper the child uses to time repaints for "Ns ago" labels.
 pub fn age_label(age: Duration) -> String {
     humanize_duration(age)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn caller(pid: u32, name: &str) -> Caller {
+        Caller {
+            pid,
+            name: name.to_owned(),
+            command: format!("{name} --run"),
+            exe: None,
+            start_time: 0,
+        }
+    }
+
+    /// A chain that fits draws whole, with nothing standing in for anything.
+    #[test]
+    fn a_short_chain_hides_nothing() {
+        let chain: Vec<Caller> = (0..4).map(|i| caller(100 + i, "sh")).collect();
+        let (shown, hidden) = caller_tree_split(&chain);
+        assert_eq!(shown.len(), 4);
+        assert!(hidden.is_empty());
+    }
+
+    /// The case the prompt used to get wrong: `caller_chain` stops at 16
+    /// frames, the prompt drew all 16 as if that were the whole story, and
+    /// the audit view — the surface for *reviewing* a decision — was the
+    /// only one that admitted to eliding anything.
+    #[test]
+    fn a_long_chain_keeps_the_root_and_the_leaf_and_counts_the_rest() {
+        // Storage is nearest-first: pid 100 is the immediate caller,
+        // pid 115 the outermost frame.
+        let chain: Vec<Caller> = (0..16).map(|i| caller(100 + i, "node")).collect();
+        let (shown, hidden) = caller_tree_split(&chain);
+
+        assert_eq!(shown.len(), CALLER_TREE_MAX_DEPTH);
+        assert_eq!(hidden.len(), 16 - CALLER_TREE_MAX_DEPTH);
+
+        // The outermost frame survives — "where did this ultimately come
+        // from" is half of what the tree is read for.
+        assert_eq!(shown.last().expect("outermost").pid, 115);
+        // The elided frames are the middle ones, and the frame nearest the
+        // asking command is the *last* thing given up.
+        assert_eq!(hidden.first().expect("nearest hidden").pid, 100);
+        assert_eq!(hidden.last().expect("furthest hidden").pid, 109);
+    }
+
+    /// Exactly at the cap is not overflow; one past it is.
+    #[test]
+    fn the_indicator_appears_only_once_a_frame_is_actually_hidden() {
+        let exact: Vec<Caller> = (0..CALLER_TREE_MAX_DEPTH as u32)
+            .map(|i| caller(i, "sh"))
+            .collect();
+        assert!(caller_tree_split(&exact).1.is_empty());
+
+        let over: Vec<Caller> = (0..CALLER_TREE_MAX_DEPTH as u32 + 1)
+            .map(|i| caller(i, "sh"))
+            .collect();
+        assert_eq!(caller_tree_split(&over).1.len(), 1);
+    }
+
+    /// The hover has to carry what the row replaced, in the order the tree
+    /// reads — outermost first, continuing downward toward the leaf.
+    #[test]
+    fn the_overflow_hover_lists_hidden_frames_outermost_first() {
+        let chain: Vec<Caller> = vec![caller(100, "make"), caller(101, "bash")];
+        let summary = caller_overflow_summary(&chain);
+        let lines: Vec<&str> = summary.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with("bash (pid 101)"), "got {:?}", lines[0]);
+        assert!(lines[1].starts_with("make (pid 100)"), "got {:?}", lines[1]);
+        assert!(lines[0].contains("--run"), "argv is the point of the hover");
+    }
+
+    /// A frame whose argv adds nothing over its name renders as just the
+    /// name and pid, the same rule the visible rows follow.
+    #[test]
+    fn the_overflow_hover_omits_a_redundant_argv() {
+        let mut c = caller(7, "zsh");
+        c.command = "zsh".to_owned();
+        assert_eq!(caller_overflow_summary(&[c]), "zsh (pid 7)");
+    }
 }

@@ -1282,6 +1282,51 @@ fn ssh_session_anchor_pending() {
 }
 
 #[test]
+fn deep_caller_chain_pending() {
+    // A chain at the walk's own ceiling: `provenance::caller_chain` stops
+    // after 16 useful frames, and this is what 16 looks like — a postinstall
+    // buried under a stack of package-manager and node wrappers.
+    //
+    // The fixture exists for one row: `… 10 more`. The prompt used to draw
+    // every frame it was handed, which read as the complete ancestry when it
+    // was not, and left the audit view — the surface for *reviewing* a
+    // decision — as the only one that admitted to eliding anything. Now the
+    // tree keeps the outermost frame and the asking leaf, counts the middle,
+    // and lists it on hover.
+    render_prompt_fixture(
+        Shot::new("30-deep-caller-chain").caption(
+            "A request from the bottom of a deep wrapper stack. The tree keeps the \
+             outermost process and the one actually asking, and collapses the middle \
+             into <code>… 10 more</code> — hover it to read every frame it stands for.",
+        ),
+        vec![],
+        |state| {
+            let mut callers = vec![
+                caller(9440, "sh", 1_700_004_000),
+                caller(9438, "postinstall.js", 1_700_003_900),
+                caller(9430, "node", 1_700_003_800),
+                caller(9425, "pnpm", 1_700_003_700),
+                caller(9418, "node", 1_700_003_600),
+                caller(9411, "turbo", 1_700_003_500),
+            ];
+            callers.extend(
+                (0..8).map(|i| caller(9300 - i * 7, "node", 1_700_003_000 - u64::from(i) * 60)),
+            );
+            callers.push(caller(8120, "make", 1_700_001_000));
+            callers.push(caller(7926, "zsh", 1_700_000_000));
+            assert_eq!(callers.len(), 16, "the chain walk's own ceiling");
+            vec![submit(
+                state,
+                "npm",
+                vec!["npm", "publish"],
+                callers,
+                vec![secret("NPM_TOKEN", "op", "op://Dev/npm/token")],
+            )]
+        },
+    );
+}
+
+#[test]
 fn agent_scope_pending() {
     // A guest VM asked a scoped agent socket for a ref on its allowlist.
     // This is the prompt's third variant, and the one where what's *absent*
