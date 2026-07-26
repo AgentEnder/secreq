@@ -32,6 +32,7 @@ mod m0001_secreq_root;
 mod m0002_ssh_agent_socket;
 
 use std::fs::{File, OpenOptions};
+use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
@@ -354,6 +355,11 @@ fn write_state(root: &Path, level: u32) -> Result<()> {
 /// which is a map worth not publishing.
 const OWNER_ONLY: u32 = 0o600;
 
+/// The directory counterpart, for the snapshot dirs those files live in. A
+/// directory's mode governs who can *list* it, and a listing of what a restore
+/// touched is a map of the user's config paths.
+const OWNER_ONLY_DIR: u32 = 0o700;
+
 // ── restore ───────────────────────────────────────────────────────────────
 
 /// Restore the config snapshot taken before migration `level`.
@@ -440,7 +446,16 @@ fn restore_in(root: &Path, level: u32, assume_yes: bool) -> Result<i32> {
     // Save the current state before overwriting it, so a mistaken restore is
     // itself recoverable.
     let saved = snapshot_root(&root).join(format!("current-{}", now_stamp()));
-    std::fs::create_dir_all(&saved).with_context(|| format!("create {}", saved.display()))?;
+    // 0700, inlined rather than via `paths::ensure_private_dir` — migrations
+    // resolve no locations through `paths`. What lands in here is a copy of
+    // whatever the restore is about to overwrite, `~/.ssh/config` included, so
+    // the directory has to be as private as the copies inside it: at the
+    // umask's 0755 the listing alone maps every config path on the machine.
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(OWNER_ONLY_DIR)
+        .create(&saved)
+        .with_context(|| format!("create {}", saved.display()))?;
     for (entry, live, live_body, _) in &plan {
         if live.exists() {
             // Carry the live file's mode into the saved copy: this is the
@@ -1100,6 +1115,35 @@ mod tests {
         // 0001 finished and stamped; 0002 did not, so the level stays at 1 and
         // the next foreground command runs 0002 again.
         assert_eq!(read_state(&ctx.root).unwrap().migration_level, 1);
+    }
+
+    /// `restore` copies the live config aside before overwriting it, and that
+    /// copy can be the user's `~/.ssh/config`. The copies are owner-only, but
+    /// the directory holding them was still created at the umask's 0755 — so
+    /// the *names* of everything a restore touches, which is a map of the
+    /// user's config paths, were listable by anyone on the machine.
+    #[test]
+    fn the_pre_restore_save_dir_is_owner_only() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_in(&tmp);
+        write(
+            &ctx.legacy_config_dir.clone().unwrap().join("wraps.json5"),
+            "{ gh: {} }",
+        );
+
+        run_pending_in(&ctx).unwrap();
+        restore_in(&ctx.root, 0, true).unwrap();
+
+        let saved = std::fs::read_dir(snapshot_root(&ctx.root))
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| {
+                p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with("current-"))
+            })
+            .expect("restore saves the config it is about to overwrite");
+        assert_eq!(mode_of(&saved), 0o700);
     }
 
     #[test]
