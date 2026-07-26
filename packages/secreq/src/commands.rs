@@ -351,7 +351,9 @@ pub fn run(
         );
         // A nested run may skip the prompt when fully cached; a top-level
         // run leaves this false, so the daemon always shows the window.
-        ask.nested_run = nested;
+        if let Some(wrap) = ask.wrap_mut() {
+            wrap.nested_run = nested;
+        }
         if nested {
             if let Some(key) = session_dedupe_key(&session) {
                 ask.dedupe_key = key;
@@ -2781,34 +2783,32 @@ pub(crate) fn build_ask(
     let parent = callers.first();
     proto::Ask {
         command: spec.command,
-        cwd: cwd.display().to_string(),
-        callers: callers
-            .iter()
-            .map(|c| proto::Caller {
-                pid: c.pid,
-                name: c.name.clone(),
-                command: c.command.clone(),
-                start_time: c.start_time,
-                exe: c.exe.clone(),
-            })
-            .collect(),
-        secrets,
-        providers,
         dedupe_key: proto::DedupeKey {
             wrap: spec.dedupe_wrap,
             ppid: parent.map_or(0, |p| p.pid),
             parent_start_time: parent.map_or(0, |p| p.start_time),
             subject_digest: None,
         },
-        // Wrap / run asks are never SSH sign asks; only the in-process SSH
-        // agent path sets this.
-        ssh: None,
-        agent: None,
-        allow_remember: spec.allow_remember,
-        ignore_remembered: spec.ignore_remembered,
-        // Default to false (always-prompt). The `run` path sets it on the
-        // returned ask when it detects it's nested under another run.
-        nested_run: false,
+        subject: proto::AskSubject::Wrap(proto::WrapSubject {
+            cwd: cwd.display().to_string(),
+            callers: callers
+                .iter()
+                .map(|c| proto::Caller {
+                    pid: c.pid,
+                    name: c.name.clone(),
+                    command: c.command.clone(),
+                    start_time: c.start_time,
+                    exe: c.exe.clone(),
+                })
+                .collect(),
+            secrets,
+            providers,
+            allow_remember: spec.allow_remember,
+            ignore_remembered: spec.ignore_remembered,
+            // Default to false (always-prompt). The `run` path sets it on the
+            // returned ask when it detects it's nested under another run.
+            nested_run: false,
+        }),
     }
 }
 
@@ -3578,11 +3578,11 @@ mod tests {
         );
         assert_eq!(ask.dedupe_key.wrap, "run");
         assert_eq!(ask.command, vec!["./deploy.sh", "--prod"]);
-        assert!(!ask.allow_remember);
-        assert_eq!(ask.secrets.len(), 1);
-        assert_eq!(ask.secrets[0].name, "DATABASE_URL");
-        assert_eq!(ask.secrets[0].provider, "op");
-        assert_eq!(ask.secrets[0].locator, "Work/PG/url");
+        assert!(!ask.allow_remember());
+        assert_eq!(ask.secrets().len(), 1);
+        assert_eq!(ask.secrets()[0].name, "DATABASE_URL");
+        assert_eq!(ask.secrets()[0].provider, "op");
+        assert_eq!(ask.secrets()[0].locator, "Work/PG/url");
         assert_eq!(ask.dedupe_key.ppid, 42);
     }
 

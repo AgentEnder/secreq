@@ -34,7 +34,7 @@ use anyhow::{Context, Result};
 
 use super::cache::{CacheKey, SecretCache};
 use super::in_flight::InFlightMap;
-use super::proto::{Ask, Caller, DedupeKey, SshAnchorInfo, SshAskInfo};
+use super::proto::{Ask, AskSubject, Caller, DedupeKey, SshAnchorInfo, SshAskInfo, SshSubject};
 use super::ssh_proto::{self, AgentRequest};
 use super::state::{SharedState, WaiterReply};
 use crate::consent::{Decision, SshAnchor, SshGrant, SshGrantScope};
@@ -654,20 +654,6 @@ fn sign_ask(
     );
     Ask {
         command: vec![format!("ssh-sign {}", identity.key_id)],
-        cwd: cwd.to_owned(),
-        callers: chain
-            .iter()
-            .map(|c| Caller {
-                pid: c.pid,
-                name: c.name.clone(),
-                command: c.command.clone(),
-                start_time: c.start_time,
-                exe: c.exe.clone(),
-            })
-            .collect(),
-        // No SecretAsk: the daemon resolves nothing for an SSH sign.
-        secrets: Vec::new(),
-        providers: std::collections::HashMap::new(),
         dedupe_key: DedupeKey {
             wrap,
             ppid: anchor.pid,
@@ -678,36 +664,40 @@ fn sign_ask(
             // both payloads — including one the user never saw.
             subject_digest: Some(crate::rules::sha256_hex(data)),
         },
-        // Mark this ask as an SSH sign so the consent window renders the
-        // SSH variant (identity + fingerprint, no secret list) rather than
-        // the wrap layout. Carries no secret material — only the display
-        // identity and the public-key fingerprint.
-        ssh: Some(SshAskInfo {
-            key_id: identity.key_id.clone(),
-            fingerprint: identity.fingerprint.clone(),
-            reason: identity.reason.clone(),
-            // Re-derived from the chain rather than threaded down beside
-            // `anchor`, so the frame the prompt names and the frame the
-            // grant keys on cannot be two different answers: both are
-            // `select_anchor` on this same chain. The assertion below holds
-            // the two together if a future caller ever passes an anchor it
-            // computed some other way.
-            anchor: anchor_frame.map(|c| SshAnchorInfo {
-                name: c.name.clone(),
-                pid: c.pid,
-            }),
+        // The SSH-sign subject: the consent window renders the SSH variant
+        // (identity + fingerprint, no secret list) because that is what this
+        // ask *is*, not because a marker field is set. The variant carries no
+        // secret material — only the display identity, the public-key
+        // fingerprint, and the kernel-sourced chain behind the socket peer,
+        // which is exactly what the scoped-agent path cannot have.
+        subject: AskSubject::SshSign(SshSubject {
+            cwd: cwd.to_owned(),
+            callers: chain
+                .iter()
+                .map(|c| Caller {
+                    pid: c.pid,
+                    name: c.name.clone(),
+                    command: c.command.clone(),
+                    start_time: c.start_time,
+                    exe: c.exe.clone(),
+                })
+                .collect(),
+            info: SshAskInfo {
+                key_id: identity.key_id.clone(),
+                fingerprint: identity.fingerprint.clone(),
+                reason: identity.reason.clone(),
+                // Re-derived from the chain rather than threaded down beside
+                // `anchor`, so the frame the prompt names and the frame the
+                // grant keys on cannot be two different answers: both are
+                // `select_anchor` on this same chain. The assertion below
+                // holds the two together if a future caller ever passes an
+                // anchor it computed some other way.
+                anchor: anchor_frame.map(|c| SshAnchorInfo {
+                    name: c.name.clone(),
+                    pid: c.pid,
+                }),
+            },
         }),
-        // Not a scoped-agent ask: an SSH sign has a real, kernel-sourced
-        // caller chain, which is exactly what the scoped-agent path cannot
-        // have.
-        agent: None,
-        // SSH grants are remembered via `SshGrant`, not the wrap approvals
-        // cache; the `ssh.is_some()` guard already skips the cache write, so
-        // this value is moot for SSH asks. Keep it `true` for consistency.
-        allow_remember: true,
-        // SSH signs are never `secreq run`; nested-run cache-skip is moot.
-        nested_run: false,
-        ignore_remembered: false,
     }
 }
 
@@ -966,7 +956,10 @@ mod tests {
             b"challenge",
         );
 
-        let info = ask.ssh.expect("ssh ask info").anchor.expect("anchor info");
+        let AskSubject::SshSign(ssh) = ask.subject else {
+            panic!("sign_ask builds an SshSign subject");
+        };
+        let info = ssh.info.anchor.expect("anchor info");
         assert_eq!(info.pid, 7926, "the grant binds to the shell, not to git");
         assert_eq!(
             info.name, "-zsh",
@@ -998,13 +991,10 @@ mod tests {
             b"challenge",
         );
 
-        let info = ask
-            .ssh
-            .as_ref()
-            .expect("ssh ask info")
-            .anchor
-            .as_ref()
-            .expect("anchor info");
+        let AskSubject::SshSign(ssh) = &ask.subject else {
+            panic!("sign_ask builds an SshSign subject");
+        };
+        let info = ssh.info.anchor.as_ref().expect("anchor info");
         assert_eq!(info.pid, 7926);
         assert_eq!(
             info.pid, ask.dedupe_key.ppid,

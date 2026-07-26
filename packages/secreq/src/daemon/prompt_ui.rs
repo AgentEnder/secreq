@@ -19,7 +19,7 @@ use eframe::egui;
 
 use crate::consent::Decision;
 
-use super::proto::{Caller, SecretAsk};
+use super::proto::{AskSubject, Caller, SecretAsk};
 use super::state::{ApprovalScope, QueueRow, QueueSnapshot};
 use super::theme::{OsFlavor, Theme};
 use super::ui::{
@@ -202,17 +202,21 @@ pub fn render_prompt_panel(
                             render_header(ui, &th, row);
                             ui.add_space(12.0);
                             render_evidence_well(ui, &th, row, state);
-                            if row.representative.ssh.is_some()
-                                && row.status == super::proto::RowStatus::Awaiting
-                            {
-                                ui.add_space(8.0);
-                                render_ssh_session_grants(ui, &th, row, actions_out);
-                            }
-                            if row.representative.agent.is_some()
-                                && row.status == super::proto::RowStatus::Awaiting
-                            {
-                                ui.add_space(8.0);
-                                render_agent_session_grant(ui, &th, row, actions_out);
+                            // The two non-wrap kinds each offer a TTL grant
+                            // above the footer; a wrap ask's "remember" lives
+                            // in the footer's Approve instead.
+                            if row.status == super::proto::RowStatus::Awaiting {
+                                match &row.representative.subject {
+                                    AskSubject::SshSign(_) => {
+                                        ui.add_space(8.0);
+                                        render_ssh_session_grants(ui, &th, row, actions_out);
+                                    }
+                                    AskSubject::ScopedAgent(_) => {
+                                        ui.add_space(8.0);
+                                        render_agent_session_grant(ui, &th, row, actions_out);
+                                    }
+                                    AskSubject::Wrap(_) => {}
+                                }
                             }
                         }
                     }
@@ -249,13 +253,13 @@ fn row_scope(row: &QueueRow) -> ApprovalScope {
     }
 }
 
-/// What "Approve" means for this ask. SSH signs approve once; wrap asks
-/// remember at the parent scope when the ask allows it (`secreq run`
-/// forbids remembering — its fixed identity would over-match).
+/// What "Approve" means for this ask. A wrap ask remembers at the parent
+/// scope when it allows it (`secreq run` forbids remembering — its fixed
+/// identity would over-match). Everything else approves once: a sign and a
+/// guest release both remember elsewhere, which is why `allow_remember()`
+/// answers `false` for them and this needs no kind test of its own.
 fn approve_decision(row: &QueueRow) -> Decision {
-    if row.representative.ssh.is_some() {
-        Decision::Approve
-    } else if row.representative.allow_remember {
+    if row.representative.allow_remember() {
         Decision::ApproveRemember
     } else {
         Decision::Approve
@@ -273,10 +277,9 @@ fn render_header(ui: &mut egui::Ui, th: &Theme, row: &QueueRow) {
             ui.add(egui::Label::new(title_job(ui, th, row)).wrap());
             ui.add_space(2.0);
             let cmdline = ask.command.join(" ");
-            let sub = if let Some(ssh) = &ask.ssh {
-                ssh.reason.clone().unwrap_or_else(|| cmdline.clone())
-            } else {
-                cmdline.clone()
+            let sub = match &ask.subject {
+                AskSubject::SshSign(s) => s.info.reason.clone().unwrap_or_else(|| cmdline.clone()),
+                AskSubject::Wrap(_) | AskSubject::ScopedAgent(_) => cmdline.clone(),
             };
             ui.add(
                 egui::Label::new(
@@ -321,28 +324,31 @@ fn title_job(ui: &egui::Ui, th: &Theme, row: &QueueRow) -> egui::text::LayoutJob
     let prose = span(th.dim);
     let subject = span(th.fg);
     let _ = ui;
-    if let Some(agent) = &ask.agent {
-        // "sandbox `brain-nx-t5` wants `secret://op/Dev/gh/token`". The
-        // scope leads because it IS the principal here — there is no
-        // process name to lead with, and inventing one would misrepresent
-        // what we actually know (see `scoped_agent`'s module docs).
-        job.append("sandbox ", 0.0, prose.clone());
-        job.append(&agent.scope, 0.0, subject.clone());
-        job.append(" wants ", 0.0, prose);
-        job.append(&agent.reference, 0.0, subject);
-    } else if let Some(ssh) = &ask.ssh {
-        let requester = ask.callers.first().map_or("ssh", |c| c.name.as_str());
-        job.append(requester, 0.0, subject.clone());
-        job.append(" wants to sign with ", 0.0, prose);
-        job.append(&ssh.key_id, 0.0, subject);
-    } else {
-        job.append(&row.key.wrap, 0.0, subject.clone());
-        if ask.secrets.len() == 1 {
+    match &ask.subject {
+        AskSubject::ScopedAgent(agent) => {
+            // "sandbox `brain-nx-t5` wants `secret://op/Dev/gh/token`". The
+            // scope leads because it IS the principal here — there is no
+            // process name to lead with, and inventing one would misrepresent
+            // what we actually know (see `scoped_agent`'s module docs).
+            job.append("sandbox ", 0.0, prose.clone());
+            job.append(&agent.scope, 0.0, subject.clone());
+            job.append(" wants ", 0.0, prose);
+            job.append(&agent.reference, 0.0, subject);
+        }
+        AskSubject::SshSign(ssh) => {
+            let requester = ssh.callers.first().map_or("ssh", |c| c.name.as_str());
+            job.append(requester, 0.0, subject.clone());
+            job.append(" wants to sign with ", 0.0, prose);
+            job.append(&ssh.info.key_id, 0.0, subject);
+        }
+        AskSubject::Wrap(wrap) => {
+            job.append(&row.key.wrap, 0.0, subject.clone());
             job.append(" wants to use ", 0.0, prose);
-            job.append(&ask.secrets[0].name, 0.0, subject);
-        } else {
-            job.append(" wants to use ", 0.0, prose);
-            job.append(&format!("{} secrets", ask.secrets.len()), 0.0, subject);
+            if wrap.secrets.len() == 1 {
+                job.append(&wrap.secrets[0].name, 0.0, subject);
+            } else {
+                job.append(&format!("{} secrets", wrap.secrets.len()), 0.0, subject);
+            }
         }
     }
     job
@@ -367,7 +373,7 @@ fn render_evidence_well(
     let ask = &row.representative;
     well_frame(th).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        if let Some(agent) = &ask.agent {
+        if let AskSubject::ScopedAgent(agent) = &ask.subject {
             // A guest's request has a different evidence shape from every
             // local ask, and the well says so honestly:
             //
@@ -426,11 +432,11 @@ fn render_evidence_well(
                 render_guest_chain(ui, th, chain);
                 well_separator(ui, th);
             }
-        } else if let Some(ssh) = &ask.ssh {
+        } else if let AskSubject::SshSign(ssh) = &ask.subject {
             well_row(ui, th, "SIGN WITH", |ui, th| {
                 ui.add(
                     egui::Label::new(
-                        egui::RichText::new(&ssh.fingerprint)
+                        egui::RichText::new(&ssh.info.fingerprint)
                             .monospace()
                             .size(th.body_size - 1.0)
                             .color(th.fg),
@@ -440,16 +446,18 @@ fn render_evidence_well(
             });
             well_separator(ui, th);
         } else {
-            well_row(ui, th, &secrets_label(ask.secrets.len()), |ui, th| {
-                render_secrets(ui, th, &ask.secrets, state);
+            well_row(ui, th, &secrets_label(ask.secrets().len()), |ui, th| {
+                render_secrets(ui, th, ask.secrets(), state);
             });
             well_separator(ui, th);
         }
 
         // ASKED BY / IN are host-process facts. A scoped-agent ask has
-        // neither (its `agent` branch above rendered SCOPE in their place),
-        // so they're skipped rather than rendered empty.
-        if ask.agent.is_none() {
+        // neither (its branch above rendered SCOPE in their place), so
+        // they're skipped rather than rendered empty. That is now the
+        // variant's shape talking: the subject has no field either row could
+        // read from.
+        if !matches!(ask.subject, AskSubject::ScopedAgent(_)) {
             well_row(ui, th, "ASKED BY", |ui, th| {
                 render_caller_tree(ui, th, row);
             });
@@ -460,11 +468,11 @@ fn render_evidence_well(
             // (process gone, platform won't say), and an `IN` header over
             // dead space reads as a rendering fault rather than as "we
             // could not determine this".
-            if !ask.cwd.is_empty() {
+            if !ask.cwd().is_empty() {
                 well_row(ui, th, "IN", |ui, th| {
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new(abbreviate_home(&ask.cwd))
+                            egui::RichText::new(abbreviate_home(ask.cwd()))
                                 .monospace()
                                 .size(th.body_size - 1.0)
                                 .color(th.fg),
@@ -477,12 +485,13 @@ fn render_evidence_well(
         }
 
         well_row(ui, th, "HISTORY", |ui, th| {
-            let caller = ask.callers.first().map(|c| super::ui::CallerIdentity {
+            let caller = ask.callers().first().map(|c| super::ui::CallerIdentity {
                 name: c.name.as_str(),
                 exe: c.exe.as_deref(),
             });
             let summary = state.audit.summarize(history_wrap(row).as_ref(), caller);
-            let (line, color) = if ask.agent.is_some() && summary.is_empty() {
+            let is_agent = matches!(ask.subject, AskSubject::ScopedAgent(_));
+            let (line, color) = if is_agent && summary.is_empty() {
                 // The shared empty-history line says "first request from
                 // this caller". There is no caller on this path — that's
                 // the entire point of the scoped-agent design — so saying
@@ -587,9 +596,11 @@ fn render_agent_session_grant(
 /// nothing; this asks the question the user actually has — "what has this
 /// sandbox asked for before?"
 fn history_wrap(row: &QueueRow) -> std::borrow::Cow<'_, str> {
-    match &row.representative.agent {
-        Some(agent) => std::borrow::Cow::Owned(format!("agent:{}", agent.scope)),
-        None => std::borrow::Cow::Borrowed(row.key.wrap.as_str()),
+    match &row.representative.subject {
+        AskSubject::ScopedAgent(agent) => std::borrow::Cow::Owned(format!("agent:{}", agent.scope)),
+        AskSubject::Wrap(_) | AskSubject::SshSign(_) => {
+            std::borrow::Cow::Borrowed(row.key.wrap.as_str())
+        }
     }
 }
 
@@ -772,7 +783,7 @@ fn caller_overflow_summary(hidden: &[Caller]) -> String {
 /// said so.
 fn render_caller_tree(ui: &mut egui::Ui, th: &Theme, row: &QueueRow) {
     let ask = &row.representative;
-    let (shown, hidden) = caller_tree_split(&ask.callers);
+    let (shown, hidden) = caller_tree_split(ask.callers());
     let mut depth = 0usize;
     for caller in shown.iter().rev() {
         caller_row(
@@ -937,12 +948,10 @@ fn render_ssh_session_grants(
                 .size(th.body_size - 2.0)
                 .color(th.faint),
         );
-        if let Some(anchor) = row
-            .representative
-            .ssh
-            .as_ref()
-            .and_then(|s| s.anchor.as_ref())
-        {
+        if let Some(anchor) = match &row.representative.subject {
+            AskSubject::SshSign(s) => s.info.anchor.as_ref(),
+            AskSubject::Wrap(_) | AskSubject::ScopedAgent(_) => None,
+        } {
             let full = format!("{} · {}", anchor.name, anchor.pid);
             let row_height = ui.text_style_height(&egui::TextStyle::Body);
             let resp = ui
@@ -1068,10 +1077,9 @@ const MANAGER_LINK: &str = "Open Manager\u{2026}";
 /// and is waiting on the provider: the SSH path is signing, everything
 /// else is resolving.
 fn resolving_text(row: &QueueRow) -> &'static str {
-    if row.representative.ssh.is_some() {
-        "Signing\u{2026}"
-    } else {
-        "Resolving\u{2026}"
+    match row.representative.subject {
+        AskSubject::SshSign(_) => "Signing\u{2026}",
+        AskSubject::Wrap(_) | AskSubject::ScopedAgent(_) => "Resolving\u{2026}",
     }
 }
 

@@ -55,7 +55,10 @@ use secreq::audit::AuditEntry;
 use secreq::consent::Decision;
 use secreq::daemon::manager_ui::{render_manager_panel, ManagerWindowState};
 use secreq::daemon::prompt_ui::{render_prompt_panel, PromptWindowState, PROMPT_DEFAULT_SIZE};
-use secreq::daemon::proto::{AgentAskInfo, Ask, Caller, DedupeKey, SecretAsk, SshAskInfo};
+use secreq::daemon::proto::{
+    AgentAskInfo, Ask, AskSubject, Caller, DedupeKey, SecretAsk, SshAskInfo, SshSubject,
+    WrapSubject,
+};
 use secreq::daemon::state::{SharedState, State};
 use secreq::daemon::theme::OsFlavor;
 use secreq::daemon::ui::{AutoDenyToastView, RuleAction, RuleSort};
@@ -233,16 +236,16 @@ fn submit(
     };
     let ask = Ask {
         command: command.into_iter().map(String::from).collect(),
-        cwd: "~/repos/acme".to_owned(),
-        callers,
-        secrets,
-        providers: HashMap::new(),
         dedupe_key,
-        ssh: None,
-        agent: None,
-        allow_remember: true,
-        nested_run: false,
-        ignore_remembered: false,
+        subject: AskSubject::Wrap(WrapSubject {
+            cwd: "~/repos/acme".to_owned(),
+            callers,
+            secrets,
+            providers: HashMap::new(),
+            allow_remember: true,
+            nested_run: false,
+            ignore_remembered: false,
+        }),
     };
     let (tx, rx) = mpsc::channel();
     state.lock().unwrap().submit_ask(ask, tx);
@@ -267,16 +270,16 @@ fn submit_run(
     };
     let ask = Ask {
         command: command.into_iter().map(String::from).collect(),
-        cwd: "~/repos/acme".to_owned(),
-        callers,
-        secrets,
-        providers: HashMap::new(),
         dedupe_key,
-        ssh: None,
-        agent: None,
-        allow_remember: false,
-        nested_run: false,
-        ignore_remembered: false,
+        subject: AskSubject::Wrap(WrapSubject {
+            cwd: "~/repos/acme".to_owned(),
+            callers,
+            secrets,
+            providers: HashMap::new(),
+            allow_remember: false,
+            nested_run: false,
+            ignore_remembered: false,
+        }),
     };
     let (tx, rx) = mpsc::channel();
     state.lock().unwrap().submit_ask(ask, tx);
@@ -320,21 +323,17 @@ fn submit_ssh(
     };
     let ask = Ask {
         command: vec![format!("ssh-sign {key_id}")],
-        cwd: cwd.to_owned(),
-        callers,
-        secrets: vec![],
-        providers: HashMap::new(),
         dedupe_key,
-        ssh: Some(SshAskInfo {
-            key_id: key_id.to_owned(),
-            fingerprint: fingerprint.to_owned(),
-            reason: reason.map(str::to_owned),
-            anchor,
+        subject: AskSubject::SshSign(SshSubject {
+            cwd: cwd.to_owned(),
+            callers,
+            info: SshAskInfo {
+                key_id: key_id.to_owned(),
+                fingerprint: fingerprint.to_owned(),
+                reason: reason.map(str::to_owned),
+                anchor,
+            },
         }),
-        agent: None,
-        allow_remember: true,
-        nested_run: false,
-        ignore_remembered: false,
     };
     let (tx, rx) = mpsc::channel();
     state.lock().unwrap().submit_ask(ask, tx);
@@ -367,21 +366,14 @@ fn submit_agent(
     };
     let ask = Ask {
         command: vec![format!("agent-resolve {reference}")],
-        // A guest has no host cwd.
-        cwd: String::new(),
-        callers: vec![],
-        secrets: vec![],
-        providers: HashMap::new(),
+        // No cwd, no callers, no secrets: the variant has nowhere to put
+        // any of them, which is the point.
         dedupe_key,
-        ssh: None,
-        agent: Some(AgentAskInfo {
+        subject: AskSubject::ScopedAgent(AgentAskInfo {
             scope: scope.to_owned(),
             reference: reference.to_owned(),
             guest_chain: guest_chain.map(str::to_owned),
         }),
-        allow_remember: false,
-        nested_run: false,
-        ignore_remembered: false,
     };
     let (tx, rx) = mpsc::channel();
     state.lock().unwrap().submit_ask(ask, tx);
@@ -409,16 +401,16 @@ fn pending(
     };
     let ask = Ask {
         command: command.into_iter().map(String::from).collect(),
-        cwd: "~/repos/acme".to_owned(),
-        callers,
-        secrets,
-        providers: HashMap::new(),
         dedupe_key,
-        ssh: None,
-        agent: None,
-        allow_remember: true,
-        nested_run: false,
-        ignore_remembered: false,
+        subject: AskSubject::Wrap(WrapSubject {
+            cwd: "~/repos/acme".to_owned(),
+            callers,
+            secrets,
+            providers: HashMap::new(),
+            allow_remember: true,
+            nested_run: false,
+            ignore_remembered: false,
+        }),
     };
     state.lock().unwrap().begin_pending(ask);
 }

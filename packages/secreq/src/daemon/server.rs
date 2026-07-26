@@ -14,7 +14,7 @@ use std::thread;
 
 use anyhow::{Context, Result};
 
-use super::proto::{Ask, ClientMsg, DaemonMsg, DedupeKey};
+use super::proto::{Ask, AskSubject, ClientMsg, DaemonMsg, DedupeKey};
 use super::state::{SharedState, WaiterId, WaiterReply};
 
 /// Bind the daemon socket and start accepting connections.
@@ -906,7 +906,7 @@ fn handle_ask(ask: Ask, state: SharedState) -> AskDisposition {
         // `--no-remember` asks to be gated even where an approval exists.
         // Honoured here rather than at the client, because this is the only
         // place the cache is read.
-        if !ask.ignore_remembered && guard.has_cached_approval(&ask) {
+        if !ask.ignore_remembered() && guard.has_cached_approval(&ask) {
             let cache = guard.secret_cache_arc();
             let in_flight = guard.in_flight_arc();
             drop(guard);
@@ -1040,25 +1040,50 @@ fn handle_ask(ask: Ask, state: SharedState) -> AskDisposition {
 /// the error and never enqueues the ask, so no prompt is shown and nothing is
 /// released.
 ///
-/// **Scoped-agent asks are exempt, and must stay exempt.** Their peer is the
-/// `secreq agent open` process, whose parent is whatever shell started the
-/// sandbox — a host process that has nothing to do with the guest making the
-/// request. Walking it would not be "the truth about the asker", it would be
-/// a plausible-looking chain attached to the wrong principal, which is worse
+/// **A scoped-agent ask has nothing here to adopt, and that is now its
+/// shape rather than an exemption.** Its peer is the `secreq agent open`
+/// process, whose parent is whatever shell started the sandbox — a host
+/// process that has nothing to do with the guest making the request. Walking
+/// it would not be "the truth about the asker", it would be a
+/// plausible-looking chain attached to the wrong principal, which is worse
 /// than the empty one the prompt shows today. The host-declared scope is the
 /// principal on that path (see `scoped_agent`).
 fn adopt_peer_provenance(ask: &mut Ask, stream: &UnixStream) -> Result<()> {
-    if ask.agent.is_some() {
-        return Ok(());
-    }
-
+    // Read the peer *before* looking at what the ask claims to be, so the
+    // shape of the request cannot decide whether the kernel gets consulted.
     let peer = super::peercred::peer_pid(stream)
         .context("could not read the peer's pid from the consent socket")?;
+
+    let (callers, cwd) = match &mut ask.subject {
+        AskSubject::Wrap(w) => (&mut w.callers, &mut w.cwd),
+        // An SSH sign never reaches this socket — the daemon is the agent and
+        // builds its own ask from `agent.sock`'s peer — but if one ever did,
+        // it has the same kernel-sourced fields a wrap ask has and is
+        // corrected the same way.
+        AskSubject::SshSign(s) => (&mut s.callers, &mut s.cwd),
+        AskSubject::ScopedAgent(_) => return Ok(()),
+    };
+
     let chain = crate::provenance::caller_chain_from_pid(peer);
     let parent = chain.first().context(
         "the requesting process has no visible parent; refusing to prompt for an ask \
          whose provenance cannot be established",
     )?;
+    let (parent_pid, parent_start_time) = (parent.pid, parent.start_time);
+
+    *callers = chain
+        .iter()
+        .map(|c| super::proto::Caller {
+            pid: c.pid,
+            name: c.name.clone(),
+            command: c.command.clone(),
+            start_time: c.start_time,
+            exe: c.exe.clone(),
+        })
+        .collect();
+    // A cwd we cannot read is rendered as absent rather than guessed at, and
+    // the client's claim is not a fallback — it is the thing being replaced.
+    *cwd = crate::provenance::cwd_for_pid(peer).unwrap_or_default();
 
     // The dedupe key's process half keys the approvals cache, so a forged one
     // is a cache-scope escape, not just a display lie. Re-derive it from the
@@ -1074,23 +1099,9 @@ fn adopt_peer_provenance(ask: &mut Ask, stream: &UnixStream) -> Result<()> {
     // served without prompting is bounded separately by
     // `State::nested_run_may_skip_window`.
     if ask.dedupe_key.wrap != super::state::RUN_SESSION_WRAP {
-        ask.dedupe_key.ppid = parent.pid;
-        ask.dedupe_key.parent_start_time = parent.start_time;
+        ask.dedupe_key.ppid = parent_pid;
+        ask.dedupe_key.parent_start_time = parent_start_time;
     }
-
-    ask.callers = chain
-        .iter()
-        .map(|c| super::proto::Caller {
-            pid: c.pid,
-            name: c.name.clone(),
-            command: c.command.clone(),
-            start_time: c.start_time,
-            exe: c.exe.clone(),
-        })
-        .collect();
-    // A cwd we cannot read is rendered as absent rather than guessed at, and
-    // the client's claim is not a fallback — it is the thing being replaced.
-    ask.cwd = crate::provenance::cwd_for_pid(peer).unwrap_or_default();
 
     Ok(())
 }
@@ -1449,6 +1460,8 @@ mod tests {
     use super::*;
     use std::os::unix::net::UnixStream;
 
+    use super::super::proto::WrapSubject;
+
     fn deny_reply() -> DaemonMsg {
         DaemonMsg::Decision {
             decision: crate::consent::Decision::Deny,
@@ -1496,21 +1509,21 @@ mod tests {
             // Register a parked waiter, as the slow path does.
             let ask = Ask {
                 command: vec!["gh".to_owned(), "pr".to_owned(), "view".to_owned()],
-                cwd: "/work".to_owned(),
-                callers: vec![],
-                secrets: vec![],
-                providers: std::collections::HashMap::new(),
                 dedupe_key: DedupeKey {
                     wrap: "gh".to_owned(),
                     ppid: 4242,
                     parent_start_time: 7,
                     subject_digest: None,
                 },
-                ssh: None,
-                agent: None,
-                allow_remember: true,
-                nested_run: false,
-                ignore_remembered: false,
+                subject: AskSubject::Wrap(WrapSubject {
+                    cwd: "/work".to_owned(),
+                    callers: vec![],
+                    secrets: vec![],
+                    providers: std::collections::HashMap::new(),
+                    allow_remember: true,
+                    nested_run: false,
+                    ignore_remembered: false,
+                }),
             };
             let (tx, rx) = mpsc::channel();
             let key = ask.dedupe_key.clone();
@@ -1758,27 +1771,27 @@ mod tests {
     fn forged_ask(wrap: &str) -> Ask {
         Ask {
             command: vec!["gh".to_owned(), "api".to_owned()],
-            cwd: "/somewhere/the/attacker/named".to_owned(),
-            callers: vec![super::super::proto::Caller {
-                pid: FORGED_PID,
-                name: "zsh".to_owned(),
-                command: "-zsh".to_owned(),
-                start_time: 12345,
-                exe: None,
-            }],
-            secrets: Vec::new(),
-            providers: std::collections::HashMap::new(),
             dedupe_key: DedupeKey {
                 wrap: wrap.to_owned(),
                 ppid: FORGED_PID,
                 parent_start_time: 12345,
                 subject_digest: None,
             },
-            ssh: None,
-            agent: None,
-            allow_remember: true,
-            nested_run: false,
-            ignore_remembered: false,
+            subject: AskSubject::Wrap(WrapSubject {
+                cwd: "/somewhere/the/attacker/named".to_owned(),
+                callers: vec![super::super::proto::Caller {
+                    pid: FORGED_PID,
+                    name: "zsh".to_owned(),
+                    command: "-zsh".to_owned(),
+                    start_time: 12345,
+                    exe: None,
+                }],
+                secrets: Vec::new(),
+                providers: std::collections::HashMap::new(),
+                allow_remember: true,
+                nested_run: false,
+                ignore_remembered: false,
+            }),
         }
     }
 
@@ -1807,15 +1820,15 @@ mod tests {
         adopt_peer_provenance(&mut ask, &server_conn).expect("provenance");
 
         assert!(
-            !ask.callers.iter().any(|c| c.pid == FORGED_PID),
+            !ask.callers().iter().any(|c| c.pid == FORGED_PID),
             "the forged frame survived into the chain: {:?}",
-            ask.callers.iter().map(|c| c.pid).collect::<Vec<_>>()
+            ask.callers().iter().map(|c| c.pid).collect::<Vec<_>>()
         );
         assert!(
-            !ask.callers.is_empty(),
+            !ask.callers().is_empty(),
             "the real chain should be populated"
         );
-        assert_ne!(ask.cwd, "/somewhere/the/attacker/named");
+        assert_ne!(ask.cwd(), "/somewhere/the/attacker/named");
     }
 
     /// The dedupe key's process half keys the approvals cache, so leaving it
@@ -1832,8 +1845,11 @@ mod tests {
         assert_ne!(ask.dedupe_key.parent_start_time, 12345);
         // It agrees with the chain the daemon just walked, which is how the
         // client derives it too.
-        assert_eq!(ask.dedupe_key.ppid, ask.callers[0].pid);
-        assert_eq!(ask.dedupe_key.parent_start_time, ask.callers[0].start_time);
+        assert_eq!(ask.dedupe_key.ppid, ask.callers()[0].pid);
+        assert_eq!(
+            ask.dedupe_key.parent_start_time,
+            ask.callers()[0].start_time
+        );
         // The wrap half is config, not provenance, and is left alone.
         assert_eq!(ask.dedupe_key.wrap, "gh");
     }
@@ -1854,32 +1870,39 @@ mod tests {
             "session identity preserved"
         );
         assert_eq!(ask.dedupe_key.parent_start_time, 12345);
-        assert!(!ask.callers.iter().any(|c| c.pid == FORGED_PID));
+        assert!(!ask.callers().iter().any(|c| c.pid == FORGED_PID));
     }
 
-    /// A scoped-agent ask's peer is the `agent open` process, whose parent is
-    /// a host shell with no relationship to the guest that made the request.
-    /// Walking it would attach a plausible chain to the wrong principal —
-    /// worse than the empty one the prompt deliberately shows.
+    /// A scoped-agent ask, built the way `scoped_agent::agent_ask` builds
+    /// one, but keeping the forged dedupe identity so the assertions below
+    /// can tell "left alone" from "re-derived".
+    fn forged_agent_ask() -> Ask {
+        Ask {
+            subject: AskSubject::ScopedAgent(super::super::proto::AgentAskInfo {
+                scope: "sandbox".to_owned(),
+                reference: "secret://op/a/b".to_owned(),
+                guest_chain: None,
+            }),
+            ..forged_ask("agent:sandbox:secret://op/a/b")
+        }
+    }
+
+    /// A genuine scoped-agent ask's peer is the `agent open` process, whose
+    /// parent is a host shell with no relationship to the guest that made the
+    /// request. Walking it would attach a plausible chain to the wrong
+    /// principal — worse than the empty one the prompt deliberately shows.
     #[test]
     fn a_scoped_agent_ask_keeps_its_empty_chain() {
         let (server_conn, _client) = connected_pair();
-        let mut ask = forged_ask("agent:sandbox:secret://op/a/b");
-        ask.callers = Vec::new();
-        ask.cwd = String::new();
-        ask.agent = Some(super::super::proto::AgentAskInfo {
-            scope: "sandbox".to_owned(),
-            reference: "secret://op/a/b".to_owned(),
-            guest_chain: None,
-        });
+        let mut ask = forged_agent_ask();
 
         adopt_peer_provenance(&mut ask, &server_conn).expect("provenance");
 
         assert!(
-            ask.callers.is_empty(),
+            ask.callers().is_empty(),
             "a guest ask must not gain a host chain"
         );
-        assert!(ask.cwd.is_empty());
+        assert!(ask.cwd().is_empty());
         assert_eq!(ask.dedupe_key.ppid, FORGED_PID);
     }
 
@@ -1890,8 +1913,8 @@ mod tests {
     #[test]
     fn ignore_remembered_bypasses_the_approval_cache() {
         let mut state = super::super::state::State::new();
-        let mut ask = forged_ask("gh");
-        ask.ignore_remembered = false;
+        let ask = forged_ask("gh");
+        assert!(!ask.ignore_remembered(), "precondition: the flag is off");
 
         // Grant the approval the flag is supposed to ignore.
         state.remember_approval_for_test(&ask);
@@ -1903,16 +1926,14 @@ mod tests {
         // The read half: the same ask, flagged, must not take the fast path.
         // `has_cached_approval` still reports the entry — the flag is applied
         // by the caller, which is where the cache is actually consulted.
-        let flagged = Ask {
-            ignore_remembered: true,
-            ..forged_ask("gh")
-        };
+        let mut flagged = forged_ask("gh");
+        flagged.wrap_mut().expect("a wrap ask").ignore_remembered = true;
         assert!(
             state.has_cached_approval(&flagged),
             "the entry still exists; the flag is not a cache mutation"
         );
         assert!(
-            flagged.ignore_remembered && !ask.ignore_remembered,
+            flagged.ignore_remembered() && !ask.ignore_remembered(),
             "the flag rides the ask to the daemon"
         );
     }

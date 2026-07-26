@@ -84,7 +84,7 @@
 pub mod client;
 pub mod proto;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -97,7 +97,7 @@ use zeroize::Zeroize;
 
 use crate::audit::{self, AuditEntry};
 use crate::consent::{AgentAnchor, AgentGrant, Decision};
-use crate::daemon::proto::{AgentAskInfo, Ask, DedupeKey};
+use crate::daemon::proto::{AgentAskInfo, Ask, AskSubject, DedupeKey};
 use crate::manifest::{Manifest, Provider};
 use crate::reference::Reference;
 use crate::resolve::{resolve_all, ResolutionPlan, SecretRequest, Source};
@@ -538,21 +538,23 @@ fn resolve_fresh(manifest: &Manifest, reference: &Reference) -> Result<SecretVal
 
 /// Build the consent [`Ask`] for one scoped-agent resolve.
 ///
-/// Four fields carry the design decisions and are worth reading as such:
+/// Most of what used to be a decision here is now a consequence of picking
+/// [`AskSubject::ScopedAgent`], which is the point: the variant carries a
+/// scope, a ref and the guest's claim, and nothing else exists to fill in.
 ///
-/// - **`callers` is empty.** Not "not yet populated" — *empty on purpose*.
-///   See the module docs: there is no host-verifiable caller chain behind a
+/// - **There is no `callers` field.** Not "empty on purpose" — *absent*. See
+///   the module docs: there is no host-verifiable caller chain behind a
 ///   guest, and displaying an unverifiable one as if it were provenance
 ///   would be theater. The scope is the principal.
-/// - **`agent.guest_chain` carries the guest's claim** — and it goes *here*,
-///   never into `callers`, however tempting the shape. `callers` is what
-///   `rules.rs` matches on and what `provenance.rs` fills from the kernel;
-///   a guest's story landing there could fire an auto-approve rule, which
-///   would hand a compromised guest a silent release by simply naming the
-///   right process. Two fields, because they are two different kinds of
-///   thing: one the host saw, one the guest said.
-/// - **`secrets` is empty.** The daemon decides; it does not resolve. See
-///   [`DaemonGate`].
+/// - **`guest_chain` carries the guest's claim**, and it is the only place
+///   it can go. A caller chain is what `rules.rs` matches on and what
+///   `provenance.rs` fills from the kernel; a guest's story landing there
+///   could fire an auto-approve rule, which would hand a compromised guest a
+///   silent release by simply naming the right process. Two fields, because
+///   they are two different kinds of thing: one the host saw, one the guest
+///   said.
+/// - **There is no `secrets` field either.** The daemon decides; it does not
+///   resolve. See [`DaemonGate`].
 /// - **`dedupe_key.wrap` names the scope *and* the ref — and nothing the
 ///   guest said.** Coalescing folds asks with an equal key into one queue
 ///   entry answered by one decision, so a scope-only key would let a request
@@ -565,11 +567,6 @@ fn resolve_fresh(manifest: &Manifest, reference: &Reference) -> Result<SecretVal
 fn agent_ask(scope: &Scope, reference: &Reference, guest_chain: &GuestChain) -> Ask {
     Ask {
         command: vec![format!("agent-resolve {reference}")],
-        // A guest has no host cwd. Empty, like the SSH sign path's.
-        cwd: String::new(),
-        callers: Vec::new(),
-        secrets: Vec::new(),
-        providers: HashMap::new(),
         dedupe_key: DedupeKey {
             wrap: format!("agent:{}:{reference}", scope.name),
             // Our own pid: the scoped socket's lifetime is this process's
@@ -578,20 +575,11 @@ fn agent_ask(scope: &Scope, reference: &Reference, guest_chain: &GuestChain) -> 
             parent_start_time: 0,
             subject_digest: None,
         },
-        ssh: None,
-        agent: Some(AgentAskInfo {
+        subject: AskSubject::ScopedAgent(AgentAskInfo {
             scope: scope.name.clone(),
             reference: reference.to_string(),
             guest_chain: guest_chain.display().map(str::to_owned),
         }),
-        // Approvals anchor to the scope in *this* process's
-        // [`ScopeApprovals`], not in the daemon: `false` keeps the daemon's
-        // parent-keyed cache — which keys on `(wrap, ppid,
-        // parent_start_time)`, none of which means anything for a guest —
-        // out of this path entirely.
-        allow_remember: false,
-        nested_run: false,
-        ignore_remembered: false,
     }
 }
 
@@ -1598,27 +1586,33 @@ mod tests {
 
     /// The ask the daemon sees must gate on the scope and carry no caller
     /// chain and no secrets — the three decisions in `agent_ask`'s docs.
+    ///
+    /// Two of those three are now the variant's shape rather than this
+    /// function's discipline, so the assertions read them back through the
+    /// accessors every consumer uses: whatever a guest ask is asked for, the
+    /// answer must stay empty.
     #[test]
     fn agent_ask_gates_on_scope_with_no_provenance_and_no_secrets() {
         let scope = test_scope();
         let reference = reference("secret://op/Dev/gh/token");
         let ask = agent_ask(&scope, &reference, &GuestChain::default());
 
-        let info = ask.agent.expect("agent asks carry AgentAskInfo");
+        let AskSubject::ScopedAgent(info) = &ask.subject else {
+            panic!("agent asks carry a ScopedAgent subject");
+        };
         assert_eq!(info.scope, "brain-nx-t5");
         assert_eq!(info.reference, "secret://op/Dev/gh/token");
 
         assert!(
-            ask.callers.is_empty(),
+            ask.callers().is_empty(),
             "a guest has no host-verifiable caller chain; peercred/provenance must not be wired in"
         );
         assert!(
-            ask.secrets.is_empty(),
+            ask.secrets().is_empty(),
             "the daemon decides but must not resolve — the material must not enter its cache"
         );
-        assert!(ask.cwd.is_empty());
-        assert!(ask.ssh.is_none());
-        assert!(!ask.allow_remember);
+        assert!(ask.cwd().is_empty());
+        assert!(!ask.allow_remember());
     }
 
     /// A cached decision skips the prompt but **not** the resolve. This is
@@ -1917,21 +1911,23 @@ mod tests {
         );
     }
 
-    /// The claim rides the ask for the prompt to render — in the `agent`
-    /// marker, and **not** in `callers`. `callers` is what `rules.rs`
-    /// matches on and what `provenance.rs` fills from the kernel; a guest
-    /// able to write there could name a process that fires an auto-approve
-    /// rule and collect a silent release.
+    /// The claim rides the ask for the prompt to render — in the
+    /// `ScopedAgent` subject, and **not** as a caller chain. A caller chain
+    /// is what `rules.rs` matches on and what `provenance.rs` fills from the
+    /// kernel; a guest able to write there could name a process that fires
+    /// an auto-approve rule and collect a silent release.
     #[test]
     fn agent_ask_carries_the_guest_claim_for_display_but_never_as_callers() {
         let scope = test_scope();
         let chain = GuestChain::new(vec!["node".to_owned(), "pnpm".to_owned()]);
         let ask = agent_ask(&scope, &reference("secret://op/Dev/gh/token"), &chain);
 
-        let info = ask.agent.expect("agent asks carry AgentAskInfo");
+        let AskSubject::ScopedAgent(info) = &ask.subject else {
+            panic!("agent asks carry a ScopedAgent subject");
+        };
         assert_eq!(info.guest_chain.as_deref(), Some("node → pnpm"));
         assert!(
-            ask.callers.is_empty(),
+            ask.callers().is_empty(),
             "a guest's claim must never be laundered into the kernel-sourced caller chain"
         );
     }

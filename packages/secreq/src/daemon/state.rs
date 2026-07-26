@@ -30,7 +30,7 @@ use crate::rules::{self, EvalCtx, Rule, RuleHit};
 
 use super::cache::{CacheKey, SecretCache};
 use super::in_flight::{Acquired, InFlightGuard, InFlightMap};
-use super::proto::{Ask, DedupeKey, RowStatus, WireProvider};
+use super::proto::{Ask, AskSubject, DedupeKey, RowStatus, WireProvider};
 
 /// One coalesced queue entry. Multiple clients with the same dedupe key
 /// share a single entry; resolving it sends the same outcome to every
@@ -1097,16 +1097,18 @@ impl State {
             key: key.clone(),
             // Build the representative's secrets by folding the creating
             // ask's own secrets through `merge_secret`, so even the first
-            // ask's secrets carry `← command` provenance.
-            representative: Ask {
-                secrets: {
-                    let mut rep = Vec::new();
-                    for s in &ask.secrets {
-                        merge_secret(&mut rep, s, &command_label);
+            // ask's secrets carry `← command` provenance. Only a wrap ask
+            // has any; the other kinds pass through untouched.
+            representative: {
+                let mut rep = ask.clone();
+                if let Some(wrap) = rep.wrap_mut() {
+                    let mut merged = Vec::new();
+                    for s in &wrap.secrets {
+                        merge_secret(&mut merged, s, &command_label);
                     }
-                    rep
-                },
-                ..ask.clone()
+                    wrap.secrets = merged;
+                }
+                rep
             },
             waiters: Vec::new(),
             first_seen: Instant::now(),
@@ -1114,8 +1116,10 @@ impl State {
         if !is_new {
             // Coalesce: union this ask's secrets into the growing
             // representative, stamping each with this ask's command.
-            for s in &ask.secrets {
-                merge_secret(&mut entry.representative.secrets, s, &command_label);
+            if let Some(wrap) = entry.representative.wrap_mut() {
+                for s in ask.secrets() {
+                    merge_secret(&mut wrap.secrets, s, &command_label);
+                }
             }
         }
         let waiter_id = WaiterId(self.waiter_next_id);
@@ -1123,10 +1127,10 @@ impl State {
         entry.waiters.push(Waiter {
             id: waiter_id,
             sender: waiter,
-            requested: ask.secrets.clone(),
+            requested: ask.secrets().to_vec(),
             command: ask.command.clone(),
-            cwd: ask.cwd.clone(),
-            callers: ask.callers.clone(),
+            cwd: ask.cwd().to_owned(),
+            callers: ask.callers().to_vec(),
         });
         self.show_window();
         self.broadcast_consent_update();
@@ -1188,13 +1192,12 @@ impl State {
         };
 
         // SSH asks track their session grants separately via `SshGrant`
-        // (keyed on the anchor, inserted on the SSH path); the wrap approvals
-        // cache is never read for them, so skip the insert to avoid polluting
-        // it with dead entries.
-        if decision == Decision::ApproveRemember
-            && entry.representative.ssh.is_none()
-            && entry.representative.allow_remember
-        {
+        // (keyed on the anchor, inserted on the SSH path) and guest asks
+        // through the `agent open` process's own `ScopeApprovals`; the wrap
+        // approvals cache is never read for either, so skip the insert to
+        // avoid polluting it with dead entries. `allow_remember()` answers
+        // `false` for both, which is the whole guard.
+        if decision == Decision::ApproveRemember && entry.representative.allow_remember() {
             let new = ApprovalEntry {
                 wrap: key.wrap.clone(),
                 ppid: scope.pid,
@@ -1211,7 +1214,7 @@ impl State {
         if decision.approved() {
             if let Some(session) = RunSession::of(&entry.representative) {
                 let released = self.run_session_releases.entry(session).or_default();
-                for secret in &entry.representative.secrets {
+                for secret in entry.representative.secrets() {
                     released.insert((secret.provider.clone(), secret.locator.clone()));
                 }
             }
@@ -1540,26 +1543,31 @@ impl State {
     pub fn evaluate_rules_for_ask(&self, ask: &Ask) -> Option<RuleHit> {
         // A scoped-agent ask never reaches the ruleset. Both design docs say
         // so already, but they say it about the *call sites* — and this
-        // method has no way to refuse one, so the guarantee held only while
-        // nobody added a third caller. `handle_ask` is that third caller: a
-        // guest ask arrives over the ordinary consent socket and lands here
-        // like any other.
+        // method used to have no way to refuse one, so the guarantee held
+        // only while nobody added a third caller. `handle_ask` is that third
+        // caller: a guest ask arrives over the ordinary consent socket and
+        // lands here like any other.
         //
-        // Enforced rather than assumed, because a guest is the principal
+        // Refused rather than assumed away, because a guest is the principal
         // least suited to minting silent approvals. Every clause a rule could
-        // match on is absent or unverifiable here: `callers` is empty by
-        // construction, `cwd` is in another kernel, and the only rich input
-        // is a string the guest chose. The host-declared scope is the
-        // principal on this path, and the prompt is where it gets decided.
-        if ask.agent.is_some() {
-            return None;
-        }
+        // match on is absent or unverifiable here: there is no caller chain,
+        // no cwd (it is in another kernel), and the only rich input is a
+        // string the guest chose. The host-declared scope is the principal on
+        // this path, and the prompt is where it gets decided.
+        //
+        // Written as a match on the two kinds that *may* reach the engine, so
+        // a fourth kind of ask has to state which side of this line it is on
+        // instead of defaulting onto the permissive one.
+        let (callers, secrets, cwd, ssh) = match &ask.subject {
+            AskSubject::Wrap(w) => (&w.callers, w.secrets.as_slice(), w.cwd.as_str(), None),
+            AskSubject::SshSign(s) => (&s.callers, [].as_slice(), s.cwd.as_str(), Some(&s.info)),
+            AskSubject::ScopedAgent(_) => return None,
+        };
         if self.rules.is_empty() {
             return None;
         }
         let joined_argv = ask.command.join(" ");
-        let callers: Vec<rules::EvalCaller<'_>> = ask
-            .callers
+        let callers: Vec<rules::EvalCaller<'_>> = callers
             .iter()
             .map(|c| rules::EvalCaller {
                 name: c.name.as_str(),
@@ -1576,10 +1584,11 @@ impl State {
         // and every rule is consulted for every sign regardless of what
         // it was trained on.
         //
-        // Derived here rather than in `sign_ask` deliberately:
-        // `Ask::secrets` drives provider resolution, so a synthetic
-        // entry there would send the daemon looking for a secret that
-        // does not exist.
+        // Derived here rather than in `sign_ask` deliberately: a wrap ask's
+        // `secrets` drives provider resolution, and the SSH variant has no
+        // such field to put a synthetic entry in anyway — which is the shape
+        // this reasoning always wanted.
+        //
         // A **gate-only wrap** has no `env` entries, so it declares no
         // secrets either — it exists to put consent in front of a binary that
         // holds its own credentials (`op` is the shipped example). That ask
@@ -1587,24 +1596,20 @@ impl State {
         // close, and the fix landed only on the SSH branch. Name the wrap
         // itself, so `--secret wrap:op` scopes a rule to it and a rule
         // trained on anything else stops being consulted.
-        let subject = ask
-            .ssh
-            .as_ref()
-            .map(|s| format!("ssh:{}", s.key_id))
-            .or_else(|| {
-                ask.secrets
-                    .is_empty()
-                    .then(|| format!("wrap:{}", ask.dedupe_key.wrap))
-            });
+        let subject = ssh.map(|s| format!("ssh:{}", s.key_id)).or_else(|| {
+            secrets
+                .is_empty()
+                .then(|| format!("wrap:{}", ask.dedupe_key.wrap))
+        });
         let requested: Vec<&str> = match &subject {
             Some(subject) => vec![subject.as_str()],
-            None => ask.secrets.iter().map(|s| s.name.as_str()).collect(),
+            None => secrets.iter().map(|s| s.name.as_str()).collect(),
         };
         let ctx = EvalCtx {
             wrap: &ask.dedupe_key.wrap,
             joined_argv: &joined_argv,
             callers: &callers,
-            cwd: &ask.cwd,
+            cwd,
             secrets: &requested,
         };
         let evaluation = rules::evaluate(&self.rules, &self.rule_modules, &ctx);
@@ -2019,7 +2024,7 @@ pub fn approval_scope_for(approvals: &[ApprovalEntry], ask: &Ask) -> Option<Appr
         return Some(direct);
     }
     // Then each ancestor past the direct parent.
-    for caller in ask.callers.iter().skip(1) {
+    for caller in ask.callers().iter().skip(1) {
         let scope = ApprovalScope {
             pid: caller.pid,
             start_time: caller.start_time,
@@ -2101,7 +2106,7 @@ fn has_entry(approvals: &[ApprovalEntry], wrap: &str, scope: ApprovalScope) -> b
 /// is already cached, resolution is instant and silent.
 pub(super) fn ask_fully_cached(ask: &Ask, cache: &Arc<Mutex<SecretCache>>) -> bool {
     let guard = cache.lock().expect("secret cache mutex");
-    ask.secrets.iter().all(|s| {
+    ask.secrets().iter().all(|s| {
         guard
             .get(&CacheKey {
                 wrap: ask.dedupe_key.wrap.clone(),
@@ -2132,7 +2137,7 @@ impl State {
     pub(super) fn record_run_release_for_test(&mut self, ask: &Ask) {
         if let Some(session) = RunSession::of(ask) {
             let released = self.run_session_releases.entry(session).or_default();
-            for secret in &ask.secrets {
+            for secret in ask.secrets() {
                 released.insert((secret.provider.clone(), secret.locator.clone()));
             }
         }
@@ -2142,7 +2147,7 @@ impl State {
     #[cfg(test)]
     pub(super) fn put_cached_for_test(&mut self, ask: &Ask, value: &str) {
         let mut guard = self.secret_cache.lock().expect("secret cache mutex");
-        for secret in &ask.secrets {
+        for secret in ask.secrets() {
             guard.put(
                 CacheKey {
                     wrap: ask.dedupe_key.wrap.clone(),
@@ -2166,7 +2171,7 @@ impl State {
     }
 
     pub fn nested_run_may_skip_window(&self, ask: &Ask) -> bool {
-        if !ask.nested_run {
+        if !ask.nested_run() {
             return false;
         }
         let Some(session) = RunSession::of(ask) else {
@@ -2178,7 +2183,7 @@ impl State {
             return false;
         };
         let all_released = ask
-            .secrets
+            .secrets()
             .iter()
             .all(|s| released.contains(&(s.provider.clone(), s.locator.clone())));
         all_released && ask_fully_cached(ask, &self.secret_cache)
@@ -2254,7 +2259,7 @@ pub(super) fn resolve_for_ask(
     let mut needs_resolve: Vec<&super::proto::SecretAsk> = Vec::new();
     let mut guards: Vec<InFlightGuard> = Vec::new();
 
-    for s in &ask.secrets {
+    for s in ask.secrets() {
         let key = CacheKey {
             wrap: ask.dedupe_key.wrap.clone(),
             provider: s.provider.clone(),
@@ -2311,7 +2316,7 @@ pub(super) fn resolve_for_ask(
         };
     }
 
-    let manifest = build_manifest(&ask.providers);
+    let manifest = build_manifest(ask.providers());
     let plan = ResolutionPlan {
         requests: needs_resolve
             .iter()
@@ -2399,7 +2404,7 @@ fn resolve_union(
     // resolve batch mirrors arrival order.
     let mut order: Vec<(String, String)> = Vec::new();
     let mut first_ask: HashMap<(String, String), &super::proto::SecretAsk> = HashMap::new();
-    for s in &rep.secrets {
+    for s in rep.secrets() {
         let pl = (s.provider.clone(), s.locator.clone());
         first_ask.entry(pl.clone()).or_insert_with(|| {
             order.push(pl);
@@ -2474,7 +2479,7 @@ fn resolve_union(
         return out;
     }
 
-    let manifest = build_manifest(&rep.providers);
+    let manifest = build_manifest(rep.providers());
     let plan = ResolutionPlan {
         requests: needs_resolve
             .iter()
@@ -2683,26 +2688,47 @@ mod tests {
         };
         Ask {
             command: vec![wrap.to_owned()],
-            cwd: String::new(),
-            callers: callers
-                .into_iter()
-                .map(|(pid, start_time)| Caller {
-                    pid,
-                    name: String::new(),
-                    command: String::new(),
-                    start_time,
-                    exe: None,
-                })
-                .collect(),
-            secrets: vec![],
-            providers: HashMap::new(),
             dedupe_key,
-            ssh: None,
-            agent: None,
-            allow_remember: true,
-            nested_run: false,
-            ignore_remembered: false,
+            subject: AskSubject::Wrap(super::super::proto::WrapSubject {
+                cwd: String::new(),
+                callers: callers
+                    .into_iter()
+                    .map(|(pid, start_time)| Caller {
+                        pid,
+                        name: String::new(),
+                        command: String::new(),
+                        start_time,
+                        exe: None,
+                    })
+                    .collect(),
+                secrets: vec![],
+                providers: HashMap::new(),
+                allow_remember: true,
+                nested_run: false,
+                ignore_remembered: false,
+            }),
         }
+    }
+
+    /// The same shape as [`mk_ask`], but an SSH sign: same caller chain,
+    /// no secrets, and the identity the prompt renders. `mk_ask`'s tuple
+    /// list is `(pid, start_time)` pairs, nearest-first.
+    fn mk_ssh_ask(key_id: &str, callers: Vec<(u32, u64)>) -> Ask {
+        let mut ask = mk_ask(&format!("ssh:{key_id}"), callers);
+        let AskSubject::Wrap(wrap) = ask.subject else {
+            unreachable!("mk_ask builds a wrap subject")
+        };
+        ask.subject = AskSubject::SshSign(super::super::proto::SshSubject {
+            cwd: wrap.cwd,
+            callers: wrap.callers,
+            info: SshAskInfo {
+                key_id: key_id.to_owned(),
+                fingerprint: "SHA256:deadbeef".into(),
+                reason: None,
+                anchor: None,
+            },
+        });
+        ask
     }
 
     #[test]
@@ -2763,14 +2789,9 @@ mod tests {
             start_time: 1_700_000_000,
         };
 
-        // SSH ask: carries an `SshAskInfo` marker, no secrets.
-        let mut ssh_ask = mk_ask("ssh:github", vec![(4242, 1_700_000_000)]);
-        ssh_ask.ssh = Some(SshAskInfo {
-            key_id: "github".into(),
-            fingerprint: "SHA256:deadbeef".into(),
-            reason: None,
-            anchor: None,
-        });
+        // SSH ask: an `SshSign` subject, which carries no secrets and
+        // answers `allow_remember()` with false.
+        let ssh_ask = mk_ssh_ask("github", vec![(4242, 1_700_000_000)]);
         let ssh_key = ssh_ask.dedupe_key.clone();
         let (tx, _rx) = mpsc::channel();
         {
@@ -2813,7 +2834,7 @@ mod tests {
         };
 
         let mut ask = mk_ask("run", vec![(4242, 1_700_000_000)]);
-        ask.allow_remember = false;
+        ask.wrap_mut().expect("a wrap ask").allow_remember = false;
         let key = ask.dedupe_key.clone();
         let (tx, _rx) = mpsc::channel();
         let mut guard = shared.lock().expect("state mutex");
@@ -3034,30 +3055,36 @@ mod tests {
     fn ask_with_secret(wrap: &str, argv: &[&str], secret: &str) -> Ask {
         Ask {
             command: argv.iter().map(|s| (*s).to_owned()).collect(),
-            cwd: String::new(),
-            callers: vec![],
-            secrets: vec![super::super::proto::SecretAsk {
-                name: secret.to_owned(),
-                provider: "fake".to_owned(),
-                locator: "x".to_owned(),
-                default: None,
-                description: None,
-                reason: None,
-                requested_by: vec![],
-            }],
-            providers: HashMap::new(),
             dedupe_key: DedupeKey {
                 wrap: wrap.to_owned(),
                 ppid: 0,
                 parent_start_time: 0,
                 subject_digest: None,
             },
-            ssh: None,
-            agent: None,
-            allow_remember: true,
-            nested_run: false,
-            ignore_remembered: false,
+            subject: AskSubject::Wrap(super::super::proto::WrapSubject {
+                cwd: String::new(),
+                callers: vec![],
+                secrets: vec![super::super::proto::SecretAsk {
+                    name: secret.to_owned(),
+                    provider: "fake".to_owned(),
+                    locator: "x".to_owned(),
+                    default: None,
+                    description: None,
+                    reason: None,
+                    requested_by: vec![],
+                }],
+                providers: HashMap::new(),
+                allow_remember: true,
+                nested_run: false,
+                ignore_remembered: false,
+            }),
         }
+    }
+
+    /// Mutable wrap payload of a test ask. Every helper below builds one
+    /// through [`ask_with_secret`], so the unwrap cannot fail.
+    fn wrap_of(ask: &mut Ask) -> &mut super::super::proto::WrapSubject {
+        ask.wrap_mut().expect("test asks are wrap asks")
     }
 
     /// Like [`ask_with_secret`] but with an explicit `(provider, locator)`
@@ -3071,8 +3098,9 @@ mod tests {
         locator: &str,
     ) -> Ask {
         let mut ask = ask_with_secret(wrap, argv, name);
-        ask.secrets[0].provider = provider.to_owned();
-        ask.secrets[0].locator = locator.to_owned();
+        let wrap = wrap_of(&mut ask);
+        wrap.secrets[0].provider = provider.to_owned();
+        wrap.secrets[0].locator = locator.to_owned();
         ask
     }
 
@@ -3102,7 +3130,7 @@ mod tests {
             .map(|s| (s.name.as_str(), s.provider.as_str(), s.locator.as_str()))
             .collect();
         let expected: Vec<(&str, &str, &str)> = ask
-            .secrets
+            .secrets()
             .iter()
             .map(|s| (s.name.as_str(), s.provider.as_str(), s.locator.as_str()))
             .collect();
@@ -3230,10 +3258,10 @@ mod tests {
         let waiter = Waiter {
             id: WaiterId(1),
             sender: tx,
-            requested: x_ask.secrets.clone(),
+            requested: x_ask.secrets().to_vec(),
             command: x_ask.command.clone(),
             cwd: "/work".to_owned(),
-            callers: x_ask.callers.clone(),
+            callers: x_ask.callers().to_vec(),
         };
         let entry = State::abandoned_audit_entry(&x_ask.dedupe_key, &waiter);
         assert_eq!(entry.wrap, "gh");
@@ -3249,7 +3277,7 @@ mod tests {
         let waiter2 = Waiter {
             id: WaiterId(2),
             sender: tx2,
-            requested: run_ask.secrets.clone(),
+            requested: run_ask.secrets().to_vec(),
             command: run_ask.command.clone(),
             cwd: String::new(),
             callers: vec![],
@@ -3273,7 +3301,7 @@ mod tests {
         let entry = state.queue_entry_for_test(&a.dedupe_key).unwrap();
         let names: Vec<&str> = entry
             .representative
-            .secrets
+            .secrets()
             .iter()
             .map(|s| s.name.as_str())
             .collect();
@@ -3283,10 +3311,10 @@ mod tests {
             "union preserves both, in arrival order"
         );
         // provenance stamped with each requesting command:
-        assert!(entry.representative.secrets[0]
+        assert!(entry.representative.secrets()[0]
             .requested_by
             .contains(&"run ./migrate".to_owned()));
-        assert!(entry.representative.secrets[1]
+        assert!(entry.representative.secrets()[1]
             .requested_by
             .contains(&"run ./worker".to_owned()));
     }
@@ -3303,7 +3331,7 @@ mod tests {
         // Unnested run, even fully cached → must NOT skip. This is the
         // load-bearing invariant: a top-level run always prompts.
         let mut unnested = ask_with_secret("run", &["run", "cmd"], "TOKEN");
-        unnested.nested_run = false;
+        wrap_of(&mut unnested).nested_run = false;
         assert!(
             !state.nested_run_may_skip_window(&unnested),
             "an unnested run must always prompt, even when fully cached"
@@ -3311,7 +3339,7 @@ mod tests {
 
         // Nested + fully cached → skip the window.
         let mut nested = ask_with_secret("run", &["run", "cmd"], "TOKEN");
-        nested.nested_run = true;
+        wrap_of(&mut nested).nested_run = true;
         assert!(
             state.nested_run_may_skip_window(&nested),
             "a nested, fully-cached run should resolve without prompting"
@@ -3320,8 +3348,8 @@ mod tests {
         // Nested but one secret uncached → must NOT skip (prompts for the
         // uncached var).
         let mut nested_uncached = ask_with_secret("run", &["run", "cmd"], "TOKEN");
-        nested_uncached.nested_run = true;
-        nested_uncached
+        wrap_of(&mut nested_uncached).nested_run = true;
+        wrap_of(&mut nested_uncached)
             .secrets
             .push(super::super::proto::SecretAsk {
                 name: "OTHER".to_owned(),
@@ -3448,31 +3476,10 @@ mod tests {
             },
         );
 
-        let make_ask = || Ask {
-            command: vec!["gh".to_owned(), "api".to_owned()],
-            cwd: String::new(),
-            callers: vec![],
-            secrets: vec![super::super::proto::SecretAsk {
-                name: "GITHUB_TOKEN".to_owned(),
-                provider: "fake".to_owned(),
-                locator: "x".to_owned(),
-                default: None,
-                description: None,
-                reason: None,
-                requested_by: vec![],
-            }],
-            providers: providers.clone(),
-            dedupe_key: DedupeKey {
-                wrap: "gh".to_owned(),
-                ppid: 0,
-                parent_start_time: 0,
-                subject_digest: None,
-            },
-            ssh: None,
-            agent: None,
-            allow_remember: true,
-            nested_run: false,
-            ignore_remembered: false,
+        let make_ask = || {
+            let mut ask = ask_with_secret("gh", &["gh", "api"], "GITHUB_TOKEN");
+            wrap_of(&mut ask).providers = providers.clone();
+            ask
         };
 
         let state = State::new();
@@ -3638,16 +3645,18 @@ mod tests {
         // Two secrets through the batch-capable provider must resolve via the
         // BATCH (`batched-*`), not the per-secret fallback (`persecret-*`).
         let mut ask = ask_with_secret_named("run", &["run", "x"], "S1", "bat", "loc-a");
-        ask.secrets.push(super::super::proto::SecretAsk {
-            name: "S2".to_owned(),
-            provider: "bat".to_owned(),
-            locator: "loc-b".to_owned(),
-            default: None,
-            description: None,
-            reason: None,
-            requested_by: vec![],
-        });
-        ask.providers = batch_fake_providers();
+        wrap_of(&mut ask)
+            .secrets
+            .push(super::super::proto::SecretAsk {
+                name: "S2".to_owned(),
+                provider: "bat".to_owned(),
+                locator: "loc-b".to_owned(),
+                default: None,
+                description: None,
+                reason: None,
+                requested_by: vec![],
+            });
+        wrap_of(&mut ask).providers = batch_fake_providers();
 
         let cache = Arc::new(Mutex::new(SecretCache::new()));
         let in_flight = InFlightMap::new();
@@ -3684,7 +3693,7 @@ mod tests {
         key: DedupeKey,
     ) -> Ask {
         let mut ask = ask_with_secret_named("run", argv, name, provider, locator);
-        ask.providers = fake_echo_providers();
+        wrap_of(&mut ask).providers = fake_echo_providers();
         ask.dedupe_key = key;
         ask
     }
@@ -3857,26 +3866,22 @@ mod tests {
     fn ssh_sign_ask(key_id: &str) -> Ask {
         Ask {
             command: vec![format!("ssh-sign {key_id}")],
-            cwd: String::new(),
-            callers: vec![],
-            secrets: vec![],
-            providers: HashMap::new(),
             dedupe_key: DedupeKey {
                 wrap: format!("ssh:{key_id}"),
                 ppid: 0,
                 parent_start_time: 0,
                 subject_digest: None,
             },
-            ssh: Some(super::super::proto::SshAskInfo {
-                key_id: key_id.to_owned(),
-                fingerprint: "SHA256:AAAAtest".to_owned(),
-                reason: None,
-                anchor: None,
+            subject: AskSubject::SshSign(super::super::proto::SshSubject {
+                cwd: String::new(),
+                callers: vec![],
+                info: super::super::proto::SshAskInfo {
+                    key_id: key_id.to_owned(),
+                    fingerprint: "SHA256:AAAAtest".to_owned(),
+                    reason: None,
+                    anchor: None,
+                },
             }),
-            agent: None,
-            allow_remember: false,
-            nested_run: false,
-            ignore_remembered: false,
         }
     }
 
@@ -3946,7 +3951,7 @@ mod tests {
 
     fn cursor_ask() -> Ask {
         let mut ask = ask_with_secret("gh", &["gh", "api", "--get", "/repos/x"], "GITHUB_TOKEN");
-        ask.callers = vec![super::super::proto::Caller {
+        wrap_of(&mut ask).callers = vec![super::super::proto::Caller {
             pid: 1,
             name: "Cursor".to_owned(),
             command: "/Applications/Cursor.app/Contents/MacOS/Cursor".to_owned(),
@@ -4648,7 +4653,7 @@ mod tests {
     #[test]
     fn trained_secrets_guard_blocks_a_gate_only_ask() {
         let mut gate_only = ask_with_secret("op", &["op", "item", "get", "x"], "IGNORED");
-        gate_only.secrets.clear();
+        wrap_of(&mut gate_only).secrets.clear();
 
         let mut state = State::new();
         state.rules = vec![Rule {
@@ -4679,7 +4684,7 @@ mod tests {
     #[test]
     fn a_gate_only_ask_can_be_scoped_with_a_wrap_subject() {
         let mut gate_only = ask_with_secret("op", &["op", "item", "get", "x"], "IGNORED");
-        gate_only.secrets.clear();
+        wrap_of(&mut gate_only).secrets.clear();
 
         let mut state = State::new();
         state.rules = vec![Rule {
@@ -4712,10 +4717,7 @@ mod tests {
     #[test]
     fn a_scoped_agent_ask_never_reaches_the_ruleset() {
         let mut agent_ask = ask_with_secret("agent:sandbox", &["agent-resolve"], "IGNORED");
-        agent_ask.secrets.clear();
-        agent_ask.callers.clear();
-        agent_ask.cwd = String::new();
-        agent_ask.agent = Some(super::super::proto::AgentAskInfo {
+        agent_ask.subject = AskSubject::ScopedAgent(super::super::proto::AgentAskInfo {
             scope: "sandbox".to_owned(),
             reference: "secret://op/Prod/aws/root_key".to_owned(),
             guest_chain: None,
@@ -4749,15 +4751,15 @@ mod tests {
     /// Build a nested `run` ask belonging to session `(pid, nonce)`.
     fn nested_run_ask(pid: u32, nonce: u64, provider: &str, locator: &str) -> Ask {
         let mut ask = ask_with_secret("run", &["./whatever"], "TOKEN");
-        ask.nested_run = true;
+        wrap_of(&mut ask).nested_run = true;
         ask.dedupe_key = DedupeKey {
             wrap: RUN_SESSION_WRAP.to_owned(),
             ppid: pid,
             parent_start_time: nonce,
             subject_digest: None,
         };
-        ask.secrets[0].provider = provider.to_owned();
-        ask.secrets[0].locator = locator.to_owned();
+        wrap_of(&mut ask).secrets[0].provider = provider.to_owned();
+        wrap_of(&mut ask).secrets[0].locator = locator.to_owned();
         ask
     }
 
@@ -4809,7 +4811,7 @@ mod tests {
         let mut ask = nested_run_ask(100, 1, "op", "Dev/api/key");
         state.record_run_release_for_test(&ask);
         state.put_cached_for_test(&ask, "value");
-        ask.nested_run = false;
+        wrap_of(&mut ask).nested_run = false;
         assert!(!state.nested_run_may_skip_window(&ask));
     }
 }

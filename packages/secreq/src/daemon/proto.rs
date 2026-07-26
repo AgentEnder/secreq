@@ -228,10 +228,70 @@ pub enum ClientMsg {
 /// Everything the daemon needs to render the prompt **and** resolve the
 /// secrets after the user approves. Carries no secret *values* — only
 /// addresses (locators) and the templates needed to fetch them.
+///
+/// The three fields here are the ones every ask has whatever it is asking
+/// for. Everything else hangs off [`Ask::subject`], because the three kinds
+/// of ask do not share a field set — see [`AskSubject`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ask {
-    /// Argv of the command the wrap will exec.
+    /// Argv of the command the wrap will exec. Synthesized on the two
+    /// non-wrap paths (`ssh-sign <key_id>`, `agent-resolve <ref>`) so the
+    /// prompt's subtitle and the audit row have something to print.
     pub command: Vec<String>,
+    /// Coalescing key: parallel asks with the same key fold into one queue
+    /// entry. Today: `(wrap_name, ppid, parent_start_time)`.
+    pub dedupe_key: DedupeKey,
+    /// What is being asked for, and everything that is only meaningful for
+    /// that kind of request.
+    pub subject: AskSubject,
+}
+
+/// The three genuinely different things an [`Ask`] can be.
+///
+/// These used to be a `Vec<Caller>`, a `Vec<SecretAsk>` and two `Option`s on
+/// `Ask` itself, with the emptiness rules ("`callers` is empty for a guest",
+/// "`secrets` is empty for a sign") written in doc comments and enforced by
+/// each producer remembering them. Two of those rules are load-bearing for
+/// security, so they are fields' *presence* now rather than prose:
+///
+/// - **A guest ask has no `callers` field at all.** `callers` is
+///   kernel-sourced, is what `rules.rs` matches on, and is what the prompt
+///   renders as `ASKED BY`. A guest has no host pid to walk (see the
+///   provenance section of
+///   `brain: areas/secreq/design/2026-07-16-remote-secret-agent.md`), so what it
+///   claims about itself rides [`AgentAskInfo::guest_chain`] — display-only,
+///   marked unverifiable on screen. There is no longer anywhere to write a
+///   guest's story that provenance code would read.
+/// - **Only a wrap ask has `secrets` and `providers`.** Those two fields
+///   are the resolution payload: the daemon runs the provider's `retrieve`
+///   template against them after an approve and ships the values back. A
+///   sign resolves its key in-process; a guest resolves its own ref in the
+///   `agent open` process. Neither may name a secret for the daemon to
+///   fetch, and now neither can.
+///
+/// The old shape also admitted `(Some(ssh), Some(agent))`, which meant
+/// nothing: consumers disagreed about which `Option` to test first, so two
+/// of them could render the same ask as two different requests. That state
+/// no longer exists.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AskSubject {
+    /// A wrap (`secreq x …`), a `secreq run`, or a `secreq read`: a local
+    /// process asking for secrets to be injected.
+    Wrap(WrapSubject),
+    /// An SSH-agent sign request. The daemon *is* the agent here, so there
+    /// is no client — but there is a real socket peer, and therefore a real
+    /// caller chain.
+    SshSign(SshSubject),
+    /// A guest (VM) resolving a `secret://` ref through
+    /// [`crate::scoped_agent`]. The host-declared scope is the principal;
+    /// there is no host process behind the request to describe.
+    ScopedAgent(AgentAskInfo),
+}
+
+/// The wrap ask's payload: who is asking, and what they want injected.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WrapSubject {
     /// Working directory of the requesting process.
     pub cwd: String,
     /// Parent-process chain, nearest-first.
@@ -245,37 +305,17 @@ pub struct Ask {
     /// ask so the daemon doesn't have to re-read the user's config file
     /// (and so coalesced asks all agree on what to run).
     pub providers: HashMap<String, WireProvider>,
-    /// Coalescing key: parallel asks with the same key fold into one queue
-    /// entry. Today: `(wrap_name, ppid, parent_start_time)`.
-    pub dedupe_key: DedupeKey,
-    /// `Some` when this ask is an SSH-agent sign request rather than a wrap
-    /// run. The consent UI renders an SSH variant (key identity + SHA256
-    /// fingerprint, no "secrets to inject" list) when this is set; wrap asks
-    /// leave it `None`. `#[serde(default)]` keeps the streaming attach
-    /// protocol back-compatible — an older child decoding a newer daemon's
-    /// snapshot, or vice versa, simply sees `None` and renders the wrap
-    /// layout. This is the consent-window attach protocol (daemon ↔ child),
-    /// not the `wraps.json5` config schema.
-    #[serde(default)]
-    pub ssh: Option<SshAskInfo>,
-    /// `Some` when this ask came from a **scoped agent socket** — a guest
-    /// (VM) resolving a `secret://` ref from this host through
-    /// [`crate::scoped_agent`]. The consent UI renders a scope variant: the
-    /// declared scope is the principal, and there is deliberately **no
-    /// caller chain** (`callers` is empty on these asks — a guest has no
-    /// host pid to walk; see the provenance section of
-    /// `brain: areas/secreq/design/2026-07-16-remote-secret-agent.md`). `None` for every
-    /// local ask. `#[serde(default)]` keeps the attach protocol
-    /// back-compatible, same as [`Ask::ssh`].
-    #[serde(default)]
-    pub agent: Option<AgentAskInfo>,
     /// Whether an `ApproveRemember` decision on this ask may persist a
     /// remembered approval. `true` for wrap (`x`) asks; `false` for
     /// `secreq run`, whose fixed `"run"` identity would otherwise let one
     /// remembered approval cover any later command in the same shell.
-    /// `#[serde(default = "default_true")]` keeps the attach protocol
-    /// back-compatible: an older peer omits the field and decodes `true`.
-    #[serde(default = "default_true")]
+    ///
+    /// Lives here rather than on [`Ask`] because the approvals cache is
+    /// keyed on `(wrap, ppid, parent_start_time)` and only wrap asks are
+    /// ever looked up in it. An SSH sign remembers through `SshGrant`; a
+    /// guest remembers through the `agent open` process's own
+    /// `ScopeApprovals`. Neither used to read this field, and both had to
+    /// pick a value for it anyway.
     pub allow_remember: bool,
     /// `true` when this ask is a `secreq run` invoked under an already-
     /// consented run (the inner run saw the [`crate::RUN_SESSION_ENV`]
@@ -283,9 +323,7 @@ pub struct Ask {
     /// from the secret cache without showing the consent window — but
     /// *only* when every value is already cached (`ask_fully_cached`), so
     /// any uncached secret still prompts. A top-level run never sets this,
-    /// so it always prompts. `#[serde(default)]` decodes older peers as
-    /// `false` (the never-skip, always-prompt default).
-    #[serde(default)]
+    /// so it always prompts.
     pub nested_run: bool,
     /// Ignore any remembered approval for this ask: prompt even on a cache
     /// hit, and do not persist a new entry.
@@ -299,12 +337,124 @@ pub struct Ask {
     ///
     /// The write half needs no field: the client sets `allow_remember` to
     /// false alongside this.
-    #[serde(default)]
     pub ignore_remembered: bool,
 }
 
-fn default_true() -> bool {
-    true
+/// The SSH sign ask's payload.
+///
+/// No `secrets` and no `providers`: the SSH path resolves the private key
+/// in-process after consent (`daemon::ssh_agent::resolve_and_sign`) rather
+/// than handing a value back to a client, which is what keeps the key out of
+/// the wire reply entirely.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SshSubject {
+    /// Working directory of the socket peer, when the platform will say.
+    /// May be empty — the prompt omits the `IN` row rather than rendering a
+    /// blank one.
+    pub cwd: String,
+    /// Parent-process chain of the socket peer, nearest-first. Kernel-
+    /// sourced, exactly like a wrap ask's: this path has always derived
+    /// provenance from `SO_PEERCRED` rather than trusting a client.
+    pub callers: Vec<Caller>,
+    /// The key identity, its fingerprint, and the session a grant binds to.
+    pub info: SshAskInfo,
+}
+
+impl Ask {
+    /// The caller chain, or `&[]` for a guest ask that structurally has
+    /// none.
+    ///
+    /// Every reader of this wants "the kernel-sourced chain behind this
+    /// request, if there is one". A guest ask returning empty is the same
+    /// answer the old `Ask::callers` gave — the difference is that a guest
+    /// ask can no longer be *given* a chain, so an empty result here is a
+    /// fact about the ask's kind rather than a field nobody filled in.
+    pub fn callers(&self) -> &[Caller] {
+        match &self.subject {
+            AskSubject::Wrap(w) => &w.callers,
+            AskSubject::SshSign(s) => &s.callers,
+            AskSubject::ScopedAgent(_) => &[],
+        }
+    }
+
+    /// Secrets the daemon is being asked to resolve, or `&[]` when this ask
+    /// resolves nothing daemon-side (every non-wrap kind).
+    pub fn secrets(&self) -> &[SecretAsk] {
+        match &self.subject {
+            AskSubject::Wrap(w) => &w.secrets,
+            AskSubject::SshSign(_) | AskSubject::ScopedAgent(_) => &[],
+        }
+    }
+
+    /// The requesting process's working directory, or `""` when there is no
+    /// host process to have one (a guest's cwd is in another kernel).
+    pub fn cwd(&self) -> &str {
+        match &self.subject {
+            AskSubject::Wrap(w) => &w.cwd,
+            AskSubject::SshSign(s) => &s.cwd,
+            AskSubject::ScopedAgent(_) => "",
+        }
+    }
+
+    /// Whether an `ApproveRemember` on this ask may write the approvals
+    /// cache. Only a wrap ask is ever looked up there.
+    pub fn allow_remember(&self) -> bool {
+        match &self.subject {
+            AskSubject::Wrap(w) => w.allow_remember,
+            AskSubject::SshSign(_) | AskSubject::ScopedAgent(_) => false,
+        }
+    }
+
+    /// The provider definitions resolution runs against, or an empty map for
+    /// a kind that resolves nothing daemon-side.
+    ///
+    /// Both callers reach this only after finding something in
+    /// [`Ask::secrets`] to resolve, so the empty map is unreachable in
+    /// practice — it exists so neither has to carry an "impossible" branch.
+    pub fn providers(&self) -> &HashMap<String, WireProvider> {
+        static EMPTY: std::sync::LazyLock<HashMap<String, WireProvider>> =
+            std::sync::LazyLock::new(HashMap::new);
+        match &self.subject {
+            AskSubject::Wrap(w) => &w.providers,
+            AskSubject::SshSign(_) | AskSubject::ScopedAgent(_) => &EMPTY,
+        }
+    }
+
+    /// Whether this ask asked to be gated even where a remembered approval
+    /// exists (`--no-remember`). Only a wrap ask reads that cache, so every
+    /// other kind answers `false` — the value they used to carry and nothing
+    /// consulted.
+    pub fn ignore_remembered(&self) -> bool {
+        match &self.subject {
+            AskSubject::Wrap(w) => w.ignore_remembered,
+            AskSubject::SshSign(_) | AskSubject::ScopedAgent(_) => false,
+        }
+    }
+
+    /// Whether this is a `secreq run` nested under an already-consented run.
+    /// Only a wrap ask can be.
+    pub fn nested_run(&self) -> bool {
+        match &self.subject {
+            AskSubject::Wrap(w) => w.nested_run,
+            AskSubject::SshSign(_) | AskSubject::ScopedAgent(_) => false,
+        }
+    }
+
+    /// Mutable access to the wrap payload, for the two places that amend an
+    /// ask after building it: the `run` path stamping `nested_run`, and the
+    /// daemon merging a coalesced ask's secrets into the queue entry's
+    /// representative.
+    ///
+    /// Deliberately the only mutable door into a subject, and deliberately
+    /// one that can only ever hand back a [`WrapSubject`]. Nothing can reach
+    /// through it to give a sign or a guest ask a caller chain, because
+    /// neither variant is reachable from here.
+    pub fn wrap_mut(&mut self) -> Option<&mut WrapSubject> {
+        match &mut self.subject {
+            AskSubject::Wrap(w) => Some(w),
+            AskSubject::SshSign(_) | AskSubject::ScopedAgent(_) => None,
+        }
+    }
 }
 
 /// SSH-specific metadata carried on an [`Ask`] so the consent window can
@@ -392,19 +542,16 @@ pub struct AgentAskInfo {
     /// **Display-only, and rendered with an explicit "not verifiable"
     /// marker.** The host cannot check a word of it — that is the provenance
     /// problem this whole design starts from — so it is offered to the *user*
-    /// as a hint and to nothing else as a fact. It is carried here rather
-    /// than in [`Ask::callers`] (which stays empty on these asks) precisely
-    /// so it cannot be mistaken for provenance: `callers` is kernel-sourced
-    /// and is what `rules.rs` matches on, and a guest able to write there
-    /// could name a process that fires an auto-approve rule.
+    /// as a hint and to nothing else as a fact. It is carried here precisely
+    /// so it cannot be mistaken for provenance: a caller chain is
+    /// kernel-sourced and is what `rules.rs` matches on, and a guest able to
+    /// write there could name a process that fires an auto-approve rule.
+    /// [`AskSubject::ScopedAgent`] has no `callers` field for it to reach,
+    /// which is the strongest form that separation can take.
     ///
     /// A pre-rendered `String` rather than a `Vec`: by the time a claim
     /// crosses this socket it is a label, and handing it back the shape of a
     /// caller list would only invite code to treat it like one.
-    ///
-    /// `#[serde(default)]` keeps the attach protocol back-compatible, same as
-    /// [`Ask::ssh`] and [`Ask::agent`].
-    #[serde(default)]
     pub guest_chain: Option<String>,
 }
 

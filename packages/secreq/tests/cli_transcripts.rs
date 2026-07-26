@@ -986,7 +986,7 @@ fn serve_stub(listener: UnixListener, asked: Sender<()>, approve: Receiver<()>) 
                     // hardcoded name: the reply then stays correct if the
                     // fixture's wrap ever declares a different variable.
                     secrets: ask
-                        .secrets
+                        .secrets()
                         .iter()
                         .map(|secret| (secret.name.clone(), STUB_TOKEN.to_owned()))
                         .collect(),
