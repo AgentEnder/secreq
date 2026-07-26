@@ -25,9 +25,9 @@ is no network listener and no new auth surface; SSH is the auth.
 secreq agent open --scope my-vm \
   --allow secret://op/Dev/gh/token \
   --allow secret://op/Dev/linear/token \
-  --sock /tmp/secreq-my-vm.sock &
+  --sock "$HOME/.secreq/run/my-vm.sock" &
 
-ssh -R /run/secreq.sock:/tmp/secreq-my-vm.sock my-vm
+ssh -R /run/secreq.sock:"$HOME/.secreq/run/my-vm.sock" my-vm
 ```
 
 ```sh
