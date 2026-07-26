@@ -1,0 +1,16 @@
+# Clippy configuration for the workspace. `cargo clippy` reads this from the
+# repo root for every crate under it; lint *levels* live in each crate's
+# `[lints.clippy]` table in Cargo.toml.
+
+# `indexing_slicing` is about code that indexes bytes or rows it did not
+# choose. A test almost always indexes a vector it built two lines earlier,
+# where the offset is the thing being asserted and an out-of-range access is a
+# failing test rather than a reachable panic — so in tests the lint reports
+# noise, and 141 of the crate's 213 hits were exactly that.
+#
+# One switch here rather than an `#![allow(...)]` at the top of every
+# `mod tests`: those have to be written by hand, they get copied into new
+# modules by imitation without anyone re-deciding, and the reason ends up
+# restated — or not — thirty times over. Saying it once keeps the production
+# half of the lint honest, which is the half worth having.
+allow-indexing-slicing-in-tests = true

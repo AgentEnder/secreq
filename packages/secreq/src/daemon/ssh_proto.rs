@@ -304,13 +304,6 @@ fn parse_sign_response(body: &[u8]) -> Result<AgentResponse> {
 
 #[cfg(test)]
 mod tests {
-    // The module-level `deny` is aimed at the parsers, which are handed
-    // bytes a peer chose. These tests index into frames they built
-    // themselves a line earlier, where the offset of the type byte is the
-    // thing being asserted — and an out-of-range one is a failing test,
-    // not a reachable panic.
-    #![allow(clippy::indexing_slicing)]
-
     use super::*;
 
     #[test]
