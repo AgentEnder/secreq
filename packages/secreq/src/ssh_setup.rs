@@ -352,46 +352,51 @@ pub fn remove(home: &Path, method: Method, shell: Shell) -> Result<bool> {
     Ok(true)
 }
 
-/// Line indices of the begin/end sentinels in `content`, inclusive. `None` if
-/// either is absent. The single source of truth for locating our block —
+/// `lines` split into what precedes our managed block, the block itself
+/// (both sentinels included), and what follows it. `None` if either sentinel
+/// is absent. The single source of truth for locating our block —
 /// [`strip_block`], [`replace_block`], and [`existing_block`] all agree by
 /// construction because they share it.
-fn block_bounds(content: &str) -> Option<(usize, usize)> {
-    let lines: Vec<&str> = content.lines().collect();
+///
+/// Three slices rather than the pair of line indices this used to return:
+/// an index has to be re-paired with the right `Vec` at every call site, and
+/// each pairing is a bounds assumption the reader has to re-check. A slice
+/// carries its own bounds.
+fn split_around_block<'l, 's>(
+    lines: &'l [&'s str],
+) -> Option<(&'l [&'s str], &'l [&'s str], &'l [&'s str])> {
     let begin = lines.iter().position(|l| l.contains(BEGIN_SENTINEL))?;
     let end = lines
         .iter()
         .skip(begin)
         .position(|l| l.contains(END_SENTINEL))
         .map(|offset| begin + offset)?;
-    Some((begin, end))
+    let (before, rest) = lines.split_at_checked(begin)?;
+    let (block, after) = rest.split_at_checked(end - begin + 1)?;
+    Some((before, block, after))
 }
 
 /// The managed block currently in `content`, sentinels included, or `None` if
 /// there isn't one. Used to compare what's on disk against what we'd write —
 /// see [`BlockState`].
 fn existing_block(content: &str) -> Option<String> {
-    let (begin, end) = block_bounds(content)?;
     let lines: Vec<&str> = content.lines().collect();
-    Some(lines[begin..=end].join("\n"))
+    let (_, block, _) = split_around_block(&lines)?;
+    Some(block.join("\n"))
 }
 
 /// Strip the sentinel-bracketed block from `content`. Returns `None` if no
 /// block is present, else the remainder with the begin..=end lines removed
 /// (plus one trailing blank line if it immediately follows the end line).
 fn strip_block(content: &str) -> Option<String> {
-    let (begin, end) = block_bounds(content)?;
     let lines: Vec<&str> = content.lines().collect();
-    // Drop begin..=end, plus a single blank line right after the end line.
-    let mut after = end + 1;
-    if lines.get(after).is_some_and(|l| l.trim().is_empty()) {
-        after += 1;
-    }
-    let kept: Vec<&str> = lines[..begin]
-        .iter()
-        .chain(lines[after..].iter())
-        .copied()
-        .collect();
+    let (before, _, after) = split_around_block(&lines)?;
+    // Drop a single blank line right after the end line along with the block.
+    let after = match after.split_first() {
+        Some((first, rest)) if first.trim().is_empty() => rest,
+        _ => after,
+    };
+    let kept: Vec<&str> = before.iter().chain(after.iter()).copied().collect();
     let mut result = kept.join("\n");
     // `str::lines` drops a trailing newline; restore one if there's content
     // and the original ended with a newline, so we don't strip the file's
@@ -410,13 +415,13 @@ fn strip_block(content: &str) -> Option<String> {
 /// `~/.ssh/config` that position decides whether our `IdentityAgent` wins,
 /// since ssh takes the first one it obtains for a host.
 fn replace_block(content: &str, new_block: &str) -> Option<String> {
-    let (begin, end) = block_bounds(content)?;
     let lines: Vec<&str> = content.lines().collect();
+    let (before, _, after) = split_around_block(&lines)?;
     let new_lines: Vec<&str> = new_block.lines().collect();
-    let kept: Vec<&str> = lines[..begin]
+    let kept: Vec<&str> = before
         .iter()
         .chain(new_lines.iter())
-        .chain(lines[end + 1..].iter())
+        .chain(after.iter())
         .copied()
         .collect();
     let mut result = kept.join("\n");
