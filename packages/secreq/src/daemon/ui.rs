@@ -371,13 +371,6 @@ pub fn install_style(ctx: &egui::Context) {
     });
 }
 
-/// Old name kept as a back-compat shim so callers from prior commits
-/// still work if any exist; the real entry point is now `install_style`.
-#[doc(hidden)]
-pub fn install_fonts(ctx: &egui::Context) {
-    install_style(ctx);
-}
-
 /// Render the always-on-top pending-requests badge: a compact pill
 /// reading "N pending" with an accent indicator dot. The background is
 /// painted here (not left to the window/panel fill) so the screenshot

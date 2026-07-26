@@ -41,9 +41,6 @@ pub enum RetrieveOutcome {
     NotFound { status: String, stderr: String },
 }
 
-// `read` kept temporarily as the historical alias used by `resolve`.
-pub use RetrieveOutcome as ReadOutcome;
-
 /// Wall-clock breakdown of one [`retrieve_batch`] call.
 ///
 /// `subprocess` is the load-bearing figure for a slow 1Password read: it's
@@ -99,20 +96,9 @@ pub fn retrieve(provider: &Provider, locator: &str) -> Result<RetrieveOutcome> {
     }
 }
 
-/// Back-compat alias for the previous `read` name; new code should call
-/// [`retrieve`] directly.
-pub fn read(provider: &Provider, locator: &str) -> Result<RetrieveOutcome> {
-    retrieve(provider, locator)
-}
-
 /// Confirm the provider's retrieve program exists on PATH (used by `doctor`).
 pub fn retrieve_program(provider: &Provider) -> Option<&str> {
     provider.retrieve.first().map(std::string::String::as_str)
-}
-
-/// Back-compat alias for `retrieve_program`.
-pub fn read_program(provider: &Provider) -> Option<&str> {
-    retrieve_program(provider)
 }
 
 /// Reject an empty argv early with a clear message.

@@ -15,7 +15,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 
 use crate::manifest::Manifest;
-use crate::provider::{self, ReadOutcome};
+use crate::provider::{self, RetrieveOutcome};
 use crate::reference::Reference;
 use crate::secret::SecretValue;
 
@@ -182,7 +182,7 @@ pub fn resolve_all(
     }
 
     // Provider-group resolution → outcomes_by_name.
-    let mut outcomes: BTreeMap<String, ReadOutcome> = BTreeMap::new();
+    let mut outcomes: BTreeMap<String, RetrieveOutcome> = BTreeMap::new();
     let mut stats = ResolveStats::default();
     for (provider_name, reqs) in &by_provider {
         let provider = manifest.providers.get(*provider_name).with_context(|| {
@@ -229,7 +229,7 @@ pub fn resolve_all(
             // batch — which is the right trade.
             let salvage: Vec<&&SecretRequest> = reqs
                 .iter()
-                .filter(|r| matches!(outcomes.get(&r.name), Some(ReadOutcome::NotFound { .. })))
+                .filter(|r| matches!(outcomes.get(&r.name), Some(RetrieveOutcome::NotFound { .. })))
                 .collect();
             stats.batched += reqs.len() - salvage.len();
             stats.per_secret += salvage.len();
@@ -249,18 +249,18 @@ pub fn resolve_all(
     // Assemble in plan order. Apply default / hard-error per request.
     let mut resolved = Vec::with_capacity(plan.requests.len());
     for req in &plan.requests {
-        let outcome = outcomes.remove(&req.name).unwrap_or(ReadOutcome::NotFound {
+        let outcome = outcomes.remove(&req.name).unwrap_or(RetrieveOutcome::NotFound {
             status: "missing from resolver output".to_owned(),
             stderr: String::new(),
         });
         match outcome {
-            ReadOutcome::Found(value) => {
+            RetrieveOutcome::Found(value) => {
                 resolved.push(ResolvedSecret {
                     name: req.name.clone(),
                     value,
                 });
             }
-            ReadOutcome::NotFound { status, stderr } => {
+            RetrieveOutcome::NotFound { status, stderr } => {
                 if let Some(default) = &req.default {
                     resolved.push(ResolvedSecret {
                         name: req.name.clone(),

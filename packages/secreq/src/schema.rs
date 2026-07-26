@@ -70,11 +70,6 @@ pub fn wraps_schema() -> Value {
     })
 }
 
-/// Back-compat: kept under the old name for the drift test's stable import path.
-pub fn manifest_schema() -> Value {
-    wraps_schema()
-}
-
 /// JSON Schema for `auto-rules.json5` — the persisted ruleset the
 /// daemon evaluates before prompting the user. Source of truth in
 /// `src/rules.rs`; see `brain: areas/secreq/design/2026-06-02-auto-rules.md`.
