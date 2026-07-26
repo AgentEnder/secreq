@@ -497,8 +497,7 @@ impl eframe::App for ChildApp {
                     let msg = ClientMsg::ConsentDecision {
                         key: act.key,
                         decision: act.decision,
-                        scope_pid: act.scope.pid,
-                        scope_start_time: act.scope.start_time,
+                        scope: act.scope,
                     };
                     if let Err(err) = send_msg(&self.writer, &msg) {
                         super::log::log_at(

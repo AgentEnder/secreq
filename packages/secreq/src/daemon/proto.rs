@@ -24,6 +24,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::provenance::ProcessIdentity;
+
 use std::collections::BTreeSet;
 
 use crate::consent::Decision;
@@ -103,8 +105,11 @@ pub enum ClientMsg {
     ConsentDecision {
         key: DedupeKey,
         decision: crate::consent::Decision,
-        scope_pid: u32,
-        scope_start_time: u64,
+        /// The process a remembered approval is written against. One value
+        /// rather than a `scope_pid` / `scope_start_time` pair: what lands in
+        /// the approvals cache is a [`ProcessIdentity`], and every hop that
+        /// takes it apart is a hop that can put it back together wrong.
+        scope: ProcessIdentity,
     },
     /// "I'm closing cleanly." Daemon removes me from its subscriber list.
     ConsentWindowDetach,
@@ -316,7 +321,7 @@ pub struct WrapSubject {
     /// remembered approval cover any later command in the same shell.
     ///
     /// Lives here rather than on [`Ask`] because the approvals cache is
-    /// keyed on `(wrap, ppid, parent_start_time)` and only wrap asks are
+    /// keyed on `(wrap, parent ProcessIdentity)` and only wrap asks are
     /// ever looked up in it. An SSH sign remembers through `SshGrant`; a
     /// guest remembers through the `agent open` process's own
     /// `ScopeApprovals`. Neither used to read this field, and both had to
@@ -589,6 +594,21 @@ pub struct AgentAskInfo {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct DedupeKey {
     pub wrap: String,
+    /// **Not a [`ProcessIdentity`], deliberately.** Every other place in this
+    /// codebase that holds a pid beside a start time now holds that type; this
+    /// pair does not, because on the `run` path it is not a process at all.
+    /// `commands::run::session_dedupe_key` puts the outer run's pid here and a
+    /// random **session nonce** in `parent_start_time`, shared verbatim by
+    /// every nested run in the tree — and `server::adopt_peer_provenance`
+    /// re-derives this pair from the socket peer for every ask *except* that
+    /// one, precisely to leave the session identity alone.
+    ///
+    /// So the two halves mean "a process" for a wrap ask and "a session" for a
+    /// run ask. Naming them as one identity would let a reader — or an
+    /// approvals-cache lookup — treat a nonce as a kernel-verified start time,
+    /// which is the opposite of what the type is for. Making the difference
+    /// structural (a sum type over the two kinds of key) is a real change to
+    /// the ask protocol and wants its own slice.
     pub ppid: u32,
     pub parent_start_time: u64,
     /// Distinguishes asks that agree on every other field but authorize
@@ -619,11 +639,12 @@ pub struct Caller {
     pub pid: u32,
     pub name: String,
     pub command: String,
-    /// Process start time as `sysinfo` reports it. The `(pid, start_time)`
-    /// pair is what makes an ancestor cache hit pid-recycle-safe — a new
-    /// process inheriting the same pid will have a different start_time,
-    /// so it can't ride an old approval. Default 0 for any client that
-    /// hasn't been updated yet; matching against 0 just falls through.
+    /// Process start time as `sysinfo` reports it. Paired with `pid` it is
+    /// what makes an ancestor cache hit pid-recycle-safe — a new process
+    /// inheriting the same pid will have a different start_time, so it can't
+    /// ride an old approval. Read the pair through [`Caller::identity`], not
+    /// field by field. Default 0 for any client that hasn't been updated yet;
+    /// matching against 0 just falls through.
     #[serde(default)]
     pub start_time: u64,
     /// Absolute path to the executable, when the kernel will say.
@@ -640,6 +661,19 @@ pub struct Caller {
     /// to the old behaviour instead of erasing the caller.
     #[serde(default)]
     pub exe: Option<String>,
+}
+
+impl Caller {
+    /// This frame's [`ProcessIdentity`] — the wire twin of
+    /// [`crate::provenance::Caller::identity`], and the only way the daemon
+    /// should turn a frame into a cache scope. Reading `pid` and `start_time`
+    /// separately at a call site is how one of them gets left behind.
+    pub fn identity(&self) -> ProcessIdentity {
+        ProcessIdentity {
+            pid: self.pid,
+            start_time: self.start_time,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

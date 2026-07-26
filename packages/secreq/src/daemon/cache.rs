@@ -61,8 +61,8 @@
 //! ## Lifetime
 //!
 //! Entries live as long as the daemon. There is intentionally **no
-//! TTL** — the approvals cache (which keys on `(wrap, ppid,
-//! parent_start_time)`) is what controls whether a future ask can
+//! TTL** — the approvals cache (which keys on `(wrap, parent
+//! ProcessIdentity)`) is what controls whether a future ask can
 //! ride a remembered approval, and *it* lives for the daemon's
 //! lifetime. Capping the secret cache shorter than the approvals
 //! cache produced a UX bug: an approved-and-remembered wrap that

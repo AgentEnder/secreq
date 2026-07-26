@@ -20,12 +20,13 @@ use eframe::egui;
 use crate::consent::Decision;
 
 use super::proto::{AskSubject, Caller, SecretAsk};
-use super::state::{ApprovalScope, QueueRow, QueueSnapshot};
+use super::state::{QueueRow, QueueSnapshot};
 use super::theme::{OsFlavor, Theme};
 use super::ui::{
     abbreviate_home, caller_args, format_audit_line, humanize_duration, paint_app_icon,
     render_auto_deny_toast, AuditCache, AutoDenyToastView, PendingAction,
 };
+use crate::provenance::ProcessIdentity;
 
 /// Which manager view the prompt asks the daemon to open. A wire type
 /// (the child forwards it as `ClientMsg::OpenManager`), so it lives in
@@ -230,8 +231,8 @@ fn current_row(snapshot: &QueueSnapshot) -> Option<&QueueRow> {
 /// Approval scope for the current ask: its direct parent, which is what
 /// the dedupe key already names. A remembered approval written there
 /// covers subsequent asks from the same parent process.
-fn row_scope(row: &QueueRow) -> ApprovalScope {
-    ApprovalScope {
+fn row_scope(row: &QueueRow) -> ProcessIdentity {
+    ProcessIdentity {
         pid: row.key.ppid,
         start_time: row.key.parent_start_time,
     }

@@ -7,6 +7,7 @@
 
 use std::path::Path;
 
+use serde::{Deserialize, Serialize};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
 /// Longest a rendered process name or command line may be.
@@ -84,6 +85,37 @@ fn sanitize_display(raw: &str) -> String {
     out
 }
 
+/// Which process this is, in the only way that survives pid recycling.
+///
+/// A bare pid is not an identity: the kernel hands a freed one to whatever
+/// starts next, and every cache in this codebase is keyed on "may this
+/// process have that secret". Pairing the pid with the process's start time
+/// closes that — a new process on a recycled pid started later, so it cannot
+/// match an approval stored for the process that is gone.
+///
+/// It exists as a type because the pair used to be spelled five different
+/// ways (`pid`/`start_time` in one struct, `ppid`/`parent_start_time` in the
+/// next), which forced every comparison to be written out by hand:
+///
+/// ```ignore
+/// e.wrap == wrap && e.ppid == scope.pid && e.parent_start_time == scope.start_time
+/// ```
+///
+/// Dropping one conjunct there is a cache-scope escape, and nothing but
+/// review stood between that line and a wrong one. `PartialEq` is derived, so
+/// the comparison is `e.parent == parent` and there is no conjunct to drop.
+/// `Copy` because it is two integers and threading it should never be a
+/// borrow question. Serializable because the prompt window is a child
+/// process: the scope a decision is remembered at crosses that socket, and it
+/// should cross as one value rather than as two fields a reader has to pair
+/// back up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ProcessIdentity {
+    pub pid: u32,
+    /// Start time as `sysinfo` reports it (seconds since the Unix epoch).
+    pub start_time: u64,
+}
+
 /// One process in the caller chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Caller {
@@ -94,10 +126,21 @@ pub struct Caller {
     /// Absolute path to the executable, if known.
     pub exe: Option<String>,
     /// Process start time as reported by `sysinfo` (seconds since the Unix
-    /// epoch). Paired with `pid` it tiebreaks pid recycling: a new process
-    /// that inherits a freed pid has a different `start_time`, so any cache
-    /// or audit entry keyed on both reliably distinguishes them.
+    /// epoch). Paired with `pid` it tiebreaks pid recycling; read that pair
+    /// through [`Caller::identity`] rather than field by field.
     pub start_time: u64,
+}
+
+impl Caller {
+    /// This frame's [`ProcessIdentity`] — the one way to make the pair out of
+    /// a frame, so a site that means "this process" cannot accidentally take
+    /// the pid and leave the start time behind.
+    pub fn identity(&self) -> ProcessIdentity {
+        ProcessIdentity {
+            pid: self.pid,
+            start_time: self.start_time,
+        }
+    }
 }
 
 /// Limit on *useful* (non-self) entries a walk returns. The daemon's

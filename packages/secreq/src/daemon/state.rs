@@ -25,6 +25,7 @@ use zeroize::Zeroizing;
 use crate::audit::{self, AuditCaller, AuditEntry};
 use crate::consent::{ApprovalEntry, Decision, SshGrant};
 use crate::manifest::{BatchRetrieve, Manifest, Provider};
+use crate::provenance::ProcessIdentity;
 use crate::resolve::{self, ResolutionPlan, SecretRequest, Source};
 use crate::rules::{self, EvalCtx, Rule, RuleHit};
 
@@ -1015,28 +1016,22 @@ impl State {
     // `SystemTime::now()` and a private `has_ssh_grant_at(now)` that takes
     // the clock explicitly — the latter is what the unit test drives.
 
-    /// True if a non-expired SSH grant covers `(key_id, anchor_pid,
-    /// anchor_start_time)` as of *now*. Prunes expired grants on access.
-    /// Reads the wall clock; see [`State::has_ssh_grant_at`] for the
-    /// clock-injectable form the tests use.
-    pub fn has_ssh_grant(&mut self, key_id: &str, anchor_pid: u32, anchor_start_time: u64) -> bool {
-        self.has_ssh_grant_at(key_id, anchor_pid, anchor_start_time, now_unix_secs())
+    /// True if a non-expired SSH grant covers `(key_id, anchor)` as of *now*.
+    /// Prunes expired grants on access. Reads the wall clock; see
+    /// [`State::has_ssh_grant_at`] for the clock-injectable form the tests
+    /// use.
+    pub fn has_ssh_grant(&mut self, key_id: &str, anchor: ProcessIdentity) -> bool {
+        self.has_ssh_grant_at(key_id, anchor, now_unix_secs())
     }
 
     /// Clock-injectable core of [`State::has_ssh_grant`]. Prunes every grant
     /// that has expired as of `now`, then reports whether any surviving grant
     /// covers the anchor + key.
-    fn has_ssh_grant_at(
-        &mut self,
-        key_id: &str,
-        anchor_pid: u32,
-        anchor_start_time: u64,
-        now: u64,
-    ) -> bool {
+    fn has_ssh_grant_at(&mut self, key_id: &str, anchor: ProcessIdentity, now: u64) -> bool {
         self.ssh_grants.retain(|g| now < g.expires_at);
         self.ssh_grants
             .iter()
-            .any(|g| g.matches(key_id, anchor_pid, anchor_start_time, now))
+            .any(|g| g.matches(key_id, anchor, now))
     }
 
     /// Remember an SSH sign session grant. Dedupes on the full grant so a
@@ -1186,7 +1181,7 @@ impl State {
         &mut self,
         key: &DedupeKey,
         decision: Decision,
-        scope: ApprovalScope,
+        scope: ProcessIdentity,
         shared: &SharedState,
     ) {
         self.last_activity = Instant::now();
@@ -1206,8 +1201,7 @@ impl State {
         if decision == Decision::ApproveRemember && entry.representative.allow_remember() {
             let new = ApprovalEntry {
                 wrap: key.wrap.clone(),
-                ppid: scope.pid,
-                parent_start_time: scope.start_time,
+                parent: scope,
             };
             if !self.approvals.contains(&new) {
                 self.approvals.push(new);
@@ -2003,29 +1997,23 @@ pub type SharedState = Arc<Mutex<State>>;
 // One invocation per approved batch. `resolve::resolve_all` already
 // handles same-provider batching across multiple secrets in the wrap.
 
-/// The `(scope_pid, scope_start_time)` pair that authorized `ask` —
-/// either the direct parent or some ancestor the user previously
-/// approved at. Returned so the upcoming secret cache can key on the
-/// scope that granted the access (so a future ask from a *different*
-/// descendant of the same ancestor can ride the same cached value).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ApprovalScope {
-    pub pid: u32,
-    pub start_time: u64,
-}
-
-/// Walk the caller chain, return the first `(pid, start_time)` that has
-/// a matching `ApprovalEntry` for this wrap. Returns `None` if no
-/// ancestor is approved for the wrap.
+/// Walk the caller chain, return the first process that has a matching
+/// `ApprovalEntry` for this wrap. Returns `None` if no ancestor is approved
+/// for the wrap.
+///
+/// The returned [`ProcessIdentity`] is the scope that authorized `ask` —
+/// either the direct parent or some ancestor the user previously approved at
+/// — and the secret cache keys on it, so a later ask from a *different*
+/// descendant of the same ancestor rides the same cached value.
 ///
 /// Order: direct parent first, then each ancestor outwards. Direct
 /// parent wins ties — most-specific approval scope is the most informative.
-pub fn approval_scope_for(approvals: &[ApprovalEntry], ask: &Ask) -> Option<ApprovalScope> {
+pub fn approval_scope_for(approvals: &[ApprovalEntry], ask: &Ask) -> Option<ProcessIdentity> {
     // Direct parent: encoded in the dedupe key (it's the same data as
     // callers[0] but stored separately because the wire format predates
     // start_time on Caller). Check it first so legacy clients (whose
     // Caller.start_time is 0) still hit the cache.
-    let direct = ApprovalScope {
+    let direct = ProcessIdentity {
         pid: ask.dedupe_key.ppid,
         start_time: ask.dedupe_key.parent_start_time,
     };
@@ -2034,10 +2022,7 @@ pub fn approval_scope_for(approvals: &[ApprovalEntry], ask: &Ask) -> Option<Appr
     }
     // Then each ancestor past the direct parent.
     for caller in ask.callers().iter().skip(1) {
-        let scope = ApprovalScope {
-            pid: caller.pid,
-            start_time: caller.start_time,
-        };
+        let scope = caller.identity();
         if has_entry(approvals, &ask.dedupe_key.wrap, scope) {
             return Some(scope);
         }
@@ -2076,10 +2061,17 @@ fn merge_secret(
     }
 }
 
-fn has_entry(approvals: &[ApprovalEntry], wrap: &str, scope: ApprovalScope) -> bool {
+/// Is `(wrap, scope)` in the approvals cache?
+///
+/// One derived comparison per field. This used to spell the scope's two
+/// halves out as separate conjuncts against differently-named fields
+/// (`e.ppid == scope.pid && e.parent_start_time == scope.start_time`), which
+/// meant a dropped conjunct here would have let any process on a recycled pid
+/// inherit a remembered approval — with nothing but the reader to catch it.
+fn has_entry(approvals: &[ApprovalEntry], wrap: &str, scope: ProcessIdentity) -> bool {
     approvals
         .iter()
-        .any(|e| e.wrap == wrap && e.ppid == scope.pid && e.parent_start_time == scope.start_time)
+        .any(|e| e.wrap == wrap && e.parent == scope)
 }
 
 /// Resolve every secret in `ask`. Cache-aware AND singleflight-aware:
@@ -2174,8 +2166,10 @@ impl State {
     pub(super) fn remember_approval_for_test(&mut self, ask: &Ask) {
         self.approvals.push(ApprovalEntry {
             wrap: ask.dedupe_key.wrap.clone(),
-            ppid: ask.dedupe_key.ppid,
-            parent_start_time: ask.dedupe_key.parent_start_time,
+            parent: ProcessIdentity {
+                pid: ask.dedupe_key.ppid,
+                start_time: ask.dedupe_key.parent_start_time,
+            },
         });
     }
 
@@ -2742,48 +2736,69 @@ mod tests {
         ask
     }
 
+    /// A signing anchor at a fixed start time, so a test varying the pid is
+    /// varying only the pid.
+    fn ssh_anchor(pid: u32) -> ProcessIdentity {
+        ProcessIdentity {
+            pid,
+            start_time: 1_700_000_000,
+        }
+    }
+
     #[test]
     fn ssh_grant_insert_hit_then_expiry_miss() {
-        use crate::consent::{SshAnchor, SshGrantScope};
+        use crate::consent::SshGrantScope;
         let mut state = State::new();
         state.remember_ssh_grant(SshGrant {
             scope: SshGrantScope::OneKey("github".into()),
-            anchor: SshAnchor {
-                pid: 99,
-                start_time: 1_700_000_000,
-            },
+            anchor: ssh_anchor(99),
             expires_at: 5000,
         });
 
         // Inside the window, matching anchor + key: hit. `now` is passed
         // explicitly so the test never reads the real clock.
-        assert!(state.has_ssh_grant_at("github", 99, 1_700_000_000, /*now=*/ 4999));
+        assert!(state.has_ssh_grant_at("github", ssh_anchor(99), /*now=*/ 4999));
         // Wrong anchor pid: miss even before expiry.
-        assert!(!state.has_ssh_grant_at("github", 100, 1_700_000_000, 4999));
+        assert!(!state.has_ssh_grant_at("github", ssh_anchor(100), 4999));
         // Past expiry: miss. This also prunes the grant.
-        assert!(!state.has_ssh_grant_at("github", 99, 1_700_000_000, 5001));
+        assert!(!state.has_ssh_grant_at("github", ssh_anchor(99), 5001));
         // The expired grant was pruned on the last access, so even a
         // pre-expiry `now` no longer hits.
-        assert!(!state.has_ssh_grant_at("github", 99, 1_700_000_000, 4999));
+        assert!(!state.has_ssh_grant_at("github", ssh_anchor(99), 4999));
+    }
+
+    /// The other half of the anchor: a grant must not survive its process.
+    /// A pid alone would, because the kernel hands it out again.
+    #[test]
+    fn a_recycled_pid_does_not_inherit_a_signing_grant() {
+        use crate::consent::SshGrantScope;
+        let mut state = State::new();
+        state.remember_ssh_grant(SshGrant {
+            scope: SshGrantScope::AllKeys,
+            anchor: ssh_anchor(99),
+            expires_at: 5000,
+        });
+        let recycled = ProcessIdentity {
+            pid: 99,
+            start_time: 1_700_000_001,
+        };
+        assert!(!state.has_ssh_grant_at("github", recycled, 4999));
     }
 
     #[test]
     fn ssh_all_keys_grant_covers_any_key_on_the_anchor() {
-        use crate::consent::{SshAnchor, SshGrantScope};
+        use crate::consent::SshGrantScope;
         let mut state = State::new();
         state.remember_ssh_grant(SshGrant {
             scope: SshGrantScope::AllKeys,
-            anchor: SshAnchor {
-                pid: 99,
-                start_time: 1_700_000_000,
-            },
+            anchor: ssh_anchor(99),
             expires_at: 5000,
         });
         // Any key id on the granted anchor is covered.
-        assert!(state.has_ssh_grant_at("github", 99, 1_700_000_000, 4999));
-        assert!(state.has_ssh_grant_at("gitlab", 99, 1_700_000_000, 4999));
+        assert!(state.has_ssh_grant_at("github", ssh_anchor(99), 4999));
+        assert!(state.has_ssh_grant_at("gitlab", ssh_anchor(99), 4999));
         // A different anchor is not.
-        assert!(!state.has_ssh_grant_at("github", 100, 1_700_000_000, 4999));
+        assert!(!state.has_ssh_grant_at("github", ssh_anchor(100), 4999));
     }
 
     #[test]
@@ -2795,7 +2810,7 @@ mod tests {
         use std::sync::mpsc;
 
         let shared: SharedState = Arc::new(Mutex::new(State::new()));
-        let scope = ApprovalScope {
+        let scope = ProcessIdentity {
             pid: 4242,
             start_time: 1_700_000_000,
         };
@@ -2839,7 +2854,7 @@ mod tests {
         use std::sync::mpsc;
 
         let shared: SharedState = Arc::new(Mutex::new(State::new()));
-        let scope = ApprovalScope {
+        let scope = ProcessIdentity {
             pid: 4242,
             start_time: 1_700_000_000,
         };
@@ -2902,7 +2917,7 @@ mod tests {
             guard.resolve(
                 &key,
                 Decision::Deny,
-                ApprovalScope {
+                ProcessIdentity {
                     pid: 100,
                     start_time: 1_700_000_000,
                 },
@@ -2938,8 +2953,10 @@ mod tests {
     fn approval_at_direct_parent_hits_with_scope_of_direct_parent() {
         let approvals = vec![ApprovalEntry {
             wrap: "gh".into(),
-            ppid: 7926,
-            parent_start_time: 1_700_000_000,
+            parent: ProcessIdentity {
+                pid: 7926,
+                start_time: 1_700_000_000,
+            },
         }];
         let ask = mk_ask("gh", vec![(7926, 1_700_000_000)]);
         let scope = approval_scope_for(&approvals, &ask).expect("hit");
@@ -2954,8 +2971,10 @@ mod tests {
         // up to Superset and hit.
         let approvals = vec![ApprovalEntry {
             wrap: "gh".into(),
-            ppid: 2831,
-            parent_start_time: 1_600_000_000,
+            parent: ProcessIdentity {
+                pid: 2831,
+                start_time: 1_600_000_000,
+            },
         }];
         let ask = mk_ask(
             "gh",
@@ -2974,8 +2993,10 @@ mod tests {
         // Scope match but wrong wrap name — must miss.
         let approvals = vec![ApprovalEntry {
             wrap: "aws".into(),
-            ppid: 7926,
-            parent_start_time: 1_700_000_000,
+            parent: ProcessIdentity {
+                pid: 7926,
+                start_time: 1_700_000_000,
+            },
         }];
         let ask = mk_ask("gh", vec![(7926, 1_700_000_000)]);
         assert!(approval_scope_for(&approvals, &ask).is_none());
@@ -2987,8 +3008,10 @@ mod tests {
         // means a different process and the approval must not transfer.
         let approvals = vec![ApprovalEntry {
             wrap: "gh".into(),
-            ppid: 7926,
-            parent_start_time: 1_500_000_000,
+            parent: ProcessIdentity {
+                pid: 7926,
+                start_time: 1_500_000_000,
+            },
         }];
         let ask = mk_ask("gh", vec![(7926, 1_700_000_000)]);
         assert!(approval_scope_for(&approvals, &ask).is_none());
@@ -3001,13 +3024,19 @@ mod tests {
         let approvals = vec![
             ApprovalEntry {
                 wrap: "gh".into(),
-                ppid: 7926, // zsh — direct
-                parent_start_time: 1_700_000_000,
+                // zsh — direct
+                parent: ProcessIdentity {
+                    pid: 7926,
+                    start_time: 1_700_000_000,
+                },
             },
             ApprovalEntry {
                 wrap: "gh".into(),
-                ppid: 2831, // Superset — ancestor
-                parent_start_time: 1_600_000_000,
+                // Superset — ancestor
+                parent: ProcessIdentity {
+                    pid: 2831,
+                    start_time: 1_600_000_000,
+                },
             },
         ];
         let ask = mk_ask("gh", vec![(7926, 1_700_000_000), (2831, 1_600_000_000)]);
@@ -3026,8 +3055,10 @@ mod tests {
         let mut state = State::new();
         state.approvals.push(ApprovalEntry {
             wrap: "gh".into(),
-            ppid: 7926,
-            parent_start_time: 1_700_000_000,
+            parent: ProcessIdentity {
+                pid: 7926,
+                start_time: 1_700_000_000,
+            },
         });
         let ask = mk_ask("gh", vec![(7926, 1_700_000_000)]);
         assert!(state.has_cached_approval(&ask), "matching scope hits");
@@ -3781,7 +3812,7 @@ mod tests {
             guard.resolve(
                 &key,
                 Decision::Approve,
-                ApprovalScope {
+                ProcessIdentity {
                     pid: 6042,
                     start_time: 12345,
                 },
@@ -3836,7 +3867,7 @@ mod tests {
             guard.resolve(
                 &key,
                 Decision::Approve,
-                ApprovalScope {
+                ProcessIdentity {
                     pid: 6042,
                     start_time: 12345,
                 },
@@ -3873,7 +3904,7 @@ mod tests {
             guard.resolve(
                 &key,
                 Decision::Approve,
-                ApprovalScope {
+                ProcessIdentity {
                     pid: 6042,
                     start_time: 12345,
                 },
@@ -4647,7 +4678,7 @@ mod tests {
             guard.resolve(
                 &key,
                 Decision::Deny,
-                ApprovalScope {
+                ProcessIdentity {
                     pid: 100,
                     start_time: 1_700_000_000,
                 },
@@ -4683,7 +4714,7 @@ mod tests {
             guard.resolve(
                 &key,
                 Decision::Deny,
-                ApprovalScope {
+                ProcessIdentity {
                     pid: 100,
                     start_time: 1_700_000_000,
                 },

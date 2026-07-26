@@ -37,8 +37,9 @@ use super::in_flight::InFlightMap;
 use super::proto::{Ask, AskSubject, Caller, DedupeKey, SshAnchorInfo, SshAskInfo, SshSubject};
 use super::ssh_proto::{self, AgentRequest};
 use super::state::{SharedState, WaiterReply};
-use crate::consent::{Decision, SshAnchor, SshGrant, SshGrantScope};
+use crate::consent::{Decision, SshGrant, SshGrantScope};
 use crate::manifest::Provider;
+use crate::provenance::ProcessIdentity;
 use crate::wraps::SshIdentity;
 
 /// Upper bound on a single agent frame's payload length. Mirrors OpenSSH's
@@ -340,10 +341,7 @@ fn handle_sign(
     };
     // The consent layer identifies a session by the pair, not by the frame,
     // so convert once here rather than passing two loose integers down.
-    let anchor = SshAnchor {
-        pid: anchor.pid,
-        start_time: anchor.start_time,
-    };
+    let anchor = anchor.identity();
 
     // The production daemon always supplies state; the listing-only test
     // path doesn't. With no state there is no consent machinery, so fail
@@ -451,7 +449,7 @@ fn handle_sign(
 fn decide_sign(
     state: &SharedState,
     identity: &PreparedIdentity,
-    anchor: crate::consent::SshAnchor,
+    anchor: ProcessIdentity,
     chain: &crate::provenance::CallerChain,
     cwd: &str,
     data: &[u8],
@@ -461,7 +459,7 @@ fn decide_sign(
     // works headless.
     {
         let mut guard = state.lock().expect("state mutex");
-        if guard.has_ssh_grant(&identity.key_id, anchor.pid, anchor.start_time) {
+        if guard.has_ssh_grant(&identity.key_id, anchor) {
             // The audit row for a grant hit is written at the sign outcome
             // (with `decision = ApproveCached`), alongside the approve/deny
             // rows — one audit-write site, fed the decision this returns.
@@ -519,7 +517,7 @@ fn decide_sign(
 fn decide_sign_on_miss(
     state: &SharedState,
     identity: &PreparedIdentity,
-    anchor: crate::consent::SshAnchor,
+    anchor: ProcessIdentity,
     chain: &crate::provenance::CallerChain,
     cwd: &str,
     data: &[u8],
@@ -641,7 +639,7 @@ fn grant_scope_for(decision: Decision, key_id: &str) -> Option<SshGrantScope> {
 /// queue entry.
 fn sign_ask(
     identity: &PreparedIdentity,
-    anchor: crate::consent::SshAnchor,
+    anchor: ProcessIdentity,
     chain: &crate::provenance::CallerChain,
     cwd: &str,
     data: &[u8],
@@ -889,7 +887,7 @@ mod tests {
         let decision = decide_sign_on_miss(
             &state,
             &identity,
-            SshAnchor {
+            ProcessIdentity {
                 pid: 4242,
                 start_time: 1,
             },
@@ -963,10 +961,7 @@ mod tests {
         let anchor = crate::provenance::select_anchor(&chain.frames).expect("anchor");
         let ask = sign_ask(
             &test_identity("github"),
-            SshAnchor {
-                pid: anchor.pid,
-                start_time: anchor.start_time,
-            },
+            anchor.identity(),
             &chain,
             "/home/dev/repos/acme",
             b"challenge",
@@ -998,10 +993,7 @@ mod tests {
         let anchor = crate::provenance::select_anchor(&chain.frames).expect("anchor");
         let ask = sign_ask(
             &test_identity("github"),
-            SshAnchor {
-                pid: anchor.pid,
-                start_time: anchor.start_time,
-            },
+            anchor.identity(),
             &chain,
             "/home/dev/repos/acme",
             b"challenge",
@@ -1070,7 +1062,7 @@ mod tests {
         let decision = decide_sign(
             &state,
             &identity,
-            SshAnchor {
+            ProcessIdentity {
                 pid: 4242,
                 start_time: 1,
             },
@@ -1113,7 +1105,7 @@ mod tests {
         let decision = decide_sign(
             &state,
             &identity,
-            SshAnchor {
+            ProcessIdentity {
                 pid: 4242,
                 start_time: 1,
             },
@@ -1216,7 +1208,7 @@ mod tests {
 
         let a = sign_ask(
             &identity,
-            SshAnchor {
+            ProcessIdentity {
                 pid: 4242,
                 start_time: 1,
             },
@@ -1226,7 +1218,7 @@ mod tests {
         );
         let b = sign_ask(
             &identity,
-            SshAnchor {
+            ProcessIdentity {
                 pid: 4242,
                 start_time: 1,
             },
@@ -1253,7 +1245,7 @@ mod tests {
 
         let a = sign_ask(
             &identity,
-            SshAnchor {
+            ProcessIdentity {
                 pid: 4242,
                 start_time: 1,
             },
@@ -1263,7 +1255,7 @@ mod tests {
         );
         let b = sign_ask(
             &identity,
-            SshAnchor {
+            ProcessIdentity {
                 pid: 4242,
                 start_time: 1,
             },
@@ -1283,7 +1275,7 @@ mod tests {
         let chain = whole_chain(Vec::new());
         let ask = sign_ask(
             &identity,
-            SshAnchor {
+            ProcessIdentity {
                 pid: 4242,
                 start_time: 1,
             },

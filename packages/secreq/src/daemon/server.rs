@@ -297,20 +297,15 @@ fn handle_consent_window_connection(
             ClientMsg::ConsentDecision {
                 key,
                 decision,
-                scope_pid,
-                scope_start_time,
+                scope,
             } => {
                 super::log::log_at(
                     "server",
                     format_args!(
-                        "← ConsentDecision wrap={} decision={:?} scope=({scope_pid},{scope_start_time})",
-                        key.wrap, decision
+                        "← ConsentDecision wrap={} decision={:?} scope=({},{})",
+                        key.wrap, decision, scope.pid, scope.start_time
                     ),
                 );
-                let scope = super::state::ApprovalScope {
-                    pid: scope_pid,
-                    start_time: scope_start_time,
-                };
                 // `resolve` hands a clone of `state` to its off-thread
                 // resolver so it can clear the "Resolving…" card when
                 // the value lands; lock a separate handle to call it.

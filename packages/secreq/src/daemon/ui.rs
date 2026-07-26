@@ -31,8 +31,8 @@ use crate::rules::{Pattern, Rule, RuleBody, RuleDecision, RuleMatch};
 
 use super::manager_ui::ManagerView;
 use super::proto::DedupeKey;
-use super::state::ApprovalScope;
 use super::theme::{OsFlavor, Theme};
+use crate::provenance::ProcessIdentity;
 
 /// How often the UI re-reads the audit log to refresh the per-wrap history
 /// summaries. The log is append-only and small, so re-reading is cheap, but
@@ -73,7 +73,7 @@ const AUDIT_VERDICT_COL_WIDTH: f32 = 132.0;
 pub struct PendingAction {
     pub key: DedupeKey,
     pub decision: Decision,
-    pub scope: ApprovalScope,
+    pub scope: ProcessIdentity,
 }
 
 /// Form-state for the rule create/edit modal. Holds raw strings so

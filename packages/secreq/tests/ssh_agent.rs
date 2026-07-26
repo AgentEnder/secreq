@@ -23,7 +23,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use secreq::consent::{SshAnchor, SshGrant, SshGrantScope};
+use secreq::consent::{SshGrant, SshGrantScope};
 use secreq::daemon::ssh_agent::{self, SignContext};
 use secreq::daemon::ssh_proto::{self, SSH_AGENT_FAILURE, SSH_AGENT_IDENTITIES_ANSWER};
 use secreq::daemon::state::State;
@@ -210,10 +210,7 @@ fn signing_context_with_seeded_approval(
     let state = Arc::new(Mutex::new(State::new()));
     state.lock().unwrap().remember_ssh_grant(SshGrant {
         scope: SshGrantScope::OneKey("github".to_owned()),
-        anchor: SshAnchor {
-            pid: anchor.pid,
-            start_time: anchor.start_time,
-        },
+        anchor: anchor.identity(),
         expires_at: far_future,
     });
 

@@ -5,13 +5,15 @@
 //! - [`Decision`] — the serializable enum that crosses the daemon socket
 //!   and lands in the audit log.
 //! - [`ApprovalEntry`] — the in-memory remembered-approval record the
-//!   daemon keys on `(wrap, ppid, parent_start_time)`. Never persisted:
+//!   daemon keys on `(wrap, parent process)`. Never persisted:
 //!   approvals live for the daemon process's lifetime only, so a daemon
 //!   restart (`secreq daemon stop`) is the way to clear them. This is the
 //!   security property we want — a remembered approval can't outlive the
 //!   user's awareness of what they approved.
 
 use serde::{Deserialize, Serialize};
+
+use crate::provenance::ProcessIdentity;
 
 /// The user's decision on a consent request.
 ///
@@ -22,7 +24,7 @@ use serde::{Deserialize, Serialize};
 pub enum Decision {
     /// Release the secrets for this run only. Not cached.
     Approve,
-    /// Release and remember `(wrap, ppid, parent_start_time)` in the
+    /// Release and remember `(wrap, parent process)` in the
     /// daemon's in-memory approvals cache. Subsequent asks from the same
     /// parent skip the prompt for as long as the daemon (and that parent
     /// process) lives.
@@ -127,7 +129,7 @@ impl Decision {
 
 // ── Approval cache: scoped to the daemon process's lifetime ───────────────
 //
-// Each entry binds (wrap_name, ppid, parent_start_time). Re-invocations
+// Each entry binds (wrap_name, parent ProcessIdentity). Re-invocations
 // from the *same* parent skip the prompt; any other parent (npm postinstall,
 // IDE integration, a fresh shell) prompts. There is **no TTL** and **no
 // disk persistence** — the cache lives inside the daemon's memory and is
@@ -143,8 +145,11 @@ impl Decision {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApprovalEntry {
     pub wrap: String,
-    pub ppid: u32,
-    pub parent_start_time: u64,
+    /// The parent process this approval was given for. A
+    /// [`ProcessIdentity`] rather than a loose `(ppid, parent_start_time)`
+    /// pair so the lookup is one derived comparison — see the type's own
+    /// note on what the hand-written version cost.
+    pub parent: ProcessIdentity,
 }
 
 // ── SSH sign session grants: a deliberate TTL divergence ──────────────────
@@ -154,7 +159,7 @@ pub struct ApprovalEntry {
 // wall-clock `expires_at` (Unix seconds), and a key *scope* that can be a
 // single identity or a wildcard over all of them.
 //
-// Why a TTL? The wrap cache binds `(wrap, ppid, parent_start_time)` and
+// Why a TTL? The wrap cache binds `(wrap, parent process)` and
 // relies on the parent process's lifetime as the natural expiry: a `gh`
 // wrap's parent shell dies, its pid/start_time stop matching, and the
 // approval is effectively dead. There's a concrete, user-observable event
@@ -187,16 +192,6 @@ pub enum SshGrantScope {
     AllKeys,
 }
 
-/// The anchor a grant is scoped to — the `(pid, start_time)` of the
-/// long-lived session (shell / IDE / git) that drives the signing. A grant
-/// only matches signs whose anchor is this exact session, so it can't leak
-/// to an unrelated process that happens to reuse a recycled pid.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SshAnchor {
-    pub pid: u32,
-    pub start_time: u64,
-}
-
 /// Remembered SSH sign session grant. Unlike [`ApprovalEntry`] (the wrap
 /// cache, which has no TTL), this carries a wall-clock `expires_at` (Unix
 /// seconds) and a [`SshGrantScope`]. See the module-level note above for the
@@ -204,7 +199,11 @@ pub struct SshAnchor {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SshGrant {
     pub scope: SshGrantScope,
-    pub anchor: SshAnchor,
+    /// The long-lived session (shell / IDE / git) the signing hangs off,
+    /// picked by [`crate::provenance::select_anchor`]. A grant only matches
+    /// signs from this exact process, so it cannot leak to whatever inherits
+    /// a recycled pid.
+    pub anchor: ProcessIdentity,
     /// Unix seconds after which this grant no longer matches.
     pub expires_at: u64,
 }
@@ -214,12 +213,17 @@ impl SshGrant {
     /// **and** the grant has not yet expired (`now < expires_at`). `now` is
     /// passed in (Unix seconds) so callers control the clock — the lookup in
     /// `state.rs` reads `SystemTime::now()`, while tests pass explicit values.
-    pub fn matches(&self, key_id: &str, pid: u32, start: u64, now: u64) -> bool {
+    ///
+    /// The anchor arrives as one value rather than as two integers: this used
+    /// to compare `pid` and `start_time` in separate conjuncts, and either one
+    /// dropped would have handed a 30-minute signing grant to a process that
+    /// only had to reuse a pid.
+    pub fn matches(&self, key_id: &str, anchor: ProcessIdentity, now: u64) -> bool {
         let key_ok = match &self.scope {
             SshGrantScope::OneKey(id) => id == key_id,
             SshGrantScope::AllKeys => true,
         };
-        key_ok && self.anchor.pid == pid && self.anchor.start_time == start && now < self.expires_at
+        key_ok && self.anchor == anchor && now < self.expires_at
     }
 }
 
@@ -234,8 +238,9 @@ impl SshGrant {
 // What differs is what the anchor **is**, and that difference is the whole
 // scoped-agent design:
 //
-//   - An [`SshAnchor`] is `(pid, start_time)` — a kernel fact about a local
-//     process, read through `SO_PEERCRED` and walked by `provenance.rs`.
+//   - An [`SshGrant`]'s anchor is a [`ProcessIdentity`] — a kernel fact about
+//     a local process, read through `SO_PEERCRED` and walked by
+//     `provenance.rs`.
 //   - An [`AgentAnchor`] is a **scope name**: the sandbox the host declared
 //     when it ran `secreq agent open --scope <name>`. A guest has no host
 //     pid to anchor on (there is no local process behind another kernel, and
@@ -262,10 +267,10 @@ impl SshGrant {
 /// The anchor an [`AgentGrant`] is bound to: the **scope** — the sandbox
 /// name the host declared at `secreq agent open` time.
 ///
-/// The scoped-agent counterpart to [`SshAnchor`]. Where that anchors on a
-/// kernel-sourced `(pid, start_time)`, this anchors on a name the *host*
-/// chose, because that is the only unforgeable statement available about a
-/// guest. See the module note above.
+/// The scoped-agent counterpart to an [`SshGrant`]'s anchor. Where that is a
+/// kernel-sourced [`ProcessIdentity`], this is a name the *host* chose,
+/// because that is the only unforgeable statement available about a guest.
+/// See the module note above.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentAnchor {
     pub scope: String,
@@ -333,39 +338,37 @@ mod tests {
         assert_eq!(Decision::Abandoned.as_str(), "abandoned");
     }
 
+    fn anchor(pid: u32, start_time: u64) -> ProcessIdentity {
+        ProcessIdentity { pid, start_time }
+    }
+
     #[test]
     fn ssh_grant_one_key_expires_and_scopes() {
         let grant = SshGrant {
             scope: SshGrantScope::OneKey("github".into()),
-            anchor: SshAnchor {
-                pid: 42,
-                start_time: 1000,
-            },
+            anchor: anchor(42, 1000),
             expires_at: 5000,
         };
-        assert!(grant.matches("github", 42, 1000, /*now=*/ 4999));
-        assert!(!grant.matches("github", 42, 1000, /*now=*/ 5001)); // expired
-        assert!(!grant.matches("other", 42, 1000, 4999)); // wrong key
-        assert!(!grant.matches("github", 43, 1000, 4999)); // wrong anchor pid
-        assert!(!grant.matches("github", 42, 1001, 4999)); // wrong anchor start
+        assert!(grant.matches("github", anchor(42, 1000), /*now=*/ 4999));
+        assert!(!grant.matches("github", anchor(42, 1000), /*now=*/ 5001)); // expired
+        assert!(!grant.matches("other", anchor(42, 1000), 4999)); // wrong key
+        assert!(!grant.matches("github", anchor(43, 1000), 4999)); // wrong anchor pid
+        assert!(!grant.matches("github", anchor(42, 1001), 4999)); // wrong anchor start
     }
 
     #[test]
     fn ssh_grant_all_keys_covers_any_identity() {
         let grant = SshGrant {
             scope: SshGrantScope::AllKeys,
-            anchor: SshAnchor {
-                pid: 42,
-                start_time: 1000,
-            },
+            anchor: anchor(42, 1000),
             expires_at: 5000,
         };
         // Any key id matches while the anchor + TTL hold.
-        assert!(grant.matches("github", 42, 1000, 4999));
-        assert!(grant.matches("gitlab", 42, 1000, 4999));
+        assert!(grant.matches("github", anchor(42, 1000), 4999));
+        assert!(grant.matches("gitlab", anchor(42, 1000), 4999));
         // But the anchor scoping and TTL still bind.
-        assert!(!grant.matches("github", 99, 1000, 4999)); // wrong anchor
-        assert!(!grant.matches("github", 42, 1000, 5001)); // expired
+        assert!(!grant.matches("github", anchor(99, 1000), 4999)); // wrong anchor
+        assert!(!grant.matches("github", anchor(42, 1000), 5001)); // expired
     }
 
     fn agent_grant(scope: &str, reference: &str, expires_at: u64) -> AgentGrant {
