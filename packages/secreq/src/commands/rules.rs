@@ -40,10 +40,8 @@ fn rule_list_line(r: &crate::rules::Rule, refusals: &[crate::rules::WasmRefusal]
     // A wasm rule has no static decision — the module returns one
     // per ask — and no match clause to take a wrap from.
     let (decide, wrap) = match &r.body {
-        crate::rules::RuleBody::Declarative {
-            r#match, decide, ..
-        } => (
-            match decide {
+        crate::rules::RuleBody::Declarative { r#match, decide } => (
+            match decide.decision() {
                 crate::rules::RuleDecision::Approve => "approve",
                 crate::rules::RuleDecision::Deny => "deny",
             },
@@ -84,15 +82,11 @@ fn rule_show_text(rule: &crate::rules::Rule, refusals: &[crate::rules::WasmRefus
     let _ = writeln!(out, "enabled:        {}", rule.enabled);
     let mut deny_message = None;
     match &rule.body {
-        crate::rules::RuleBody::Declarative {
-            r#match,
-            decide,
-            deny_message: msg,
-        } => {
+        crate::rules::RuleBody::Declarative { r#match, decide } => {
             let _ = writeln!(
                 out,
                 "decide:         {}",
-                match decide {
+                match decide.decision() {
                     crate::rules::RuleDecision::Approve => "approve",
                     crate::rules::RuleDecision::Deny => "deny",
                 }
@@ -107,7 +101,7 @@ fn rule_show_text(rule: &crate::rules::Rule, refusals: &[crate::rules::WasmRefus
             if let Some(p) = &r#match.cwd {
                 let _ = writeln!(out, "cwd match:      {}", p.as_str());
             }
-            deny_message = msg.as_deref();
+            deny_message = decide.deny_message();
         }
         crate::rules::RuleBody::Wasm(w) => {
             let _ = writeln!(out, "decide:         wasm (module decides per ask)");

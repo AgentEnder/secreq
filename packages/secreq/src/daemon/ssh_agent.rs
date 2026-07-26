@@ -1030,8 +1030,7 @@ mod tests {
                     ancestor: None,
                     cwd: None,
                 },
-                decide,
-                deny_message: None,
+                decide: decide.into(),
             },
         }
     }

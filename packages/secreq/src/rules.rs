@@ -98,16 +98,66 @@ pub struct Rule {
 pub enum RuleBody {
     Declarative {
         r#match: RuleMatch,
-        /// The rule's decision whenever the match clause fires.
-        decide: RuleDecision,
-        /// Message shown to the user on auto-deny — the wrap client
-        /// prints it to stderr, the consent window renders it in a toast
-        /// row. Only consulted when `decide == Deny`; an approve rule may
-        /// carry one, because files on disk do and refusing to load them
-        /// would be a format change rather than a type cleanup.
-        deny_message: Option<String>,
+        /// The rule's decision whenever the match clause fires — and,
+        /// on the deny side, the message that explains it.
+        decide: StaticDecision,
     },
     Wasm(WasmRule),
+}
+
+/// What a declarative rule does when its match clause fires.
+///
+/// The deny message lives **inside** `Deny` because an approve has
+/// nothing to explain: nobody is being refused, so there is no place in
+/// the UI or on a wrap's stderr where the string could appear. Holding
+/// it beside `decide` made "approve, with a reason for denying"
+/// representable, and three separate places — the evaluator, the UI
+/// form, the CLI's `rules show` — each dropped it by hand.
+///
+/// A *file* may still say both, because files on disk do and refusing
+/// to load one would break a configuration that works today. That is
+/// resolved on the way in, not in the type: [`load_rules`] records a
+/// [`StrayDenyMessage`] and warns by file and rule name, and the next
+/// write drops the key.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StaticDecision {
+    Approve,
+    Deny {
+        /// Message shown to the user on auto-deny — the wrap client
+        /// prints it to stderr, the consent window renders it in a
+        /// toast row. `None` denies without elaborating.
+        message: Option<String>,
+    },
+}
+
+impl StaticDecision {
+    /// The direction alone, for the audit pill and [`RuleHit`].
+    pub fn decision(&self) -> RuleDecision {
+        match self {
+            StaticDecision::Approve => RuleDecision::Approve,
+            StaticDecision::Deny { .. } => RuleDecision::Deny,
+        }
+    }
+
+    /// The configured deny message, if this is a deny that carries one.
+    pub fn deny_message(&self) -> Option<&str> {
+        match self {
+            StaticDecision::Approve => None,
+            StaticDecision::Deny { message } => message.as_deref(),
+        }
+    }
+}
+
+impl From<RuleDecision> for StaticDecision {
+    /// The direction with no message yet — the inverse of
+    /// [`StaticDecision::decision`], for a caller that has picked which
+    /// way a rule fires before it has anything to say about it.
+    fn from(decide: RuleDecision) -> StaticDecision {
+        match decide {
+            RuleDecision::Approve => StaticDecision::Approve,
+            RuleDecision::Deny => StaticDecision::Deny { message: None },
+        }
+    }
 }
 
 impl Rule {
@@ -201,11 +251,19 @@ impl TryFrom<RuleWire> for Rule {
                 let Some(decide) = wire.decide else {
                     bail!("{label} has a `match` clause but no `decide` (approve or deny)");
                 };
-                RuleBody::Declarative {
-                    r#match,
-                    decide,
-                    deny_message: wire.deny_message,
-                }
+                // An approve's `deny_message` is dropped here rather
+                // than refused: files carrying one load today, and
+                // breaking them would be a worse trade than losing a
+                // string that could never have been shown. The drop is
+                // not silent — `load_rules` spots it on the wire first
+                // and warns by file and rule. See [`StrayDenyMessage`].
+                let decide = match decide {
+                    RuleDecision::Approve => StaticDecision::Approve,
+                    RuleDecision::Deny => StaticDecision::Deny {
+                        message: wire.deny_message,
+                    },
+                };
+                RuleBody::Declarative { r#match, decide }
             }
         };
         Ok(Rule {
@@ -222,11 +280,12 @@ impl TryFrom<RuleWire> for Rule {
 impl From<Rule> for RuleWire {
     fn from(rule: Rule) -> RuleWire {
         let (decide, r#match, wasm, deny_message) = match rule.body {
-            RuleBody::Declarative {
-                r#match,
-                decide,
-                deny_message,
-            } => (Some(decide), Some(r#match), None, deny_message),
+            RuleBody::Declarative { r#match, decide } => match decide {
+                StaticDecision::Approve => (Some(RuleDecision::Approve), Some(r#match), None, None),
+                StaticDecision::Deny { message } => {
+                    (Some(RuleDecision::Deny), Some(r#match), None, message)
+                }
+            },
             RuleBody::Wasm(wasm) => (None, None, Some(wasm), None),
         };
         RuleWire {
@@ -580,6 +639,50 @@ pub struct RulesFile {
     pub rules: Vec<Rule>,
 }
 
+/// The same file, read one layer lower: rules still in their
+/// [`RuleWire`] form. [`load_rules`] parses through this rather than
+/// straight into [`Rule`] so it can see the `deny_message` an approve
+/// rule wrote *before* the conversion drops it, and name the rule in the
+/// warning. The shape check is unchanged — it still runs in
+/// `TryFrom<RuleWire> for Rule`, one line later.
+#[derive(Deserialize)]
+struct RulesFileWire {
+    #[serde(default)]
+    rules: Vec<RuleWire>,
+}
+
+/// A `deny_message` found on a rule that decides `approve`, and can
+/// therefore never show it.
+///
+/// The file is accepted — one that says both loads today, and refusing
+/// it would invalidate a working configuration — but the key is dropped
+/// on the way in and gone the next time the daemon writes the file.
+/// **That drop must never be silent**, which is what this type is for:
+/// [`load_rules`] records one per offending rule and warns through the
+/// daemon log with [`stray_deny_message_warning`], naming the file and
+/// the rule. A quietly-vanishing policy field is the failure mode this
+/// module's deserializer is built to avoid, not one to introduce.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StrayDenyMessage {
+    pub rule_id: String,
+    pub rule_name: String,
+}
+
+/// The operator-facing warning for one [`StrayDenyMessage`]. Pure, so
+/// the wording is testable, and one line so it sits in `daemon.log`
+/// beside the other rules-load warnings.
+pub fn stray_deny_message_warning(path: &Path, stray: &StrayDenyMessage) -> String {
+    format!(
+        "{}: rule `{}` (id {}) decides `approve` but sets `deny_message` — \
+         an approve refuses nobody, so the message is ignored now and will be \
+         removed the next time secreq writes this file. Change `decide` to \
+         \"deny\" if the message was meant to fire.",
+        path.display(),
+        stray.rule_name,
+        stray.rule_id
+    )
+}
+
 /// Compiled wasm modules keyed by rule id. Built once per rules load
 /// ([`load_rules`]) so evaluation never compiles; a wasm rule whose id
 /// is absent here was refused at load time (and warned about then) —
@@ -603,6 +706,11 @@ pub struct LoadedRules {
     /// must surface these loudly (the daemon logs each one and retains
     /// them so list/show/UI render the refusal).
     pub wasm_refusals: Vec<WasmRefusal>,
+    /// One entry per rule whose `deny_message` was dropped because the
+    /// rule decides `approve`. [`load_rules`] has already warned about
+    /// each of these through the daemon log; the list is here so a
+    /// caller (and the tests) can see what was dropped.
+    pub stray_deny_messages: Vec<StrayDenyMessage>,
 }
 
 /// Load rules from `path`. A missing file returns an empty
@@ -617,8 +725,14 @@ pub struct LoadedRules {
 ///   `decide`/`deny_message`) errors the whole load — the file was
 ///   authored wrong, same class as a syntax error, and the daemon's
 ///   existing "warn + empty ruleset" contract applies. Both are
-///   literally the same error now: the shape check lives in
-///   `TryFrom<RuleWire> for Rule`, so it runs inside the parse.
+///   literally the same check now: the shape lives in
+///   `TryFrom<RuleWire> for Rule`, run on every rule as it is converted.
+/// - **Tolerated, and warned about**: a `deny_message` on a rule that
+///   decides `approve`. Files carrying one load today, so refusing them
+///   would break a working configuration; the key is dropped instead
+///   (and so gone the next time the file is written) and every
+///   occurrence is logged by file and rule name. See
+///   [`StrayDenyMessage`].
 /// - **Per-rule**: a wasm rule whose *referenced module* fails to load
 ///   (missing file, sha256 mismatch, sandbox rejection) refuses just
 ///   that rule, recorded in [`LoadedRules::wasm_refusals`]. A tampered
@@ -640,13 +754,35 @@ pub fn load_rules(path: &Path) -> Result<LoadedRules> {
     let mtime = meta.modified().ok();
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("read auto-rules file: {}", path.display()))?;
-    let parsed: RulesFile = json5::from_str(&text)
+    let parsed: RulesFileWire = json5::from_str(&text)
         .with_context(|| format!("parse auto-rules file: {}", path.display()))?;
+    // Spot the stray `deny_message`s on the wire, where the key still
+    // exists, then convert. Warning here rather than in the conversion
+    // is what lets the message name the file the rule came from.
+    let mut stray_deny_messages = Vec::new();
+    let mut rules = Vec::with_capacity(parsed.rules.len());
+    for wire in parsed.rules {
+        if wire.decide == Some(RuleDecision::Approve) && wire.deny_message.is_some() {
+            let stray = StrayDenyMessage {
+                rule_id: wire.id.clone(),
+                rule_name: wire.name.clone(),
+            };
+            crate::daemon::log::log_at(
+                "rules",
+                format_args!("WARN: {}", stray_deny_message_warning(path, &stray)),
+            );
+            stray_deny_messages.push(stray);
+        }
+        rules.push(
+            Rule::try_from(wire)
+                .with_context(|| format!("in auto-rules file: {}", path.display()))?,
+        );
+    }
     // Relative wasm paths anchor at the rules file's directory.
     let rules_dir = path.parent().unwrap_or(Path::new(""));
     let mut modules = RuleModules::new();
     let mut wasm_refusals = Vec::new();
-    for rule in &parsed.rules {
+    for rule in &rules {
         match load_rule_module(rule, rules_dir) {
             Ok(Some(module)) => {
                 modules.insert(rule.id.clone(), module);
@@ -660,10 +796,11 @@ pub fn load_rules(path: &Path) -> Result<LoadedRules> {
         }
     }
     Ok(LoadedRules {
-        rules: parsed.rules,
+        rules,
         mtime,
         modules,
         wasm_refusals,
+        stray_deny_messages,
     })
 }
 
@@ -931,22 +1068,16 @@ pub fn evaluate(rules: &[Rule], modules: &RuleModules, ctx: &EvalCtx) -> Evaluat
                     }
                 }
             }
-            RuleBody::Declarative {
-                r#match,
-                decide,
-                deny_message,
-            } => {
+            RuleBody::Declarative { r#match, decide } => {
                 if !match_clause_matches(r#match, ctx) {
                     continue;
                 }
                 Candidate {
                     rule,
-                    decide: *decide,
-                    deny_message: if *decide == RuleDecision::Deny {
-                        deny_message.clone()
-                    } else {
-                        None
-                    },
+                    decide: decide.decision(),
+                    // No "…only if this is a deny" guard: an approve has
+                    // no message to guard against carrying.
+                    deny_message: decide.deny_message().map(str::to_owned),
                     specificity: specificity(r#match),
                 }
             }
@@ -1073,8 +1204,7 @@ mod tests {
             created_at_unix: 0,
             body: RuleBody::Declarative {
                 r#match: m,
-                decide,
-                deny_message: None,
+                decide: decide.into(),
             },
         }
     }
@@ -1096,13 +1226,17 @@ mod tests {
         }
     }
 
-    /// Set (or clear) a declarative rule's `deny_message` in place.
-    /// Panics on a wasm rule, which cannot carry one.
+    /// Set (or clear) a declarative deny rule's message in place.
+    /// Panics on anything that isn't a deny — nothing else can hold one.
     fn set_deny_message(rule: &mut Rule, msg: Option<&str>) {
-        let RuleBody::Declarative { deny_message, .. } = &mut rule.body else {
-            panic!("not a declarative rule");
+        let RuleBody::Declarative {
+            decide: StaticDecision::Deny { message },
+            ..
+        } = &mut rule.body
+        else {
+            panic!("not a declarative deny rule");
         };
-        *deny_message = msg.map(str::to_owned);
+        *message = msg.map(str::to_owned);
     }
 
     /// Replace a rule's module reference in place. Panics on a
@@ -1544,7 +1678,7 @@ mod tests {
         else {
             panic!("declarative rule");
         };
-        assert_eq!(*decide, RuleDecision::Approve);
+        assert_eq!(*decide, StaticDecision::Approve);
         assert_eq!(m.wrap, "gh");
         assert_eq!(
             m.argv.as_ref().map(Pattern::as_str),
@@ -2264,18 +2398,13 @@ mod tests {
         let RuleBody::Declarative { decide, .. } = &declarative.body else {
             panic!("rule 01 is declarative");
         };
-        assert_eq!(*decide, RuleDecision::Approve);
+        assert_eq!(*decide, StaticDecision::Approve);
         let deny = &first.rules[1];
         assert!(!deny.enabled);
-        let RuleBody::Declarative {
-            r#match,
-            deny_message,
-            ..
-        } = &deny.body
-        else {
+        let RuleBody::Declarative { r#match, decide } = &deny.body else {
             panic!("rule 02 is declarative");
         };
-        assert_eq!(deny_message.as_deref(), Some("Use the UI instead."));
+        assert_eq!(decide.deny_message(), Some("Use the UI instead."));
         assert_eq!(
             r#match.cwd.as_ref().map(Pattern::as_str),
             Some("/Users/me/oss")
@@ -2342,6 +2471,160 @@ mod tests {
             err.contains("decide") && err.contains("half a rule"),
             "{err}"
         );
+    }
+
+    // ── A `deny_message` on a rule that never denies ──────────────────
+    //
+    // Files carrying `decide: "approve"` beside a `deny_message` load
+    // today, so refusing them would break a configuration that works.
+    // They are still wrong — the message can never be shown — so the
+    // load warns by name and the next write drops the key. That warning
+    // is what separates this from the silent-drop failure mode which
+    // disqualified `#[serde(untagged)]` for the very same file.
+
+    /// A file whose one rule approves and carries a `deny_message`.
+    fn stray_deny_message_file(dir: &Path) -> std::path::PathBuf {
+        let path = dir.join("auto-rules.json5");
+        std::fs::write(
+            &path,
+            r#"{ rules: [ {
+                id: "0a1b2c3d4e5f",
+                name: "Cursor reads via gh",
+                enabled: true,
+                decide: "approve",
+                match: { wrap: "gh", argv: "gh api --get /repos/*" },
+                deny_message: "Use the UI instead.",
+                trained_secrets: ["GITHUB_TOKEN"],
+                created_at_unix: 1700000000,
+            } ] }"#,
+        )
+        .expect("write");
+        path
+    }
+
+    #[test]
+    fn an_approve_rule_carrying_a_deny_message_loads_as_a_plain_approve() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = stray_deny_message_file(dir.path());
+        let loaded = load_rules(&path).expect("a stray deny_message must not fail the load");
+        assert_eq!(loaded.rules.len(), 1);
+        let rule = &loaded.rules[0];
+        // The rule behaves as the plain approve it says it is …
+        let hit = evaluate(
+            std::slice::from_ref(rule),
+            &RuleModules::new(),
+            &ctx(
+                "gh",
+                "gh api --get /repos/secreq",
+                &[],
+                "/tmp",
+                &["GITHUB_TOKEN"],
+            ),
+        )
+        .hit
+        .expect("the approve fires");
+        assert_eq!(hit.decide, RuleDecision::Approve);
+        assert_eq!(hit.deny_message, None);
+        // … and holds no message to be written back.
+        let json = serde_json::to_value(rule).expect("serialize");
+        assert!(
+            json.get("deny_message").is_none(),
+            "an approve rule must not carry a deny message: {json}"
+        );
+    }
+
+    #[test]
+    fn loading_a_stray_deny_message_warns_naming_the_file_and_the_rule() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = stray_deny_message_file(dir.path());
+        let loaded = load_rules(&path).expect("load");
+        assert_eq!(
+            loaded.stray_deny_messages,
+            vec![StrayDenyMessage {
+                rule_id: "0a1b2c3d4e5f".to_owned(),
+                rule_name: "Cursor reads via gh".to_owned(),
+            }]
+        );
+        let warning = stray_deny_message_warning(&path, &loaded.stray_deny_messages[0]);
+        // Naming the file is the whole point: without it this reads
+        // exactly like the silent drop it exists not to be.
+        assert!(warning.contains(&path.display().to_string()), "{warning}");
+        assert!(warning.contains("Cursor reads via gh"), "{warning}");
+        assert!(warning.contains("0a1b2c3d4e5f"), "{warning}");
+        assert!(warning.contains("deny_message"), "{warning}");
+        // And it says what happens: ignored now, gone on the next write.
+        assert!(warning.contains("ignored"), "{warning}");
+        assert!(warning.contains("next time"), "{warning}");
+    }
+
+    #[test]
+    fn saving_after_a_stray_deny_message_drops_only_that_key() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = stray_deny_message_file(dir.path());
+        let loaded = load_rules(&path).expect("load");
+        save_rules(&path, &loaded.rules).expect("save");
+        let written = std::fs::read_to_string(&path).expect("read back");
+
+        // The same rule authored without the stray key must produce
+        // byte-identical output — the drop is the only difference.
+        let clean_path = dir.path().join("clean.json5");
+        std::fs::write(
+            &clean_path,
+            r#"{ rules: [ {
+                id: "0a1b2c3d4e5f",
+                name: "Cursor reads via gh",
+                enabled: true,
+                decide: "approve",
+                match: { wrap: "gh", argv: "gh api --get /repos/*" },
+                trained_secrets: ["GITHUB_TOKEN"],
+                created_at_unix: 1700000000,
+            } ] }"#,
+        )
+        .expect("write");
+        let clean = load_rules(&clean_path).expect("load");
+        assert!(clean.stray_deny_messages.is_empty());
+        save_rules(&clean_path, &clean.rules).expect("save");
+        assert_eq!(
+            written,
+            std::fs::read_to_string(&clean_path).expect("read back"),
+            "dropping the stray key must be the only change to the file"
+        );
+        assert!(!written.contains("deny_message"), "{written}");
+    }
+
+    #[test]
+    fn a_deny_rules_message_survives_load_and_save_unchanged() {
+        // The guard, not the repro: this passed before the nesting and
+        // must pass after it. A legitimate deny message is part of the
+        // format and nothing here may move it.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        std::fs::write(
+            &path,
+            r#"{ rules: [ {
+                id: "0a1b2c3d4e5f",
+                name: "block deletes",
+                enabled: true,
+                decide: "deny",
+                match: { wrap: "gh", argv: "gh repo delete *" },
+                deny_message: "Use the UI instead.",
+                trained_secrets: ["GITHUB_TOKEN"],
+                created_at_unix: 1700000000,
+            } ] }"#,
+        )
+        .expect("write");
+        let loaded = load_rules(&path).expect("load");
+        assert!(loaded.stray_deny_messages.is_empty());
+        save_rules(&path, &loaded.rules).expect("save");
+        let written = std::fs::read_to_string(&path).expect("read back");
+        assert!(
+            written.contains(r#""deny_message": "Use the UI instead.""#),
+            "{written}"
+        );
+        // And a second pass writes the same bytes.
+        let again = load_rules(&path).expect("reload");
+        save_rules(&path, &again.rules).expect("re-save");
+        assert_eq!(std::fs::read_to_string(&path).expect("read back"), written);
     }
 
     // ── ID generation ─────────────────────────────────────────────────

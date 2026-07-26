@@ -65,7 +65,8 @@ use secreq::daemon::ui::{AutoDenyToastView, RuleAction, RuleSort};
 use secreq::recommendations::SuggestionSort;
 use secreq::rule_scaffold::Editor;
 use secreq::rules::{
-    Pattern, Rule, RuleBody, RuleDecision, RuleMatch, WasmRefusal, WasmRefusalCategory, WasmRule,
+    Pattern, Rule, RuleBody, RuleDecision, RuleMatch, StaticDecision, WasmRefusal,
+    WasmRefusalCategory, WasmRule,
 };
 
 /// Where the regenerated PNGs land. Relative to the package root,
@@ -2215,11 +2216,11 @@ fn sample_rule(id: &str, name: &str, decide: RuleDecision, argv: Option<&str>) -
                 ancestor: Some(Pattern::parse("Cursor.app")),
                 cwd: None,
             },
-            decide,
-            deny_message: if decide == RuleDecision::Deny {
-                Some("Destructive gh operations are policy-denied.".to_owned())
-            } else {
-                None
+            decide: match decide {
+                RuleDecision::Approve => StaticDecision::Approve,
+                RuleDecision::Deny => StaticDecision::Deny {
+                    message: Some("Destructive gh operations are policy-denied.".to_owned()),
+                },
             },
         },
     }

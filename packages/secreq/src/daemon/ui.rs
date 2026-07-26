@@ -27,7 +27,7 @@ use crate::audit::{self, AuditCaller, AuditEntry};
 use crate::consent::Decision;
 use crate::recommendations::{Suggestion, SuggestionDecision, SuggestionSort};
 use crate::rule_scaffold::{self, Editor};
-use crate::rules::{Pattern, Rule, RuleBody, RuleDecision, RuleMatch};
+use crate::rules::{Pattern, Rule, RuleBody, RuleDecision, RuleMatch, StaticDecision};
 
 use super::manager_ui::ManagerView;
 use super::proto::DedupeKey;
@@ -216,24 +216,19 @@ impl RuleDraft {
     pub(crate) fn from_rule(rule: &Rule) -> RuleDraft {
         let pattern_str =
             |p: Option<&Pattern>| p.map(|p| p.as_str().to_owned()).unwrap_or_default();
-        let RuleBody::Declarative {
-            r#match,
-            decide,
-            deny_message,
-        } = &rule.body
-        else {
+        let RuleBody::Declarative { r#match, decide } = &rule.body else {
             return RuleDraft::fresh();
         };
         RuleDraft {
             id: Some(rule.id.clone()),
             name: rule.name.clone(),
             enabled: rule.enabled,
-            decide: (*decide).into(),
+            decide: decide.decision().into(),
             wrap: r#match.wrap.clone(),
             argv: pattern_str(r#match.argv.as_ref()),
             ancestor: pattern_str(r#match.ancestor.as_ref()),
             cwd: pattern_str(r#match.cwd.as_ref()),
-            deny_message: deny_message.clone().unwrap_or_default(),
+            deny_message: decide.deny_message().unwrap_or_default().to_owned(),
             trained_secrets: rule.trained_secrets.clone(),
         }
     }
@@ -258,15 +253,17 @@ impl RuleDraft {
                 Some(Pattern::parse(s))
             }
         };
-        let deny_message = if self.decide == RuleDecisionDraft::Deny {
-            let m = self.deny_message.trim();
-            if m.is_empty() {
-                None
-            } else {
-                Some(m.to_owned())
+        // The form keeps a message box either way (the toggle can flip
+        // back), but only a deny has somewhere to show one — so the
+        // approve branch simply has no field to put it in.
+        let decide = match self.decide {
+            RuleDecisionDraft::Approve => StaticDecision::Approve,
+            RuleDecisionDraft::Deny => {
+                let m = self.deny_message.trim();
+                StaticDecision::Deny {
+                    message: (!m.is_empty()).then(|| m.to_owned()),
+                }
             }
-        } else {
-            None
         };
         let id = self.id.unwrap_or_else(crate::rules::new_rule_id);
         let created_at = crate::rules::now_unix();
@@ -285,8 +282,7 @@ impl RuleDraft {
                     ancestor: optional_pattern(&self.ancestor),
                     cwd: optional_pattern(&self.cwd),
                 },
-                decide: self.decide.into(),
-                deny_message,
+                decide,
             },
         })
     }
@@ -1627,11 +1623,11 @@ fn render_rules_row(
                 // that can actually fire.
                 let (pill_fg, pill_text) = match &rule.body {
                     RuleBody::Declarative {
-                        decide: RuleDecision::Approve,
+                        decide: StaticDecision::Approve,
                         ..
                     } => (th.ok, "approve"),
                     RuleBody::Declarative {
-                        decide: RuleDecision::Deny,
+                        decide: StaticDecision::Deny { .. },
                         ..
                     } => (th.danger, "deny"),
                     RuleBody::Wasm(_) => (th.dim, "wasm"),
@@ -3158,8 +3154,7 @@ mod tests {
                     ancestor: None,
                     cwd: None,
                 },
-                decide: RuleDecision::Approve,
-                deny_message: None,
+                decide: RuleDecision::Approve.into(),
             },
         }
     }

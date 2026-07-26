@@ -156,7 +156,7 @@ fn rule_schema() -> Value {
             },
             "deny_message": {
                 "type": "string",
-                "description": "Message printed to stderr on auto-deny and shown in the consent window's toast. Only meaningful when `decide == deny`; forbidden on wasm rules (the module returns its own reason)."
+                "description": "Message printed to stderr on auto-deny and shown in the consent window's toast. Belongs to `decide: deny`: an approve rule refuses nobody, so a `deny_message` beside `decide: approve` is ignored, warned about by rule name in the daemon log, and removed the next time secreq writes the file. Forbidden outright on wasm rules (the module returns its own reason)."
             },
             "created_at_unix": {
                 "type": "integer",

@@ -514,8 +514,7 @@ mod tests {
             created_at_unix: 0,
             body: crate::rules::RuleBody::Declarative {
                 r#match: m,
-                decide,
-                deny_message: None,
+                decide: decide.into(),
             },
         }
     }

@@ -3089,8 +3089,7 @@ mod tests {
                     ancestor: None,
                     cwd: None,
                 },
-                decide,
-                deny_message: None,
+                decide: decide.into(),
             },
         }
     }
@@ -4754,8 +4753,7 @@ mod tests {
                     ancestor: None,
                     cwd: None,
                 },
-                decide: RuleDecision::Approve,
-                deny_message: None,
+                decide: RuleDecision::Approve.into(),
             },
         }];
 
@@ -4786,8 +4784,7 @@ mod tests {
                     ancestor: None,
                     cwd: None,
                 },
-                decide: RuleDecision::Approve,
-                deny_message: None,
+                decide: RuleDecision::Approve.into(),
             },
         }];
 
@@ -4825,8 +4822,7 @@ mod tests {
                     ancestor: None,
                     cwd: None,
                 },
-                decide: RuleDecision::Approve,
-                deny_message: None,
+                decide: RuleDecision::Approve.into(),
             },
         }];
 

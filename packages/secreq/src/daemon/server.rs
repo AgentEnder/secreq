@@ -1638,8 +1638,7 @@ mod tests {
                     ancestor: None,
                     cwd: None,
                 },
-                decide: RuleDecision::Approve,
-                deny_message: None,
+                decide: RuleDecision::Approve.into(),
             },
         };
 
@@ -1735,7 +1734,7 @@ mod tests {
 
     #[test]
     fn streaming_delete_and_toggle_round_trip_to_disk() {
-        use crate::rules::{Rule, RuleDecision, RuleMatch};
+        use crate::rules::{Rule, RuleMatch};
         use std::collections::BTreeSet;
         use std::sync::{Arc, Mutex};
 
@@ -1758,8 +1757,9 @@ mod tests {
                     ancestor: None,
                     cwd: None,
                 },
-                decide: RuleDecision::Deny,
-                deny_message: Some("blocked".to_owned()),
+                decide: crate::rules::StaticDecision::Deny {
+                    message: Some("blocked".to_owned()),
+                },
             },
         };
         apply_streaming_rule_msg(&state, ClientMsg::AddRule { rule });
