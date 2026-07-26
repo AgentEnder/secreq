@@ -107,8 +107,17 @@ fn run_in(home: &Path, legacy_dir: &Path, new_dir: &Path) -> Result<()> {
         let Some(existing) = ssh_setup::block_in_file(&path) else {
             continue;
         };
+        // Compare by the path the block *means*, not the way it spells it.
+        // `ssh setup` writes the socket as `~/…` (ssh config) or `$HOME/…`
+        // (shell rc) whenever it sits under the user's home — which on macOS
+        // is exactly where the legacy socket lives, `dirs::cache_dir()` being
+        // `~/Library/Caches`. A raw substring match against the absolute path
+        // therefore missed every block this migration was written for, on the
+        // one platform that needs it. `ssh_setup::block_state` has always
+        // compared this way; the migration was the odd one out.
+        let expanded = ssh_setup::expand_home_tokens(&existing, home);
         // Someone else's socket, or already ours. Not our business.
-        if !existing.contains(&legacy_needle) {
+        if !expanded.contains(&legacy_needle) {
             continue;
         }
         // Rebuild through `plan` so the block is byte-identical to what
@@ -196,6 +205,27 @@ mod tests {
         }
     }
 
+    /// The shape a real macOS install has: `dirs::cache_dir()` is
+    /// `~/Library/Caches`, so the legacy socket sits **under `$HOME`** — and
+    /// `ssh setup` therefore spelled it with a `~` rather than absolutely.
+    /// [`sandbox`] deliberately puts it outside home, which is the Linux
+    /// (`$XDG_RUNTIME_DIR`-unset) shape and the one spelling a raw substring
+    /// match happens to catch.
+    fn sandbox_with_legacy_under_home() -> Sandbox {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        let legacy_dir = home.join("Library/Caches/secreq");
+        let new_dir = home.join(".secreq/run");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        Sandbox {
+            _tmp: tmp,
+            home,
+            legacy_dir,
+            new_dir,
+        }
+    }
+
     /// Wire up a block pointing at the legacy socket, the way a pre-0001
     /// `ssh setup` left it.
     fn wire_legacy(sb: &Sandbox, method: Method, shell: Shell) -> PathBuf {
@@ -225,6 +255,55 @@ mod tests {
         assert!(
             !content.contains(&sb.legacy_dir.join("agent.sock").display().to_string()),
             "stale path must be gone:\n{content}"
+        );
+    }
+
+    /// The macOS case, which is the only platform this migration exists for.
+    /// `ssh setup` wrote `IdentityAgent "~/Library/Caches/secreq/agent.sock"`;
+    /// a raw substring match against the absolute path never sees it, so the
+    /// block is skipped and the user's SSH stays pointed at a socket no daemon
+    /// listens on.
+    #[test]
+    fn repoints_a_block_that_spells_the_legacy_socket_with_a_tilde() {
+        let sb = sandbox_with_legacy_under_home();
+        let config = wire_legacy(&sb, Method::SshConfig, Shell::Zsh);
+        assert!(
+            std::fs::read_to_string(&config)
+                .unwrap()
+                .contains("\"~/Library/Caches/secreq/agent.sock\""),
+            "the fixture must reproduce the tilde spelling, or it proves nothing"
+        );
+
+        run_in(&sb.home, &sb.legacy_dir, &sb.new_dir).unwrap();
+
+        let content = std::fs::read_to_string(&config).unwrap();
+        assert!(
+            ssh_setup::expand_home_tokens(&content, &sb.home).contains(&format!(
+                "IdentityAgent \"{}\"",
+                sb.new_dir.join("agent.sock").display()
+            )),
+            "block still names the legacy socket:\n{content}"
+        );
+    }
+
+    /// Same spelling, the shell-rc half: `export SSH_AUTH_SOCK="$HOME/…"`.
+    #[test]
+    fn repoints_an_rc_block_that_spells_the_legacy_socket_with_a_home_var() {
+        let sb = sandbox_with_legacy_under_home();
+        let zshrc = wire_legacy(&sb, Method::ShellRc, Shell::Zsh);
+        assert!(std::fs::read_to_string(&zshrc)
+            .unwrap()
+            .contains("\"$HOME/Library/Caches/secreq/agent.sock\""));
+
+        run_in(&sb.home, &sb.legacy_dir, &sb.new_dir).unwrap();
+
+        let content = std::fs::read_to_string(&zshrc).unwrap();
+        assert!(
+            ssh_setup::expand_home_tokens(&content, &sb.home).contains(&format!(
+                r#"export SSH_AUTH_SOCK="{}""#,
+                sb.new_dir.join("agent.sock").display()
+            )),
+            "rc still names the legacy socket:\n{content}"
         );
     }
 
