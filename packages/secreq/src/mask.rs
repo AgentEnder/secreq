@@ -113,7 +113,14 @@ impl Masker {
         let mut out = Vec::with_capacity(len);
         let mut i = 0;
 
-        while i < len {
+        // One `buf.get(i..)` per position, rather than the three separate
+        // `buf[i]` / `buf[i..]` accesses this used to make, each restating the
+        // same bound: the scan is really over "what's left", and `rest.len()`
+        // says that more plainly than `len - i` did.
+        while let Some(rest) = buf.get(i..) {
+            let Some((&byte, _)) = rest.split_first() else {
+                break; // nothing left to scan
+            };
             // Hold back BEFORE matching, not after. `match_at` is longest-first
             // only among secrets already fully present in `buf`; when a shorter
             // secret ends exactly at the buffer's end and a longer one starting
@@ -125,15 +132,15 @@ impl Masker {
             // This cannot over-hold: `is_secret_prefix` requires
             // `s.len() > slice.len()`, so a position whose match is already
             // complete at full length is never deferred.
-            if !eof && len - i < self.max_len && self.is_secret_prefix(&buf[i..]) {
+            if !eof && rest.len() < self.max_len && self.is_secret_prefix(rest) {
                 break; // hold back from i
             }
-            if let Some(match_len) = self.match_at(&buf[i..]) {
+            if let Some(match_len) = self.match_at(rest) {
                 out.extend_from_slice(&self.mask);
                 i += match_len;
                 continue;
             }
-            out.push(buf[i]);
+            out.push(byte);
             i += 1;
         }
 

@@ -77,11 +77,14 @@ fn run_pty(
         })
         .context("failed to allocate PTY")?;
 
+    // Named the way `run_piped` names it, off the same `first` element
+    // `build_command` splits out.
+    let program = command.first().map_or("", String::as_str);
     let cmd = build_command(command, env_overrides, cwd);
     let mut child = pair
         .slave
         .spawn_command(cmd)
-        .with_context(|| format!("failed to spawn `{}`", command[0]))?;
+        .with_context(|| format!("failed to spawn `{program}`"))?;
 
     // Independent handles taken before we hand the master to the resize thread.
     let mut reader = pair.master.try_clone_reader().context("clone pty reader")?;
@@ -102,10 +105,14 @@ fn run_pty(
         let mut stdout = std::io::stdout();
         let mut buf = [0u8; 8192];
         loop {
+            // `buf.get(..n)`, not `buf[..n]`: a `Read` that over-reports what
+            // it wrote should stop the pump, not panic inside a thread whose
+            // job is to keep the child's output flowing.
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    let masked = masker.push(&buf[..n]);
+                    let Some(chunk) = buf.get(..n) else { break };
+                    let masked = masker.push(chunk);
                     if stdout.write_all(&masked).is_err() || stdout.flush().is_err() {
                         break;
                     }
@@ -125,7 +132,8 @@ fn run_pty(
             match stdin.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if writer.write_all(&buf[..n]).is_err() || writer.flush().is_err() {
+                    let Some(chunk) = buf.get(..n) else { break };
+                    if writer.write_all(chunk).is_err() || writer.flush().is_err() {
                         break;
                     }
                 }
@@ -209,7 +217,10 @@ fn spawn_mask_pump<R: Read + Send + 'static>(
         loop {
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
-                Ok(n) => write_chunk(&masker.push(&buf[..n])),
+                Ok(n) => match buf.get(..n) {
+                    Some(chunk) => write_chunk(&masker.push(chunk)),
+                    None => break,
+                },
             }
         }
         write_chunk(&masker.finish());
