@@ -30,6 +30,16 @@ jobs:
       - name: Upgrade npm for OIDC support
         run: npm install -g npm@11.11.0 && npm install -g npm@latest
 
+      # The docs build generates its webfonts from the fonts egui embeds
+      # (packages/webfonts), so this job needs a Rust toolchain. It is a tiny
+      # standalone crate — no egui, no wgpu — so the compile is seconds, and
+      # the cache makes repeat runs free.
+      - name: Install stable toolchain (webfonts)
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: webfonts
       - run: pnpm install --frozen-lockfile
 
       - name: Build docs preview

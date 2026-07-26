@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "typedoc --options typedoc.json && vike dev",
     "extract-docs": "typedoc --options typedoc.json",
+    "typecheck-docs": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/typecheck-docs.mts",
     "build": "typedoc --options typedoc.json && vike build && pnpm exec pagefind --site dist/client",
     "preview": "typedoc --options typedoc.json && vike build && pnpm exec pagefind --site dist/client && vike preview"
   },
@@ -45,10 +46,55 @@
     "name": "docs-site",
     "targets": {
       "build": {
-        "outputs": ["{projectRoot}/dist"]
+        "dependsOn": [
+          "^build",
+          "gen-webfonts"
+        ],
+        "outputs": [
+          "{projectRoot}/dist"
+        ]
+      },
+      "typecheck-docs": {
+        "cache": true,
+        "inputs": [
+          "{projectRoot}/scripts/typecheck-docs.mts",
+          "{workspaceRoot}/docs/wasm-rules.md",
+          "{workspaceRoot}/packages/secreq-rule/README.md",
+          "{workspaceRoot}/packages/secreq-rule/index.ts",
+          "{workspaceRoot}/packages/secreq-rule/assembly/**/*.ts"
+        ],
+        "outputs": []
+      },
+      "gen-webfonts": {
+        "executor": "nx:run-commands",
+        "cache": true,
+        "inputs": [
+          "{workspaceRoot}/packages/webfonts/**/*",
+          "{workspaceRoot}/Cargo.lock"
+        ],
+        "outputs": [
+          "{projectRoot}/public/fonts/*.woff2",
+          "{projectRoot}/public/fonts/*.txt"
+        ],
+        "options": {
+          "command": "cargo run -p secreq-webfonts",
+          "cwd": "{workspaceRoot}"
+        }
+      },
+      "dev": {
+        "dependsOn": [
+          "gen-webfonts"
+        ]
+      },
+      "preview": {
+        "dependsOn": [
+          "gen-webfonts"
+        ]
       },
       "deploy": {
-        "dependsOn": ["build"],
+        "dependsOn": [
+          "build"
+        ],
         "executor": "nx-github-pages:deploy",
         "options": {
           "remote": "https://github.com/AgentEnder/secreq.git",

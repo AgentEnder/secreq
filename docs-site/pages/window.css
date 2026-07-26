@@ -1,0 +1,129 @@
+/* ════════════════════════════════════════════════════════════════════
+   WINDOWS — a consent window re-drawn as DOM
+
+   A `::shot` is a picture of a window. A `<secreq-window>` is the same
+   window rebuilt out of the geometry the screenshot harness measured
+   while rendering that picture: divs for the boxes, SVG for the text.
+   The reader gets selectable, copyable, searchable text and an
+   accessibility tree instead of a flat image — and, later, something an
+   animation can reach into.
+
+   This file owns two things the element cannot express in JS: the faces
+   egui draws with, and the typesetting rules that make a browser lay
+   glyphs out the way epaint does.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── The app's own faces ──
+   Generated from the fonts epaint embeds by the `docs-site:gen-webfonts`
+   target (see `packages/webfonts/README.md`), and served from this origin
+   because the site's CSP admits no font host but itself.
+
+   These *have* to be the exact cuts egui draws with. Every text run in a
+   layout capture carries the x it was measured at, with those faces'
+   advance widths; Google Fonts' Ubuntu is a different cut and would drift
+   a long run clean out of the box drawn around it.
+
+   `block` rather than `swap`: a window typeset in the fallback face is a
+   window with text outside its own borders, which is worse than a window
+   that arrives a moment later. The element waits on these anyway — until
+   they load it leaves the screenshot up, which is a truer picture than a
+   mis-metriced render of the same window. */
+@font-face {
+  font-family: 'sqw-proportional';
+  src: url('/fonts/Ubuntu-Light.woff2') format('woff2');
+  font-weight: 300;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'sqw-monospace';
+  src: url('/fonts/Hack-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
+/* ── The stage ──
+   The scene is built at the window's own point size — 500×470 for a
+   prompt — and scaled once, as a whole, to whatever width the column
+   gives it. Scaling here rather than baking a factor into every
+   coordinate keeps the numbers in the DOM the same numbers as in the
+   capture, which is what makes an inspector session worth anything.
+
+   `aspect-ratio` is set by the element from the captured size, because
+   the moment the scene mounts the screenshot underneath it is hidden and
+   there is nothing else left to give the box a height. */
+.sqw-stage {
+  position: relative;
+  width: 100%;
+  filter: drop-shadow(0 8px 22px rgb(0 0 0 / 0.45));
+}
+:root[data-theme='light'] .sqw-stage {
+  filter: drop-shadow(0 8px 22px rgb(16 20 26 / 0.16));
+}
+
+/* A badge is a 184pt pill, and blown to column width it stops reading as
+   the small floating thing it is — the same cap `.shot-img` takes, for
+   the same reason. */
+.shot[data-window='badge'] .sqw-stage {
+  width: auto;
+  max-width: 280px;
+}
+
+.sqw-scene {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform: scale(var(--sqw-scale, 1));
+  transform-origin: 0 0;
+  /* The window's own clip. egui hands out shapes that overhang the
+     viewport — a row half-scrolled out of a list — and relies on the
+     clip rect to cut them; the outermost of those clip rects is the
+     window itself. */
+  overflow: hidden;
+}
+
+/* Boxes and vectors are inert; only the text is worth pointing at. Every
+   vector layer spans the whole scene, so without this the topmost one
+   would swallow every selection drag on the text below it. */
+.sqw-scene > * {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+.sqw-scene text {
+  pointer-events: auto;
+}
+
+/* ── Typesetting the way epaint does ──
+   epaint places one glyph after another at its own advance width. It
+   does no shaping: no kerning pairs, no ligatures, no contextual
+   alternates. A browser does all three by default, and each one would
+   move a glyph off the x the capture recorded — `fi` in "confirm"
+   collapsing into one ligature is a visible, measurable drift.
+
+   `geometricPrecision` is the other half: it stops the rasteriser
+   rounding advances to whole pixels, which is what lets a run of text
+   land on the same subpixel column egui measured. */
+.sqw-scene text {
+  font-kerning: none;
+  font-variant-ligatures: none;
+  font-feature-settings:
+    'kern' 0,
+    'liga' 0,
+    'clig' 0,
+    'calt' 0;
+  text-rendering: geometricPrecision;
+  letter-spacing: 0;
+  white-space: pre;
+}
+
+.sqw-scene .sqw-prop {
+  font-family: 'sqw-proportional', sans-serif;
+  font-weight: 300;
+}
+.sqw-scene .sqw-mono {
+  font-family: 'sqw-monospace', monospace;
+  font-weight: 400;
+}

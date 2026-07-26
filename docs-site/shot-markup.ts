@@ -9,10 +9,11 @@
  * so both callers get it on exactly the same terms.
  *
  * Everything a figure knows about itself is generated. `.generated/shots.json`
- * is built by the `secreq-copy-repo-assets` Vite plugin from the harness's
- * `manifest.json` — window kind, caption, and one render per (OS, appearance)
- * cell — joined to dimensions read out of the PNG headers. There is no
- * hand-maintained list of screenshots anywhere in this site.
+ * is built by the `secreq-copy-repo-assets` Vite plugin from the screenshot
+ * tree itself — one render per (OS, appearance) cell, sized from the PNG
+ * headers — plus the window kind and caption each fixture declares in its
+ * `layout.json`. There is no hand-maintained list of screenshots anywhere in
+ * this site.
  *
  * A figure carries every cell of the grid and lets CSS pick one, keyed off
  * `<html data-os>` and `<html data-theme>`. The hidden renders are
@@ -63,7 +64,7 @@ function imgTag(
   appearance: string,
   alt: string,
   fallback: boolean,
-  eager: boolean
+  eager: boolean,
 ): string {
   return [
     '<img class="shot-img"',
@@ -107,14 +108,14 @@ export function shotHtml(id: string, options: ShotMarkupOptions = {}): string {
       console.warn(
         `[docs-site] No screenshots rendered yet — "${id}" and every other figure ` +
           'will be blank. Run `cargo test --test ui_screenshots -- --ignored ' +
-          '--test-threads=1` to generate them.'
+          '--test-threads=1` to generate them.',
       );
       return `<figure class="shot shot-missing"><p>Screenshot <code>${escapeAttr(id)}</code> has not been rendered yet.</p></figure>`;
     }
     throw new Error(
       `[docs-site] No screenshot named "${id}". Expected a fixture of that name in ` +
         'tests/ui_screenshots.rs — regenerate with ' +
-        '`cargo test --test ui_screenshots -- --ignored --test-threads=1`.'
+        '`cargo test --test ui_screenshots -- --ignored --test-threads=1`.',
     );
   }
 
@@ -130,7 +131,7 @@ export function shotHtml(id: string, options: ShotMarkupOptions = {}): string {
     : Object.keys(entry.renders[fallbackOs])[0];
 
   const cells = Object.entries(entry.renders).flatMap(([os, byAppearance]) =>
-    Object.entries(byAppearance).map(([appearance, render]) => ({ os, appearance, render }))
+    Object.entries(byAppearance).map(([appearance, render]) => ({ os, appearance, render })),
   );
 
   // The CSS picks a cell by exact (os, appearance) match, so an incomplete
@@ -140,7 +141,7 @@ export function shotHtml(id: string, options: ShotMarkupOptions = {}): string {
   if (cells.length < 6) {
     console.warn(
       `[docs-site] "${id}" has ${cells.length} of 6 renders — readers on the ` +
-        'missing desktops will see nothing. Regenerate the fixtures.'
+        'missing desktops will see nothing. Regenerate the fixtures.',
     );
   }
 
@@ -152,8 +153,8 @@ export function shotHtml(id: string, options: ShotMarkupOptions = {}): string {
         appearance,
         alt,
         os === fallbackOs && appearance === fallbackAppearance,
-        eager
-      )
+        eager,
+      ),
     )
     .join('');
 

@@ -4,5 +4,5 @@
 # the root (cargo ignores a lock inside a member), so `--locked` builds in CI
 # and the release workflow read it from here.
 [workspace]
-members = ["packages/secreq"]
+members = ["packages/secreq", "packages/webfonts"]
 resolver = "2"

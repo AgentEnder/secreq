@@ -1,0 +1,15 @@
+[package]
+name = "secreq-webfonts"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Generates the docs site's webfonts from the fonts egui embeds."
+
+# Deliberately does NOT depend on `secreq`. This runs as part of the docs-site
+# build, and an example or bin inside the main crate would drag the whole
+# library — egui, wgpu, the daemon — through a compile just to Brotli two
+# fonts. Standalone, it builds in seconds on a runner that has no other reason
+# to touch Rust.
+[dependencies]
+epaint_default_fonts = "0.34"
+ttf2woff2 = "0.13"

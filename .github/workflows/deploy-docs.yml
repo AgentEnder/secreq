@@ -37,6 +37,16 @@ jobs:
           git config --global user.name "${GITHUB_ACTOR}"
           git config --global user.email "${GITHUB_ACTOR}@users.noreply.github.com"
 
+      # The docs build generates its webfonts from the fonts egui embeds
+      # (packages/webfonts), so this job needs a Rust toolchain. It is a tiny
+      # standalone crate — no egui, no wgpu — so the compile is seconds, and
+      # the cache makes repeat runs free.
+      - name: Install stable toolchain (webfonts)
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: webfonts
       - run: pnpm install --frozen-lockfile
       - run: npx nx deploy docs-site
         env:

@@ -32,7 +32,7 @@ export class SecreqShot extends HTMLElement {
     // The figure carries one render per OS appearance and hides the rest,
     // so the visible one is the only one worth enlarging.
     const image = [...this.querySelectorAll<HTMLImageElement>('.shot-img')].find(
-      (candidate) => candidate.offsetParent !== null
+      (candidate) => candidate.offsetParent !== null,
     );
     if (!image) return;
 
@@ -44,7 +44,7 @@ export class SecreqShot extends HTMLElement {
         },
         bubbles: true,
         composed: true,
-      })
+      }),
     );
   };
 }
