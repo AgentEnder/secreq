@@ -106,7 +106,7 @@ wasmtime = { version = "46.0.1", default-features = false, features = [
   "anyhow",
 ] }
 textwrap = "0.16"
-console = "0.15"
+console = "0.16"
 
 # macOS-only.
 #
