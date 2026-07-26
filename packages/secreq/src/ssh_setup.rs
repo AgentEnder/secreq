@@ -40,6 +40,33 @@ pub enum Method {
     ShellRc,
 }
 
+/// How the config file on disk stands relative to the block we would write —
+/// the single fact [`apply`] branches on, and the sentence the CLI reports.
+///
+/// This was a `(bool, bool)` pair (`already_configured`, `updates_existing`)
+/// whose fourth combination, "already correct *and* needs rewriting", never
+/// existed. Three states are three variants, so the impossible one is now
+/// unwritable and every caller has to say which of the three it means.
+///
+/// The comparison behind [`UpToDate`](Self::UpToDate) is deliberately content
+/// equality, not sentinel presence. Presence-only would make the block
+/// write-once: the socket path is baked into it, so when that path moves (as
+/// it did in migration 0001) every existing install reports "already
+/// configured" and re-running setup silently changes nothing, leaving SSH
+/// pointed at a socket no daemon listens on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockState {
+    /// The file is absent or unreadable, or carries no managed block —
+    /// [`apply`] adds one.
+    Absent,
+    /// The file already carries **exactly** this block — [`apply`] is a no-op.
+    UpToDate,
+    /// A managed block is present but differs from the one we'd write (the
+    /// socket moved) — [`apply`] rewrites it in place rather than adding a
+    /// second one. Lets a caller say "updating" instead of "writing".
+    Stale,
+}
+
 /// What [`apply`] will do — handed back to the caller so the user gets to
 /// see and approve it before any file is touched. Mirrors
 /// [`crate::path_setup::Plan`].
@@ -51,19 +78,9 @@ pub struct SshSetupPlan {
     pub config_file: PathBuf,
     /// Full block including sentinels. Show this to the user.
     pub block: String,
-    /// True if the file already carries **exactly** this block — [`apply`]
-    /// will be a no-op.
-    ///
-    /// Deliberately content equality, not sentinel presence. Presence-only
-    /// would make the block write-once: the socket path is baked into it, so
-    /// when that path moves (as it did in migration 0001) every existing
-    /// install reports "already configured" and re-running setup silently
-    /// changes nothing, leaving SSH pointed at a socket no daemon listens on.
-    pub already_configured: bool,
-    /// True if a block is present but differs from [`block`](Self::block) —
-    /// [`apply`] will rewrite it in place rather than add a new one. Lets the
-    /// caller say "updating" instead of "writing".
-    pub updates_existing: bool,
+    /// How [`config_file`](Self::config_file) stands relative to
+    /// [`block`](Self::block), and so what [`apply`] will do.
+    pub block_state: BlockState,
     /// Optional one-liner caveat about this method/shell's behavior.
     pub caveat: Option<String>,
 }
@@ -81,13 +98,12 @@ pub fn plan(home: &Path, method: Method, shell: Shell, agent_sock: &Path) -> Res
         Method::SshConfig => {
             let config_file = home.join(".ssh/config");
             let block = ssh_config_block(agent_sock, home);
-            let (already_configured, updates_existing) = block_state(&config_file, &block, home);
+            let block_state = block_state(&config_file, &block, home);
             Ok(SshSetupPlan {
                 method,
                 config_file,
                 block,
-                already_configured,
-                updates_existing,
+                block_state,
                 // ssh applies the FIRST IdentityAgent it obtains for a host;
                 // we prepend so ours wins over anything already in the file.
                 caveat: Some(
@@ -105,31 +121,30 @@ pub fn plan(home: &Path, method: Method, shell: Shell, agent_sock: &Path) -> Res
                 )
             })?;
             let block = shell_rc_block(&shell, agent_sock, home);
-            let (already_configured, updates_existing) = block_state(&config_file, &block, home);
+            let block_state = block_state(&config_file, &block, home);
             Ok(SshSetupPlan {
                 method,
                 config_file,
                 block,
-                already_configured,
-                updates_existing,
+                block_state,
                 caveat: path_setup::caveat_for(&shell),
             })
         }
     }
 }
 
-/// Classify `config_file` against the block we want: `(already_configured,
-/// updates_existing)`. A missing/unreadable file is neither.
-fn block_state(config_file: &Path, want: &str, home: &Path) -> (bool, bool) {
+/// Classify `config_file` against the block we want. A missing or unreadable
+/// file reads as [`BlockState::Absent`] — there is nothing there to be stale.
+fn block_state(config_file: &Path, want: &str, home: &Path) -> BlockState {
     let Ok(content) = fs::read_to_string(config_file) else {
-        return (false, false);
+        return BlockState::Absent;
     };
     match existing_block(&content) {
         Some(found) if expand_home_tokens(&found, home) == expand_home_tokens(want, home) => {
-            (true, false)
+            BlockState::UpToDate
         }
-        Some(_) => (false, true),
-        None => (false, false),
+        Some(_) => BlockState::Stale,
+        None => BlockState::Absent,
     }
 }
 
@@ -160,21 +175,21 @@ pub(crate) fn expand_home_tokens(block: &str, home: &Path) -> String {
 /// block that differs → rewrite it **in place**, preserving its position; an
 /// identical block → no-op.
 pub fn apply(plan: &SshSetupPlan) -> Result<bool> {
-    if plan.already_configured {
-        return Ok(false);
-    }
-    if plan.updates_existing {
-        // `apply`'s own answer is "did a file change?", so both of
-        // [`Rewrote`]'s outcomes map onto it honestly. The block going missing
-        // between `plan` and here needs a live file racing an interactive
-        // confirm; the migration, which has no user to re-run it, treats the
-        // same answer as `Outcome::Incomplete`.
-        let rewrote = rewrite_in_place(&plan.config_file, &plan.block)?;
-        return Ok(rewrote == Rewrote::TheBlock);
-    }
-    match plan.method {
-        Method::SshConfig => apply_ssh_config(plan),
-        Method::ShellRc => apply_shell_rc(plan),
+    match plan.block_state {
+        BlockState::UpToDate => Ok(false),
+        BlockState::Stale => {
+            // `apply`'s own answer is "did a file change?", so both of
+            // [`Rewrote`]'s outcomes map onto it honestly. The block going
+            // missing between `plan` and here needs a live file racing an
+            // interactive confirm; the migration, which has no user to re-run
+            // it, treats the same answer as `Outcome::Incomplete`.
+            let rewrote = rewrite_in_place(&plan.config_file, &plan.block)?;
+            Ok(rewrote == Rewrote::TheBlock)
+        }
+        BlockState::Absent => match plan.method {
+            Method::SshConfig => apply_ssh_config(plan),
+            Method::ShellRc => apply_shell_rc(plan),
+        },
     }
 }
 
@@ -354,7 +369,7 @@ fn block_bounds(content: &str) -> Option<(usize, usize)> {
 
 /// The managed block currently in `content`, sentinels included, or `None` if
 /// there isn't one. Used to compare what's on disk against what we'd write —
-/// see [`plan`]'s `already_configured`.
+/// see [`BlockState`].
 fn existing_block(content: &str) -> Option<String> {
     let (begin, end) = block_bounds(content)?;
     let lines: Vec<&str> = content.lines().collect();
@@ -523,18 +538,19 @@ mod tests {
         let sock = home.path().join("agent.sock");
 
         let p1 = plan(home.path(), Method::SshConfig, Shell::Zsh, &sock).unwrap();
+        assert_eq!(p1.block_state, BlockState::Absent, "no ~/.ssh/config yet");
         assert!(apply(&p1).unwrap());
         let after_first = fs::read_to_string(&p1.config_file).unwrap();
 
         let p2 = plan(home.path(), Method::SshConfig, Shell::Zsh, &sock).unwrap();
-        assert!(p2.already_configured);
+        assert_eq!(p2.block_state, BlockState::UpToDate);
         assert!(!apply(&p2).unwrap(), "second apply must be a no-op");
         let after_second = fs::read_to_string(&p2.config_file).unwrap();
         assert_eq!(after_first, after_second);
     }
 
     #[test]
-    fn a_block_written_before_the_tilde_switch_is_still_already_configured() {
+    fn a_block_written_before_the_tilde_switch_is_still_up_to_date() {
         // Configs written by an earlier secreq spell the socket absolutely,
         // where we now write `~`. Both name the same socket, so a user who
         // already ran `ssh setup` must not be told their block "points at a
@@ -550,8 +566,11 @@ mod tests {
         fs::write(ssh_dir.join("config"), &legacy).unwrap();
 
         let p = plan(home.path(), Method::SshConfig, Shell::Zsh, &sock).unwrap();
-        assert!(p.already_configured, "absolute spelling must still match");
-        assert!(!p.updates_existing);
+        assert_eq!(
+            p.block_state,
+            BlockState::UpToDate,
+            "absolute spelling must still match"
+        );
         assert!(!apply(&p).unwrap(), "nothing to rewrite");
         // And the file is left exactly as the user had it.
         assert_eq!(fs::read_to_string(ssh_dir.join("config")).unwrap(), legacy);
@@ -559,8 +578,8 @@ mod tests {
 
     #[test]
     fn a_genuinely_different_socket_still_reports_an_update() {
-        // The normalization must not blunt the check the `already_configured`
-        // doc calls out: a socket that actually moved has to be detected.
+        // The normalization must not blunt the check [`BlockState`]'s doc
+        // calls out: a socket that actually moved has to be detected.
         let home = tempfile::tempdir().unwrap();
         let ssh_dir = home.path().join(".ssh");
         fs::create_dir_all(&ssh_dir).unwrap();
@@ -580,8 +599,11 @@ mod tests {
             &home.path().join(".secreq/run/agent.sock"),
         )
         .unwrap();
-        assert!(!p.already_configured);
-        assert!(p.updates_existing, "a moved socket must still be rewritten");
+        assert_eq!(
+            p.block_state,
+            BlockState::Stale,
+            "a moved socket must still be rewritten"
+        );
     }
 
     #[test]
@@ -594,7 +616,7 @@ mod tests {
         let after_first = fs::read_to_string(&p1.config_file).unwrap();
 
         let p2 = plan(home.path(), Method::ShellRc, Shell::Bash, &sock).unwrap();
-        assert!(p2.already_configured);
+        assert_eq!(p2.block_state, BlockState::UpToDate);
         assert!(!apply(&p2).unwrap(), "second apply must be a no-op");
         let after_second = fs::read_to_string(&p2.config_file).unwrap();
         assert_eq!(after_first, after_second);
@@ -613,13 +635,11 @@ mod tests {
         assert!(apply(&p1).unwrap());
 
         let p2 = plan(home.path(), Method::SshConfig, Shell::Zsh, &new_sock).unwrap();
-        assert!(
-            !p2.already_configured,
-            "a block naming a stale socket is not 'already configured'"
-        );
-        assert!(
-            p2.updates_existing,
-            "should rewrite, not add a second block"
+        assert_eq!(
+            p2.block_state,
+            BlockState::Stale,
+            "a block naming a stale socket is not up to date; rewrite it \
+             rather than adding a second one"
         );
         assert!(apply(&p2).unwrap(), "apply must rewrite the stale block");
 
@@ -653,7 +673,7 @@ mod tests {
         fs::write(&config, format!("{before}{block}\n{after}")).unwrap();
 
         let p = plan(home.path(), Method::SshConfig, Shell::Zsh, &new_sock).unwrap();
-        assert!(p.updates_existing);
+        assert_eq!(p.block_state, BlockState::Stale);
         assert!(apply(&p).unwrap());
 
         let content = fs::read_to_string(&config).unwrap();
@@ -763,7 +783,7 @@ mod tests {
         let p1 = plan(home.path(), Method::ShellRc, Shell::Zsh, &old_sock).unwrap();
         apply(&p1).unwrap();
         let p2 = plan(home.path(), Method::ShellRc, Shell::Zsh, &new_sock).unwrap();
-        assert!(p2.updates_existing);
+        assert_eq!(p2.block_state, BlockState::Stale);
         assert!(apply(&p2).unwrap());
 
         let content = fs::read_to_string(&zshrc).unwrap();

@@ -254,23 +254,23 @@ fn ssh_setup_wiring_step(
     // brain task #295 was about.
     let config_display =
         crate::daemon::ui::abbreviate_home(&plan.config_file.display().to_string());
-    if plan.already_configured {
-        cliclack::log::success(crate::term::wrap_log_text(&format!(
-            "{config_display} already wires the secreq SSH agent; nothing to do."
-        )))?;
-        return Ok(());
-    }
-
-    if plan.updates_existing {
-        cliclack::log::warning(crate::term::wrap_log_text(&format!(
-            "{config_display} already has a secreq SSH-agent block, but it points at a \
-             different socket than the agent now uses. I'll update it in place."
-        )))?;
-    }
-    let verb = if plan.updates_existing {
-        "update"
-    } else {
-        "write"
+    // One match over the plan's state decides both what we say and the verb
+    // we say it with, so the two cannot disagree about which case we're in.
+    let verb = match plan.block_state {
+        ssh_setup::BlockState::UpToDate => {
+            cliclack::log::success(crate::term::wrap_log_text(&format!(
+                "{config_display} already wires the secreq SSH agent; nothing to do."
+            )))?;
+            return Ok(());
+        }
+        ssh_setup::BlockState::Stale => {
+            cliclack::log::warning(crate::term::wrap_log_text(&format!(
+                "{config_display} already has a secreq SSH-agent block, but it points at a \
+                 different socket than the agent now uses. I'll update it in place."
+            )))?;
+            "update"
+        }
+        ssh_setup::BlockState::Absent => "write",
     };
     cliclack::note(
         format!("I'll {verb} your SSH config"),
