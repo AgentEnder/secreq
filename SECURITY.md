@@ -92,6 +92,18 @@ Reports in these areas are especially valuable:
 - **SSH agent** — signing without consent, or the resolved private key
   escaping the daemon's encrypted secret cache: reaching plaintext outside
   the single in-process signing use, or surviving `secreq daemon stop`.
+- **SSH session grants under agent forwarding** — a "for 30 minutes" grant
+  is anchored on the innermost forwarding `ssh` process when `ForwardAgent`
+  is in play, not on the shell, so it ends when that SSH session does. A
+  remote host signing on a grant that should have expired with the session
+  it was granted in is in scope. So is defeating the detection: it reads the
+  peer's argv **and** checks the peer is SSH-family by its executable path,
+  and the two failure directions are deliberately asymmetric — over-detecting
+  narrows the grant, under-detecting leaves it as wide as it would have been
+  anyway. A report showing a process can *widen* its own grant that way is a
+  vulnerability; one showing it can narrow it is not.
+  Forwarding declared only in `~/.ssh/config` or a `-F` file is **not**
+  detected, and that limit is known rather than a finding.
 
 The threat model these boundaries defend is summarised in
 [`docs/overview.md`](./docs/overview.md); the enforcement points are
