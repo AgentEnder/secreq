@@ -198,8 +198,10 @@ fn signing_context_with_seeded_approval(
     ssh.insert("github".to_owned(), identity.clone());
 
     let identities = ssh_agent::prepare_identities(&ssh);
-    assert_eq!(identities.len(), 1);
-    let blob = identities[0].blob.clone();
+    let [identity_blob] = identities.as_slice() else {
+        panic!("one declared identity should prepare exactly one blob");
+    };
+    let blob = identity_blob.blob.clone();
 
     // Compute the anchor exactly as the SIGN handler will, then seed a
     // session grant for it that won't expire during the test.

@@ -63,12 +63,16 @@ fn is_executable(path: &Path) -> bool {
 /// and bail; native binaries we'd never bother loading.
 fn is_secreq_shim(path: &Path) -> bool {
     use std::io::Read;
-    let Ok(mut f) = std::fs::File::open(path) else {
+    let Ok(f) = std::fs::File::open(path) else {
         return false;
     };
-    let mut head = [0u8; 256];
-    let n = f.read(&mut head).unwrap_or(0);
-    let prefix = &head[..n];
+    // `take(256)` rather than reading into a fixed array and slicing to the
+    // byte count: the buffer is then exactly what was read, with no length
+    // to keep honest.
+    let mut prefix = Vec::new();
+    if f.take(256).read_to_end(&mut prefix).is_err() {
+        return false;
+    }
     // Quick reject: a Mach-O / ELF binary won't start with `#!`. Saves a
     // substring search on the typical case.
     if !prefix.starts_with(b"#!") {

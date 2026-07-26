@@ -865,6 +865,13 @@ fn run_wait_indicator(label: &str, tty: bool, inner: &(Mutex<bool>, Condvar)) {
 /// One spinner line's text (no leading carriage-return / clear sequence; the
 /// caller adds those). Pure so it can be unit-tested.
 fn spinner_frame(label: &str, tick: usize) -> String {
+    // `% SPINNER_FRAMES.len()` is the bounds check, one token to the left of
+    // the index — restating it through `get` would read as doubt about the
+    // modulo rather than as a check.
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "index is taken modulo the array's own length"
+    )]
     let frame = SPINNER_FRAMES[tick % SPINNER_FRAMES.len()];
     format!("{frame} secreq: waiting for approval of `{label}` — approve in the popup window")
 }

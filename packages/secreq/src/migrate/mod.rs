@@ -220,7 +220,7 @@ pub fn run_pending_in(ctx: &Ctx) -> Result<()> {
         return Ok(());
     }
 
-    for m in &MIGRATIONS[level..] {
+    for m in MIGRATIONS.iter().skip(level) {
         snapshot_if_absent(ctx, m)?;
         let outcome =
             (m.run)(ctx).with_context(|| format!("migration {:04} ({}) failed", m.id, m.name))?;

@@ -283,7 +283,7 @@ fn tail_follow(path: &Path) -> Result<i32> {
     let mut stdout = std::io::stdout();
     let lines: Vec<&str> = existing.lines().collect();
     let start = lines.len().saturating_sub(TAIL_INITIAL_LINES);
-    for line in &lines[start..] {
+    for line in lines.iter().skip(start) {
         let _ = writeln!(stdout, "{line}");
     }
     let _ = stdout.flush();

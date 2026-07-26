@@ -398,8 +398,8 @@ pub fn fields_from_locator(
     let mut fields = BTreeMap::new();
     let mut rest = locator;
     let mut i = 0;
-    while i < tokens.len() {
-        match &tokens[i] {
+    while let Some(token) = tokens.get(i) {
+        match token {
             TemplateToken::Literal(lit) => {
                 rest = rest.strip_prefix(lit.as_str()).with_context(|| {
                     format!(

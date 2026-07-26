@@ -101,6 +101,10 @@ pub fn wrap(args: WrapArgs, config_path: Option<&Path>) -> Result<i32> {
         reason,
         env,
     };
+    // An empty env means we created a gate-only wrap. Read off `wrap` here,
+    // before the insert takes it — reading it back out of the map afterwards
+    // meant re-establishing that the key we just wrote is still there.
+    let gate_only = wrap.env.is_empty();
     config.wraps.insert(args.binary.clone(), wrap);
 
     // Validate by round-tripping through the parser before writing.
@@ -109,9 +113,7 @@ pub fn wrap(args: WrapArgs, config_path: Option<&Path>) -> Result<i32> {
     // Drop the shim.
     let shim_path = shim::install(&shim_dir, &args.binary)?;
 
-    // `config.wraps[binary]` is the wrap we just inserted; an empty env
-    // means we created a gate-only wrap.
-    let kind = if config.wraps[&args.binary].env.is_empty() {
+    let kind = if gate_only {
         " (gate-only — consent required, nothing injected)"
     } else {
         ""

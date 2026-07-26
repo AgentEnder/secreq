@@ -121,7 +121,8 @@ impl PtyRun {
                 if n == 0 {
                     break;
                 }
-                sink.lock().unwrap().extend_from_slice(&buf[..n]);
+                let Some(chunk) = buf.get(..n) else { break };
+                sink.lock().unwrap().extend_from_slice(chunk);
             }
         });
 
