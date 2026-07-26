@@ -146,7 +146,7 @@ fn ssh_setup_identity_step(config_path: Option<&Path>) -> Result<()> {
             "No SSH identities configured yet — the agent has nothing to serve until you add one.",
         )?;
         if prompt::confirm_default_yes("Add an SSH identity now?")? {
-            ssh_add_core(SshAddArgs::default(), config_path)?;
+            ssh_add_core(SshAddArgs::default(), false, config_path)?;
         }
     } else {
         let names = config.ssh.keys().cloned().collect::<Vec<_>>().join(", ");
@@ -156,7 +156,7 @@ fn ssh_setup_identity_step(config_path: Option<&Path>) -> Result<()> {
             .interact()
             .context("interactive confirm failed (need a real terminal)")?
         {
-            ssh_add_core(SshAddArgs::default(), config_path)?;
+            ssh_add_core(SshAddArgs::default(), false, config_path)?;
         }
     }
     Ok(())
@@ -325,8 +325,7 @@ pub struct SshAddArgs {
 /// no prompts (so scripts/tests work); otherwise the missing pieces are
 /// resolved interactively, with 1Password `op` discovery when it's on PATH.
 pub fn ssh_add(args: SshAddArgs, assume_yes: bool, config_path: Option<&Path>) -> Result<i32> {
-    let _ = assume_yes;
-    ssh_add_core(args, config_path)?;
+    ssh_add_core(args, assume_yes, config_path)?;
     Ok(0)
 }
 
@@ -336,7 +335,7 @@ pub fn ssh_add(args: SshAddArgs, assume_yes: bool, config_path: Option<&Path>) -
 ///
 /// When `args.name` is empty the name is prompted for interactively — that's
 /// the path the orchestrator takes (it has no name to preset).
-fn ssh_add_core(args: SshAddArgs, config_path: Option<&Path>) -> Result<()> {
+fn ssh_add_core(args: SshAddArgs, assume_yes: bool, config_path: Option<&Path>) -> Result<()> {
     let config_path = resolve_config_path(config_path)?;
     let mut config = if config_path.is_file() {
         WrapsConfig::load(&config_path)?
@@ -423,7 +422,15 @@ fn ssh_add_core(args: SshAddArgs, config_path: Option<&Path>) -> Result<()> {
     // actually sign with the key we just added. The fully non-interactive path
     // (`--public-key` + `--private-key`) never prompts or signs, so scripts
     // stay deterministic. A declined or failing self-test is non-fatal.
+    //
+    // `--yes` **skips** this rather than accepting it, which is the one place
+    // in the crate where assume_yes does not mean "answer yes". Answering yes
+    // here performs a *real* signature, and a real signature can park on a
+    // consent prompt with nobody there to click it — so the automated answer
+    // that keeps `--yes` unattended is "don't". The comment above is the
+    // reason: scripted paths never sign, and `--yes` is a scripted path.
     if !non_interactive
+        && !assume_yes
         && prompt::confirm_default_yes(&format!(
             "Test that the agent can sign with `{name}` now? (this performs a real signature and may prompt for approval)"
         ))
