@@ -156,10 +156,31 @@ pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Re
             }
         }
         Err(err) => {
-            cliclack::log::warning(format!("couldn't auto-configure your shell: {err:#}"))?;
+            // `plan` only fails on a shell we don't recognize, and its error
+            // names the shim dir — so this line carries a path and has to be
+            // wrapped like every other one here.
+            cliclack::log::warning(crate::term::wrap_log_text(&format!(
+                "couldn't auto-configure your shell: {err:#}"
+            )))?;
+            // Same shape as the branch above: a short constant title, the
+            // prose wrapped into the body, and the line to paste verbatim
+            // under it. The export line is the one thing here that must not
+            // be reflowed — `wrap_note_text` breaks at spaces, and this
+            // string has them, so wrapping it would split a shell command
+            // the user is being told to copy. Nor can it be shortened with
+            // `abbreviate_home`: it is spelled absolute on purpose (see
+            // `path_setup::manual_export_line`), because a `~` inside the
+            // double quotes is not expanded and would put a directory
+            // literally named `~` on PATH.
             cliclack::note(
-                "Add this to your shell config yourself:",
-                path_setup::manual_export_line(&shim_dir),
+                "Add secreq to your PATH",
+                format!(
+                    "{}\n\n{}",
+                    crate::term::wrap_note_text(
+                        "I couldn't tell which file your shell reads at startup. Add this line to it by hand, then open a new terminal:"
+                    ),
+                    path_setup::manual_export_line(&shim_dir)
+                ),
             )?;
         }
     }
