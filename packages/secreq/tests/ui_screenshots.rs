@@ -470,6 +470,7 @@ fn audit_line(
             command: caller_name.to_owned(),
             exe: None,
         }],
+        callers_truncated: Some(false),
         secrets: secrets.iter().map(|s| (*s).to_owned()).collect(),
         decision: decision.to_owned(),
         rule_id: None,
@@ -517,12 +518,34 @@ fn audit_line_traced(
                 exe: None,
             })
             .collect(),
+        callers_truncated: Some(false),
         secrets: secrets.iter().map(|s| (*s).to_owned()).collect(),
         decision: decision.to_owned(),
         rule_id: None,
         fingerprint: None,
         unverified_guest_chain: None,
     }
+}
+
+/// The same row, but written by a walk that stopped at its own ceiling: real
+/// ancestors exist above the outermost frame and were never read. The audit
+/// tree draws a `… more above` row for it.
+fn chain_clipped(mut entry: AuditEntry) -> AuditEntry {
+    entry.callers_truncated = Some(true);
+    entry
+}
+
+/// The same row as an **older** `secreq` wrote it, before the log recorded
+/// whether the walk reached the top. `None` is not "not truncated" — it is
+/// "nobody wrote it down" — and the audit tree renders it as its own third
+/// state (`… may be more above`) rather than as a complete chain.
+///
+/// Every row the current code writes carries the field, so this state can only
+/// come off disk. It is worth a fixture precisely because it is the one an
+/// existing install sees on every row it already has.
+fn chain_unrecorded(mut entry: AuditEntry) -> AuditEntry {
+    entry.callers_truncated = None;
+    entry
 }
 
 /// An audit row recording a rule auto-firing. The Rules view aggregates
@@ -541,6 +564,7 @@ fn audit_auto_fire(secs_ago: u64, rule_id: &str, decision: &str) -> AuditEntry {
             command: "Cursor.app".to_owned(),
             exe: None,
         }],
+        callers_truncated: Some(false),
         secrets: vec!["GITHUB_TOKEN".to_owned()],
         decision: decision.to_owned(),
         rule_id: Some(rule_id.to_owned()),
@@ -2063,6 +2087,64 @@ fn audit_tab_agent_out_of_scope_row() {
         Shot::new("35-audit-tab-agent-out-of-scope").caption(
             "A guest asked for a secret outside its declared scope. The agent refused \
              without prompting you, and the attempt is on the record.",
+        ),
+        audit,
+        ManagerExtras {
+            window_state: Some(Box::new(
+                secreq::daemon::manager_ui::ManagerWindowState::focus_audit_view,
+            )),
+            ..ManagerExtras::default()
+        },
+    );
+}
+
+#[test]
+fn audit_tab_chain_completeness() {
+    // The two ways a row admits its tree is not the whole ancestry, one above
+    // the other so the wording difference is legible:
+    //
+    //   `… may be more above` — the row predates the field; nothing recorded
+    //                           whether the walk reached the top.
+    //   `… more above`        — the walk stopped at its own ceiling; there IS
+    //                           ancestry above and secreq did not read it.
+    //
+    // Rows in that order because that is the order they occur in: the unknown
+    // ones are the ones already in your log. The third state — a walk that
+    // reached the top — draws no marker at all, which is what every other
+    // audit fixture here is showing; adding a row for it would only push one
+    // of these two below the fold.
+    let audit = vec![
+        chain_unrecorded(audit_line_traced(
+            60 * 60 * 30,
+            "aws",
+            &["s3", "ls", "s3://prod-backups/"],
+            &[
+                (49220, "zsh", "-zsh"),
+                (49100, "Terminal", "/Applications/Utilities/Terminal.app"),
+            ],
+            &["AWS_ACCESS_KEY_ID"],
+            "approve+remember",
+        )),
+        chain_clipped(audit_line_traced(
+            60 * 4,
+            "gh",
+            &["api", "/repos/acme/web/issues"],
+            &[
+                (52318, "node", "node ./scripts/publish.js"),
+                (52317, "npm", "npm run release"),
+                (52316, "make", "make ci-deploy"),
+            ],
+            &["GITHUB_TOKEN"],
+            "approve",
+        )),
+    ];
+    render_manager_fixture(
+        Shot::new("40-audit-chain-completeness").caption(
+            "A row says how much of the ancestry secreq actually saw. \
+             <b>… more above</b> means the walk stopped before the top, so whatever \
+             launched the command is not shown here. <b>… may be more above</b> is an \
+             older row, written before secreq recorded which of the two it was — the \
+             log cannot say, so neither does the tree.",
         ),
         audit,
         ManagerExtras {

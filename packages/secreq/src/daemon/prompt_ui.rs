@@ -757,7 +757,8 @@ fn secret_name_label(ui: &mut egui::Ui, th: &Theme, s: &SecretAsk) {
 }
 
 /// How many ancestry frames the tree draws before it starts counting
-/// instead. Matches the audit view's `MAX_DEPTH`, deliberately: the two
+/// instead. Matches the audit view's [`super::ui::AUDIT_TREE_MAX_DEPTH`],
+/// deliberately: the two
 /// surfaces show the same chain, and a reader who learns the `… N more` row
 /// in one should not meet a different rule in the other.
 const CALLER_TREE_MAX_DEPTH: usize = 6;

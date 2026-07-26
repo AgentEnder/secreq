@@ -73,6 +73,11 @@ pub struct Waiter {
     pub cwd: String,
     /// The caller chain at ask time, kept for the abandoned-ask audit row.
     pub callers: Vec<super::proto::Caller>,
+    /// Whether that chain was all of it. Kept beside `callers` and written to
+    /// the same audit row: the daemon walked this chain itself
+    /// (`adopt_peer_provenance`), so it is the only place the answer still
+    /// exists once the client is gone.
+    pub callers_truncated: bool,
 }
 
 impl QueueEntry {
@@ -1131,6 +1136,7 @@ impl State {
             command: ask.command.clone(),
             cwd: ask.cwd().to_owned(),
             callers: ask.callers().to_vec(),
+            callers_truncated: ask.callers_truncated(),
         });
         self.show_window();
         self.broadcast_consent_update();
@@ -1332,7 +1338,14 @@ impl State {
             })
             .collect();
         let secret_names: Vec<String> = waiter.requested.iter().map(|s| s.name.clone()).collect();
-        AuditEntry::abandoned(&key.wrap, args, &waiter.cwd, &callers, &secret_names)
+        AuditEntry::abandoned(
+            &key.wrap,
+            args,
+            &waiter.cwd,
+            &callers,
+            waiter.callers_truncated,
+            &secret_names,
+        )
     }
 
     /// Remove a single parked waiter whose client exited before the user
@@ -3262,6 +3275,7 @@ mod tests {
             command: x_ask.command.clone(),
             cwd: "/work".to_owned(),
             callers: x_ask.callers().to_vec(),
+            callers_truncated: x_ask.callers_truncated(),
         };
         let entry = State::abandoned_audit_entry(&x_ask.dedupe_key, &waiter);
         assert_eq!(entry.wrap, "gh");
@@ -3281,10 +3295,50 @@ mod tests {
             command: run_ask.command.clone(),
             cwd: String::new(),
             callers: vec![],
+            callers_truncated: false,
         };
         let entry2 = State::abandoned_audit_entry(&run_ask.dedupe_key, &waiter2);
         assert_eq!(entry2.wrap, "run");
         assert_eq!(entry2.args, vec!["./deploy.sh", "--prod"]);
+    }
+
+    /// The daemon is the only one left holding this fact when a client dies
+    /// mid-ask: it walked the chain itself, the client is gone, and the audit
+    /// row is the last place the answer can go. A row that dropped it would
+    /// read months later as an ancestry that reached the top.
+    #[test]
+    fn an_abandoned_row_keeps_the_asks_answer_about_its_own_chain() {
+        let ask = ask_with_secret("gh", &["gh", "pr", "view"], "GITHUB_TOKEN");
+        for truncated in [true, false] {
+            let (tx, _rx) = mpsc::channel();
+            let waiter = Waiter {
+                id: WaiterId(1),
+                sender: tx,
+                requested: ask.secrets().to_vec(),
+                command: ask.command.clone(),
+                cwd: "/work".to_owned(),
+                callers: ask.callers().to_vec(),
+                callers_truncated: truncated,
+            };
+            let entry = State::abandoned_audit_entry(&ask.dedupe_key, &waiter);
+            assert_eq!(entry.callers_truncated, Some(truncated));
+        }
+    }
+
+    /// And the flag has to reach the waiter in the first place — it is read
+    /// off the ask at submit time, after `adopt_peer_provenance` has replaced
+    /// the client's claim with the daemon's own walk.
+    #[test]
+    fn submitting_an_ask_parks_its_truncation_answer_on_the_waiter() {
+        let mut state = State::new();
+        let mut ask = ask_with_secret("gh", &["gh", "pr", "view"], "GITHUB_TOKEN");
+        if let Some(wrap) = ask.wrap_mut() {
+            wrap.callers_truncated = true;
+        }
+        let (tx, _rx) = mpsc::channel();
+        state.submit_ask(ask.clone(), tx);
+        let entry = state.queue_entry_for_test(&ask.dedupe_key).unwrap();
+        assert!(entry.waiters[0].callers_truncated);
     }
 
     #[test]

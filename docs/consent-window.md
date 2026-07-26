@@ -160,6 +160,16 @@ abandoned requests all land in the same list.
 
 ::shot{id=07-audit-tab}
 
+A row's process tree is the ancestry secreq walked at the time, and it says
+when that walk was not the whole story. `… more above` means the walk stopped
+at its limit of 16 frames, so whatever launched the command sits above the
+top row and was never read. `… may be more above` marks a row written before
+secreq recorded the difference: the log cannot say whether anything is
+missing, and a tree drawn without the marker would put the walk's stopping
+point where you look for the origin.
+
+::shot{id=40-audit-chain-completeness}
+
 Search narrows across every field at once and reports how much of the log
 you're looking at. Each term may match a different field, so `gh auth` finds
 the row where both are true.
@@ -188,13 +198,17 @@ jq -c 'select(.decision | startswith("deny"))' ~/.secreq/audit.log
     { "pid": 7926, "name": "zsh", "command": "zsh" },
     { "pid": 2831, "name": "iTerm2", "command": "iTerm2" }
   ],
+  "callers_truncated": false,
   "secrets": ["GITHUB_TOKEN"],
   "decision": "approve+remember"
 }
 ```
 
 `secrets` holds **names only, never values**. That is the invariant the
-whole file rests on. Three fields appear only when they apply: `rule_id` on
+whole file rests on. `callers_truncated` answers whether `callers` is the
+whole ancestry or only the part the walk reached; rows written before it
+existed omit it, which reads as "unknown" rather than as "complete". Three
+more fields appear only when they apply: `rule_id` on
 auto-decisions, `fingerprint` (of the **public** key) on SSH sign rows, and
 `unverified_guest_chain` for a chain a sandbox guest reported about itself.
 That last one is a claim rather than evidence, so it is kept out of `callers`

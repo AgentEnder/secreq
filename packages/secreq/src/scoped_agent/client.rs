@@ -141,7 +141,11 @@ impl AgentClient {
 /// empty chain, which renders no row at all. Nothing depends on it, so
 /// nothing needs to fail when it's missing.
 pub fn self_reported_chain() -> Vec<String> {
+    // `.frames` only: whether this guest's own walk reached the top is not a
+    // fact the host could use for anything. The claim is unverifiable however
+    // complete it is, and qualifying it would only make it look measured.
     crate::provenance::caller_chain()
+        .frames
         .into_iter()
         .map(|caller| caller.name)
         .collect()

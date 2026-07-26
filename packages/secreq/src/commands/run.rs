@@ -84,7 +84,13 @@ pub fn wrap_run(
     // (see `provenance::caller_chain`), so the chain we get back is the
     // user-meaningful ancestry — what the consent UI shows and what the
     // approvals cache anchors on.
-    let callers = provenance::caller_chain();
+    //
+    // The whole `CallerChain`, not just its frames: the audit row this client
+    // writes is rendered as a process tree in the manager's Audit tab, and
+    // `chain.truncated` is the only thing distinguishing "this is where it
+    // came from" from "this is as far as we looked".
+    let chain = provenance::caller_chain();
+    let callers = &chain.frames;
 
     // Consent: hand off to the daemon. The daemon owns the cache, the
     // coalescing queue, the UI, *and* the resolution — on approve it
@@ -98,15 +104,13 @@ pub fn wrap_run(
     let resolved: Vec<(String, SecretValue)> = if opts.assume_yes {
         let decision = Decision::Approve;
         let env_names: Vec<String> = wrap.env.keys().cloned().collect();
-        let _ = audit::append(&AuditEntry::new(
-            binary, args, &callers, &env_names, decision,
-        ));
+        let _ = audit::append(&AuditEntry::new(binary, args, &chain, &env_names, decision));
         resolve_wrap_env(&config, &wrap)?
     } else {
-        let outcome = obtain_wrap_consent(&wrap, &callers, args, &opts)?;
+        let outcome = obtain_wrap_consent(&wrap, callers, args, &opts)?;
         let env_names: Vec<String> = wrap.env.keys().cloned().collect();
         let _ = audit::append(
-            &AuditEntry::new(binary, args, &callers, &env_names, outcome.decision)
+            &AuditEntry::new(binary, args, &chain, &env_names, outcome.decision)
                 .with_rule_id(outcome.rule_id.clone()),
         );
         if !outcome.decision.approved() {
@@ -315,13 +319,13 @@ pub fn run(
     }
 
     // 4 + 5. Consent + resolve (daemon, or client-side under --yes).
-    let callers = provenance::caller_chain();
+    let chain = provenance::caller_chain();
     let names: Vec<String> = refs.iter().map(|(n, _)| n.clone()).collect();
     let resolved: Vec<(String, SecretValue)> = if opts.assume_yes {
         let _ = audit::append(&AuditEntry::new(
             "run",
             command,
-            &callers,
+            &chain,
             &names,
             Decision::Approve,
         ));
@@ -336,7 +340,7 @@ pub fn run(
                 allow_remember: false,
                 ignore_remembered: false,
             },
-            &callers,
+            &chain.frames,
             &cwd,
             &config,
         );
@@ -353,7 +357,7 @@ pub fn run(
         let outcome = daemon_client::request_consent(ask, config.wait_indicator_enabled())
             .context("daemon consent request failed")?;
         let _ = audit::append(
-            &AuditEntry::new("run", command, &callers, &names, outcome.decision)
+            &AuditEntry::new("run", command, &chain, &names, outcome.decision)
                 .with_rule_id(outcome.rule_id.clone()),
         );
         if !outcome.decision.approved() {
@@ -413,7 +417,7 @@ fn prompt_and_store_unresolved(
     refs: &[(String, Reference)],
     command: &[String],
 ) -> Result<()> {
-    let callers = provenance::caller_chain();
+    let chain = provenance::caller_chain();
     for (env_name, reference) in refs {
         // Unknown provider: let the resolution step below produce its own
         // "unknown provider scheme" error rather than storing nowhere.
@@ -446,7 +450,7 @@ fn prompt_and_store_unresolved(
                 let _ = audit::append(&AuditEntry::new(
                     "store",
                     command,
-                    &callers,
+                    &chain,
                     std::slice::from_ref(&ref_display),
                     Decision::Approve,
                 ));

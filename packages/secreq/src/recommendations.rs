@@ -496,6 +496,7 @@ mod tests {
                 command: ancestor.to_owned(),
                 exe: None,
             }],
+            callers_truncated: Some(false),
             secrets: secrets.iter().map(|s| (*s).to_owned()).collect(),
             decision: decision.to_owned(),
             rule_id: None,

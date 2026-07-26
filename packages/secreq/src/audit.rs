@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::consent::Decision;
-use crate::provenance::Caller;
+use crate::provenance::{Caller, CallerChain};
 
 /// One audit record. Serialized as a single JSON line.
 ///
@@ -37,6 +37,33 @@ pub struct AuditEntry {
     /// audit view can render the full process tree that triggered this
     /// request rather than just a stack of process names.
     pub callers: Vec<AuditCaller>,
+    /// Whether the walk that produced [`AuditEntry::callers`] stopped at its
+    /// own ceiling with ancestry still above the outermost frame.
+    ///
+    /// **Three states, and the third is why this is an `Option`.** Storage is
+    /// nearest-first, so the frames a walk gives up are the *outermost* ones —
+    /// the ones that answer "where did this ultimately come from". A reader
+    /// holding only `callers` cannot tell a chain that ended at its root from
+    /// one abandoned at the walk's limit, and the audit view drew both the
+    /// same way.
+    ///
+    /// - `Some(true)` — the walk stopped short; there is ancestry above that
+    ///   nothing read.
+    /// - `Some(false)` — the walk reached the top. The outermost frame really
+    ///   is the origin.
+    /// - `None` — **this row predates the field.** Not "not truncated": the
+    ///   row was written by a `secreq` that never recorded the answer, so the
+    ///   log does not know. The audit view renders that as its own third
+    ///   state rather than as completeness, because a log that reports an
+    ///   unknown as a fact is worse than one that admits the gap.
+    ///
+    /// `#[serde(default)]` is what produces that `None`, and every
+    /// constructor in this module writes `Some(_)` — including
+    /// [`AuditEntry::agent_resolve`], which has no chain at all. That is the
+    /// invariant the third state rests on: **an absent field means an old
+    /// row, and nothing else.**
+    #[serde(default)]
+    pub callers_truncated: Option<bool>,
     /// Names of the secrets granted (never their values).
     pub secrets: Vec<String>,
     /// The consent decision.
@@ -107,10 +134,14 @@ impl AuditEntry {
     /// Assemble an entry from the pieces a `run` already has. Rule
     /// linkage is attached via [`AuditEntry::with_rule_id`] when the
     /// decision came from an auto-rule.
+    ///
+    /// Takes the whole [`CallerChain`] rather than its frames: the audit view
+    /// draws this chain, so "how far the walk got" has to survive the write
+    /// alongside what it got.
     pub fn new(
         wrap: &str,
         args: &[String],
-        callers: &[Caller],
+        chain: &CallerChain,
         secret_names: &[String],
         decision: Decision,
     ) -> AuditEntry {
@@ -121,7 +152,8 @@ impl AuditEntry {
                 .unwrap_or_default(),
             wrap: wrap.to_owned(),
             args: args.to_vec(),
-            callers: callers.iter().map(AuditCaller::from_runtime).collect(),
+            callers: chain.frames.iter().map(AuditCaller::from_runtime).collect(),
+            callers_truncated: Some(chain.truncated),
             secrets: secret_names.to_vec(),
             decision: decision.as_str().to_owned(),
             rule_id: None,
@@ -149,7 +181,7 @@ impl AuditEntry {
     pub fn ssh_sign(
         key_id: &str,
         fingerprint: &str,
-        callers: &[Caller],
+        chain: &CallerChain,
         cwd: &str,
         decision: Decision,
     ) -> AuditEntry {
@@ -158,7 +190,8 @@ impl AuditEntry {
             cwd: cwd.to_owned(),
             wrap: format!("ssh:{key_id}"),
             args: Vec::new(),
-            callers: callers.iter().map(AuditCaller::from_runtime).collect(),
+            callers: chain.frames.iter().map(AuditCaller::from_runtime).collect(),
+            callers_truncated: Some(chain.truncated),
             secrets: Vec::new(),
             decision: decision.as_str().to_owned(),
             rule_id: None,
@@ -200,6 +233,13 @@ impl AuditEntry {
             wrap: format!("agent:{scope}"),
             args: Vec::new(),
             callers: Vec::new(),
+            // `Some(false)`, structurally, the same answer
+            // `Ask::callers_truncated` gives a guest ask: there was no walk to
+            // stop short, so nothing is missing from the empty chain above.
+            // Writing it rather than leaving the field off is what keeps an
+            // *absent* field meaning exactly one thing — a row written before
+            // the field existed.
+            callers_truncated: Some(false),
             secrets: vec![reference.to_owned()],
             decision: decision.as_str().to_owned(),
             rule_id: None,
@@ -219,11 +259,17 @@ impl AuditEntry {
     /// process's working directory (carried on the ask), not the daemon's.
     /// The row carries no secret material — only the secret **names** the
     /// ask would have released, same as every other wrap-run row.
+    ///
+    /// `callers_truncated` travels next to `callers` because it is the same
+    /// fact about the same chain: the ask carried both from the daemon's own
+    /// walk of the socket peer, and splitting them here is how a row ends up
+    /// claiming an ancestry it only has part of.
     pub fn abandoned(
         wrap: &str,
         args: &[String],
         cwd: &str,
         callers: &[AuditCaller],
+        callers_truncated: bool,
         secret_names: &[String],
     ) -> AuditEntry {
         AuditEntry {
@@ -232,6 +278,7 @@ impl AuditEntry {
             wrap: wrap.to_owned(),
             args: args.to_vec(),
             callers: callers.to_vec(),
+            callers_truncated: Some(callers_truncated),
             secrets: secret_names.to_vec(),
             decision: Decision::Abandoned.as_str().to_owned(),
             rule_id: None,
@@ -384,22 +431,25 @@ mod tests {
         // leak NEITHER the private key NOR the signature bytes. We construct
         // the entry the way the daemon does and assert on its serialized
         // JSON (the exact on-disk shape).
-        let callers = vec![
-            Caller {
-                pid: 4242,
-                name: "git".to_owned(),
-                command: "git push origin main".to_owned(),
-                exe: None,
-                start_time: 1,
-            },
-            Caller {
-                pid: 4000,
-                name: "zsh".to_owned(),
-                command: "-zsh".to_owned(),
-                exe: None,
-                start_time: 1,
-            },
-        ];
+        let chain = CallerChain {
+            frames: vec![
+                Caller {
+                    pid: 4242,
+                    name: "git".to_owned(),
+                    command: "git push origin main".to_owned(),
+                    exe: None,
+                    start_time: 1,
+                },
+                Caller {
+                    pid: 4000,
+                    name: "zsh".to_owned(),
+                    command: "-zsh".to_owned(),
+                    exe: None,
+                    start_time: 1,
+                },
+            ],
+            truncated: false,
+        };
         // A made-up PEM + signature blob that must NOT appear in the row.
         let secret_private_key = "-----BEGIN OPENSSH PRIVATE KEY-----DEADBEEF";
         let secret_signature = "c2lnbmF0dXJlLWJ5dGVz";
@@ -407,7 +457,7 @@ mod tests {
         let entry = AuditEntry::ssh_sign(
             "ssh.deploy",
             "SHA256:Nh0Me49Zh9fDwabc",
-            &callers,
+            &chain,
             "/home/dev/repos/acme",
             Decision::ApproveCached,
         );
@@ -585,6 +635,7 @@ mod tests {
             &["pr".to_owned(), "view".to_owned(), "42".to_owned()],
             "/home/dev/project",
             &callers,
+            false,
             &["GITHUB_TOKEN".to_owned()],
         );
         assert_eq!(entry.decision, "abandoned");
@@ -601,6 +652,86 @@ mod tests {
         let parsed: AuditEntry = serde_json::from_str(&json).expect("round-trip");
         assert_eq!(parsed.decision, "abandoned");
         assert_eq!(parsed.wrap, "gh");
+    }
+
+    /// The invariant the audit view's third state rests on: **every**
+    /// constructor writes the field, so an absent one means an old row and
+    /// nothing else. If a future constructor forgets it, this fails here
+    /// rather than by silently labelling fresh rows "may be more above".
+    #[test]
+    fn every_row_this_version_writes_carries_a_truncation_answer() {
+        let chain = CallerChain {
+            frames: vec![Caller {
+                pid: 1,
+                name: "zsh".to_owned(),
+                command: "-zsh".to_owned(),
+                exe: None,
+                start_time: 1,
+            }],
+            truncated: true,
+        };
+        let rows = [
+            AuditEntry::new("gh", &[], &chain, &[], Decision::Approve),
+            AuditEntry::ssh_sign("ssh.deploy", "SHA256:x", &chain, "/w", Decision::Approve),
+            AuditEntry::agent_resolve("scope", "secret://op/a/b", Decision::Approve, None),
+            AuditEntry::abandoned("gh", &[], "/w", &[], true, &[]),
+        ];
+        for row in &rows {
+            assert!(
+                row.callers_truncated.is_some(),
+                "constructor left the field absent, which the reader takes to mean \
+                 'written by an older secreq': {row:?}"
+            );
+            let json = serde_json::to_string(row).expect("serialize");
+            assert!(json.contains("\"callers_truncated\":"), "json: {json}");
+        }
+    }
+
+    /// The walk's own answer has to survive the write — both ways round.
+    #[test]
+    fn a_clipped_walk_is_recorded_as_clipped_and_a_whole_one_as_whole() {
+        let frames = vec![Caller {
+            pid: 1,
+            name: "zsh".to_owned(),
+            command: "-zsh".to_owned(),
+            exe: None,
+            start_time: 1,
+        }];
+        let clipped = CallerChain {
+            frames: frames.clone(),
+            truncated: true,
+        };
+        let whole = CallerChain {
+            frames,
+            truncated: false,
+        };
+        assert_eq!(
+            AuditEntry::new("gh", &[], &clipped, &[], Decision::Approve).callers_truncated,
+            Some(true)
+        );
+        assert_eq!(
+            AuditEntry::new("gh", &[], &whole, &[], Decision::Approve).callers_truncated,
+            Some(false)
+        );
+        assert_eq!(
+            AuditEntry::ssh_sign("k", "SHA256:x", &clipped, "/w", Decision::Approve)
+                .callers_truncated,
+            Some(true)
+        );
+    }
+
+    /// A row written before the field existed reads back as `None` — **not**
+    /// as `Some(false)`. The distinction is the whole point: the log does not
+    /// know whether that chain was the whole ancestry, and a reader must not
+    /// be shown a walk's stopping point dressed as an origin.
+    #[test]
+    fn a_row_written_before_the_field_reads_back_as_unknown_not_as_whole() {
+        let json = r#"{"ts_unix":1,"cwd":"/w","wrap":"gh","args":[],
+                       "callers":[{"pid":9,"name":"zsh","command":"-zsh"}],
+                       "secrets":["GITHUB_TOKEN"],"decision":"approve"}"#;
+        let parsed: AuditEntry = serde_json::from_str(json).expect("older rows must parse");
+        assert_eq!(parsed.callers_truncated, None);
+        assert_ne!(parsed.callers_truncated, Some(false));
     }
 
     #[test]

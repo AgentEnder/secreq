@@ -2376,7 +2376,7 @@ fn render_audit_row_body(ui: &mut egui::Ui, entry: &AuditEntry, now: u64) {
     // the line a reviewer scans for.
     if !entry.callers.is_empty() {
         ui.add_space(6.0);
-        render_audit_caller_chain(ui, &entry.callers);
+        render_audit_caller_chain(ui, &entry.callers, entry.callers_truncated);
     }
 
     // ── Line 4: cwd + time footer ──
@@ -2562,28 +2562,46 @@ pub(crate) fn caller_args<'a>(name: &str, command: &'a str) -> &'a str {
     }
 }
 
+/// Depth the audit view's process tree draws before collapsing the rest into
+/// a `… N more` row. Mirrored by `prompt_ui::CALLER_TREE_MAX_DEPTH`: the two
+/// surfaces show the same chain, and a reader who learns the elision in one
+/// should not meet a different rule in the other.
+pub(crate) const AUDIT_TREE_MAX_DEPTH: usize = 6;
+
+/// Per-level indent of that tree.
+const AUDIT_TREE_INDENT_PX: f32 = 13.0;
+
 /// Render an audit entry's caller chain as an indented process tree,
 /// outermost-first (the way `pstree` prints). Each row carries the bare
 /// process name, its pid, and — load-bearingly — the argv it was invoked
 /// with when that adds information over the name (`make ci-deploy`,
-/// `node ./scripts/import.js`). Depth is capped at `MAX_DEPTH` so a
-/// pathological 16-deep wrapper stack can't dominate the card; the
+/// `node ./scripts/import.js`). Depth is capped at [`AUDIT_TREE_MAX_DEPTH`]
+/// so a pathological 16-deep wrapper stack can't dominate the card; the
 /// overflow collapses to a single `… N more` row whose hover reveals the
 /// rest. The command tail is width-truncated (tooltip on overflow) so a
 /// long argv never pushes the card wider than the window.
-fn render_audit_caller_chain(ui: &mut egui::Ui, callers: &[AuditCaller]) {
-    const MAX_DEPTH: usize = 6;
-    const INDENT_PX: f32 = 13.0;
-
+///
+/// `truncated` is [`crate::audit::AuditEntry::callers_truncated`], and it
+/// decides whether a row goes **above** the outermost frame. Without it this
+/// tree drew the frame the walk happened to stop on exactly like a real
+/// origin — the same over-claim the consent prompt made until it started
+/// rendering `… more above`. The audit view is where that claim is read back
+/// long after nobody can go and check.
+fn render_audit_caller_chain(ui: &mut egui::Ui, callers: &[AuditCaller], truncated: Option<bool>) {
     let th = Theme::of(ui.ctx());
     // Storage is nearest-first; reverse to outermost-first for display.
     let ordered: Vec<&AuditCaller> = callers.iter().rev().collect();
-    let visible = ordered.len().min(MAX_DEPTH);
+    let visible = ordered.len().min(AUDIT_TREE_MAX_DEPTH);
     let hidden = ordered.len().saturating_sub(visible);
-    for (depth, c) in ordered.iter().take(visible).enumerate() {
+    let mut depth = 0usize;
+    if let Some((text, hover)) = unwalked_row_text(truncated) {
+        audit_elision_row(ui, &th, depth, text, hover.to_owned());
+        depth += 1;
+    }
+    for c in ordered.iter().take(visible) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 5.0;
-            ui.add_space(depth as f32 * INDENT_PX);
+            ui.add_space(depth as f32 * AUDIT_TREE_INDENT_PX);
             // `·` roots the tree; `└─` hangs every deeper level off its
             // parent so the eye walks the chain downward.
             let glyph = if depth == 0 {
@@ -2617,32 +2635,82 @@ fn render_audit_caller_chain(ui: &mut egui::Ui, callers: &[AuditCaller]) {
                 }
             }
         });
+        depth += 1;
     }
     if hidden > 0 {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 5.0;
-            ui.add_space(visible as f32 * INDENT_PX);
-            let summary = ordered
-                .iter()
-                .skip(visible)
-                .map(|c| {
-                    let args = caller_args(&c.name, &c.command);
-                    if args.is_empty() {
-                        format!("{} (pid {})", c.name, c.pid)
-                    } else {
-                        format!("{} (pid {})  {}", c.name, c.pid, args)
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            ui.label(
-                egui::RichText::new(format!("\u{2514}\u{2500} \u{2026} {hidden} more"))
-                    .font(egui::FontId::monospace(10.0))
-                    .color(th.faint),
-            )
-            .on_hover_text(summary);
-        });
+        let summary = ordered
+            .iter()
+            .skip(visible)
+            .map(|c| {
+                let args = caller_args(&c.name, &c.command);
+                if args.is_empty() {
+                    format!("{} (pid {})", c.name, c.pid)
+                } else {
+                    format!("{} (pid {})  {}", c.name, c.pid, args)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        audit_elision_row(ui, &th, depth, &format!("{hidden} more"), summary);
     }
+}
+
+/// What (if anything) to draw above the outermost frame, for each of the
+/// three states [`crate::audit::AuditEntry::callers_truncated`] can be in.
+///
+/// The two rows say different things and must not be spelled the same way:
+///
+/// - **`Some(true)`** — the walk stopped at its own ceiling. There *is*
+///   ancestry above and secreq declined to read it. Uncounted, for the reason
+///   the prompt's row is: the walk stopped precisely so it would not have to
+///   find out how much.
+/// - **`None`** — the row was written before the log recorded this at all.
+///   "May be" is the whole difference: nothing here knows whether anything is
+///   missing, and rendering that silence as a complete chain would be the
+///   audit view asserting something no writer ever checked. It fades from a
+///   user's log on its own as old rows age out.
+/// - **`Some(false)`** — the walk reached the top. Nothing to say.
+fn unwalked_row_text(truncated: Option<bool>) -> Option<(&'static str, &'static str)> {
+    match truncated {
+        Some(true) => Some((
+            "more above",
+            "secreq stops walking the process tree after 16 frames.\n\
+             Whatever launched this is further up and was not read.",
+        )),
+        None => Some((
+            "may be more above",
+            "This row was written before secreq recorded whether its walk\n\
+             reached the top of the ancestry, so the log cannot say whether\n\
+             anything is missing above.",
+        )),
+        Some(false) => None,
+    }
+}
+
+/// One `…` row of the audit tree: the tree's own indent and glyph, then faint
+/// text with an explanatory hover.
+///
+/// Shared by both elisions, mirroring `prompt_ui::elision_row` on the other
+/// surface. They stand in for different things — frames this row holds and
+/// hides, versus frames nothing ever read — but they are the same *kind* of
+/// statement, "the tree is not showing you everything, here", and a reader who
+/// learns one should not have to learn a second visual language for the other.
+fn audit_elision_row(ui: &mut egui::Ui, th: &Theme, depth: usize, text: &str, hover: String) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 5.0;
+        ui.add_space(depth as f32 * AUDIT_TREE_INDENT_PX);
+        let glyph = if depth == 0 {
+            "\u{b7}"
+        } else {
+            "\u{2514}\u{2500}"
+        };
+        ui.label(
+            egui::RichText::new(format!("{glyph} \u{2026} {text}"))
+                .font(egui::FontId::monospace(10.0))
+                .color(th.faint),
+        )
+        .on_hover_text(hover);
+    });
 }
 
 /// Calendar-style day-bucket label for an audit timestamp, relative to
@@ -2789,6 +2857,30 @@ mod tests {
     use super::*;
     use crate::audit::AuditCaller;
 
+    // ── the audit tree's completeness marker ─────────────────────
+
+    /// Three states in, three answers out — and the one that matters is the
+    /// middle one. A row with no recorded answer must not render like a row
+    /// that recorded "the walk reached the top", or the audit view goes back
+    /// to claiming an origin nothing verified.
+    #[test]
+    fn an_unrecorded_walk_renders_as_neither_of_the_other_two() {
+        let clipped = unwalked_row_text(Some(true)).expect("a clipped walk says so");
+        let unknown = unwalked_row_text(None).expect("an unrecorded walk says so too");
+        assert_eq!(clipped.0, "more above");
+        assert_eq!(unknown.0, "may be more above");
+        assert_ne!(
+            clipped.0, unknown.0,
+            "'we did not look further' and 'nobody wrote down whether we did' are \
+             different claims and must not share a row"
+        );
+        assert_ne!(clipped.1, unknown.1, "and must not share a hover either");
+        assert!(
+            unwalked_row_text(Some(false)).is_none(),
+            "a walk that reached the top has nothing to add above the outermost frame"
+        );
+    }
+
     // ── abbreviate_home ──────────────────────────────────────────
 
     #[test]
@@ -2876,6 +2968,7 @@ mod tests {
                 command: caller_name.to_owned(),
                 exe: None,
             }],
+            callers_truncated: Some(false),
             secrets: secrets.iter().map(|s| (*s).to_owned()).collect(),
             decision: decision.to_owned(),
             rule_id: None,
@@ -3025,6 +3118,7 @@ mod tests {
             wrap: "gh".to_owned(),
             args: vec![],
             callers: vec![],
+            callers_truncated: Some(false),
             secrets: vec![],
             decision: "approve+auto".to_owned(),
             rule_id: rule_id.map(str::to_owned),
@@ -3145,6 +3239,7 @@ mod tests {
                 command: caller.to_owned(),
                 exe: None,
             }],
+            callers_truncated: Some(false),
             secrets: vec![],
             decision: decision.to_owned(),
             rule_id: None,

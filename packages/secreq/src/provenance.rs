@@ -137,15 +137,17 @@ pub struct CallerChain {
 /// any other `secreq` processes in the chain, because they're our PTY
 /// masters / inner shims, not "who's asking."
 ///
-/// Returns frames only. This is the **client** entry point, and a client's
-/// chain never reaches the consent prompt: the daemon throws it away and
-/// re-walks from the socket peer (`daemon::server::adopt_peer_provenance`),
-/// because a client's account of its own ancestry is a claim rather than a
-/// fact. The truncation bit is a display fact about the chain that gets
-/// rendered, so it is carried by [`caller_chain_from_pid`], which is where
-/// the rendered chain comes from.
-pub fn caller_chain() -> Vec<Caller> {
-    caller_chain_with_limit(MAX_CHAIN, MAX_WALK).frames
+/// This is the **client** entry point. A client's chain never reaches the
+/// consent prompt — the daemon throws it away and re-walks from the socket
+/// peer (`daemon::server::adopt_peer_provenance`), because a client's account
+/// of its own ancestry is a claim rather than a fact — but it *is* what the
+/// client writes into its own **audit row**, and the audit view renders that
+/// chain back months later. So the truncation bit travels with the frames
+/// here for the same reason it does in [`caller_chain_from_pid`]: a suffix of
+/// an ancestry and a whole one are drawn identically unless something says
+/// which of the two this is.
+pub fn caller_chain() -> CallerChain {
+    caller_chain_with_limit(MAX_CHAIN, MAX_WALK)
 }
 
 fn caller_chain_with_limit(max_chain: usize, max_walk: usize) -> CallerChain {
@@ -430,7 +432,7 @@ mod tests {
 
     #[test]
     fn caller_chain_excludes_our_own_pid() {
-        let chain = caller_chain();
+        let chain = caller_chain().frames;
         // Running under cargo/the test harness, there is always at least one
         // ancestor, and none of them is our own pid.
         let me = std::process::id();
@@ -443,7 +445,7 @@ mod tests {
         // Our own parent chain, requested explicitly, equals caller_chain().
         let me = std::process::id();
         let explicit = caller_chain_from_pid(me).frames;
-        let implicit = caller_chain();
+        let implicit = caller_chain().frames;
         // Both anchor on our parent; neither contains our own pid.
         assert!(explicit.iter().all(|c| c.pid != me));
         assert_eq!(

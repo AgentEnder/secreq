@@ -362,7 +362,7 @@ fn handle_sign(
     let decision = match decide_sign(state, identity, anchor, &chain, &cwd, data) {
         Some(d) if d.approved() => d,
         Some(deny) => {
-            audit_sign(identity, &chain.frames, &cwd, deny);
+            audit_sign(identity, &chain, &cwd, deny);
             super::log::log_at(
                 "ssh-agent",
                 format_args!(
@@ -413,7 +413,7 @@ fn handle_sign(
             // carries the decision that authorized it (`ApproveCached` on a
             // cache hit, or whatever the user chose). The signature bytes are
             // never recorded; the row holds only the key id + fingerprint.
-            audit_sign(identity, &chain.frames, &cwd, decision);
+            audit_sign(identity, &chain, &cwd, decision);
             super::log::log_at(
                 "ssh-agent",
                 format_args!(
@@ -762,7 +762,7 @@ fn resolve_and_sign(
 /// audit-log write error would be a worse outcome than a missing row.
 fn audit_sign(
     identity: &PreparedIdentity,
-    chain: &[crate::provenance::Caller],
+    chain: &crate::provenance::CallerChain,
     cwd: &str,
     decision: Decision,
 ) {

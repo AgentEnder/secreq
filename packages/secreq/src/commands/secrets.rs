@@ -272,7 +272,7 @@ pub fn read(refs: &[String], config_path: Option<&Path>) -> Result<i32> {
     }
 
     let cwd = std::env::current_dir().context("could not determine current directory")?;
-    let callers = provenance::caller_chain();
+    let chain = provenance::caller_chain();
 
     // The argv shown in the consent prompt: `read` plus the refs (locators,
     // never values — safe to display).
@@ -288,14 +288,14 @@ pub fn read(refs: &[String], config_path: Option<&Path>) -> Result<i32> {
             allow_remember: false,
             ignore_remembered: false,
         },
-        &callers,
+        &chain.frames,
         &cwd,
         &config,
     );
     let outcome = daemon_client::request_consent(ask, config.wait_indicator_enabled())
         .context("daemon consent request failed")?;
     let _ = audit::append(
-        &AuditEntry::new("read", &command, &callers, &seen, outcome.decision)
+        &AuditEntry::new("read", &command, &chain, &seen, outcome.decision)
             .with_rule_id(outcome.rule_id.clone()),
     );
 
