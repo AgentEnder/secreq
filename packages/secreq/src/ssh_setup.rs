@@ -189,10 +189,21 @@ pub(crate) fn rewrite_in_place(config_file: &Path, new_block: &str) -> Result<bo
     if updated == content {
         return Ok(false);
     }
-    // Preserve the file's mode: ~/.ssh/config must stay 0600 or ssh refuses
-    // it, and `fs::write` on an existing file leaves the mode alone.
-    fs::write(config_file, updated)
-        .with_context(|| format!("could not write {}", config_file.display()))?;
+    // Staged and renamed, not written in place. These are the user's own
+    // dotfiles and we are rewriting them from a migration, where nobody asked
+    // for the edit and nobody is watching it: a `fs::write` that dies after
+    // truncating leaves a `~/.zshrc` that is a broken login shell, and — worse
+    // for a migration — one the retry then reads as carrying no managed block,
+    // so it reports success and stamps the level over the damage.
+    //
+    // `Mode::Like(config_file)` keeps the file's own mode across the new inode:
+    // ~/.ssh/config must stay 0600 or ssh refuses it.
+    crate::atomic::replace(
+        config_file,
+        updated.as_bytes(),
+        crate::atomic::Mode::Like(config_file),
+    )
+    .with_context(|| format!("could not write {}", config_file.display()))?;
     Ok(true)
 }
 
@@ -618,6 +629,49 @@ mod tests {
         apply(&p2).unwrap();
 
         assert_eq!(mode_of(&p2.config_file), 0o600, "ssh refuses a laxer mode");
+    }
+
+    /// `rewrite_in_place` edits files secreq does not own, and migration 0002
+    /// calls it on installs whose owner never asked for the edit and isn't
+    /// watching it happen. It must replace the inode, not truncate one: a
+    /// `fs::write` that died mid-write left a truncated `~/.zshrc` — and the
+    /// migration's retry then read that as carrying no managed block, reported
+    /// success, and stamped the level over the damage.
+    #[test]
+    fn rewrite_replaces_the_inode_rather_than_truncating_it() {
+        use std::os::unix::fs::MetadataExt;
+
+        let home = tempfile::tempdir().unwrap();
+        let zshrc = home.path().join(".zshrc");
+        fs::write(&zshrc, "# my rc\n").unwrap();
+        let p1 = plan(
+            home.path(),
+            Method::ShellRc,
+            Shell::Zsh,
+            &home.path().join("old.sock"),
+        )
+        .unwrap();
+        apply(&p1).unwrap();
+        let before = fs::metadata(&zshrc).unwrap().ino();
+
+        let p2 = plan(
+            home.path(),
+            Method::ShellRc,
+            Shell::Zsh,
+            &home.path().join("new.sock"),
+        )
+        .unwrap();
+        assert!(rewrite_in_place(&zshrc, &p2.block).unwrap());
+
+        assert_ne!(
+            fs::metadata(&zshrc).unwrap().ino(),
+            before,
+            "a truncate-in-place rewrite can publish a half-written rc"
+        );
+        // The whole point of the staging file: the rest of the rc is intact.
+        assert!(fs::read_to_string(&zshrc).unwrap().starts_with("# my rc\n"));
+        // And nothing is left beside it for the user to wonder about.
+        assert!(!home.path().join(".zshrc.tmp").exists());
     }
 
     #[test]
