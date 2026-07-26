@@ -11,15 +11,26 @@
 //! `Zeroizing<Vec<u8>>` and hands each masking thread a clone of the same type,
 //! and the masker's own buffers — the values it matches against and its carry —
 //! are `Zeroizing` too, so the longest-lived copies (one set per masker, for
-//! the child's whole run) all scrub. See `mask.rs`.
+//! the child's whole run) all scrub. See `mask.rs`. So does `provider.rs` on
+//! both sides of a provider call: the batch reader's stdout (one buffer holding
+//! every value the batch resolved) and the argv a `store` builds.
 //!
 //! **The environment and the wire do not**, so this type is not a claim that
-//! plaintext exists nowhere else in the process. `commands.rs` and
+//! plaintext exists nowhere else in the process. `commands/run.rs` and
 //! `daemon/state.rs` move resolved values straight into a
 //! `Vec<(String, String)>` and a `HashMap<String, String>` on the way to the
-//! child's environment and across the daemon socket. Wrapping the local there
-//! changes nothing; the fix is a different collection and wire type, which was
-//! judged not worth the churn.
+//! child's environment and across the daemon socket, and
+//! `scoped_agent/mod.rs` does the same on its own wire. Wrapping the local
+//! there changes nothing; the fix is a different collection and wire type,
+//! which was judged not worth the churn.
+//!
+//! **Nor does a copy we hand to another process.** `std`'s `Command` keeps its
+//! own `CString` of every argument and every env value, out of reach behind a
+//! `&str` bound; and a provider whose store capability takes the value on argv
+//! (`ValueMode::Arg`) puts it in a child's argv, where the process table has it
+//! for as long as that child runs. Scrubbing our own buffers is worth doing
+//! against a coredump or a swapped-out page. It is not a defence against a
+//! local observer, and no amount of `Zeroizing` on this side makes it one.
 
 use std::fmt;
 

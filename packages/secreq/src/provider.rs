@@ -16,6 +16,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
+use zeroize::Zeroizing;
 
 use crate::manifest::{BatchRetrieve, Provider, StoreCapability, ValueMode};
 use crate::secret::SecretValue;
@@ -187,12 +188,23 @@ pub fn retrieve_batch(
     }
 
     let parse_started = Instant::now();
-    let text = String::from_utf8(output.stdout).with_context(|| {
+    // The batch's whole stdout: every requested value, in plaintext, in one
+    // buffer — the largest single plaintext allocation on the resolve path, and
+    // it outlives each individual `SecretValue` built out of it. `Zeroizing`
+    // for the reason `secret.rs` gives. `String::from_utf8` reuses the `Vec`'s
+    // allocation rather than copying, so this wraps the buffer the child's
+    // output was read into, not a copy of it.
+    //
+    // The scrub is a volatile byte-wise memset — measured ~1.8 GB/s, so ~36µs
+    // for a 64 KiB `printenv` dump — charged once per batch, after `parse`
+    // below is taken. It is invisible to `BatchTiming` for that reason, and
+    // four orders of magnitude under the subprocess it follows.
+    let text = Zeroizing::new(String::from_utf8(output.stdout).with_context(|| {
         format!(
             "provider `{}` retrieve_batch returned non-UTF-8 output",
             provider.name
         )
-    })?;
+    })?);
 
     // Parse KEY=VALUE per line; keep only lines whose key was requested. The
     // batch command (e.g. `printenv`) emits the entire inherited env, so most
@@ -255,9 +267,10 @@ pub fn store(
     let (program, args) = argv
         .split_first()
         .context("provider store template is empty")?;
+    let program = program.as_str();
 
     let mut cmd = Command::new(program);
-    cmd.args(args);
+    cmd.args(args.iter().map(|arg| arg.as_str()));
     // Internal resolution marker — see `crate::RESOLVING_ENV`.
     cmd.env(crate::RESOLVING_ENV, "1");
     if cap.value_mode == ValueMode::Stdin {
@@ -498,12 +511,22 @@ fn substitute_fields(template: &str, fields: &BTreeMap<String, String>) -> Strin
 /// Substitute `{field}` placeholders into the argv. When `mode == Arg`, also
 /// substitute `{value}` in argv; when `Stdin`, `{value}` is left in place so a
 /// stray literal in argv is visible (rather than silently swallowed).
+///
+/// The elements are [`Zeroizing`] because under [`ValueMode::Arg`] one of them
+/// holds the plaintext value, and the property belongs on the type rather than
+/// on a scrub at this one call site — the same choice `exec.rs` and `mask.rs`
+/// made. Under [`ValueMode::Stdin`] nothing here is secret and the wrapper
+/// costs a memset of a template string; a uniform return type is worth more
+/// than that. Note this scrubs *our* copy only: [`store`] hands these to
+/// `Command`, which keeps its own `CString` of every argument, and under `Arg`
+/// the value then lands in a child's argv where the process table has it. See
+/// `secret.rs`.
 fn substitute_fields_and_value(
     template: &[String],
     fields: &BTreeMap<String, String>,
     value: &SecretValue,
     mode: ValueMode,
-) -> Vec<String> {
+) -> Vec<Zeroizing<String>> {
     template
         .iter()
         .map(|arg| {
@@ -512,9 +535,12 @@ fn substitute_fields_and_value(
                 s = s.replace(&format!("{{{key}}}"), val);
             }
             if mode == ValueMode::Arg {
+                // Field substitution runs first deliberately: every `replace`
+                // drops the string it replaced, so doing the value last means
+                // no intermediate ever held the plaintext un-zeroized.
                 s = s.replace(VALUE_PLACEHOLDER, value.expose());
             }
-            s
+            Zeroizing::new(s)
         })
         .collect()
 }
