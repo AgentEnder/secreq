@@ -9,18 +9,28 @@
 //!   carrying a tail buffer and only emitting bytes that cannot begin a secret.
 //! - **Binary safety** — matching is byte-exact, never UTF-8-dependent, so a
 //!   binary stream that doesn't contain a secret passes through untouched.
+//!
+//! Both of the masker's own buffers hold plaintext — the secrets it matches
+//! against, and the tail it carries — so both are [`Zeroizing`], for the
+//! reason `secret.rs` gives: a masker outlives the child whose output it
+//! filters, and one masker per stream means these are the copies most likely
+//! to still be resident in a coredump or paged out to swap.
+
+use zeroize::Zeroizing;
 
 /// A streaming, byte-exact redactor for a fixed set of secret values.
 pub struct Masker {
     /// Secret byte-strings, sorted longest-first so overlapping matches prefer
-    /// the longer secret.
-    secrets: Vec<Vec<u8>>,
+    /// the longer secret. Plaintext, and held for the child's whole lifetime.
+    secrets: Vec<Zeroizing<Vec<u8>>>,
     /// Length of the longest secret; the most we ever need to hold back.
     max_len: usize,
-    /// Replacement emitted in place of each matched secret.
+    /// Replacement emitted in place of each matched secret. Not secret.
     mask: Vec<u8>,
     /// Bytes carried over from a previous `push` (a potential partial match).
-    buf: Vec<u8>,
+    /// Held back precisely *because* they may be the head of a secret, so this
+    /// is live secret material between pushes.
+    buf: Zeroizing<Vec<u8>>,
 }
 
 /// The default redaction token written in place of a secret.
@@ -44,20 +54,22 @@ impl Masker {
         I: IntoIterator<Item = S>,
         S: AsRef<[u8]>,
     {
-        let mut secrets: Vec<Vec<u8>> = secrets
+        let mut secrets: Vec<Zeroizing<Vec<u8>>> = secrets
             .into_iter()
-            .map(|s| s.as_ref().to_vec())
+            .map(|s| Zeroizing::new(s.as_ref().to_vec()))
             .filter(|s| !s.is_empty())
             .collect();
         // Longest-first: prefer the longer secret when two overlap at a position.
         secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
-        secrets.dedup();
-        let max_len = secrets.first().map_or(0, std::vec::Vec::len);
+        // `dedup` by value; `Zeroizing` is deliberately not `PartialEq`, and a
+        // dropped duplicate scrubs rather than being freed as plaintext.
+        secrets.dedup_by(|a, b| a[..] == b[..]);
+        let max_len = secrets.first().map_or(0, |s| s.len());
         Masker {
             secrets,
             max_len,
             mask: mask.to_vec(),
-            buf: Vec::new(),
+            buf: Zeroizing::new(Vec::new()),
         }
     }
 
@@ -88,7 +100,11 @@ impl Masker {
     /// the first trailing position that could still begin a secret and carry it
     /// over; when true, emit everything.
     fn scan(&mut self, eof: bool) -> Vec<u8> {
-        let buf = std::mem::take(&mut self.buf);
+        // Taken out to scan, put back below — the same allocation each time.
+        // `out` never receives a whole secret (a match becomes the mask), so
+        // it is not scrubbed; the carry is, and it is the one that holds live
+        // secret bytes between calls.
+        let mut buf = std::mem::replace(&mut self.buf, Zeroizing::new(Vec::new()));
         let len = buf.len();
         let mut out = Vec::with_capacity(len);
         let mut i = 0;
@@ -118,7 +134,13 @@ impl Masker {
         }
 
         // Anything not emitted is carried for the next push (empty at EOF).
-        self.buf = buf[i..].to_vec();
+        // Draining in place rather than reallocating the tail keeps one buffer
+        // for the masker's life: the consumed head is left in the allocation
+        // that gets scrubbed on drop instead of being freed as plaintext on
+        // every push, and the hot path loses an allocation rather than gaining
+        // one.
+        buf.drain(..i);
+        self.buf = buf;
         out
     }
 
@@ -127,7 +149,7 @@ impl Masker {
         self.secrets
             .iter()
             .find(|s| slice.starts_with(s))
-            .map(std::vec::Vec::len)
+            .map(|s| s.len())
     }
 
     /// True if `slice` is a strict, incomplete prefix of some secret — i.e. it
@@ -141,6 +163,13 @@ impl Masker {
 
 #[cfg(test)]
 mod tests {
+    //! Nothing here asserts the scrubbing itself. Seeing a buffer zeroized
+    //! means reading an allocation after its owner is dropped — undefined
+    //! behaviour, and a test that did it would be measuring the allocator
+    //! rather than this module. `Zeroizing`'s `Drop` is the guarantee; what
+    //! these tests hold is the other half of it, that wrapping the buffers
+    //! changed nothing about what the filter emits.
+
     use super::*;
 
     /// Convenience: push then finish, returning the full masked output.
