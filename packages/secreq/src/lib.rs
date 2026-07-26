@@ -52,6 +52,7 @@ pub const RUN_SESSION_ENV: &str = "SECREQ_RUN_SESSION";
 /// binary changes the id.
 pub const BUILD_ID: &str = env!("SECREQ_BUILD_ID");
 
+mod atomic;
 pub mod audit;
 pub mod autostart;
 pub mod cli;

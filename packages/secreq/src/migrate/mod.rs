@@ -33,6 +33,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::atomic;
 use crate::paths;
 
 /// Everything a migration is allowed to know about the world. Injected
@@ -282,6 +283,9 @@ fn read_state(root: &Path) -> Result<State> {
     })
 }
 
+/// Written via [`atomic::replace`]: a torn `.migration-state` would either
+/// re-run a migration (harmless, they're idempotent) or skip one (not
+/// harmless), so it's worth the two extra syscalls.
 fn write_state(root: &Path, level: u32) -> Result<()> {
     let state = State {
         migration_level: level,
@@ -289,30 +293,13 @@ fn write_state(root: &Path, level: u32) -> Result<()> {
     };
     let path = state_path(root);
     let body = serde_json::to_string_pretty(&state)?;
-    write_atomic(&path, body.as_bytes())
+    atomic::replace(&path, body.as_bytes(), atomic::Mode::Exactly(OWNER_ONLY))
 }
 
-/// Write via tmp + fsync + rename. A torn `.migration-state` would either
-/// re-run a migration (harmless, they're idempotent) or skip one (not
-/// harmless), so it's worth the two extra syscalls.
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    use std::io::Write;
-    let parent = path.parent().context("path has no parent")?;
-    std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-    let tmp = parent.join(format!(
-        ".{}.tmp",
-        path.file_name().unwrap_or_default().to_string_lossy()
-    ));
-    {
-        let mut f = File::create(&tmp).with_context(|| format!("create {}", tmp.display()))?;
-        f.write_all(bytes)
-            .with_context(|| format!("write {}", tmp.display()))?;
-        f.sync_all()
-            .with_context(|| format!("fsync {}", tmp.display()))?;
-    }
-    std::fs::rename(&tmp, path)
-        .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))
-}
+/// Mode for the bookkeeping files secreq owns outright — the state file and a
+/// snapshot's `filemap.json`. They name every config path on the machine,
+/// which is a map worth not publishing.
+const OWNER_ONLY: u32 = 0o600;
 
 // ── restore ───────────────────────────────────────────────────────────────
 
@@ -329,6 +316,13 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 /// gate is exactly what's failing when a user needs this command.
 pub fn restore(level: u32, assume_yes: bool) -> Result<i32> {
     let root = paths::secreq_root()?;
+    restore_in(&root, level, assume_yes)
+}
+
+/// [`restore`] with the root injected, so tests can drive it against a
+/// tempdir — same split as [`run_pending_in`] and [`verify_current_in`].
+fn restore_in(root: &Path, level: u32, assume_yes: bool) -> Result<i32> {
+    let root = root.to_path_buf();
     let dir = snapshot_dir(&root, level);
     if !dir.is_dir() {
         bail!(no_snapshot_message(&root, level));
@@ -380,14 +374,31 @@ pub fn restore(level: u32, assume_yes: bool) -> Result<i32> {
         }
     }
 
+    // Everything below mutates: the dotfiles, and then the recorded level.
+    // Under the lock, because `run_pending_in` writes the same level and a
+    // restore that interleaves with a migration would stamp one migration's
+    // level over another's files.
+    //
+    // Taken *after* the prompt on purpose — `acquire_lock` blocks, so holding
+    // it across an interactive confirm would park every concurrent wrap on how
+    // long the user takes to read the diff.
+    let _lock = acquire_lock(&root)?;
+
     // Save the current state before overwriting it, so a mistaken restore is
     // itself recoverable.
     let saved = snapshot_root(&root).join(format!("current-{}", now_stamp()));
     std::fs::create_dir_all(&saved).with_context(|| format!("create {}", saved.display()))?;
     for (entry, live, live_body, _) in &plan {
         if live.exists() {
-            std::fs::write(saved.join(&entry.snapshot), live_body)
-                .with_context(|| format!("save current {}", live.display()))?;
+            // Carry the live file's mode into the saved copy: this is the
+            // rescue copy of a `~/.ssh/config`, and `fs::write` would have
+            // parked it at 0644 inside the secreq root.
+            atomic::replace(
+                &saved.join(&entry.snapshot),
+                live_body.as_bytes(),
+                atomic::Mode::Like(live),
+            )
+            .with_context(|| format!("save current {}", live.display()))?;
         }
     }
 
@@ -400,7 +411,11 @@ pub fn restore(level: u32, assume_yes: bool) -> Result<i32> {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create {}", parent.display()))?;
         }
-        write_atomic(&entry.restore_to, snapshot_body.as_bytes())?;
+        atomic::replace(
+            &entry.restore_to,
+            snapshot_body.as_bytes(),
+            restore_mode(&entry.restore_to, &dir.join(&entry.snapshot)),
+        )?;
 
         // Remove the forward artifact so a later re-migration doesn't find two
         // real files that differ and refuse to guess.
@@ -420,6 +435,28 @@ pub fn restore(level: u32, assume_yes: bool) -> Result<i32> {
     println!("\nRestored level {level}.");
     println!("Your previous config was saved to {}", saved.display());
     Ok(0)
+}
+
+/// What mode a restored file must land with.
+///
+/// The **snapshot** is the mode source, not the live file and certainly not a
+/// staging file: [`snapshot_if_absent`] captures with `fs::copy`, which carries
+/// the mode across, so the copy under `migration-snapshots/` already records
+/// what the user had before the migration. Restoring content while quietly
+/// republishing it at the umask's mode is what made `migrate restore` hand back
+/// a world-readable `~/.ssh/config`.
+///
+/// That file is then the one exception, forced rather than preserved. ssh
+/// *refuses* a group- or world-readable config, so a snapshot that recorded
+/// 0644 — a config the user's own editor had already loosened — would be
+/// restored into a file ssh ignores, silently dropping the `IdentityAgent` the
+/// restore existed to bring back. `ssh_setup::apply` forces 0600 when it writes
+/// that file for the same reason; a restore has to reach the same place.
+fn restore_mode<'a>(target: &Path, snapshot: &'a Path) -> atomic::Mode<'a> {
+    if target.ends_with(".ssh/config") {
+        return atomic::Mode::Exactly(0o600);
+    }
+    atomic::Mode::Like(snapshot)
 }
 
 /// Where the file described by `entry` lives *today*. Post-migration that's
@@ -570,9 +607,10 @@ fn snapshot_if_absent(ctx: &Ctx, m: &Migration) -> Result<()> {
         created_by: build_stamp(),
         files,
     };
-    write_atomic(
+    atomic::replace(
         &staging.join("filemap.json"),
         serde_json::to_string_pretty(&map)?.as_bytes(),
+        atomic::Mode::Exactly(OWNER_ONLY),
     )?;
 
     std::fs::rename(&staging, &dir)
@@ -833,6 +871,145 @@ mod tests {
         let msg = format!("{err:#}");
         assert!(msg.contains("migrate restore"), "no restore hint: {msg}");
         assert!(msg.contains("older"), "doesn't explain the cause: {msg}");
+    }
+
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    /// A level-1 install whose `ssh setup` block names the pre-0002 socket,
+    /// which is what gives migration 0002 something to snapshot and `restore`
+    /// something to put back. Returns the `~/.ssh/config` path.
+    fn wire_ssh_config(ctx: &Ctx) -> PathBuf {
+        use crate::path_setup::Shell;
+        use crate::ssh_setup::{self, Method};
+
+        let home = ctx.home.clone().unwrap();
+        let legacy_sock = ctx.legacy_runtime_dir.clone().unwrap().join("agent.sock");
+        let plan = ssh_setup::plan(&home, Method::SshConfig, Shell::Zsh, &legacy_sock).unwrap();
+        ssh_setup::apply(&plan).unwrap();
+        plan.config_file
+    }
+
+    /// `restore` writes through an atomic replace, which publishes a **new
+    /// inode** — so it used to hand `~/.ssh/config` back at the staging file's
+    /// 0644, disclosing internal hostnames, bastion aliases and `IdentityFile`
+    /// paths. ssh also refuses a config that laxer, so the restore broke the
+    /// very `IdentityAgent` line it was restoring.
+    #[test]
+    fn restore_leaves_ssh_config_owner_only() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_in(&tmp);
+        let config = wire_ssh_config(&ctx);
+        assert_eq!(mode_of(&config), 0o600, "ssh setup writes it 0600");
+
+        run_pending_in(&ctx).unwrap();
+        assert_eq!(restore_in(&ctx.root, 1, true).unwrap(), 0);
+
+        assert_eq!(mode_of(&config), 0o600, "ssh refuses a laxer mode");
+    }
+
+    /// The forced half of [`restore_mode`]. Preserving the snapshot's mode is
+    /// right for a shell rc, but `~/.ssh/config` has a mode its *reader*
+    /// dictates: bringing back a 0644 one faithfully would restore a file ssh
+    /// then ignores.
+    #[test]
+    fn restore_narrows_an_ssh_config_that_was_already_too_wide() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_in(&tmp);
+        let config = wire_ssh_config(&ctx);
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        run_pending_in(&ctx).unwrap();
+        restore_in(&ctx.root, 1, true).unwrap();
+
+        assert_eq!(mode_of(&config), 0o600);
+    }
+
+    /// A shell rc is the user's file and its mode is the user's business, so
+    /// the snapshot's mode is what comes back.
+    #[test]
+    fn restore_carries_a_shell_rc_mode_back_unchanged() {
+        use crate::path_setup::Shell;
+        use crate::ssh_setup::{self, Method};
+
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_in(&tmp);
+        let home = ctx.home.clone().unwrap();
+        let legacy_sock = ctx.legacy_runtime_dir.clone().unwrap().join("agent.sock");
+        let plan = ssh_setup::plan(&home, Method::ShellRc, Shell::Zsh, &legacy_sock).unwrap();
+        ssh_setup::apply(&plan).unwrap();
+        std::fs::set_permissions(
+            &plan.config_file,
+            std::os::unix::fs::PermissionsExt::from_mode(0o640),
+        )
+        .unwrap();
+
+        run_pending_in(&ctx).unwrap();
+        restore_in(&ctx.root, 1, true).unwrap();
+
+        assert_eq!(mode_of(&plan.config_file), 0o640);
+    }
+
+    /// `restore` rewrites dotfiles and stamps the level, which is exactly what
+    /// `run_pending_in` does — so it takes the same lock. The lock file is
+    /// never unlinked, so its presence is the observable.
+    #[test]
+    fn restore_takes_the_migration_lock() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("secreq");
+        let target = tmp.path().join("config/secreq/wraps.json5");
+        write(&target, "live");
+
+        // A hand-built level-0 snapshot, so nothing has taken the lock on this
+        // root before `restore_in` does.
+        let snap = snapshot_dir(&root, 0);
+        std::fs::create_dir_all(&snap).unwrap();
+        std::fs::write(snap.join("wraps.json5"), "snapshot").unwrap();
+        let map = FileMap {
+            created_by: "test".into(),
+            files: vec![FileEntry {
+                snapshot: "wraps.json5".into(),
+                restore_to: target.clone(),
+            }],
+        };
+        write(
+            &snap.join("filemap.json"),
+            &serde_json::to_string(&map).unwrap(),
+        );
+        assert!(!root.join(LOCK_FILE).exists());
+
+        restore_in(&root, 0, true).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "snapshot");
+        assert!(
+            root.join(LOCK_FILE).exists(),
+            "restore must serialise against run_pending_in"
+        );
+    }
+
+    /// `.migration-state` names every config path on the machine, and the
+    /// snapshot's `filemap.json` names them all again with their restore
+    /// targets. Neither is a file to publish at the umask's 0644.
+    #[test]
+    fn the_bookkeeping_files_are_owner_only() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_in(&tmp);
+        write(
+            &ctx.legacy_config_dir.clone().unwrap().join("wraps.json5"),
+            "{ gh: {} }",
+        );
+
+        run_pending_in(&ctx).unwrap();
+
+        assert_eq!(mode_of(&state_path(&ctx.root)), 0o600);
+        assert_eq!(
+            mode_of(&snapshot_dir(&ctx.root, 0).join("filemap.json")),
+            0o600
+        );
     }
 
     #[test]

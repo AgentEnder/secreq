@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 
 use super::Ctx;
+use crate::atomic;
 
 /// The two config files. Frozen — this is the set as it existed at level 0.
 const CONFIG_FILES: &[&str] = &["wraps.json5", "auto-rules.json5"];
@@ -103,26 +104,18 @@ fn migrate_config_file(ctx: &Ctx, name: &str) -> Result<()> {
 }
 
 /// Copy via tmp + fsync + rename in the destination dir, so `new` never
-/// exists in a partial state.
+/// exists in a partial state — **and carries `src`'s mode**, not the staging
+/// file's.
+///
+/// The mode is the whole reason this delegates rather than staging inline. A
+/// `rename` publishes a new inode, so the version of this that staged through
+/// `File::create` handed every migrated `wraps.json5` and `auto-rules.json5`
+/// the umask's 0644 and undid whatever the user had chosen. `audit.log` never
+/// had the bug because it moves by `rename`, which keeps its inode and so keeps
+/// its mode; this is that behaviour for a copy.
 fn copy_atomic(src: &Path, dst: &Path) -> Result<()> {
-    use std::io::Write;
-    let parent = dst.parent().context("destination has no parent")?;
-    std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     let bytes = std::fs::read(src).with_context(|| format!("read {}", src.display()))?;
-    let tmp = parent.join(format!(
-        ".{}.tmp",
-        dst.file_name().unwrap_or_default().to_string_lossy()
-    ));
-    {
-        let mut f =
-            std::fs::File::create(&tmp).with_context(|| format!("create {}", tmp.display()))?;
-        f.write_all(&bytes)
-            .with_context(|| format!("write {}", tmp.display()))?;
-        f.sync_all()
-            .with_context(|| format!("fsync {}", tmp.display()))?;
-    }
-    std::fs::rename(&tmp, dst)
-        .with_context(|| format!("rename {} -> {}", tmp.display(), dst.display()))
+    atomic::replace(dst, &bytes, atomic::Mode::Like(src))
 }
 
 fn ensure_symlink(link: &Path, target: &Path) -> Result<()> {
@@ -270,6 +263,62 @@ mod tests {
             .unwrap()
             .file_type()
             .is_symlink());
+    }
+
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    /// The move must not relax what the user chose. `copy_atomic` used to
+    /// stage through `File::create` and rename, so every migrated config came
+    /// out at the umask's 0644 — a `chmod 600 ~/.config/secreq/wraps.json5`
+    /// silently undone by an automatic upgrade.
+    #[test]
+    fn moved_config_keeps_the_mode_the_user_chose() {
+        use std::fs::Permissions;
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_in(&tmp);
+        let legacy = ctx.legacy_config_dir.clone().unwrap();
+        std::fs::create_dir_all(&legacy).unwrap();
+        // One file the user narrowed, one they deliberately left wider — the
+        // mode is carried across, not forced to a constant.
+        for (name, mode) in [("wraps.json5", 0o600), ("auto-rules.json5", 0o640)] {
+            std::fs::write(legacy.join(name), "{}").unwrap();
+            std::fs::set_permissions(legacy.join(name), Permissions::from_mode(mode)).unwrap();
+        }
+
+        run(&ctx).unwrap();
+
+        assert_eq!(
+            mode_of(&ctx.root.join("wraps.json5")),
+            0o600,
+            "an upgrade must not undo a chmod"
+        );
+        assert_eq!(mode_of(&ctx.root.join("auto-rules.json5")), 0o640);
+    }
+
+    /// The staging file is a sibling of the destination and must not survive
+    /// it — a `.wraps.json5.*.tmp` left in the root is a second copy of the
+    /// config at whatever mode the crash left.
+    #[test]
+    fn the_migrated_root_holds_no_staging_leftovers() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ctx_in(&tmp);
+        let legacy = ctx.legacy_config_dir.clone().unwrap();
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("wraps.json5"), "{}").unwrap();
+
+        run(&ctx).unwrap();
+
+        let mut names: Vec<String> = std::fs::read_dir(&ctx.root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["wraps.json5".to_string()]);
     }
 
     #[test]
