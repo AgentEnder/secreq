@@ -39,7 +39,7 @@ pub fn install(shim_dir: &Path, wrap_name: &str) -> Result<PathBuf> {
     ensure_shim_dir(shim_dir)?;
     let path = shim_dir.join(wrap_name);
 
-    if path.exists() {
+    if shim_entry(&path)?.is_some() {
         let existing = fs::read_to_string(&path)
             .with_context(|| format!("could not read existing file at {}", path.display()))?;
         if existing.contains(SENTINEL) {
@@ -84,7 +84,7 @@ pub fn reinstall_all(
 /// sentinel (we refuse to delete an unowned file).
 pub fn remove(shim_dir: &Path, wrap_name: &str) -> Result<bool> {
     let path = shim_dir.join(wrap_name);
-    if !path.exists() {
+    if shim_entry(&path)?.is_none() {
         return Ok(false);
     }
     let body =
@@ -102,7 +102,11 @@ pub fn remove(shim_dir: &Path, wrap_name: &str) -> Result<bool> {
 /// True if a shim for `wrap_name` exists in `shim_dir` AND is managed by us.
 pub fn is_managed(shim_dir: &Path, wrap_name: &str) -> bool {
     let path = shim_dir.join(wrap_name);
-    fs::read_to_string(path).is_ok_and(|body| body.contains(SENTINEL))
+    // A symlink is never ours, and saying otherwise would send `install` at a
+    // file it is about to refuse — a repair loop that reports an error instead
+    // of doing nothing.
+    matches!(shim_entry(&path), Ok(Some(_)))
+        && fs::read_to_string(&path).is_ok_and(|body| body.contains(SENTINEL))
 }
 
 /// Does the managed shim for `wrap_name` match what [`install`] would write
@@ -121,7 +125,11 @@ pub fn is_managed(shim_dir: &Path, wrap_name: &str) -> bool {
 /// `secreq doctor` compares bodies. Returns `false` for a missing or unowned
 /// file, which is [`install`]'s problem rather than a refresh.
 pub fn is_current(shim_dir: &Path, wrap_name: &str) -> bool {
-    let Ok(existing) = fs::read_to_string(shim_dir.join(wrap_name)) else {
+    let path = shim_dir.join(wrap_name);
+    if !matches!(shim_entry(&path), Ok(Some(_))) {
+        return false;
+    }
+    let Ok(existing) = fs::read_to_string(&path) else {
         return false;
     };
     if !existing.contains(SENTINEL) {
@@ -251,6 +259,32 @@ pub fn ensure_shim_dir(dir: &Path) -> Result<()> {
         })?;
     }
     Ok(())
+}
+
+/// Metadata for `path` **without** following a symlink, or `None` if nothing
+/// is there. Errors if `path` is a symlink of any kind.
+///
+/// `Path::exists` stats the target, so a *dangling* symlink reads as "nothing
+/// here" — which skipped the sentinel guard entirely and let the `fs::write`
+/// that followed create the link's target, anywhere the user could write. A
+/// symlink whose target does exist is no better: the sentinel was then read
+/// out of the target, so aiming a link at any secreq-managed shim authorised
+/// overwriting whatever it pointed at.
+///
+/// We only ever write regular files here, so a symlink at a shim path is by
+/// construction not ours — the same "hands off what we did not write" rule the
+/// sentinel encodes, applied one level earlier.
+fn shim_entry(path: &Path) -> Result<Option<fs::Metadata>> {
+    match fs::symlink_metadata(path) {
+        Ok(md) if md.file_type().is_symlink() => bail!(
+            "{} is a symlink, not a secreq-managed shim; refusing to follow it. \
+             Remove it manually and re-run.",
+            path.display()
+        ),
+        Ok(md) => Ok(Some(md)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err).with_context(|| format!("could not stat {}", path.display())),
+    }
 }
 
 fn make_executable(path: &Path) -> Result<()> {
@@ -500,6 +534,57 @@ mod tests {
         ensure_shim_dir(&dir).unwrap();
 
         assert_eq!(mode_of(&dir), 0o755, "mode {:o}", mode_of(&dir));
+    }
+
+    // ── S3: `exists()` follows symlinks, so a dangling one is invisible ──
+
+    /// `Path::exists` stats the *target*, so a symlink pointing at nothing
+    /// reads as "no file here" — the sentinel check is skipped and the
+    /// `fs::write` that follows creates the attacker's chosen target instead.
+    #[test]
+    fn install_refuses_a_dangling_symlink_rather_than_writing_through_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("planted");
+        std::os::unix::fs::symlink(&target, dir.path().join("gh")).unwrap();
+
+        let err = install(dir.path(), "gh").expect_err("must refuse a symlink");
+        assert!(format!("{err:#}").contains("symlink"), "{err:#}");
+        assert!(!target.exists(), "wrote through the symlink to {target:?}");
+    }
+
+    /// The same guard for a symlink whose target does exist: `exists()` is
+    /// true, `read_to_string` reads the *target's* bytes, and a target that
+    /// happens to carry our sentinel would be overwritten.
+    #[test]
+    fn install_refuses_a_live_symlink_rather_than_writing_through_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("planted");
+        fs::write(&target, format!("# {SENTINEL}: wrap=gh\n")).unwrap();
+        std::os::unix::fs::symlink(&target, dir.path().join("gh")).unwrap();
+
+        let err = install(dir.path(), "gh").expect_err("must refuse a symlink");
+        assert!(format!("{err:#}").contains("symlink"), "{err:#}");
+        assert_eq!(
+            fs::read_to_string(&target).unwrap(),
+            format!("# {SENTINEL}: wrap=gh\n"),
+            "target was rewritten through the link"
+        );
+    }
+
+    /// `remove` unlinks the link and not its target, so it was never
+    /// destructive — but it read the target's bytes to decide, which means a
+    /// link aimed at any sentinel-bearing file authorised the deletion.
+    #[test]
+    fn remove_refuses_a_symlink_rather_than_deciding_on_its_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("planted");
+        fs::write(&target, format!("# {SENTINEL}: wrap=gh\n")).unwrap();
+        let link = dir.path().join("gh");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let err = remove(dir.path(), "gh").expect_err("must refuse a symlink");
+        assert!(format!("{err:#}").contains("symlink"), "{err:#}");
+        assert!(link.symlink_metadata().is_ok(), "link was removed");
     }
 
     /// A freshly installed shim is current by construction; an unowned file
