@@ -24,13 +24,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 fn main() {
     let sha = git(&["rev-parse", "--short=12", "HEAD"]).unwrap_or_else(|| "nogit".to_owned());
-    let dirty = git(&["status", "--porcelain"])
-        .map(|s| !s.is_empty())
-        .unwrap_or(false);
+    let dirty = git(&["status", "--porcelain"]).is_some_and(|s| !s.is_empty());
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
 
     let build_id = format!("{sha}{} +{ts}", if dirty { "-dirty" } else { "" });
     println!("cargo:rustc-env=SECREQ_BUILD_ID={build_id}");

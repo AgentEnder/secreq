@@ -107,7 +107,7 @@ pub fn read(provider: &Provider, locator: &str) -> Result<RetrieveOutcome> {
 
 /// Confirm the provider's retrieve program exists on PATH (used by `doctor`).
 pub fn retrieve_program(provider: &Provider) -> Option<&str> {
-    provider.retrieve.first().map(|s| s.as_str())
+    provider.retrieve.first().map(std::string::String::as_str)
 }
 
 /// Back-compat alias for `retrieve_program`.
@@ -447,18 +447,15 @@ fn tokenize_locator_template(template: &str) -> Vec<TemplateToken> {
         if open > 0 {
             tokens.push(TemplateToken::Literal(rest[..open].to_owned()));
         }
-        match rest[open..].find('}') {
-            Some(close_rel) => {
-                let close = open + close_rel;
-                tokens.push(TemplateToken::Field(rest[open + 1..close].to_owned()));
-                rest = &rest[close + 1..];
-            }
-            None => {
-                // No closing brace — the remainder is literal.
-                tokens.push(TemplateToken::Literal(rest[open..].to_owned()));
-                rest = "";
-                break;
-            }
+        if let Some(close_rel) = rest[open..].find('}') {
+            let close = open + close_rel;
+            tokens.push(TemplateToken::Field(rest[open + 1..close].to_owned()));
+            rest = &rest[close + 1..];
+        } else {
+            // No closing brace — the remainder is literal.
+            tokens.push(TemplateToken::Literal(rest[open..].to_owned()));
+            rest = "";
+            break;
         }
     }
     if !rest.is_empty() {

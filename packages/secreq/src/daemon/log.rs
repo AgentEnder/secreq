@@ -140,8 +140,7 @@ fn open_append(path: PathBuf) -> Option<File> {
 fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// Render one record as a single-line JSON string (no trailing
@@ -286,7 +285,7 @@ fn resource_summary(proc: &Process) -> (Map<String, Value>, String) {
     // Round CPU to two decimals — sub-percent noise isn't actionable.
     fields.insert(
         "cpu_pct".into(),
-        Value::from((cpu_pct as f64 * 100.0).round() / 100.0),
+        Value::from((f64::from(cpu_pct) * 100.0).round() / 100.0),
     );
     fields.insert("rss_bytes".into(), Value::from(rss_bytes));
     fields.insert("uptime_s".into(), Value::from(uptime_s));

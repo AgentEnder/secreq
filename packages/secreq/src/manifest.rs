@@ -418,7 +418,7 @@ fn parse_string_array(value: &Value) -> Result<Vec<String>> {
     arr.iter()
         .map(|v| {
             v.as_str()
-                .map(|s| s.to_owned())
+                .map(std::borrow::ToOwned::to_owned)
                 .context("expected a string array element")
         })
         .collect()

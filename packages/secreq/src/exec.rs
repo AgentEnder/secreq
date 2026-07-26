@@ -229,7 +229,7 @@ fn spawn_resize_thread(master: Box<dyn portable_pty::MasterPty + Send>) {
 #[cfg(unix)]
 fn exit_code_from_signal(status: &std::process::ExitStatus) -> i32 {
     use std::os::unix::process::ExitStatusExt;
-    status.signal().map(|s| 128 + s).unwrap_or(1)
+    status.signal().map_or(1, |s| 128 + s)
 }
 
 #[cfg(not(unix))]

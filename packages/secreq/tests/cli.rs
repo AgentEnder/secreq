@@ -11,6 +11,7 @@ mod common;
 
 use common::Sandbox;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 /// Write a config with a single wrap using a fake "echo" provider whose
@@ -51,7 +52,6 @@ fn install_fake_gh(bin_dir: &Path) {
         "#!/bin/sh\necho \"argv=$*\"\necho \"GITHUB_TOKEN=$GITHUB_TOKEN\"\n",
     )
     .unwrap();
-    use std::os::unix::fs::PermissionsExt;
     let mut perms = fs::metadata(&path).unwrap().permissions();
     perms.set_mode(0o755);
     fs::set_permissions(&path, perms).unwrap();
@@ -234,7 +234,6 @@ fn x_resolves_only_the_env_vars_the_parent_is_missing() {
         "#!/bin/sh\necho \"GITHUB_TOKEN=$GITHUB_TOKEN\"\necho \"EXTRA_SECRET=$EXTRA_SECRET\"\n",
     )
     .unwrap();
-    use std::os::unix::fs::PermissionsExt;
     let mut perms = fs::metadata(&fake).unwrap().permissions();
     perms.set_mode(0o755);
     fs::set_permissions(&fake, perms).unwrap();
@@ -651,7 +650,6 @@ fn gate_only_wrap_denies_without_terminal_or_yes() {
     // A fake `op` that announces itself if it ever runs.
     let op_path = bin_dir.join("op");
     fs::write(&op_path, "#!/bin/sh\necho \"op-ran args=$*\"\n").unwrap();
-    use std::os::unix::fs::PermissionsExt;
     let mut perms = fs::metadata(&op_path).unwrap().permissions();
     perms.set_mode(0o755);
     fs::set_permissions(&op_path, perms).unwrap();
@@ -689,7 +687,6 @@ fn resolving_env_bypasses_the_gate_for_a_wrapped_provider() {
     fs::create_dir_all(&bin_dir).unwrap();
     let op_path = bin_dir.join("op");
     fs::write(&op_path, "#!/bin/sh\necho \"op-ran args=$*\"\n").unwrap();
-    use std::os::unix::fs::PermissionsExt;
     let mut perms = fs::metadata(&op_path).unwrap().permissions();
     perms.set_mode(0o755);
     fs::set_permissions(&op_path, perms).unwrap();
@@ -802,7 +799,6 @@ fn doctor_flags_when_a_shim_is_shadowed_by_an_earlier_path_entry() {
         "#!/bin/sh\n# secreq-managed-shim: wrap=gh\nexec secreq x gh \"$@\"\n",
     )
     .unwrap();
-    use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(shim_dir.join("gh"), std::fs::Permissions::from_mode(0o755)).unwrap();
 
     // PATH order: realbin first → shim_dir second → system. Homebrew analogue.
@@ -842,7 +838,6 @@ fn doctor_is_happy_when_the_shim_is_first_on_path() {
         "#!/bin/sh\n# secreq-managed-shim: wrap=gh\nexec secreq x gh \"$@\"\n",
     )
     .unwrap();
-    use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(shim_dir.join("gh"), std::fs::Permissions::from_mode(0o755)).unwrap();
 
     // PATH order: shim_dir first.
@@ -932,7 +927,6 @@ fn run_ssh_setup(sb: &Sandbox, shell: &str, args: &[&str]) -> std::process::Outp
 
 #[test]
 fn ssh_setup_ssh_config_writes_identityagent_block_0600() {
-    use std::os::unix::fs::PermissionsExt;
     let sb = Sandbox::new();
     let home = sb.path().join("home");
 

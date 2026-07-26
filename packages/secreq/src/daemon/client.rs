@@ -302,9 +302,8 @@ pub fn delete_rule(id: &str) -> Result<()> {
 /// tell it to die.
 pub fn stop_daemon() -> Result<bool> {
     let socket = server::default_socket_path()?;
-    let stream = match UnixStream::connect(&socket) {
-        Ok(s) => s,
-        Err(_) => return Ok(false),
+    let Ok(stream) = UnixStream::connect(&socket) else {
+        return Ok(false);
     };
     match send_and_recv(stream, ClientMsg::Shutdown)? {
         DaemonMsg::Ok => Ok(true),
@@ -556,68 +555,65 @@ fn connect_or_spawn(socket: &Path) -> Result<UnixStream> {
     // Whichever client wins `daemon.spawn.lock` spawns the daemon; the
     // rest just wait for its socket to come up.
     let deadline = Instant::now() + SPAWN_TIMEOUT;
-    match acquire_spawn_lock()? {
-        Some(_spawn_guard) => {
-            // We own the spawn. Re-check first — another client may have
-            // brought the daemon up in the window before we took the lock.
+    if let Some(_spawn_guard) = acquire_spawn_lock()? {
+        // We own the spawn. Re-check first — another client may have
+        // brought the daemon up in the window before we took the lock.
+        if let Ok(stream) = UnixStream::connect(socket) {
+            return Ok(stream);
+        }
+        // Keep the child handle so we can detect early-exit (e.g. egui
+        // failing to init headless) and bail without the full timeout.
+        let death_note = socket.with_file_name("daemon-spawn.err");
+        let mut child = spawn_daemon(&death_note).context("auto-spawn secreq daemon")?;
+        let mut backoff = Duration::from_millis(20);
+        while Instant::now() < deadline {
+            sleep(backoff);
+            if let Ok(stream) = UnixStream::connect(socket) {
+                // Daemon is alive; let it run independently from here on.
+                return Ok(stream);
+            }
+            if let Ok(Some(status)) = child.try_wait() {
+                // Surface the daemon's own stderr when it left one — in a
+                // hook/headless context this error is all the user sees.
+                let note = std::fs::read_to_string(&death_note)
+                    .ok()
+                    .map(|s| s.trim().to_owned())
+                    .filter(|s| !s.is_empty());
+                match note {
+                    Some(note) => bail!(
+                        "consent daemon exited before binding its socket \
+                         (status {status}):\n{note}"
+                    ),
+                    None => bail!(
+                        "consent daemon exited before binding its socket (status {status}); \
+                         is a display available? try setting --yes to bypass"
+                    ),
+                }
+            }
+            backoff = (backoff * 2).min(Duration::from_millis(250));
+        }
+        bail!(
+            "consent daemon did not come up within {:?} ({} not connectable)",
+            SPAWN_TIMEOUT,
+            socket.display()
+        )
+    } else {
+        // Another client holds the spawn lock and is bringing the daemon
+        // up. Don't fork a competing one — just wait for its socket.
+        let mut backoff = Duration::from_millis(20);
+        while Instant::now() < deadline {
+            sleep(backoff);
             if let Ok(stream) = UnixStream::connect(socket) {
                 return Ok(stream);
             }
-            // Keep the child handle so we can detect early-exit (e.g. egui
-            // failing to init headless) and bail without the full timeout.
-            let death_note = socket.with_file_name("daemon-spawn.err");
-            let mut child = spawn_daemon(&death_note).context("auto-spawn secreq daemon")?;
-            let mut backoff = Duration::from_millis(20);
-            while Instant::now() < deadline {
-                sleep(backoff);
-                if let Ok(stream) = UnixStream::connect(socket) {
-                    // Daemon is alive; let it run independently from here on.
-                    return Ok(stream);
-                }
-                if let Ok(Some(status)) = child.try_wait() {
-                    // Surface the daemon's own stderr when it left one — in a
-                    // hook/headless context this error is all the user sees.
-                    let note = std::fs::read_to_string(&death_note)
-                        .ok()
-                        .map(|s| s.trim().to_owned())
-                        .filter(|s| !s.is_empty());
-                    match note {
-                        Some(note) => bail!(
-                            "consent daemon exited before binding its socket \
-                             (status {status}):\n{note}"
-                        ),
-                        None => bail!(
-                            "consent daemon exited before binding its socket (status {status}); \
-                             is a display available? try setting --yes to bypass"
-                        ),
-                    }
-                }
-                backoff = (backoff * 2).min(Duration::from_millis(250));
-            }
-            bail!(
-                "consent daemon did not come up within {:?} ({} not connectable)",
-                SPAWN_TIMEOUT,
-                socket.display()
-            )
+            backoff = (backoff * 2).min(Duration::from_millis(250));
         }
-        None => {
-            // Another client holds the spawn lock and is bringing the daemon
-            // up. Don't fork a competing one — just wait for its socket.
-            let mut backoff = Duration::from_millis(20);
-            while Instant::now() < deadline {
-                sleep(backoff);
-                if let Ok(stream) = UnixStream::connect(socket) {
-                    return Ok(stream);
-                }
-                backoff = (backoff * 2).min(Duration::from_millis(250));
-            }
-            bail!(
-                "consent daemon did not come up within {:?} while another client was \
-                 spawning it ({} not connectable)",
-                SPAWN_TIMEOUT,
-                socket.display()
-            )
-        }
+        bail!(
+            "consent daemon did not come up within {:?} while another client was \
+             spawning it ({} not connectable)",
+            SPAWN_TIMEOUT,
+            socket.display()
+        )
     }
 }
 
@@ -728,8 +724,7 @@ fn spawn_daemon(death_note: &Path) -> Result<Child> {
     // daemon once the buffer fills. Best-effort — a daemon we can't observe
     // beats no daemon.
     let stderr = std::fs::File::create(death_note)
-        .map(std::process::Stdio::from)
-        .unwrap_or_else(|_| std::process::Stdio::null());
+        .map_or_else(|_| std::process::Stdio::null(), std::process::Stdio::from);
     Command::new(exe)
         .arg("daemon")
         .arg("--fg")
@@ -874,8 +869,7 @@ fn waiting_line(label: &str, now_unix: u64, elapsed_secs: u64) -> String {
 fn now_unix_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// Format Unix seconds as `YYYY-MM-DDTHH:MM:SSZ` (UTC), without pulling in a

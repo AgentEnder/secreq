@@ -233,9 +233,8 @@ mod tests {
         let a_started = Arc::new(AtomicUsize::new(0));
         let a_started_clone = Arc::clone(&a_started);
         let a_thread = thread::spawn(move || {
-            let g = match map.acquire(&key("a")) {
-                Acquired::Resolver(g) => g,
-                _ => panic!("expected resolver"),
+            let Acquired::Resolver(g) = map.acquire(&key("a")) else {
+                panic!("expected resolver")
             };
             a_started_clone.store(1, Ordering::SeqCst);
             // Hold the slot for long enough that the b-thread must
@@ -269,9 +268,8 @@ mod tests {
         let resolver_started = Arc::new(AtomicUsize::new(0));
         let resolver_started_clone = Arc::clone(&resolver_started);
         let r_thread = thread::spawn(move || {
-            let g = match map.acquire(&key("gh")) {
-                Acquired::Resolver(g) => g,
-                _ => panic!("expected resolver"),
+            let Acquired::Resolver(g) = map.acquire(&key("gh")) else {
+                panic!("expected resolver")
             };
             resolver_started_clone.store(1, Ordering::SeqCst);
             thread::sleep(Duration::from_millis(20));
@@ -323,9 +321,8 @@ mod tests {
         let resolver_started = Arc::new(AtomicUsize::new(0));
         let resolver_started_clone = Arc::clone(&resolver_started);
         let r_thread = thread::spawn(move || {
-            let g = match map.acquire(&key("gh")) {
-                Acquired::Resolver(g) => g,
-                _ => panic!("expected resolver"),
+            let Acquired::Resolver(g) = map.acquire(&key("gh")) else {
+                panic!("expected resolver")
             };
             resolver_started_clone.store(1, Ordering::SeqCst);
             thread::sleep(Duration::from_millis(20));

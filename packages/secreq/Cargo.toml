@@ -18,10 +18,7 @@ categories = ["command-line-utilities", "authentication"]
 # `/out.log`) all sit OUTSIDE the package boundary and are already omitted from
 # the tarball. The only bulky path still inside the crate is the wasm test
 # fixtures, which nothing in `cargo install secreq` needs.
-exclude = [
-    "/tests/fixtures",
-    "/project.json",
-]
+exclude = ["/tests/fixtures", "/project.json"]
 
 [[bin]]
 name = "secreq"
@@ -39,6 +36,11 @@ path = "examples/gen_schema.rs"
 name = "gen-auto-rules-schema"
 path = "examples/gen_auto_rules_schema.rs"
 
+[[example]]
+name = "gen-cli-reference"
+path = "examples/gen_cli_reference.rs"
+
+
 [dependencies]
 anyhow = "1"
 thiserror = "2"
@@ -54,7 +56,12 @@ crossterm = "0.28"
 dirs = "5"
 signal-hook = "0.3"
 libc = "0.2"
-eframe = { version = "0.34", default-features = false, features = ["default_fonts", "wgpu", "wayland", "x11"] }
+eframe = { version = "0.34", default-features = false, features = [
+  "default_fonts",
+  "wgpu",
+  "wayland",
+  "x11",
+] }
 egui = "0.34"
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
 blake3 = "1"
@@ -93,7 +100,13 @@ sha2 = "0.10"
 # core wasm; no `wat`, no WASI, no component model — a rule module's only
 # window on the world is the ctx we hand it. `anyhow` enables the
 # `From<wasmtime::Error> for anyhow::Error` impl our error plumbing uses.
-wasmtime = { version = "46.0.1", default-features = false, features = ["cranelift", "runtime", "anyhow"] }
+wasmtime = { version = "46.0.1", default-features = false, features = [
+  "cranelift",
+  "runtime",
+  "anyhow",
+] }
+textwrap = "0.16"
+console = "0.15"
 
 # macOS-only.
 #
@@ -108,7 +121,18 @@ wasmtime = { version = "46.0.1", default-features = false, features = ["cranelif
 winit = "0.30"
 objc2-foundation = "0.3"
 
+[features]
+# Test-only entry points that must not exist in a shipped binary. Enabled
+# automatically for `cargo test` by the self dev-dependency below, so nobody
+# has to remember a flag — and a plain `cargo build` never sees them.
+harness = []
+
 [dev-dependencies]
+# Depending on ourselves is how a feature is turned on for the test build only.
+# Integration tests under `tests/` are separate crates that link this lib as an
+# ordinary dependency, so `#[cfg(test)]` would hide `harness` from exactly the
+# code that needs it.
+secreq = { path = ".", features = ["harness"] }
 tempfile = "3"
 egui_kittest = { version = "0.34", features = ["wgpu", "snapshot", "eframe"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
@@ -116,3 +140,45 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # at test time. Dev-only: the production loader accepts binaries only.
 wat = "1.253.0"
 vt100 = "0.16.2"
+oxipng = { version = "10.1.1", default-features = false, features = ["parallel"] }
+
+# Lints enabled because the codebase is already clean of them, so each one is
+# a ratchet rather than a backlog: it cannot regress without failing CI, and
+# it cost nothing to turn on.
+#
+# Deliberately NOT enabled, with reasons, so nobody re-litigates them blind:
+#   print_stdout      — this crate is a CLI; printing is its job.
+#   expect_used       — the house style is `expect` with a sentence explaining
+#                       the invariant, which reads better than a silent `?`.
+#   unwrap_used       — near-clean in `src` but pervasive in the inline test
+#                       modules, where a panic *is* the assertion.
+#   indexing_slicing  — three real hits worth fixing; enable once they are.
+#   pedantic          — 615 warnings, overwhelmingly cast and doc nits.
+[lints.clippy]
+# CLAUDE.md forbids TODOs in shipped code. This is that rule, enforced.
+todo = "deny"
+unimplemented = "deny"
+# Debugging residue: `dbg!` in a consent daemon prints to stderr in front of
+# a user deciding whether to release a secret.
+dbg_macro = "deny"
+# Leaks a value's destructor. In a crate holding secret material, the drop is
+# the point.
+mem_forget = "deny"
+
+# ── Mechanical pedantic lints ──
+# Enabled as a set because each is a local rewrite with no judgement call in
+# it, and `cargo clippy --fix` applies most of them. The rest of `pedantic`
+# stays off: `missing_errors_doc` (268) and `must_use_candidate` (234) are
+# library-API policy this application does not need, and the `cast_*` family
+# needs a decision per site about whether the truncation is safe — which is
+# exactly the kind of thing a blanket lint turns into a rubber stamp.
+map_unwrap_or = "warn"
+redundant_closure_for_method_calls = "warn"
+borrow_as_ptr = "warn"
+cast_lossless = "warn"
+manual_let_else = "warn"
+items_after_statements = "warn"
+match_same_arms = "warn"
+semicolon_if_nothing_returned = "warn"
+ignored_unit_patterns = "warn"
+single_match_else = "warn"

@@ -52,7 +52,7 @@ impl Masker {
         // Longest-first: prefer the longer secret when two overlap at a position.
         secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
         secrets.dedup();
-        let max_len = secrets.first().map(|s| s.len()).unwrap_or(0);
+        let max_len = secrets.first().map_or(0, std::vec::Vec::len);
         Masker {
             secrets,
             max_len,
@@ -118,7 +118,7 @@ impl Masker {
         self.secrets
             .iter()
             .find(|s| slice.starts_with(s))
-            .map(|s| s.len())
+            .map(std::vec::Vec::len)
     }
 
     /// True if `slice` is a strict, incomplete prefix of some secret — i.e. it

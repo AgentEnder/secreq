@@ -90,7 +90,7 @@ impl Host {
                 Arc::new(scope),
                 Arc::new(ScopeApprovals::new()),
                 gate,
-            )
+            );
         });
         Host { socket }
     }
@@ -446,7 +446,7 @@ fn the_client_sends_its_own_process_chain_as_a_claim() {
             Arc::new(scope),
             Arc::new(ScopeApprovals::new()),
             serve_gate,
-        )
+        );
     });
 
     let output = run_resolve(&sb, Some(&socket), &[ALLOWED_REF]);

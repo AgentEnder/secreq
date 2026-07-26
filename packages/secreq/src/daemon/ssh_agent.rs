@@ -201,10 +201,9 @@ pub fn start(
 /// [`SignContext`], without spawning the whole daemon.
 pub fn serve_on(listener: UnixListener, ctx: SignContext) {
     for incoming in listener.incoming() {
-        let stream = match incoming {
-            Ok(s) => s,
-            Err(_) => break, // Listener closed or unrecoverable accept error.
-        };
+        // A failed accept means the listener is closed or unrecoverably
+        // broken; either way there is nothing left to serve.
+        let Ok(stream) = incoming else { break };
         let ctx = ctx.clone();
         thread::Builder::new()
             .name("secreqd-ssh-conn".to_owned())
@@ -566,9 +565,9 @@ fn decide_sign_on_miss(
         Ok(WaiterReply::Decision { decision, .. }) => Some(decision),
         // A resolve error on the wrap path can't happen here (the sign ask
         // carries no secrets for the daemon to resolve — we resolve the key
-        // ourselves, fresh), but treat any Err as fail-closed.
-        Ok(WaiterReply::Err { .. }) => None,
-        Err(_) => None,
+        // ourselves, fresh), and a dropped sender means the daemon went down
+        // under us. Neither is a decision, so both fail closed.
+        Ok(WaiterReply::Err { .. }) | Err(_) => None,
     }
 }
 
@@ -727,8 +726,7 @@ fn audit_sign(
 fn now_unix_secs() -> u64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// Read one complete `[u32 length][payload]` agent frame off `stream`,

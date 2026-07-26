@@ -31,8 +31,9 @@ use secreq::manifest::Provider;
 use secreq::reference::Reference;
 use secreq::wraps::SshIdentity;
 
+use rsa::signature::Verifier;
 use ssh_encoding::{Decode, Encode};
-use ssh_key::{LineEnding, PrivateKey, PublicKey};
+use ssh_key::{LineEnding, PrivateKey, PublicKey, Signature};
 
 // These tests drive `ssh_agent::serve_on` **in-process**, and it logs
 // through `daemon::log`, which resolves its sink from `$SECREQ_HOME`. Each
@@ -257,10 +258,8 @@ fn signs_for_seeded_approval_and_signature_verifies() {
     assert!(reader.is_empty(), "no trailing bytes after signature");
 
     // The returned signature must verify against the configured public key.
-    use ssh_key::Signature;
     let mut sig_reader: &[u8] = &sig_blob;
     let signature = Signature::decode(&mut sig_reader).expect("decode signature");
-    use rsa::signature::Verifier;
     Verifier::verify(&public_key, data, &signature)
         .expect("signature verifies against the public key");
 

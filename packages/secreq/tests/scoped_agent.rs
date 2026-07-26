@@ -174,7 +174,7 @@ impl Harness {
         let approvals = Arc::new(ScopeApprovals::with_clock(clock.clone(), TEST_TTL_SECS));
         let serve_gate: Arc<dyn Gate> = gate.clone();
         std::thread::spawn(move || {
-            serve_on(listener, Arc::new(test_scope()), approvals, serve_gate)
+            serve_on(listener, Arc::new(test_scope()), approvals, serve_gate);
         });
         Harness {
             _dir: dir,

@@ -208,9 +208,8 @@ pub fn apply(plan: &InstallPlan) -> Result<bool> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("could not create {}", parent.display()))?;
     }
-    let unchanged = std::fs::read_to_string(&plan.service_file)
-        .map(|existing| existing == plan.contents)
-        .unwrap_or(false);
+    let unchanged =
+        std::fs::read_to_string(&plan.service_file).is_ok_and(|existing| existing == plan.contents);
     if unchanged {
         return Ok(false);
     }

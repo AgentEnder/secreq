@@ -50,7 +50,7 @@ fn caller_chain_with_limit(max_chain: usize, max_walk: usize) -> Vec<Caller> {
     let my_exe = std::env::current_exe().ok();
 
     // Start at our parent; the chain is the callers above us.
-    let start = sys.process(self_pid).and_then(|p| p.parent());
+    let start = sys.process(self_pid).and_then(sysinfo::Process::parent);
     walk(&sys, start, my_exe.as_deref(), max_chain, max_walk)
 }
 
@@ -72,7 +72,7 @@ fn caller_chain_from_pid_with_limit(
     let seed = sysinfo::Pid::from_u32(seed_pid);
     // Start at the seed's parent so the seed itself (the requester) is
     // never included; we report who is behind it.
-    let start = sys.process(seed).and_then(|p| p.parent());
+    let start = sys.process(seed).and_then(sysinfo::Process::parent);
     walk(&sys, start, my_exe.as_deref(), max_chain, max_walk)
 }
 
@@ -239,7 +239,7 @@ mod tests {
             pid,
             name: name.to_owned(),
             command: name.to_owned(),
-            exe: exe.map(|s| s.to_owned()),
+            exe: exe.map(std::borrow::ToOwned::to_owned),
             start_time: 0,
         }
     }

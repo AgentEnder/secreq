@@ -303,8 +303,7 @@ pub fn read_history(limit: Option<usize>) -> Result<Vec<AuditEntry>> {
 fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// Run `f` with `$XDG_STATE_HOME` pointed at a fresh tempdir, so any audit

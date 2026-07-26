@@ -60,8 +60,8 @@ pub fn peer_pid<F: AsRawFd>(conn: &F) -> Option<u32> {
             fd,
             SOL_LOCAL,
             LOCAL_PEERPID,
-            (&mut pid as *mut libc::pid_t).cast::<libc::c_void>(),
-            &mut len,
+            (&raw mut pid).cast::<libc::c_void>(),
+            &raw mut len,
         )
     };
     if rc == 0 && pid > 0 {

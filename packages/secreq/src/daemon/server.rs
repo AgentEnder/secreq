@@ -70,10 +70,9 @@ pub fn start_ssh_agent(
 
 fn accept_loop(listener: UnixListener, state: SharedState) {
     for incoming in listener.incoming() {
-        let stream = match incoming {
-            Ok(s) => s,
-            Err(_) => break, // Listener closed or unrecoverable accept error.
-        };
+        // A failed accept means the listener is closed or unrecoverably
+        // broken; either way there is nothing left to serve.
+        let Ok(stream) = incoming else { break };
         let state = state.clone();
         thread::Builder::new()
             .name("secreqd-conn".to_owned())
@@ -259,9 +258,8 @@ fn handle_consent_window_connection(
     let mut line = String::new();
     loop {
         line.clear();
-        let n = match reader.read_line(&mut line) {
-            Ok(n) => n,
-            Err(_) => break,
+        let Ok(n) = reader.read_line(&mut line) else {
+            break;
         };
         if n == 0 {
             super::log::log_at(
@@ -460,9 +458,8 @@ fn handle_manager_window_connection(
     let mut line = String::new();
     loop {
         line.clear();
-        let n = match reader.read_line(&mut line) {
-            Ok(n) => n,
-            Err(_) => break,
+        let Ok(n) = reader.read_line(&mut line) else {
+            break;
         };
         if n == 0 {
             super::log::log_at(
@@ -565,9 +562,8 @@ fn handle_badge_window_connection(
     let mut line = String::new();
     loop {
         line.clear();
-        let n = match reader.read_line(&mut line) {
-            Ok(n) => n,
-            Err(_) => break,
+        let Ok(n) = reader.read_line(&mut line) else {
+            break;
         };
         if n == 0 {
             super::log::log_at(
@@ -1128,22 +1124,22 @@ pub(super) fn apply_streaming_rule_msg(state: &SharedState, msg: ClientMsg) {
             .lock()
             .expect("state mutex")
             .add_rule(rule)
-            .map(|_| "AddRule"),
+            .map(|()| "AddRule"),
         ClientMsg::UpdateRule { rule } => state
             .lock()
             .expect("state mutex")
             .update_rule(rule)
-            .map(|_| "UpdateRule"),
+            .map(|()| "UpdateRule"),
         ClientMsg::DeleteRule { id } => state
             .lock()
             .expect("state mutex")
             .delete_rule(&id)
-            .map(|_| "DeleteRule"),
+            .map(|()| "DeleteRule"),
         ClientMsg::SetRuleEnabled { id, enabled } => state
             .lock()
             .expect("state mutex")
             .set_rule_enabled(&id, enabled)
-            .map(|_| "SetRuleEnabled"),
+            .map(|()| "SetRuleEnabled"),
         other => {
             panic!("apply_streaming_rule_msg called with non-rule variant: {other:?}");
         }
@@ -1535,6 +1531,8 @@ mod tests {
     fn add_wasm_rule_over_ipc_registers_and_lists() {
         use std::sync::{Arc, Mutex};
 
+        const APPROVE_IF: &[u8] = include_bytes!("../../tests/fixtures/wasm_rules/approve_if.wasm");
+
         // `rules_path` is a tempdir, but the *module store* is not: it
         // resolves from `$SECREQ_HOME` and is shared by every test in this
         // process. Registering without this lock lets a module land in the
@@ -1543,7 +1541,6 @@ mod tests {
         // created.
         let _store = crate::paths::env_lock();
 
-        const APPROVE_IF: &[u8] = include_bytes!("../../tests/fixtures/wasm_rules/approve_if.wasm");
         let dir = tempfile::tempdir().expect("tempdir");
         let module_src = dir.path().join("uploaded.wasm");
         std::fs::write(&module_src, APPROVE_IF).expect("write module");
@@ -1564,7 +1561,7 @@ mod tests {
         );
         match reply {
             DaemonMsg::Err { message } => {
-                assert!(message.contains("trained-secrets"), "{message}")
+                assert!(message.contains("trained-secrets"), "{message}");
             }
             other => panic!("expected Err, got {other:?}"),
         }

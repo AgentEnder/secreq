@@ -95,9 +95,7 @@ pub fn remove(shim_dir: &Path, wrap_name: &str) -> Result<bool> {
 /// True if a shim for `wrap_name` exists in `shim_dir` AND is managed by us.
 pub fn is_managed(shim_dir: &Path, wrap_name: &str) -> bool {
     let path = shim_dir.join(wrap_name);
-    fs::read_to_string(path)
-        .map(|body| body.contains(SENTINEL))
-        .unwrap_or(false)
+    fs::read_to_string(path).is_ok_and(|body| body.contains(SENTINEL))
 }
 
 fn body(wrap_name: &str) -> String {

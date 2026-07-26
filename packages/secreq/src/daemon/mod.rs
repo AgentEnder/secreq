@@ -122,14 +122,11 @@ pub fn run() -> Result<i32> {
         pidfile.display()
     ));
 
-    let _pid_guard = match acquire_pidfile_lock(&pidfile)? {
-        Some(g) => g,
-        None => {
-            log::log(format_args!(
-                "another daemon already holds the pidfile lock — exiting 0"
-            ));
-            return Ok(0);
-        }
+    let Some(_pid_guard) = acquire_pidfile_lock(&pidfile)? else {
+        log::log(format_args!(
+            "another daemon already holds the pidfile lock — exiting 0"
+        ));
+        return Ok(0);
     };
 
     let state: state::SharedState = match crate::paths::rules_path() {
@@ -500,6 +497,7 @@ struct PidGuard {
 /// it (this process should run the daemon), `Ok(None)` if another daemon
 /// already holds it (this process should exit).
 fn acquire_pidfile_lock(path: &PathBuf) -> Result<Option<PidGuard>> {
+    use std::io::Write;
     use std::os::unix::fs::MetadataExt;
 
     if let Some(parent) = path.parent() {
@@ -539,7 +537,6 @@ fn acquire_pidfile_lock(path: &PathBuf) -> Result<Option<PidGuard>> {
         // We hold the lock on the current pidfile. Record our pid for human
         // inspection (not load-bearing for liveness) — truncate first so the
         // file shows only the live owner, not a prior generation's pid.
-        use std::io::Write;
         let _ = file.set_len(0);
         let mut writer = &file;
         let _ = writeln!(writer, "{}", std::process::id());

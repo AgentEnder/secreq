@@ -156,7 +156,9 @@ mod tests {
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn with_sock<R>(value: Option<&str>, f: impl FnOnce() -> R) -> R {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let prev = std::env::var_os(SOCK_ENV);
         match value {
             Some(v) => std::env::set_var(SOCK_ENV, v),

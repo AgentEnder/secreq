@@ -235,7 +235,7 @@ pub fn render_manager_panel(
         .inner_margin(body_inset)
         .show(ui, |ui| match state.view {
             ManagerView::Rules => {
-                render_rules_body(ui, rules, wasm_refusals, state, rule_actions_out)
+                render_rules_body(ui, rules, wasm_refusals, state, rule_actions_out);
             }
             ManagerView::Audit => render_audit_page(
                 ctx,
@@ -299,9 +299,8 @@ fn render_rules_body(
 /// rows (title + selector bar), the others one.
 fn header_height(flavor: OsFlavor) -> f32 {
     match flavor {
-        OsFlavor::MacOs => 46.0,
         OsFlavor::Windows => 58.0,
-        OsFlavor::Gnome => 46.0,
+        OsFlavor::MacOs | OsFlavor::Gnome => 46.0,
     }
 }
 
@@ -350,7 +349,7 @@ fn render_header_macos(
     let search_size = egui::vec2(210.0, 26.0);
     let search_rect = egui::Rect::from_min_size(
         egui::pos2(
-            bar.right() - search_size.x - INSET_X as f32,
+            bar.right() - search_size.x - f32::from(INSET_X),
             bar.center().y - search_size.y / 2.0,
         ),
         search_size,
@@ -366,7 +365,7 @@ fn render_header_windows(
     bar: egui::Rect,
     state: &mut ManagerWindowState,
 ) {
-    let title_pos = egui::pos2(bar.left() + INSET_X as f32, bar.top() + 6.0);
+    let title_pos = egui::pos2(bar.left() + f32::from(INSET_X), bar.top() + 6.0);
     ui.painter().text(
         title_pos,
         egui::Align2::LEFT_TOP,
@@ -376,7 +375,7 @@ fn render_header_windows(
     );
 
     let row_top = bar.top() + 24.0;
-    let mut x = bar.left() + INSET_X as f32;
+    let mut x = bar.left() + f32::from(INSET_X);
     for (label, view) in [("Rules", ManagerView::Rules), ("Audit", ManagerView::Audit)] {
         let active = state.view == view;
         let font = egui::FontId::proportional(th.body_size);
@@ -422,7 +421,7 @@ fn render_header_windows(
     let search_size = egui::vec2(210.0, 26.0);
     let search_rect = egui::Rect::from_min_size(
         egui::pos2(
-            bar.right() - search_size.x - INSET_X as f32,
+            bar.right() - search_size.x - f32::from(INSET_X),
             row_top + (28.0 - search_size.y) / 2.0,
         ),
         search_size,
@@ -446,7 +445,7 @@ fn render_header_gnome(
     let search_size = egui::vec2(200.0, 26.0);
     let search_rect = egui::Rect::from_min_size(
         egui::pos2(
-            bar.right() - search_size.x - INSET_X as f32,
+            bar.right() - search_size.x - f32::from(INSET_X),
             bar.center().y - search_size.y / 2.0,
         ),
         search_size,

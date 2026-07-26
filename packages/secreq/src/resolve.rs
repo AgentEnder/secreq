@@ -260,12 +260,13 @@ pub fn resolve_all(
                     value,
                 });
             }
-            ReadOutcome::NotFound { status, stderr } => match &req.default {
-                Some(default) => resolved.push(ResolvedSecret {
-                    name: req.name.clone(),
-                    value: SecretValue::new(default.clone()),
-                }),
-                None => {
+            ReadOutcome::NotFound { status, stderr } => {
+                if let Some(default) = &req.default {
+                    resolved.push(ResolvedSecret {
+                        name: req.name.clone(),
+                        value: SecretValue::new(default.clone()),
+                    });
+                } else {
                     let detail = if stderr.is_empty() {
                         status
                     } else {
@@ -277,7 +278,7 @@ pub fn resolve_all(
                         req.provider
                     );
                 }
-            },
+            }
         }
     }
     Ok((resolved, stats))

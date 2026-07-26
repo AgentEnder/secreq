@@ -56,8 +56,7 @@ fn migrate_config_file(ctx: &Ctx, name: &str) -> Result<()> {
 
     let old_is_symlink = old
         .symlink_metadata()
-        .map(|m| m.file_type().is_symlink())
-        .unwrap_or(false);
+        .is_ok_and(|m| m.file_type().is_symlink());
     // A symlink is already-migrated, not a source to copy from.
     let old_is_file = !old_is_symlink && old.is_file();
     let new_is_file = new.is_file();

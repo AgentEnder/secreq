@@ -462,8 +462,7 @@ fn no_snapshot_message(root: &Path, level: u32) -> String {
 fn now_stamp() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs())
 }
 
 struct LockGuard {

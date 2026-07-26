@@ -58,11 +58,11 @@ fn openpty() -> (OwnedFd, OwnedFd) {
     };
     let ok = unsafe {
         libc::openpty(
-            &mut master,
-            &mut slave,
+            &raw mut master,
+            &raw mut slave,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            &mut size,
+            &raw mut size,
         )
     };
     assert_eq!(ok, 0, "openpty failed: {}", std::io::Error::last_os_error());
@@ -103,7 +103,7 @@ impl PtyRun {
                 if libc::setsid() < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
-                if libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
+                if libc::ioctl(0, libc::TIOCSCTTY.into(), 0) < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 Ok(())
