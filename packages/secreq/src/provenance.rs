@@ -209,17 +209,28 @@ fn walk(
 }
 
 /// True if `caller` is a `secreq` process — our own machinery, not a
-/// meaningful step in "who's asking." Matched two ways:
-/// 1. Caller's `exe` resolves to the same path as our own `current_exe`.
-/// 2. Caller's process name is exactly `secreq` (sysinfo's `exe()` can
-///    miss for short-lived processes; the name match is a fallback).
+/// meaningful step in "who's asking."
+///
+/// A self-frame is *dropped from the chain entirely*, so this predicate
+/// decides who the consent prompt does not show. That makes it a security
+/// boundary, and the two inputs are not equally trustworthy:
+///
+/// - `exe` is the kernel's record of what was loaded. When we know both
+///   sides, it is authoritative and a **mismatch is a mismatch** — whatever
+///   the process calls itself.
+/// - `name` is `comm`, which a process controls: one `prctl(PR_SET_NAME)` on
+///   Linux, or simply a binary named `secreq` on macOS. It is used *only*
+///   when `exe` is unavailable (sysinfo can't resolve it for some
+///   short-lived processes), because then it is all we have.
+///
+/// Consulting `name` after a failed `exe` comparison — rather than only in
+/// its absence — would let any process erase itself from the prompt by taking
+/// our name, leaving its own parent rendered as the immediate caller.
 fn is_self_frame(caller: &Caller, my_exe: Option<&Path>) -> bool {
-    if let (Some(c_exe), Some(my)) = (caller.exe.as_deref().map(Path::new), my_exe) {
-        if c_exe == my {
-            return true;
-        }
+    match (caller.exe.as_deref().map(Path::new), my_exe) {
+        (Some(caller_exe), Some(mine)) => caller_exe == mine,
+        _ => caller.name == "secreq",
     }
-    caller.name == "secreq"
 }
 
 fn join_cmd(cmd: &[std::ffi::OsString]) -> String {
@@ -333,6 +344,18 @@ mod tests {
 
         let other = mk_caller(101, "gh", Some("/opt/homebrew/bin/gh"));
         assert!(!is_self_frame(&other, Some(&my)));
+    }
+
+    /// `name` is `comm`, which the process itself controls. A caller whose
+    /// `exe` is known and is *not* ours must stay in the chain no matter what
+    /// it calls itself — otherwise anything could erase itself from the
+    /// consent prompt by taking our name, and the prompt would render that
+    /// process's parent as the immediate caller.
+    #[test]
+    fn a_foreign_exe_named_secreq_is_not_a_self_frame() {
+        let my = PathBuf::from("/usr/local/bin/secreq");
+        let impostor = mk_caller(999, "secreq", Some("/tmp/evil/payload"));
+        assert!(!is_self_frame(&impostor, Some(&my)));
     }
 
     #[test]
