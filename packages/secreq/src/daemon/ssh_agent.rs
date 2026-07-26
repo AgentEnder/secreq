@@ -34,7 +34,7 @@ use anyhow::{Context, Result};
 
 use super::cache::{CacheKey, SecretCache};
 use super::in_flight::InFlightMap;
-use super::proto::{Ask, Caller, DedupeKey, SshAskInfo};
+use super::proto::{Ask, Caller, DedupeKey, SshAnchorInfo, SshAskInfo};
 use super::ssh_proto::{self, AgentRequest};
 use super::state::{SharedState, WaiterReply};
 use crate::consent::{Decision, SshAnchor, SshGrant, SshGrantScope};
@@ -647,6 +647,11 @@ fn sign_ask(
     data: &[u8],
 ) -> Ask {
     let wrap = format!("ssh:{}", identity.key_id);
+    let anchor_frame = crate::provenance::select_anchor(chain);
+    debug_assert!(
+        anchor_frame.is_none_or(|c| c.pid == anchor.pid),
+        "the session named in the prompt must be the session the grant keys on"
+    );
     Ask {
         command: vec![format!("ssh-sign {}", identity.key_id)],
         cwd: cwd.to_owned(),
@@ -681,6 +686,16 @@ fn sign_ask(
             key_id: identity.key_id.clone(),
             fingerprint: identity.fingerprint.clone(),
             reason: identity.reason.clone(),
+            // Re-derived from the chain rather than threaded down beside
+            // `anchor`, so the frame the prompt names and the frame the
+            // grant keys on cannot be two different answers: both are
+            // `select_anchor` on this same chain. The assertion below holds
+            // the two together if a future caller ever passes an anchor it
+            // computed some other way.
+            anchor: anchor_frame.map(|c| SshAnchorInfo {
+                name: c.name.clone(),
+                pid: c.pid,
+            }),
         }),
         // Not a scoped-agent ask: an SSH sign has a real, kernel-sourced
         // caller chain, which is exactly what the scoped-agent path cannot
@@ -918,6 +933,83 @@ mod tests {
             },
             reason: None,
         }
+    }
+
+    fn test_caller(pid: u32, name: &str, exe: Option<&str>) -> crate::provenance::Caller {
+        crate::provenance::Caller {
+            pid,
+            name: name.to_owned(),
+            command: name.to_owned(),
+            exe: exe.map(std::borrow::ToOwned::to_owned),
+            start_time: 1_700_000_000,
+        }
+    }
+
+    /// The prompt's "Approve for 30 min" buttons bind a grant to the anchor,
+    /// not to the command in the header — so the ask has to say which session
+    /// that is, or the user is approving something the prompt never named.
+    #[test]
+    fn sign_ask_names_the_session_the_grant_would_bind_to() {
+        let chain = vec![
+            test_caller(8120, "git", Some("/usr/bin/git")),
+            test_caller(7926, "-zsh", Some("/bin/zsh")),
+        ];
+        let anchor = crate::provenance::select_anchor(&chain).expect("anchor");
+        let ask = sign_ask(
+            &test_identity("github"),
+            SshAnchor {
+                pid: anchor.pid,
+                start_time: anchor.start_time,
+            },
+            &chain,
+            "/home/dev/repos/acme",
+            b"challenge",
+        );
+
+        let info = ask.ssh.expect("ssh ask info").anchor.expect("anchor info");
+        assert_eq!(info.pid, 7926, "the grant binds to the shell, not to git");
+        assert_eq!(
+            info.name, "-zsh",
+            "the label must be the same string the ASKED BY tree renders"
+        );
+    }
+
+    /// The named session must be the one the grant actually keys on. A label
+    /// naming a different frame than `dedupe_key.ppid` would be a prompt that
+    /// tells the truth about nothing.
+    #[test]
+    fn the_named_session_is_the_one_the_grant_keys_on() {
+        // The attacker sits under the shell and calls itself `zsh`; the
+        // anchor must resolve past it, and the label must follow.
+        let chain = vec![
+            test_caller(8120, "git", Some("/usr/bin/git")),
+            test_caller(8000, "zsh", Some("/tmp/.hidden/payload")),
+            test_caller(7926, "-zsh", Some("/bin/zsh")),
+        ];
+        let anchor = crate::provenance::select_anchor(&chain).expect("anchor");
+        let ask = sign_ask(
+            &test_identity("github"),
+            SshAnchor {
+                pid: anchor.pid,
+                start_time: anchor.start_time,
+            },
+            &chain,
+            "/home/dev/repos/acme",
+            b"challenge",
+        );
+
+        let info = ask
+            .ssh
+            .as_ref()
+            .expect("ssh ask info")
+            .anchor
+            .as_ref()
+            .expect("anchor info");
+        assert_eq!(info.pid, 7926);
+        assert_eq!(
+            info.pid, ask.dedupe_key.ppid,
+            "the session the prompt names must be the session the grant keys on"
+        );
     }
 
     /// Build an `ssh:<wrap_key>` rule with the given decision. `trained_secrets`

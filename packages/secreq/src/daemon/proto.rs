@@ -328,6 +328,39 @@ pub struct SshAskInfo {
     /// signs carry no secrets to inject.
     #[serde(default)]
     pub reason: Option<String>,
+    /// The session a 30-minute grant would attach to — the frame
+    /// `provenance::select_anchor` picked out of the caller chain.
+    ///
+    /// Carried so the prompt can name it. The grant buttons are the only
+    /// controls in the UI whose effect outlives the request on screen, and
+    /// what they bind to is neither the command in the header nor the
+    /// nearest caller: it is the shell or multiplexer further up. Without
+    /// this the user is asked to approve a session the prompt never
+    /// identifies.
+    ///
+    /// `None` on an ask with no anchor — a shape the SSH path refuses
+    /// before it builds one, but the field is optional so no other ask
+    /// producer has to invent a session it does not have.
+    #[serde(default)]
+    pub anchor: Option<SshAnchorInfo>,
+}
+
+/// The session an [`SshAskInfo`]'s grant buttons would bind to, in the terms
+/// the prompt shows it: the process's name and its pid.
+///
+/// The pid is here to be *matched by eye*. It also appears on that frame's
+/// row in the ASKED BY tree, so "Session: zsh · pid 7926" points at a line
+/// the user is already reading rather than asserting something they have to
+/// take on faith.
+///
+/// `name` is the sanitized `comm` (see `provenance::sanitize_display`), the
+/// same string the tree renders for that frame, so the two agree
+/// character-for-character. Which process is *selected* no longer depends on
+/// that name — see `provenance::frame_identity`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SshAnchorInfo {
+    pub name: String,
+    pub pid: u32,
 }
 
 /// Scoped-agent metadata carried on an [`Ask`] so the consent window can

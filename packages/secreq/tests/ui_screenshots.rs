@@ -168,6 +168,40 @@ fn caller(pid: u32, name: &str, start_time: u64) -> Caller {
     }
 }
 
+/// A caller frame that also carries the kernel's record of what was loaded.
+///
+/// `exe` is never rendered, so it changes no pixel — but it *is* what
+/// `provenance::select_anchor` reads to decide which frame an SSH session
+/// grant binds to, so an SSH fixture that wants a realistic anchor has to
+/// supply it.
+fn caller_exe(pid: u32, name: &str, start_time: u64, exe: &str) -> Caller {
+    Caller {
+        exe: Some(exe.to_owned()),
+        ..caller(pid, name, start_time)
+    }
+}
+
+/// The session an SSH ask's grant buttons would bind to, chosen exactly the
+/// way `daemon::ssh_agent::sign_ask` chooses it — through
+/// `provenance::select_anchor` — so a fixture cannot document a session the
+/// daemon would not have picked.
+fn anchor_of(callers: &[Caller]) -> Option<secreq::daemon::proto::SshAnchorInfo> {
+    let chain: Vec<secreq::provenance::Caller> = callers
+        .iter()
+        .map(|c| secreq::provenance::Caller {
+            pid: c.pid,
+            name: c.name.clone(),
+            command: c.command.clone(),
+            exe: c.exe.clone(),
+            start_time: c.start_time,
+        })
+        .collect();
+    secreq::provenance::select_anchor(&chain).map(|c| secreq::daemon::proto::SshAnchorInfo {
+        name: c.name.clone(),
+        pid: c.pid,
+    })
+}
+
 fn secret(name: &str, provider: &str, locator: &str) -> SecretAsk {
     SecretAsk {
         name: name.to_owned(),
@@ -255,25 +289,38 @@ fn submit_run(
 /// `ssh-sign <key_id>` label, there are no secrets to inject, and the
 /// `ssh` marker carries the identity name + SHA256 fingerprint the UI
 /// renders.
+///
+/// `cwd` is a parameter rather than a constant because the SSH path is the
+/// one that can genuinely come back without it: there is no wrap client to
+/// self-report a cwd, so the daemon reads it off the socket peer
+/// (`provenance::cwd_for_pid`), which returns `None` when the process is gone
+/// or the platform won't say. An empty string renders no `IN` row at all —
+/// the prompt omits it rather than heading a blank (see
+/// `render_evidence_well`).
 fn submit_ssh(
     state: &SharedState,
     key_id: &str,
     fingerprint: &str,
     reason: Option<&str>,
+    cwd: &str,
     callers: Vec<Caller>,
 ) -> mpsc::Receiver<secreq::daemon::state::WaiterReply> {
+    // The real sign path keys the ask on the *anchor*, not on the nearest
+    // caller — that is the whole point of `select_anchor`, and it is what
+    // the prompt's "Session:" row now names.
+    let anchor = anchor_of(&callers);
     let dedupe_key = DedupeKey {
         wrap: format!("ssh:{key_id}"),
-        ppid: callers.first().map_or(0, |c| c.pid),
-        parent_start_time: callers.first().map_or(0, |c| c.start_time),
+        ppid: anchor.as_ref().map_or(0, |a| a.pid),
+        parent_start_time: callers
+            .iter()
+            .find(|c| Some(c.pid) == anchor.as_ref().map(|a| a.pid))
+            .map_or(0, |c| c.start_time),
         subject_digest: None,
     };
     let ask = Ask {
         command: vec![format!("ssh-sign {key_id}")],
-        // The SSH path has no client to self-report a cwd, so the daemon
-        // reads it off the socket peer (`provenance::cwd_for_pid`); for a
-        // `git push` that is the repository being pushed.
-        cwd: "~/repos/acme".to_owned(),
+        cwd: cwd.to_owned(),
         callers,
         secrets: vec![],
         providers: HashMap::new(),
@@ -282,6 +329,7 @@ fn submit_ssh(
             key_id: key_id.to_owned(),
             fingerprint: fingerprint.to_owned(),
             reason: reason.map(str::to_owned),
+            anchor,
         }),
         agent: None,
         allow_remember: true,
@@ -1160,10 +1208,74 @@ fn ssh_sign_pending() {
                 "github",
                 "SHA256:Nh0Me49Zh9fDw/VYUfq43IJmI1T+XrjiYONPND8GzaM",
                 Some("git pushes to github.com"),
+                // For a `git push` the peer's cwd is the repository being
+                // pushed — the fact that separates a push you started from
+                // one a script started.
+                "~/repos/acme",
                 vec![
                     caller(8120, "git", 1_700_002_000),
                     caller(7926, "zsh", 1_700_000_000),
                 ],
+            )]
+        },
+    );
+}
+
+#[test]
+fn ssh_session_anchor_pending() {
+    // The same sign prompt, but with the session grant's subject visible
+    // and *not* obvious from the rest of the card. `git push` runs inside
+    // an `ssh` inside a `nvim` terminal inside a tmux server, and the
+    // 30-minute grant binds to the tmux server — three rows up from the
+    // command in the header, and not the frame anyone would guess.
+    //
+    // This is the state `24-ssh-sign-pending` cannot show: there, the
+    // anchor is the caller's immediate parent, so naming it looks like
+    // restating the tree. Here the "Session:" row is the only place the
+    // prompt says what "Approve for 30 min" would actually cover.
+    //
+    // `caller_exe` matters: `select_anchor` reads the kernel's `exe`, not
+    // the name a process reported, so the tmux frame needs one to be
+    // chosen the way production would choose it.
+    render_prompt_fixture(
+        Shot::new("29-ssh-session-anchor").caption(
+            "The session grants name what they attach to. Here <code>git push</code> \
+             runs several frames deep, and <b>Approve for 30 min</b> would cover every \
+             process under the <code>tmux</code> server — so the prompt says which one, \
+             with a pid you can match against the tree above.",
+        ),
+        vec![],
+        |state| {
+            let mut git = caller_exe(9310, "git", 1_700_003_400, "/usr/bin/git");
+            git.command = "git push origin main".to_owned();
+            // Not a session frame, so the anchor resolves *past* it — which
+            // is what makes the "Session:" row say something the tree does
+            // not already say.
+            let mut nvim = caller_exe(9308, "nvim", 1_700_003_000, "/opt/homebrew/bin/nvim");
+            nvim.command = "nvim src/main.rs".to_owned();
+            // tmux reports `comm` as "tmux: server" while its exe is a plain
+            // `tmux`; `select_anchor` reads the exe, so this is the frame the
+            // grant binds to.
+            let mut tmux = caller_exe(
+                7710,
+                "tmux: server",
+                1_700_000_000,
+                "/opt/homebrew/bin/tmux",
+            );
+            tmux.command = "tmux new-session -s dev".to_owned();
+            vec![submit_ssh(
+                state,
+                "github",
+                "SHA256:Nh0Me49Zh9fDw/VYUfq43IJmI1T+XrjiYONPND8GzaM",
+                Some("git pushes to github.com"),
+                // The peer's cwd was unreadable — the process had already
+                // exited by the time the daemon looked. A real state on this
+                // path, and the only fixture that shows it: the well omits
+                // the `IN` row rather than heading a blank one. It also buys
+                // back the height this deeper tree costs, which keeps the
+                // session row — the point of the fixture — in frame.
+                "",
+                vec![git, nvim, tmux],
             )]
         },
     );

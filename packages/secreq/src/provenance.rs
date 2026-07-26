@@ -173,11 +173,56 @@ const SESSION_FRAMES: &[&str] = &[
     "screen",
 ];
 
-/// True if `name` is a long-lived shell / session frame (see
-/// [`SESSION_FRAMES`]), accounting for the leading `-` on login shells.
-fn is_session_frame(name: &str) -> bool {
-    let base = name.strip_prefix('-').unwrap_or(name);
+/// The identity to match a frame against, preferring the kernel's record.
+///
+/// The same trust split [`is_self_frame`] documents, applied to the other
+/// predicate that reads a frame's identity. `exe`'s file name is what the
+/// kernel loaded; `name` is `comm`, which the process chose. Fall back to
+/// `name` only when the kernel won't tell us — for a short-lived process
+/// sysinfo can't resolve, it is all there is.
+///
+/// Returned rather than compared here because both [`SESSION_FRAMES`] and
+/// [`TRANSPORT_FRAMES`] have to ask the same question of the same string:
+/// answering it two different ways is how one of them ends up trusting a
+/// name the other doesn't.
+fn frame_identity(caller: &Caller) -> &str {
+    caller
+        .exe
+        .as_deref()
+        .map(Path::new)
+        .and_then(Path::file_name)
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or(&caller.name)
+}
+
+/// True if `caller` is a long-lived shell / session frame (see
+/// [`SESSION_FRAMES`]).
+///
+/// Matched on [`frame_identity`], not on `name`. This predicate picks the
+/// process a 30-minute SSH grant binds to, so a process that could put
+/// itself here by taking the name `zsh` would get the grant the user
+/// believed they were giving their terminal — and keep it after the
+/// terminal is gone.
+///
+/// Both spellings still have to match, which is why the name fallback is
+/// consulted as well as stripped: login shells are exec'd with a leading `-`
+/// (`-zsh`), and tmux's server sets `comm` to `tmux: server` while its `exe`
+/// is a plain `tmux`.
+fn is_session_frame(caller: &Caller) -> bool {
+    let ident = frame_identity(caller);
+    let base = ident.strip_prefix('-').unwrap_or(ident);
     SESSION_FRAMES.contains(&base)
+}
+
+/// True if `caller` is an SSH-family transport frame — ephemeral, per-command
+/// plumbing rather than a session worth anchoring on.
+///
+/// Matched on [`frame_identity`] for the same reason as [`is_session_frame`],
+/// and the reason cuts both ways: a process that names itself `ssh` must not
+/// be able to skip itself out of the fallback anchor, and a real `ssh` must
+/// not be able to rename itself into it.
+fn is_transport_frame(caller: &Caller) -> bool {
+    TRANSPORT_FRAMES.contains(&frame_identity(caller))
 }
 
 /// Pick the long-lived ancestor a SIGN grant should be scoped to.
@@ -189,15 +234,16 @@ fn is_session_frame(name: &str) -> bool {
 /// the nearest session frame. Failing that (GUI/daemon-launched, no shell in
 /// the chain) we fall back to the first non-transport frame, then to the last
 /// frame if the whole chain is transport.
+///
+/// Both predicates read [`frame_identity`] rather than the self-reported
+/// `name`. What this function returns is what a session grant is scoped to,
+/// so a process able to nominate itself by renaming could collect the user's
+/// 30-minute approval on its own behalf.
 pub fn select_anchor(chain: &[Caller]) -> Option<&Caller> {
     chain
         .iter()
-        .find(|c| is_session_frame(&c.name))
-        .or_else(|| {
-            chain
-                .iter()
-                .find(|c| !TRANSPORT_FRAMES.contains(&c.name.as_str()))
-        })
+        .find(|c| is_session_frame(c))
+        .or_else(|| chain.iter().find(|c| !is_transport_frame(c)))
         .or_else(|| chain.last())
 }
 
@@ -385,6 +431,83 @@ mod tests {
         let anchor = select_anchor(&chain).unwrap();
         assert_eq!(anchor.name, "-zsh"); // login-shell prefix still matches
         assert_eq!(anchor.pid, 13);
+    }
+
+    #[test]
+    fn anchor_ignores_a_shell_name_a_process_picked_for_itself() {
+        // The attacker sits between the shell and `git` and calls itself
+        // `zsh`. Nearest-first selection would hand it the anchor, so the
+        // user's "Approve for 30 min" would bind a signing grant to the
+        // attacker's process instead of to their terminal. `exe` says what
+        // was actually loaded, and it is not a shell.
+        let chain = vec![
+            mk_caller(10, "ssh", Some("/usr/bin/ssh")),
+            mk_caller(11, "git", Some("/usr/bin/git")),
+            mk_caller(12, "zsh", Some("/tmp/.hidden/payload")),
+            mk_caller(13, "-zsh", Some("/bin/zsh")),
+        ];
+        let anchor = select_anchor(&chain).unwrap();
+        assert_eq!(
+            anchor.pid, 13,
+            "anchor must be the real shell, not the liar"
+        );
+    }
+
+    #[test]
+    fn anchor_finds_a_shell_that_renamed_itself() {
+        // The mirror image, and the reason the fix is a preference rather
+        // than an extra condition: a real `/bin/bash` that set its own
+        // `comm` to something else is still the session the user drives.
+        let chain = vec![
+            mk_caller(20, "git", Some("/usr/bin/git")),
+            mk_caller(21, "my-terminal", Some("/bin/bash")),
+        ];
+        assert_eq!(select_anchor(&chain).unwrap().pid, 21);
+    }
+
+    #[test]
+    fn transport_frames_are_recognized_by_exe_too() {
+        // The transport skip is the other half of the same trust question.
+        // A process that names itself `ssh` must not be able to skip itself
+        // out of the fallback anchor, and a real `ssh` must not be able to
+        // rename itself into it.
+        let liar = vec![
+            mk_caller(30, "ssh", Some("/tmp/.hidden/payload")),
+            mk_caller(31, "git", Some("/usr/bin/git")),
+        ];
+        assert_eq!(
+            select_anchor(&liar).unwrap().pid,
+            30,
+            "a non-ssh binary calling itself ssh is not a transport frame"
+        );
+
+        let hider = vec![
+            mk_caller(40, "definitely-not-ssh", Some("/usr/bin/ssh")),
+            mk_caller(41, "git", Some("/usr/bin/git")),
+        ];
+        assert_eq!(
+            select_anchor(&hider).unwrap().pid,
+            41,
+            "a real ssh stays a transport frame whatever it calls itself"
+        );
+    }
+
+    #[test]
+    fn tmux_server_is_a_session_frame_by_either_spelling() {
+        // tmux renames itself to `tmux: server`; its exe is plain `tmux`.
+        // Both spellings have to keep working, because dropping either one
+        // re-prompts every `git push` inside a multiplexer.
+        let named = vec![
+            mk_caller(50, "git", Some("/usr/bin/git")),
+            mk_caller(51, "tmux: server", None),
+        ];
+        assert_eq!(select_anchor(&named).unwrap().pid, 51);
+
+        let by_exe = vec![
+            mk_caller(60, "git", Some("/usr/bin/git")),
+            mk_caller(61, "tmux: server", Some("/opt/homebrew/bin/tmux")),
+        ];
+        assert_eq!(select_anchor(&by_exe).unwrap().pid, 61);
     }
 
     #[test]

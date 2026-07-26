@@ -2769,6 +2769,7 @@ mod tests {
             key_id: "github".into(),
             fingerprint: "SHA256:deadbeef".into(),
             reason: None,
+            anchor: None,
         });
         let ssh_key = ssh_ask.dedupe_key.clone();
         let (tx, _rx) = mpsc::channel();
@@ -3870,6 +3871,7 @@ mod tests {
                 key_id: key_id.to_owned(),
                 fingerprint: "SHA256:AAAAtest".to_owned(),
                 reason: None,
+                anchor: None,
             }),
             agent: None,
             allow_remember: false,

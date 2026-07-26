@@ -823,9 +823,29 @@ fn caller_row(
 
 // ── SSH session grants ───────────────────────────────────────────────────
 
+/// Width the session identity is laid out in, so a long process name
+/// truncates instead of shoving the grant buttons off the row.
+///
+/// A fixed budget rather than "whatever is left" on purpose: the two things
+/// sharing this row are attacker-influenced text and the controls that hand
+/// out a 30-minute signing grant, and the controls are not allowed to move.
+const SESSION_LABEL_WIDTH: f32 = 132.0;
+
 /// The two TTL'd session-grant actions, rendered as quiet secondary
 /// buttons between the well and the footer. The footer's Approve stays
 /// "this sign only".
+///
+/// The row leads with **which session** — `zsh · 7926`. These buttons are
+/// the only controls in the prompt whose effect outlives the request on
+/// screen, and what they bind to is not the command in the header and not
+/// the nearest caller: it is the shell or multiplexer that
+/// `provenance::select_anchor` picked further up the chain. Every process
+/// under that session signs freely for the next half hour, so a prompt that
+/// offered the choice without naming its subject was asking the user to
+/// approve something it had not shown them.
+///
+/// The pid is there to be matched by eye against the ASKED BY tree directly
+/// above, which renders the same pid on that frame's row.
 fn render_ssh_session_grants(
     ui: &mut egui::Ui,
     th: &Theme,
@@ -838,6 +858,36 @@ fn render_ssh_session_grants(
                 .size(th.body_size - 2.0)
                 .color(th.faint),
         );
+        if let Some(anchor) = row
+            .representative
+            .ssh
+            .as_ref()
+            .and_then(|s| s.anchor.as_ref())
+        {
+            let full = format!("{} · {}", anchor.name, anchor.pid);
+            let row_height = ui.text_style_height(&egui::TextStyle::Body);
+            let resp = ui
+                .allocate_ui_with_layout(
+                    egui::vec2(SESSION_LABEL_WIDTH, row_height),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.set_max_width(SESSION_LABEL_WIDTH);
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&full)
+                                    .monospace()
+                                    .size(th.body_size - 2.0)
+                                    .color(th.fg),
+                            )
+                            .truncate(),
+                        )
+                    },
+                )
+                .inner;
+            resp.on_hover_text(format!(
+                "A 30-minute grant attaches to this process.\n{full}"
+            ));
+        }
         let scope = row_scope(row);
         if quiet_button(ui, th, "Approve for 30 min").clicked() {
             actions_out.push(PendingAction {
