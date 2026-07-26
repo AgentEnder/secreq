@@ -6,23 +6,20 @@
 //! rather than rolling our own so the scrubbing is handled by the audited
 //! `zeroize` crate.
 //!
-//! **The guarantee ends at the first copy, and two paths take one.** Neither
-//! is scrubbed today, so this type is not a claim that plaintext exists
-//! nowhere else in the process:
+//! **The guarantee ends at the first copy, and the copy is the caller's to
+//! scrub.** Output masking now does: `exec.rs` holds the values as
+//! `Zeroizing<Vec<u8>>` and hands each masking thread a clone of the same type,
+//! and the masker's own buffers — the values it matches against and its carry —
+//! are `Zeroizing` too, so the longest-lived copies (one set per masker, for
+//! the child's whole run) all scrub. See `mask.rs`.
 //!
-//! - **Output masking.** `exec.rs` copies the values into a `Vec<Vec<u8>>` and
-//!   clones that once per masking thread. Closing it means changing `exec.rs`'s
-//!   own signatures and `Masker::new`'s `AsRef<[u8]>` bound — a hot path, and
-//!   not attempted. What *is* scrubbed is the masker's own copies: the values
-//!   it matches against and its carry buffer are both `Zeroizing`, and those
-//!   are the copies that live longest (one set per masker, for the child's
-//!   whole run). See `mask.rs`.
-//! - **The environment and the wire.** `commands.rs` and `daemon/state.rs`
-//!   move resolved values straight into a `Vec<(String, String)>` and a
-//!   `HashMap<String, String>` on the way to the child's environment and
-//!   across the daemon socket. Wrapping the local there changes nothing; the
-//!   fix is a different collection and wire type, which was judged not worth
-//!   the churn.
+//! **The environment and the wire do not**, so this type is not a claim that
+//! plaintext exists nowhere else in the process. `commands.rs` and
+//! `daemon/state.rs` move resolved values straight into a
+//! `Vec<(String, String)>` and a `HashMap<String, String>` on the way to the
+//! child's environment and across the daemon socket. Wrapping the local there
+//! changes nothing; the fix is a different collection and wire type, which was
+//! judged not worth the churn.
 
 use std::fmt;
 
@@ -31,7 +28,7 @@ use zeroize::Zeroizing;
 /// A resolved secret value. The buffer this owns is zeroized when dropped, and
 /// the value is never `Display`ed or logged. Copies taken out of it through
 /// [`expose`](Self::expose) or [`as_bytes`](Self::as_bytes) are the caller's to
-/// scrub — see the module comment for the two that aren't.
+/// scrub — see the module comment for which callers do.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SecretValue(Zeroizing<String>);
 

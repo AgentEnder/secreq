@@ -13,6 +13,7 @@ use std::thread;
 
 use anyhow::{Context, Result};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use zeroize::Zeroizing;
 
 use crate::mask::Masker;
 use crate::secret::SecretValue;
@@ -26,7 +27,15 @@ pub fn run(
     secrets: &[SecretValue],
     cwd: &Path,
 ) -> Result<i32> {
-    let secret_bytes: Vec<Vec<u8>> = secrets.iter().map(|s| s.as_bytes().to_vec()).collect();
+    // Plaintext, and long-lived: this copy and the clone each masking thread
+    // takes of it are live for the child's whole run, so both are `Zeroizing`
+    // for the reason `secret.rs` gives. `Masker::new` copies once more into
+    // buffers that are `Zeroizing` too, and the clone it consumes scrubs as it
+    // drops.
+    let secret_bytes: Vec<Zeroizing<Vec<u8>>> = secrets
+        .iter()
+        .map(|s| Zeroizing::new(s.as_bytes().to_vec()))
+        .collect();
 
     if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
         run_pty(command, env_overrides, &secret_bytes, cwd)
@@ -54,7 +63,7 @@ fn build_command(
 fn run_pty(
     command: &[String],
     env_overrides: &[(String, String)],
-    secrets: &[Vec<u8>],
+    secrets: &[Zeroizing<Vec<u8>>],
     cwd: &Path,
 ) -> Result<i32> {
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
@@ -137,7 +146,7 @@ fn run_pty(
 fn run_piped(
     command: &[String],
     env_overrides: &[(String, String)],
-    secrets: &[Vec<u8>],
+    secrets: &[Zeroizing<Vec<u8>>],
     cwd: &Path,
 ) -> Result<i32> {
     use std::process::{Command, Stdio};
@@ -179,7 +188,7 @@ enum Stream {
 /// Spawn a thread that masks `reader` into the chosen output stream.
 fn spawn_mask_pump<R: Read + Send + 'static>(
     mut reader: R,
-    secrets: Vec<Vec<u8>>,
+    secrets: Vec<Zeroizing<Vec<u8>>>,
     stream: Stream,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {

@@ -54,6 +54,10 @@ impl Masker {
         I: IntoIterator<Item = S>,
         S: AsRef<[u8]>,
     {
+        // `AsRef` borrows, so this copies rather than taking what it is given:
+        // a caller holding plaintext hands us `Zeroizing<Vec<u8>>` (`exec.rs`
+        // does) and its own copy scrubs when it drops, leaving only the
+        // `Zeroizing` one below.
         let mut secrets: Vec<Zeroizing<Vec<u8>>> = secrets
             .into_iter()
             .map(|s| Zeroizing::new(s.as_ref().to_vec()))
