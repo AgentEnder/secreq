@@ -399,7 +399,9 @@ fn merge_argv_samples(samples: &[String]) -> Option<String> {
     let mut stopped_on_divergence = false;
 
     for i in 0..min_len {
-        let column: Vec<&str> = tokenised.iter().map(|t| t[i]).collect();
+        // `i < min_len <= t.len()` for every row, so `get` is `t[i]` with the
+        // bound stated instead of assumed; nothing is ever filtered out.
+        let column: Vec<&str> = tokenised.iter().filter_map(|t| t.get(i).copied()).collect();
         let merged = merge_token_column(&column);
         if merged.contains('*') {
             // Path-segmented merge ("repos/*/*/commits/*/statuses") or
@@ -438,8 +440,12 @@ fn merge_argv_samples(samples: &[String]) -> Option<String> {
 /// token looks like a path and the segment counts line up), or a
 /// bare `"*"` when no structure can be preserved.
 fn merge_token_column(samples: &[&str]) -> String {
-    if samples.iter().all(|s| *s == samples[0]) {
-        return samples[0].to_owned();
+    let Some(first) = samples.first() else {
+        // No samples to merge — nothing structural survives.
+        return "*".to_owned();
+    };
+    if samples.iter().all(|s| s == first) {
+        return (*first).to_owned();
     }
     let sub_lists: Vec<Vec<&str>> = samples.iter().map(|s| s.split('/').collect()).collect();
     let lens: Vec<usize> = sub_lists.iter().map(Vec::len).collect();
@@ -451,12 +457,15 @@ fn merge_token_column(samples: &[&str]) -> String {
     let mut out: Vec<String> = Vec::with_capacity(min_len);
     let mut any_literal = false;
     for i in 0..min_len {
-        let col: Vec<&str> = sub_lists.iter().map(|s| s[i]).collect();
-        if col.iter().all(|s| *s == col[0]) {
-            out.push(col[0].to_owned());
-            any_literal = true;
-        } else {
-            out.push("*".to_owned());
+        // Every sub-list has exactly `min_len` segments here (`min_len !=
+        // max_len` returned above), so `get` never filters anything out.
+        let col: Vec<&str> = sub_lists.iter().filter_map(|s| s.get(i).copied()).collect();
+        match col.first() {
+            Some(first) if col.iter().all(|s| s == first) => {
+                out.push((*first).to_owned());
+                any_literal = true;
+            }
+            _ => out.push("*".to_owned()),
         }
     }
     if any_literal {
