@@ -135,7 +135,24 @@ fn test_fallback_root() -> PathBuf {
 fn root_from(override_env: Option<OsString>, home: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(raw) = override_env {
         if !raw.is_empty() {
-            return Ok(PathBuf::from(raw));
+            let root = PathBuf::from(raw);
+            // A relative root is not one root — it is one per working
+            // directory. Every secreq process resolves it against its own cwd,
+            // so `SECREQ_HOME=.secreq` gives the daemon one `audit.log` and a
+            // wrap launched from a checkout another, written into whatever
+            // repository the user happened to be standing in. Refused rather
+            // than silently absolutised against *this* process's cwd, which
+            // would only move the disagreement.
+            if !root.is_absolute() {
+                anyhow::bail!(
+                    "${SECREQ_HOME_ENV} must be an absolute path, but is {}. \
+                     A relative root resolves against each process's working \
+                     directory, so the daemon and your wrapped commands would \
+                     not share one.",
+                    root.display(),
+                );
+            }
+            return Ok(root);
         }
     }
     let home = home.context(
@@ -351,6 +368,20 @@ mod tests {
         // so it must not require home_dir() to resolve.
         let root = root_from(Some(OsString::from("/tmp/custom")), None).unwrap();
         assert_eq!(root, PathBuf::from("/tmp/custom"));
+    }
+
+    /// A relative root is not one root — it is one per working directory. The
+    /// daemon would open `audit.log` beside wherever it was launched and a
+    /// wrapped command would write its rows into whatever checkout the user
+    /// was standing in, so the two would never agree on the same file.
+    #[test]
+    fn a_relative_secreq_home_is_refused() {
+        for raw in ["secreq", "./secreq", ".", "..", "../elsewhere"] {
+            let err = root_from(Some(OsString::from(raw)), Some(PathBuf::from("/home/ada")))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("absolute"), "{raw:?} accepted, or: {err}");
+        }
     }
 
     #[test]
