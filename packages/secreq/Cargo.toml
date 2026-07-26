@@ -154,21 +154,24 @@ oxipng = { version = "10.1.1", default-features = false, features = ["parallel"]
 #                       modules, where a panic *is* the assertion.
 #   pedantic          — 615 warnings, overwhelmingly cast and doc nits.
 #
-# `indexing_slicing` is NOT in the table yet, and is the one entry here that is
-# waiting rather than declined. It sat out because it was all-or-nothing at 213
-# hits; 141 of those were inline tests, now settled once by
-# `allow-indexing-slicing-in-tests` in the workspace `clippy.toml`, and the
-# production half is down to five sites — all in `daemon/state.rs` and
-# `daemon/ui.rs`, all provably safe (a `position()` result reused two lines
-# later; a binary search's own `mid`/`lo`; a map key inserted in the same
-# function). Rewrite those five and add:
+# `indexing_slicing` took the longest to land and is worth the note. It sat out
+# for a year as "all-or-nothing at 213 hits", which was an artifact: 141 of
+# those were inline `mod tests`, where a panic is the assertion, and clippy has
+# had `allow-indexing-slicing-in-tests` since 1.79. One line in the workspace
+# `clippy.toml` took 213 to 41; the rest were rewritten (17 mechanically, 18 by
+# moving the safety from an argument to a structure, one `#[allow]` naming its
+# invariant). No site turned out to be actually fallible, but the sweep did
+# surface a real bug: `is_secreq_shim` used a bare `read` and could return a
+# false negative on a short read, which its doc comment already denied.
 #
-#   indexing_slicing = "deny"
-#
-# at which point `daemon/ssh_proto.rs`'s module-level deny becomes redundant and
-# should go — the point of moving it here is that the *next* untrusted-input
-# parser is covered without anyone remembering to ask.
+# The point of having it here rather than per-module is that the *next*
+# untrusted-input parser is covered without anyone remembering to ask.
+# `daemon/ssh_proto.rs` needed a hand-placed `#![deny]` precisely because
+# nothing else would have caught it.
 [lints.clippy]
+# A panic reachable from an index is a denial of service when the indexed
+# bytes came off a socket. Tests are exempt via `clippy.toml`.
+indexing_slicing = "deny"
 # CLAUDE.md forbids TODOs in shipped code. This is that rule, enforced.
 todo = "deny"
 unimplemented = "deny"

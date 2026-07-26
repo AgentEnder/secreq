@@ -1753,16 +1753,24 @@ impl State {
     /// refusal state are all restored — an update that never reached
     /// disk must not change what can fire in memory.
     pub fn update_rule(&mut self, rule: Rule) -> Result<()> {
-        let Some(pos) = self.rules.iter().position(|r| r.id == rule.id) else {
+        if !self.rules.iter().any(|r| r.id == rule.id) {
             anyhow::bail!("no rule with id `{}`", rule.id);
-        };
+        }
         let prev_refusal = self
             .wasm_refusals
             .iter()
             .find(|r| r.rule_id == rule.id)
             .cloned();
         self.install_rule_module(&rule)?;
-        let prev = std::mem::replace(&mut self.rules[pos], rule);
+        // Swap through a `&mut` we hold rather than an index we remember: the
+        // `position()` this used to carry stayed valid only because nothing
+        // between here and the rollback removes from `self.rules`, which is
+        // true and invisible. The id is unchanged by the swap, so the
+        // rollback below re-finds the same slot.
+        let Some(slot) = self.rules.iter_mut().find(|r| r.id == rule.id) else {
+            anyhow::bail!("no rule with id `{}`", rule.id);
+        };
+        let prev = std::mem::replace(slot, rule);
         if let Err(err) = self.persist_rules_and_refresh() {
             // Roll back. Reinstall recompiles the previous rule's
             // module from disk; if that module no longer loads (it was
@@ -1782,7 +1790,9 @@ impl State {
             if let Some(refusal) = prev_refusal {
                 self.wasm_refusals.push(refusal);
             }
-            self.rules[pos] = prev;
+            if let Some(slot) = self.rules.iter_mut().find(|r| r.id == prev.id) {
+                *slot = prev;
+            }
             return Err(err);
         }
         self.broadcast_consent_update();
@@ -2540,7 +2550,16 @@ fn resolve_union(
         requests: needs_resolve
             .iter()
             .map(|((provider, locator), req_name)| {
-                let ask = first_ask[&(provider.clone(), locator.clone())];
+                // `first_ask` is populated from `needs_resolve` in the loop
+                // above, so every key here has an entry. Spelled with `get`
+                // rather than `[]` so a future edit that breaks that pairing
+                // says which key it lost instead of panicking on a bare index.
+                let ask = first_ask
+                    .get(&(provider.clone(), locator.clone()))
+                    .copied()
+                    .unwrap_or_else(|| {
+                        unreachable!("no first_ask recorded for {provider}/{locator}")
+                    });
                 SecretRequest {
                     name: req_name.clone(),
                     provider: provider.clone(),

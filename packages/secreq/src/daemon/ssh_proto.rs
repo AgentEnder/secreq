@@ -20,9 +20,9 @@
 //! frame to it. Nothing here may index or slice at an offset it has not
 //! proven: [`split_frame`] is the one place the outer framing is taken
 //! apart, and it returns a message type and a body or an error. A parser
-//! added later gets the framing checks by calling it, which is why the
-//! lint below is a `deny` rather than a comment asking nicely.
-#![deny(clippy::indexing_slicing)]
+//! added later gets the framing checks by calling it. `indexing_slicing` is
+//! denied crate-wide (see `Cargo.toml`), so that rule is enforced here
+//! without this module having to ask for it.
 
 use anyhow::{bail, Context, Result};
 use ssh_encoding::{Decode, Encode};

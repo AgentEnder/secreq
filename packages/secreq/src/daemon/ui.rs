@@ -2967,7 +2967,10 @@ fn truncate_to_width(ui: &egui::Ui, text: &str, font: &egui::FontId, max_width: 
     let mut hi = chars.len();
     while lo < hi {
         let mid = (lo + hi).div_ceil(2);
-        let candidate: String = chars[..mid].iter().collect::<String>() + "\u{2026}";
+        // `take` rather than `chars[..mid]`: `mid <= hi <= chars.len()` holds,
+        // but only by reading the loop's invariant. `take` cannot go out of
+        // range at all, so the bound is structural instead of argued.
+        let candidate: String = chars.iter().take(mid).collect::<String>() + "\u{2026}";
         if measure(&candidate) <= max_width {
             lo = mid;
         } else {
@@ -2977,7 +2980,7 @@ fn truncate_to_width(ui: &egui::Ui, text: &str, font: &egui::FontId, max_width: 
     if lo == 0 {
         return "\u{2026}".to_owned();
     }
-    chars[..lo].iter().collect::<String>() + "\u{2026}"
+    chars.iter().take(lo).collect::<String>() + "\u{2026}"
 }
 
 /// The arguments a process was invoked with, with `argv[0]` removed.
