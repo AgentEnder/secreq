@@ -19,9 +19,14 @@
    the same rule. `interception.css` styles only what is unique to the
    hero's choreography. */
 
+/* The panel takes the same glass as a code block — the deeper of the two
+   frost fills plus the blur — so a terminal reads as one more surface in
+   the page's stack rather than the only opaque slab left on it. See
+   FROSTED SURFACES in tailwind.css. */
 .term-frame-wrap,
 .icept-term {
-  background: var(--sq-well);
+  background: var(--sq-frost-well);
+  backdrop-filter: blur(var(--sq-frost-blur));
   border: 1px solid var(--sq-hairline);
   border-radius: var(--radius-sq-lg, 12px);
   overflow: hidden;
@@ -101,16 +106,58 @@
   color: var(--sq-text-2);
 }
 
+/* ── The prompt row ──
+   The shell line the recording could not contain, drawn above the frames
+   rather than into them. See the head of `term-markup.ts` for why exactly
+   one line on this site is reconstructed and what it is reconstructed
+   from; what matters here is that it gets its own row, on the same
+   monospace grid, so the seam between it and the pty's own output is a
+   line you can point at.
+
+   Row 1 for the prompt and row 2 for the stack means the frames still
+   share one cell with each other — the panel's height is still the
+   tallest frame's, plus this one line, and still never changes as the
+   session plays. */
+.term-prompt {
+  grid-area: 1 / 1;
+  display: block;
+  width: calc(var(--term-cols) * 1ch);
+  white-space: pre;
+}
+.term-body:has(.term-prompt) .term-frame {
+  grid-area: 2 / 1;
+}
+
+.term-prompt-sigil {
+  color: var(--sq-text-3);
+}
+/* The one line in the panel a person wrote, so it carries the page's
+   full-strength text against the recorded output's second tier. */
+.term-prompt-cmd {
+  color: var(--sq-text);
+}
+
 /* Only the active frame shows.
 
-   Two rules, and no rule that hides the fallback. `:last-child` is the
+   Two rules, and no rule that hides the fallback. `:last-of-type` is the
    finished session — what a reader gets with no JavaScript, before
    hydration, and under reduced motion. `[data-active='true']` is the
    player's override, and the player marks exactly one frame at a time,
    removing the attribute from the rest rather than setting it false.
 
+   `:last-of-type` and NOT `:last-child`, which is what this said until a
+   `::flow` was rendered with its scripts stripped and every terminal on
+   the page came up blank. The caret is a `<span>` appended after the
+   frames, so it — not the last frame — is `.term-body`'s last child, and
+   `.term-frame:last-child` matched nothing at all. With JavaScript the
+   player marks a frame within a few hundred milliseconds and the hole
+   never shows, which is exactly why it survived: the one rule that only
+   ever runs when nothing else does is the one nothing else can catch
+   failing. `:last-of-type` counts among the div children, which is the
+   frames and only the frames.
+
    An earlier version hid `[data-active='false']` explicitly, which beat
-   `:last-child` on source order: the instant no frame held `"true"` —
+   the fallback on source order: the instant no frame held `"true"` —
    any gap between two runs racing over the same terminal — every frame
    was hidden and the panel rendered blank at full height, with nothing
    thrown to explain it. There is now no declaration anywhere that can
@@ -120,8 +167,18 @@
 }
 
 /* The fallback, scoped to "no frame is marked" so it cannot show through
-   behind the active one. */
-.term-body:not(:has(.term-frame[data-active='true'])) .term-frame:last-child {
+   behind the active one.
+
+   `[data-blank]` is the player saying the screen is genuinely empty — the
+   moment before the command has been entered, when the session has not
+   printed anything yet. It withholds the fallback rather than hiding the
+   frame, which keeps the paragraph above literally true: there is still no
+   declaration anywhere that can hide the last frame, so the blank panel
+   still has no way to happen by accident. `#showFrame` clears the
+   attribute on every call that shows a frame, so the state cannot outlive
+   the keystrokes it exists for. */
+.term-body:not([data-blank='true']):not(:has(.term-frame[data-active='true']))
+  .term-frame:last-of-type {
   visibility: visible;
 }
 
@@ -145,7 +202,13 @@
    full width, before its first character is written.
 
    Safe because only an input line is ever overlaid, and cliclack draws
-   nothing to the right of one. */
+   nothing to the right of one.
+
+   This is the one surface in the terminal that stays flat while the panel
+   around it is glass, and it has to: its whole job is erasing the
+   placeholder underneath, which a translucent fill would leave showing.
+   `sq-frost-well-solid` is the panel's own glass resolved to a flat
+   colour, so the band reads as the panel rather than as a patch on it. */
 .term-typed {
   position: absolute;
   top: calc(0.9rem + var(--row) * 1lh);
@@ -153,7 +216,28 @@
   width: calc((var(--term-cols) - var(--col)) * 1ch);
   white-space: pre;
   color: var(--sq-text);
-  background: var(--sq-well);
+  background: var(--sq-frost-well-solid);
+}
+
+/* The wait indicator, redrawn over the frame's own spinner cell.
+
+   Positioned exactly as `.term-typed` is, and opaque for the same reason —
+   there is a glyph underneath it, the one the pty was photographed
+   painting. One cell wide, and no wider: unlike a typed answer there is
+   nothing to erase to the right of it, and a band stretching to the end of
+   the row would flatten output the frame is still meant to be showing.
+
+   No transition on the glyph. The real indicator cuts between frames at
+   100ms and so does this; easing one braille character into another is a
+   smear, not a spin. */
+.term-spin {
+  position: absolute;
+  top: calc(0.9rem + var(--row) * 1lh);
+  left: calc(1rem + var(--col) * 1ch);
+  width: 1ch;
+  white-space: pre;
+  color: var(--sq-text);
+  background: var(--sq-frost-well-solid);
 }
 
 /* Above the typed overlay: the caret sits at the end of the text, inside
@@ -181,6 +265,140 @@
   }
 }
 
+/* ────────────────────────────────────────────────────────────────────
+   THE KEYPRESS MARKERS
+
+   A recording's frames show what the program drew; they cannot show the
+   keystroke that moved it on. `secreq-terminal-element.ts` raises a keycap
+   as each recorded `k` step plays.
+
+   Anchored to `.term-frame-wrap`, not `.term-body`: the body scrolls
+   horizontally when a recording is wider than the screen, and markers
+   inside it would scroll away from the corner instead of staying pinned.
+
+   **They stack.** A cap outlives its own step — the keys in a recording
+   are about 800ms apart (a key beat plus a frame dwell) and a cap lives
+   longer than that, so the previous one is usually still fading when the
+   next arrives. Replacing the text in a single element would make a quick
+   run of keys flicker through one box; instead each is its own node and
+   the column grows upward out of the corner, newest at the bottom.
+
+   Each cap runs one animation covering its whole life — in, hold, out —
+   so nothing has to time its removal; the element deletes itself on
+   `animationend`.
+   ──────────────────────────────────────────────────────────────────── */
+.term-frame-wrap {
+  position: relative;
+}
+
+.term-keys {
+  position: absolute;
+  right: 0.7rem;
+  bottom: 0.7rem;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  /* Roomy enough that two stacked caps read as two objects —
+     the wall and contact shadow occupy ~4px below each one. */
+  gap: 0.42rem;
+  pointer-events: none;
+}
+
+.term-key {
+  --term-key-life: 1250ms;
+
+  /* Every tone derives from the one surface token, so the cap themes with
+     the page instead of needing a second palette. `--sq-frost-well-solid`
+     is the terminal body the cap sits ON, so it is the starting point,
+     not the cap: a face level with its surround reads as a recess. */
+  --cap: color-mix(in srgb, var(--sq-frost-well-solid) 86%, #fff);
+  --face-shaded: color-mix(in srgb, var(--cap) 86%, #000);
+  /* Restrained: a moulded cap is matte, and a bright lip plus a hot dish
+     is what makes one read as glossy plastic. */
+  --face-bevel: color-mix(in srgb, var(--cap) 70%, #fff);
+  --face-lit: color-mix(in srgb, var(--cap) 90%, #fff);
+  /* The skirt darkens from the SURROUND, not from the lifted face.
+     Darkening the face gives a skirt that is barely a shade on a dark
+     page and a near-black slab on a light one — the same formula reading
+     as two different materials. Anchored to the surround, one step down
+     means the same thing in both themes. */
+  --skirt-lit: color-mix(in srgb, var(--sq-frost-well-solid) 90%, #000);
+  --skirt: color-mix(in srgb, var(--sq-frost-well-solid) 78%, #000);
+  --skirt-dark: color-mix(in srgb, var(--sq-frost-well-solid) 62%, #000);
+  --cap-wall-deep: color-mix(in srgb, var(--sq-frost-well-solid) 50%, #000);
+
+  /* ── The skirt ──
+     Padding is the taper. More is revealed below the face than above it,
+     which is what a cap looks like seen from slightly above: you catch
+     the front wall, and barely any of the back. */
+  display: inline-flex;
+  padding: 2px 3px 5px;
+  border-radius: 8px 8px 11px 11px;
+  background: linear-gradient(
+    180deg,
+    var(--skirt-lit) 0%,
+    var(--skirt) 45%,
+    var(--skirt-dark) 100%
+  );
+  /* Zero-blur offsets are the base of the wall; only the last, tight and
+     dark, is a shadow — where the cap meets the surface. A blurred stack
+     would read as the cap hovering above the page. */
+  box-shadow:
+    0 1px 0 var(--skirt-dark),
+    0 2px 0 var(--cap-wall-deep),
+    0 4px 5px -3px color-mix(in srgb, #000 45%, transparent);
+
+  opacity: 0;
+  animation: term-key-life var(--term-key-life) ease-out forwards;
+}
+
+/* ── The top plate ──
+   Sits proud of the skirt: its own radius, its own gradient, a lip along
+   the top edge and a dish blooming from just below it. */
+.term-key-face {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.85em;
+  padding: 0.2em 0.44em;
+  border-radius: 6px 6px 8px 8px;
+  /* One linear pass, top to bottom. A radial here put a bright spot in
+     the middle of the cap — a specular highlight, which reads as gloss.
+     A moulded cap is matte: it just catches more light along its top
+     edge than its bottom, and that is a gradient, not a dot. */
+  background: linear-gradient(180deg, var(--face-lit) 0%, var(--cap) 58%, var(--face-shaded) 100%);
+  box-shadow:
+    inset 0 1px 0 var(--face-bevel),
+    inset 0 -2px 3px -2px color-mix(in srgb, #000 55%, transparent),
+    0 1px 1px -1px color-mix(in srgb, #000 55%, transparent);
+  color: var(--sq-text-2);
+  font-size: 0.95rem;
+  font-weight: 500;
+  line-height: 1.3;
+  text-shadow: 0 1px 0 color-mix(in srgb, var(--cap) 58%, #000);
+}
+
+/* Seats downward into place — a cap being struck, not one drifting in. */
+@keyframes term-key-life {
+  0% {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  11% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  68% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(0);
+  }
+}
+
 .term figcaption {
   margin-top: 0.7rem;
   font-size: 0.8rem;
@@ -198,7 +416,8 @@
    a recording stores palette *indices*, not pixels — the same session has
    to be legible on this site's near-black panel and on its white one.
    These are the two resolutions of that palette, tuned for contrast
-   against `--sq-well` rather than copied from a terminal theme.
+   against the panel's frosted well rather than copied from a terminal
+   theme.
    ════════════════════════════════════════════════════════════════════ */
 
 .term-body {
@@ -239,40 +458,106 @@
   --a15: #1a1c1f;
 }
 
-.term-body .f0 { color: var(--a0); }
-.term-body .f1 { color: var(--a1); }
-.term-body .f2 { color: var(--a2); }
-.term-body .f3 { color: var(--a3); }
-.term-body .f4 { color: var(--a4); }
-.term-body .f5 { color: var(--a5); }
-.term-body .f6 { color: var(--a6); }
-.term-body .f7 { color: var(--a7); }
-.term-body .f8 { color: var(--a8); }
-.term-body .f9 { color: var(--a9); }
-.term-body .f10 { color: var(--a10); }
-.term-body .f11 { color: var(--a11); }
-.term-body .f12 { color: var(--a12); }
-.term-body .f13 { color: var(--a13); }
-.term-body .f14 { color: var(--a14); }
-.term-body .f15 { color: var(--a15); }
+.term-body .f0 {
+  color: var(--a0);
+}
+.term-body .f1 {
+  color: var(--a1);
+}
+.term-body .f2 {
+  color: var(--a2);
+}
+.term-body .f3 {
+  color: var(--a3);
+}
+.term-body .f4 {
+  color: var(--a4);
+}
+.term-body .f5 {
+  color: var(--a5);
+}
+.term-body .f6 {
+  color: var(--a6);
+}
+.term-body .f7 {
+  color: var(--a7);
+}
+.term-body .f8 {
+  color: var(--a8);
+}
+.term-body .f9 {
+  color: var(--a9);
+}
+.term-body .f10 {
+  color: var(--a10);
+}
+.term-body .f11 {
+  color: var(--a11);
+}
+.term-body .f12 {
+  color: var(--a12);
+}
+.term-body .f13 {
+  color: var(--a13);
+}
+.term-body .f14 {
+  color: var(--a14);
+}
+.term-body .f15 {
+  color: var(--a15);
+}
 
-.term-body .g0 { background: var(--a0); }
-.term-body .g1 { background: var(--a1); }
-.term-body .g2 { background: var(--a2); }
-.term-body .g3 { background: var(--a3); }
-.term-body .g4 { background: var(--a4); }
-.term-body .g5 { background: var(--a5); }
-.term-body .g6 { background: var(--a6); }
-.term-body .g7 { background: var(--a7); }
+.term-body .g0 {
+  background: var(--a0);
+}
+.term-body .g1 {
+  background: var(--a1);
+}
+.term-body .g2 {
+  background: var(--a2);
+}
+.term-body .g3 {
+  background: var(--a3);
+}
+.term-body .g4 {
+  background: var(--a4);
+}
+.term-body .g5 {
+  background: var(--a5);
+}
+.term-body .g6 {
+  background: var(--a6);
+}
+.term-body .g7 {
+  background: var(--a7);
+}
 
-.term-body .b { font-weight: 600; }
-.term-body .d { opacity: 0.62; }
-.term-body .i { font-style: italic; }
-.term-body .u { text-decoration: underline; }
-.term-body .v { background: var(--sq-text); color: var(--sq-well); }
+.term-body .b {
+  font-weight: 600;
+}
+.term-body .d {
+  opacity: 0.62;
+}
+.term-body .i {
+  font-style: italic;
+}
+.term-body .u {
+  text-decoration: underline;
+}
+.term-body .v {
+  background: var(--sq-text);
+  color: var(--sq-well);
+}
 
 @media (prefers-reduced-motion: reduce) {
-  .term-caret {
+  /* None of these ever appears without playback, which reduced motion skips
+     entirely — this is belt-and-braces so a future code path cannot
+     surface them here. The spinner overlay especially: the frame beneath it
+     already holds a real, still photograph of the indicator, which is the
+     right thing to leave a reader who asked for no motion. */
+  .term-caret,
+  .term-keys,
+  .term-spin {
     display: none;
   }
 }
