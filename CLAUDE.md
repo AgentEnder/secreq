@@ -368,7 +368,7 @@ hand and clap never sees them.
   `daemon/peercred.rs` or `provenance.rs`, because a guest has no host
   pid and a forwarded socket's peer is the tunnel (sshd), not the
   asker. The host-declared scope is the principal instead.
-- The audit log is written by the **wrap client** (`commands.rs`)
+- The audit log is written by the **wrap client** (`commands/run.rs`)
   after the daemon's reply lands. The scoped agent
   (`scoped_agent/mod.rs`) is also a client, so it writes its own rows
   via `audit.rs::AuditEntry::agent_resolve` — that's the rule, not an
