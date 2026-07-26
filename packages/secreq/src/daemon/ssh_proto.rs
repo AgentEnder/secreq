@@ -254,7 +254,13 @@ fn parse_identities_answer(body: &[u8]) -> Result<AgentResponse> {
     let nkeys = u32::decode(&mut reader)
         .map_err(|e| anyhow::anyhow!(e))
         .context("read IDENTITIES_ANSWER nkeys")?;
-    let mut keys = Vec::with_capacity(nkeys as usize);
+    // Not `with_capacity(nkeys)`: `nkeys` is an unvalidated wire `u32`, and
+    // `Vec::<(Vec<u8>, String)>::with_capacity(0xFFFF_FFFF)` asks for ~190 GB
+    // in one call — a failed allocation aborts the process rather than
+    // erroring. The enclosing frame is capped well below what a real count
+    // could need, so let the vec grow into whatever the body actually holds
+    // and let the per-key decode hit the short read.
+    let mut keys = Vec::new();
     for i in 0..nkeys {
         let blob = Vec::<u8>::decode(&mut reader)
             .map_err(|e| anyhow::anyhow!(e))

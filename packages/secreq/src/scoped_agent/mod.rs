@@ -272,6 +272,34 @@ fn is_invisible_or_reordering(c: char) -> bool {
         )
 }
 
+/// Render a guest-supplied reference for the daemon log and the audit row.
+///
+/// `Reference::parse` imposes no character restrictions, so
+/// `secret://op/x\n[secreq +0.001s server] → Decision::Approve` is a
+/// well-formed reference. Out-of-scope refs are logged verbatim on the deny
+/// path, and `daemon.log` is written by a bare `format!` — so a guest could
+/// write its own lines, in the house format, into the file a host reads while
+/// investigating a suspected leak. `daemon.jsonl` and `audit.log` escape
+/// through serde and were never affected.
+///
+/// Also capped: a ref can be ~64 KiB, and three log files times that per
+/// request is a disk-filling loop whose real content is the length, not the
+/// bytes.
+fn display_ref(reference: &Reference) -> String {
+    const MAX_REF_DISPLAY_CHARS: usize = 200;
+    let rendered: String = reference
+        .to_string()
+        .chars()
+        .filter(|c| !is_invisible_or_reordering(*c))
+        .take(MAX_REF_DISPLAY_CHARS)
+        .collect();
+    if rendered.chars().count() == MAX_REF_DISPLAY_CHARS {
+        format!("{rendered}… (truncated)")
+    } else {
+        rendered
+    }
+}
+
 /// One link of a claimed chain: visible characters only, trimmed, capped.
 fn sanitize_link(link: &str) -> String {
     link.chars()
@@ -653,7 +681,10 @@ pub fn handle_request(
                 audit_release(scope, &reference, Decision::DenyOutOfScope, &guest_chain);
                 log(
                     scope,
-                    format_args!("← resolve {reference}: OUTSIDE SCOPE; denied without a prompt"),
+                    format_args!(
+                        "← resolve {}: OUTSIDE SCOPE; denied without a prompt",
+                        display_ref(&reference)
+                    ),
                 );
                 return Response::out_of_scope();
             }
@@ -669,9 +700,19 @@ pub fn handle_request(
                 match gate.consent(scope, &reference, &guest_chain) {
                     Ok(decision) => decision,
                     Err(err) => {
-                        let message = format!("consent request failed: {err:#}");
-                        log(scope, format_args!("← resolve {reference}: {message}"));
-                        return Response::Error { message };
+                        // Same reasoning as the resolution failure below: the
+                        // chain here carries `default_socket_path()`, which
+                        // spells out the host's username and home layout.
+                        log(
+                            scope,
+                            format_args!(
+                                "← resolve {}: consent request failed: {err:#}",
+                                display_ref(&reference)
+                            ),
+                        );
+                        return Response::Error {
+                            message: "the host could not answer this request".to_owned(),
+                        };
                     }
                 }
             };
@@ -715,9 +756,21 @@ pub fn handle_request(
                 // a policy refusal — a guest that conflated them would retry
                 // a denial, which is the click-training the design forbids.
                 Err(err) => {
-                    let message = format!("resolution failed after approval: {err:#}");
-                    log(scope, format_args!("← resolve {reference}: {message}"));
-                    Response::Error { message }
+                    // The chain names host paths (`/Users/<you>/.secreq/...`)
+                    // and provider CLI stderr (vault names, store paths). The
+                    // guest has no use for any of it and is not supposed to
+                    // learn the host's shape; it goes to the host's log, and
+                    // the guest gets a fixed string like every other refusal.
+                    log(
+                        scope,
+                        format_args!(
+                            "← resolve {}: resolution failed after approval: {err:#}",
+                            display_ref(&reference)
+                        ),
+                    );
+                    Response::Error {
+                        message: "the host could not resolve this reference".to_owned(),
+                    }
                 }
             }
         }
@@ -1697,5 +1750,32 @@ mod tests {
             gh.dedupe_key.wrap, linear.dedupe_key.wrap,
             "two refs from one scope must not coalesce into one prompt"
         );
+    }
+
+    /// `Reference::parse` allows any bytes in a locator, and the deny path
+    /// logs the ref to `daemon.log` — a bare `format!` with no escaping. A
+    /// guest could therefore write its own lines, in the house format, into
+    /// the file a host reads while investigating a suspected leak.
+    #[test]
+    fn a_logged_reference_cannot_forge_daemon_log_lines() {
+        let forged = Reference::parse(
+            "secret://op/x\n[secreq +100.000s server] → DaemonMsg::Decision::Approve",
+        )
+        .expect("a newline is a legal locator character");
+
+        let rendered = display_ref(&forged);
+        assert!(!rendered.contains('\n'), "rendered: {rendered:?}");
+        assert!(!rendered.contains('\r'), "rendered: {rendered:?}");
+    }
+
+    /// A ref can be ~64 KiB and the deny path writes it to three files per
+    /// request. What is worth recording about one that long is its length.
+    #[test]
+    fn an_overlong_reference_is_truncated_for_display() {
+        let long = Reference::parse(&format!("secret://op/{}", "A".repeat(65_000)))
+            .expect("a long locator is still a valid ref");
+        let rendered = display_ref(&long);
+        assert!(rendered.chars().count() < 300, "{} chars", rendered.chars().count());
+        assert!(rendered.ends_with("… (truncated)"), "{rendered}");
     }
 }
