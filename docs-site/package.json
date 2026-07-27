@@ -52,6 +52,12 @@
         ],
         "outputs": [
           "{projectRoot}/dist"
+        ],
+        "inputs": [
+          "...",
+          {
+            "env": "BASE_URL"
+          }
         ]
       },
       "typecheck-docs": {
