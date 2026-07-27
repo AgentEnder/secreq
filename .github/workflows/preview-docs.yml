@@ -72,7 +72,7 @@ jobs:
         with:
           script: |
             const prNumber = context.payload.pull_request.number;
-            const previewUrl = `https://secreq.dev/pr/${prNumber}/`;
+            const previewUrl = `https://craigory.dev/secreq/pr/${prNumber}/`;
             const marker = '<!-- docs-preview-comment -->';
             const body = `${marker}\n**Docs Preview:** ${previewUrl}`;
 
