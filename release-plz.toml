@@ -38,3 +38,19 @@ git_tag_name = "v{{ version }}"
 # Keep a Changelog, which is what CHANGELOG.md already is.
 [changelog]
 protect_breaking_commits = true
+
+# release-plz writes a package's changelog beside its `Cargo.toml`, which for
+# this layout means `packages/secreq/CHANGELOG.md` — a second, empty-history
+# changelog nobody reads, while the real one at the root goes untouched.
+#
+# That is not cosmetic. `release.yml` extracts the GitHub Release notes by
+# `awk`-ing the root `CHANGELOG.md` for the section matching the version, and
+# packages that same file into every release tarball. Left alone, every
+# release would ship notes that silently fell back to auto-generated ones,
+# and a tarball whose changelog stopped at 0.1.0.
+#
+# `changelog_path` is relative to the root `Cargo.toml`, so this is the repo
+# root. It is a `[[package]]` key; there is no workspace-level equivalent.
+[[package]]
+name = "secreq"
+changelog_path = "CHANGELOG.md"
