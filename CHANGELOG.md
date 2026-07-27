@@ -16,21 +16,19 @@ hand — put the prose in the commit message.
 
 ## [Unreleased]
 
-### Added
-
-- **Public distribution channels.** Install with `curl -fsSL
-https://craigory.dev/secreq/install.sh | sh` (detects OS/arch, downloads the release
-  binary, and verifies it against the signed `SHA256SUMS`), `brew install
-AgentEnder/secreq/secreq`, or `cargo install secreq`. The release workflow
-  now also generates the Homebrew formula from the real checksums, pushes it
-  to the tap, and publishes the crate to crates.io from CI over OIDC. See
-  [`docs/install.md`](docs/install.md).
-
-## [0.1.0] - 2026-07-22
+## [0.1.0] - 2026-07-27
 
 Initial release.
 
 ### Added
+
+- **Public distribution channels.** Install with `curl -fsSL
+https://craigory.dev/secreq/install.sh | sh` (detects OS/arch, downloads the
+  release binary, and verifies it against the signed `SHA256SUMS`),
+  `brew install AgentEnder/secreq/secreq`, or `cargo install secreq`. The
+  release workflow generates the Homebrew formula from the real checksums,
+  pushes it to the tap, and publishes the crate to crates.io from CI over
+  OIDC. See [`docs/install.md`](docs/install.md).
 
 - **Per-binary wraps.** `secreq wrap <bin>` records how a binary's
   credentials are sourced (`--env NAME=secret://…`) and installs a PATH shim
