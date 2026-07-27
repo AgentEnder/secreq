@@ -24,8 +24,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up dev tools with mise
-        uses: jdx/mise-action@146a28175021df8ca24f8ee1828cc2a60f980bd5 # v3
+      - &miseCache
+        name: Cache mise tools and rust toolchain
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.local/share/mise/installs
+            ~/.cargo/bin
+            ~/.rustup
+          key: mise-rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.toml', 'rust-toolchain.toml') }}
+      - &miseInstall
+        name: Setup mise
+        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+        with:
+          cache: false
       - run: cargo fmt --all -- --check
 
   # The JS/TS/CSS half of the same gate. Without it these files drift: before
@@ -36,8 +48,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up dev tools with mise
-        uses: jdx/mise-action@146a28175021df8ca24f8ee1828cc2a60f980bd5 # v3
+      - *miseCache
+      - *miseInstall
       - uses: pnpm/action-setup@v4
       - run: pnpm install --frozen-lockfile
       - run: pnpm run format:check
@@ -83,8 +95,8 @@ jobs:
             libxcb-shape0-dev \
             libxcb-xfixes0-dev
 
-      - name: Set up dev tools with mise
-        uses: jdx/mise-action@146a28175021df8ca24f8ee1828cc2a60f980bd5 # v3
+      - *miseCache
+      - *miseInstall
 
       - name: Cache cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2

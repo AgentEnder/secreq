@@ -12,7 +12,14 @@
 # Matches the release workflow's toolchain. Pinned rather than "stable"
 # because a clippy lint added in a new stable release turns an unrelated PR
 # red, and the fix belongs in its own commit.
-rust = "1.97.1"
+#
+# `components` is not optional here, and the reason is easy to miss locally:
+# mise installs the toolchain through rustup, so a developer whose rustup
+# default profile already carries rustfmt and clippy gets them and never
+# notices. A fresh CI runner takes rustup's minimal profile and does not, so
+# `cargo fmt` and `cargo clippy` fail with "not installed for the toolchain" —
+# in the two jobs whose only purpose is to run them.
+rust = { version = "1.97.1", components = ["rustfmt", "clippy"] }
 
 # The `web` job's version. pnpm comes from package.json's `packageManager`
 # field via corepack, so it is deliberately not listed here.

@@ -324,8 +324,14 @@ mise run docs-audit  # the redundancy / stale-claim sweep
 
 Rust is pinned to an exact version rather than `stable`, so a lint added in a
 new stable release can't turn an unrelated PR red. Bumping it is its own
-commit. `rustfmt` and `clippy` come with mise's rust install, so no separate
-component step is needed.
+commit.
+
+`rustfmt` and `clippy` are named in `mise.toml`'s `components`, and have to
+be. mise installs Rust through rustup, so your machine hands them over from
+whatever your rustup default profile already had and nothing looks wrong; a
+fresh runner takes the minimal profile and the `rustfmt` and `clippy` jobs
+both fail with "not installed for the toolchain". Adding a tool to that file
+is not the same as adding a component to it.
 
 ## Prose is linted
 
