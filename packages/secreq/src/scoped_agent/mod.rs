@@ -1155,7 +1155,7 @@ fn handle_connection(
     gate: &dyn Gate,
 ) -> Result<()> {
     while let Some(payload) = proto::read_payload(&mut stream)? {
-        let response = match serde_json::from_slice::<Request>(&payload) {
+        let mut response = match serde_json::from_slice::<Request>(&payload) {
             Ok(request) => handle_request(scope, approvals, gate, request),
             // An unparseable frame is the guest's fault. Answer a defined
             // error and keep serving — and say nothing about what *would*
@@ -1167,21 +1167,30 @@ fn handle_connection(
                 }
             }
         };
-        write_response(&mut stream, response)?;
+        write_response(&mut stream, &mut response)?;
     }
     Ok(())
 }
 
 /// Encode and write one response, scrubbing both plaintext copies of any
 /// secret value it carried: the `Response`'s own `String` and the encoded
-/// frame buffer. The frame is zeroized even if the write failed — a failed
-/// write is exactly when the bytes are most likely to still be sitting in a
-/// buffer we're about to drop.
-fn write_response(stream: &mut UnixStream, response: Response) -> Result<()> {
-    let mut frame = proto::encode(&response)?;
-    if let Response::Value { mut value } = response {
+/// frame buffer.
+///
+/// **Both are scrubbed on every path out, including the failing ones.** A
+/// failed write is exactly when the bytes are most likely to still be sitting
+/// in a buffer we're about to drop, and a failed *encode* is worse: `encode`
+/// bails when the payload clears [`proto::MAX_FRAME_LEN`], which a real secret
+/// reaches — a certificate, or a large private key. So the encode's `Result`
+/// is bound rather than `?`-ed, the response is scrubbed, and only then does
+/// the error propagate. `response` is borrowed rather than consumed so that
+/// postcondition is something a caller (and a test) can observe.
+fn write_response(stream: &mut UnixStream, response: &mut Response) -> Result<()> {
+    // Bound, not `?`-ed: the scrub below has to run even when this failed.
+    let encoded = proto::encode(&*response);
+    if let Response::Value { value } = response {
         value.zeroize();
     }
+    let mut frame = encoded?;
     let result = stream
         .write_all(&frame)
         .and_then(|()| stream.flush())
@@ -2157,5 +2166,48 @@ mod tests {
             rendered.chars().count()
         );
         assert!(rendered.ends_with("… (truncated)"), "{rendered}");
+    }
+
+    /// `write_response`'s contract is that the caller's plaintext is scrubbed
+    /// by the time it returns, on **every** path. The over-cap path is the one
+    /// that used to escape it: `encode` bails, the `?` propagates, and the
+    /// value was freed intact. It is reachable with a real secret — a
+    /// certificate or a large private key clears 64 KiB.
+    #[test]
+    fn an_over_cap_response_is_scrubbed_before_the_encode_error_propagates() {
+        let (mut stream, _peer) = UnixStream::pair().expect("socketpair");
+        let mut response = Response::Value {
+            value: "A".repeat(proto::MAX_FRAME_LEN + 1),
+        };
+
+        let err = write_response(&mut stream, &mut response).expect_err("over-cap frame must bail");
+        assert!(err.to_string().contains("exceeds the cap"), "{err:#}");
+
+        let Response::Value { value } = &response else {
+            panic!("the variant must survive the scrub, only its plaintext goes");
+        };
+        assert!(
+            value.is_empty(),
+            "{} bytes of plaintext survived the bail",
+            value.len()
+        );
+    }
+
+    /// The ordinary path holds the same postcondition — this is the one the
+    /// original `value.zeroize()` already covered, kept so a future rewrite
+    /// can't satisfy the test above by scrubbing only on the error path.
+    #[test]
+    fn a_written_response_is_scrubbed_after_a_successful_write() {
+        let (mut stream, _peer) = UnixStream::pair().expect("socketpair");
+        let mut response = Response::Value {
+            value: "hunter2".to_owned(),
+        };
+
+        write_response(&mut stream, &mut response).expect("a small frame writes");
+
+        let Response::Value { value } = &response else {
+            panic!("the variant must survive the scrub, only its plaintext goes");
+        };
+        assert!(value.is_empty(), "plaintext survived a successful write");
     }
 }
