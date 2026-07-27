@@ -76,6 +76,14 @@ pub struct ManagerWindowState {
     /// Set when Cmd/Ctrl+F fires; consumed by the header to focus the
     /// search input on the next widget pass.
     pub(crate) audit_search_focus_pending: bool,
+    /// Burst keys the user has opened on the Audit view — the timeline folds
+    /// a run of identical rows into one, and this is which of those folds are
+    /// showing their members. See `super::ui::audit_burst_key`.
+    ///
+    /// Session-scoped like everything else here: a fresh manager opens with
+    /// every burst collapsed. Nothing about the log on disk is stored, or
+    /// changed, by any of it.
+    pub(crate) expanded_bursts: std::collections::HashSet<String>,
     /// Live name filter for the Rules view (the same header search box
     /// binds here while the Rules view is active).
     pub(crate) rules_filter: String,
@@ -99,6 +107,7 @@ impl ManagerWindowState {
             rule_sort: RuleSort::default(),
             audit_search: String::new(),
             audit_search_focus_pending: false,
+            expanded_bursts: std::collections::HashSet::new(),
             rules_filter: String::new(),
             audit: AuditCache::new(),
             last_viewer_mode: false,
@@ -135,6 +144,18 @@ impl ManagerWindowState {
     pub fn set_audit_search(&mut self, query: &str) {
         self.audit_search.clear();
         self.audit_search.push_str(query);
+    }
+
+    /// Open the burst whose **oldest** row is `oldest`, the way clicking its
+    /// header does. The production path toggles this from the Audit view;
+    /// this is the entry point for a caller that already knows which run it
+    /// means (the screenshot harness builds the rows itself).
+    ///
+    /// Takes the oldest member rather than any member because that is what
+    /// keys a burst — see `super::ui::audit_burst_key` for why that end.
+    pub fn expand_audit_burst(&mut self, oldest: &crate::audit::AuditEntry) {
+        self.expanded_bursts
+            .insert(super::ui::audit_burst_key(oldest));
     }
 
     /// Set how the Rules view orders its suggestion cards.
@@ -244,6 +265,7 @@ pub fn render_manager_panel(
                 &mut state.rules_draft,
                 &mut state.view,
                 &state.audit_search,
+                &mut state.expanded_bursts,
             ),
         });
 }

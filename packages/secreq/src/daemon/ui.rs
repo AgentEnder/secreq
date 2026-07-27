@@ -840,6 +840,7 @@ pub(crate) fn render_audit_page(
     rules_draft: &mut Option<RuleDraft>,
     view: &mut ManagerView,
     search: &str,
+    expanded_bursts: &mut std::collections::HashSet<String>,
 ) {
     let th = Theme::of(ctx);
     if audit.entries.is_empty() {
@@ -859,25 +860,32 @@ pub(crate) fn render_audit_page(
         return;
     }
 
-    // Cap the render at 200 to mirror the previous behavior; do the
-    // cap AFTER filtering so a user searching for an old wrap can
-    // still find it in a long history.
+    // Filter first, group second, cap third. The order is load-bearing:
+    //
+    // - Filtering before grouping is what makes a burst unable to hide a
+    //   search hit; see [`audit_row_identity`] for the guarantee.
+    // - Capping *groups* rather than rows is what makes the collapsing worth
+    //   having. A cap on rows would let one flood of identical requests spend
+    //   the whole budget and leave the reader looking at a single collapsed
+    //   row above an empty page — the same "your history is buried" failure,
+    //   wearing a count.
     let total = audit.entries.len();
     let query = search.trim().to_owned();
-    let filtered: Vec<&AuditEntry> = audit
+    let matched: Vec<&AuditEntry> = audit
         .entries
         .iter()
         .rev()
         .filter(|e| audit_entry_matches(e, &query))
-        .take(200)
         .collect();
 
     // Match count while a query is active — the header's search box is
     // pure input, so the "N of M" feedback renders with the results.
+    // Counted in *entries*, not groups: a reader asking "how much of my log
+    // is this" means rows, and a collapsed group already states its own size.
     if !query.is_empty() {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
             ui.label(
-                egui::RichText::new(format!("{} of {total}", filtered.len()))
+                egui::RichText::new(format!("{} of {total}", matched.len()))
                     .size(11.0)
                     .color(th.dim),
             );
@@ -885,7 +893,7 @@ pub(crate) fn render_audit_page(
         ui.add_space(4.0);
     }
 
-    if filtered.is_empty() {
+    if matched.is_empty() {
         ui.vertical_centered(|ui| {
             ui.add_space(28.0);
             ui.label(
@@ -903,6 +911,8 @@ pub(crate) fn render_audit_page(
     }
 
     let now = now_unix();
+    let bursts = group_audit_bursts(&matched, now);
+
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
@@ -910,11 +920,10 @@ pub(crate) fn render_audit_page(
             // session. Day-bucket headers give the eye an anchor while
             // scanning; a 1px hairline separates consecutive entries
             // (flat rows, not bordered cards).
-            let mut last_bucket: Option<String> = None;
+            let mut last_bucket: Option<&str> = None;
             let mut first = true;
-            for entry in &filtered {
-                let bucket = audit_day_bucket(entry.ts_unix, now);
-                let new_bucket = last_bucket.as_deref() != Some(bucket.as_str());
+            for burst in bursts.iter().take(AUDIT_MAX_BURSTS) {
+                let new_bucket = last_bucket != Some(burst.bucket.as_str());
                 if !first && !new_bucket {
                     audit_row_separator(ui, &th);
                 }
@@ -923,15 +932,15 @@ pub(crate) fn render_audit_page(
                         ui.add_space(10.0);
                     }
                     ui.label(
-                        egui::RichText::new(&bucket)
+                        egui::RichText::new(&burst.bucket)
                             .size(11.0)
                             .strong()
                             .color(th.faint),
                     );
                     ui.add_space(4.0);
-                    last_bucket = Some(bucket);
+                    last_bucket = Some(burst.bucket.as_str());
                 }
-                render_audit_entry(ui, entry, now, rules_draft, view);
+                render_audit_burst(ui, burst, now, expanded_bursts, rules_draft, view);
                 first = false;
             }
         });
@@ -944,6 +953,231 @@ fn audit_row_separator(ui: &mut egui::Ui, th: &Theme) {
     ui.painter()
         .hline(ui.max_rect().x_range(), y, egui::Stroke::new(1.0, th.rule));
     ui.add_space(8.0);
+}
+
+/// How many bursts the timeline draws. Was 200 *rows*; it is 200 *groups*
+/// because a cap on rows is spent by exactly the thing the grouping exists to
+/// survive — a guest that can drive an unbounded run of identical asks fills
+/// the budget with one repeated row and pushes the rest of the history off the
+/// end. A collapsed burst costs one row, so the reader keeps 200 distinct
+/// things to look at no matter how loud any one of them was.
+///
+/// An expanded burst can exceed this. That is one group, opened deliberately,
+/// and refusing to draw what the user just asked to see would be the view
+/// hiding the log again.
+const AUDIT_MAX_BURSTS: usize = 200;
+
+/// A maximal run of adjacent identical rows in the filtered timeline —
+/// what the view collapses into one row plus a count.
+///
+/// **The log on disk is untouched.** Every row is still its own line in
+/// `audit.log`, unique and unchanged; this type exists only between the
+/// filter and the painter.
+struct AuditBurst<'a> {
+    /// The row a collapsed burst draws: the first of the run in the order the
+    /// timeline is showing. Held as its own field rather than read back out of
+    /// `rows`, so "a burst is never empty" is a fact about the type instead of
+    /// an invariant every reader has to be trusted with.
+    lead: &'a AuditEntry,
+    /// Every row in the run, in timeline order, `lead` included. Length 1 is
+    /// the ordinary case and renders exactly as it did before this existed.
+    rows: Vec<&'a AuditEntry>,
+    /// Seconds from the oldest member to the newest. `0` when the whole run
+    /// landed inside one second, which is the shape a probing loop makes.
+    ///
+    /// Folded over every row rather than read off the run's two ends, so it
+    /// stays true whatever order the list arrives in. A span is the number a
+    /// reader sizes an incident with; it must not be able to read `0` because
+    /// of a sort.
+    span_secs: u64,
+    /// The day-bucket header this run sits under. Part of the run's identity,
+    /// so a burst can never straddle two headers and leave one of them
+    /// claiming rows that are not under it.
+    bucket: String,
+    /// Stable key for the expansion set; see [`audit_burst_key`].
+    key: String,
+}
+
+/// Everything the audit view draws about a request, minus the two things that
+/// differ between two occurrences of the *same* request: **when** it happened,
+/// and **which pids** the kernel happened to hand out. Two rows are "identical"
+/// exactly when these strings are equal.
+///
+/// Excluding the pid is not a convenience. A shell loop gets a fresh pid every
+/// iteration, and a run of asks from a guest carries no pid at all — so an
+/// identity that read pids would collapse nothing on the case this feature
+/// exists for. The cost is that a collapsed row shows one member's pids rather
+/// than every member's, and the answer to that is the expansion: open the
+/// group and each row is there with its own pids and its own timestamp.
+///
+/// **The search cannot lose a hit inside a burst.** `audit_entry_matches`
+/// reads the wrap, the decision, the args, each caller's name and command, the
+/// secret names, and the guest's claimed chain — a strict subset of the fields
+/// below. So any two rows with the same identity are *search-equivalent*: no
+/// query exists that matches one and not the other, and a group can never be
+/// hiding a row the user is looking for. `identity_reads_every_field_the_search_reads`
+/// is that invariant as a test, and it fails if a field is ever added to the
+/// search without being added here.
+///
+/// Values are length-prefixed rather than delimited because a scoped-agent
+/// guest supplies some of these strings verbatim (its claimed chain, the refs
+/// it asks for), and a separator a guest can type is a boundary a guest can
+/// move.
+fn audit_row_identity(entry: &AuditEntry) -> String {
+    let mut id = String::new();
+    let mut push = |v: &str| {
+        id.push_str(&v.len().to_string());
+        id.push(':');
+        id.push_str(v);
+    };
+
+    push(&entry.wrap);
+    push(&entry.decision);
+    push(&entry.cwd);
+    push(entry.rule_id.as_deref().unwrap_or_default());
+    push(entry.fingerprint.as_deref().unwrap_or_default());
+    push(match entry.callers_truncated {
+        Some(true) => "clipped",
+        Some(false) => "complete",
+        None => "unrecorded",
+    });
+
+    push(&entry.args.len().to_string());
+    for arg in &entry.args {
+        push(arg);
+    }
+    push(&entry.secrets.len().to_string());
+    for secret in &entry.secrets {
+        push(secret);
+    }
+    push(&entry.callers.len().to_string());
+    for caller in &entry.callers {
+        push(&caller.name);
+        push(&caller.command);
+        push(caller.exe.as_deref().unwrap_or_default());
+    }
+
+    match &entry.sign_anchor {
+        Some(anchor) => {
+            push("anchor");
+            push(match anchor.kind {
+                crate::provenance::SignAnchorKind::Session => "session",
+                crate::provenance::SignAnchorKind::ForwardedSsh => "forwarded_ssh",
+            });
+            push(&anchor.name);
+            push(anchor.command.as_deref().unwrap_or_default());
+        }
+        None => push("no-anchor"),
+    }
+
+    match &entry.declared_by {
+        Some(crate::audit::ScopeDeclarant::Peer(peer)) => {
+            push("declarant-peer");
+            push(&peer.name);
+            push(&peer.command);
+            push(peer.exe.as_deref().unwrap_or_default());
+        }
+        Some(crate::audit::ScopeDeclarant::Gone) => push("declarant-gone"),
+        Some(crate::audit::ScopeDeclarant::NotRead) => push("declarant-not-read"),
+        None => push("no-declarant"),
+    }
+
+    push(entry.unverified_guest_chain.as_deref().unwrap_or_default());
+    id
+}
+
+/// The expansion key for the burst `oldest` is the **oldest** member of.
+///
+/// Keyed on the oldest end because that is the end that does not move. A new
+/// identical request joins at the newest end, so a key built from the newest
+/// row would change every time the flood ticked — collapsing the group under
+/// the user mid-read, on exactly the rows where they are most likely to be
+/// reading. The oldest member only changes when rows age out of the cache.
+pub(crate) fn audit_burst_key(oldest: &AuditEntry) -> String {
+    burst_key_of(oldest.ts_unix, &audit_row_identity(oldest))
+}
+
+fn burst_key_of(oldest_ts: u64, identity: &str) -> String {
+    format!("{oldest_ts}:{identity}")
+}
+
+/// Fold the filtered timeline into runs of adjacent identical rows.
+///
+/// **Adjacency, not a time window** — deliberately, and there is no tuning
+/// constant here to get wrong. Three reasons:
+///
+/// - A row that is *not* identical breaks the run. That is the forensically
+///   important half: a run of 47 refusals with one approval in the middle must
+///   never render as 47 uninterrupted refusals, and a window would let it.
+/// - A window would leave two identical rows three hours apart drawn as two
+///   rows that look the same, making the reader compare timestamps to find
+///   out they are not one event. Adjacency groups them and *states* the span,
+///   which is more information rather than less.
+/// - The failure mode is safe. Worst case adjacency groups nothing, and the
+///   view is what it was before.
+///
+/// The list arrives newest-first and already filtered, so a query that hides
+/// an interleaving row can merge two runs that were separate without it. That
+/// is correct: the group is a property of the list on screen, and its header
+/// counts what is on screen.
+fn group_audit_bursts<'a>(rows: &[&'a AuditEntry], now: u64) -> Vec<AuditBurst<'a>> {
+    let mut out: Vec<AuditBurst<'a>> = Vec::new();
+    let mut open: Option<OpenBurst<'a>> = None;
+
+    for row in rows {
+        let identity = audit_row_identity(row);
+        let bucket = audit_day_bucket(row.ts_unix, now);
+        if let Some(acc) = &mut open {
+            if acc.identity == identity && acc.bucket == bucket {
+                acc.rows.push(row);
+                continue;
+            }
+        }
+        if let Some(acc) = open.take() {
+            out.push(acc.close());
+        }
+        open = Some(OpenBurst {
+            identity,
+            bucket,
+            lead: row,
+            rows: vec![row],
+        });
+    }
+    if let Some(acc) = open.take() {
+        out.push(acc.close());
+    }
+    out
+}
+
+/// A run still being accumulated by [`group_audit_bursts`]. Separate from
+/// [`AuditBurst`] because the finished type carries a span and a key that only
+/// exist once the run is closed.
+struct OpenBurst<'a> {
+    identity: String,
+    bucket: String,
+    lead: &'a AuditEntry,
+    rows: Vec<&'a AuditEntry>,
+}
+
+impl<'a> OpenBurst<'a> {
+    fn close(self) -> AuditBurst<'a> {
+        // `rows` always holds at least `lead`, so seeding the fold with it is
+        // the run's own first answer rather than a stand-in: a one-row run
+        // spans zero seconds because both its bounds are that row.
+        let mut oldest_ts = self.lead.ts_unix;
+        let mut newest_ts = self.lead.ts_unix;
+        for row in &self.rows {
+            oldest_ts = oldest_ts.min(row.ts_unix);
+            newest_ts = newest_ts.max(row.ts_unix);
+        }
+        AuditBurst {
+            key: burst_key_of(oldest_ts, &self.identity),
+            span_secs: newest_ts.saturating_sub(oldest_ts),
+            lead: self.lead,
+            rows: self.rows,
+            bucket: self.bucket,
+        }
+    }
 }
 
 /// Pure predicate: does `entry` match `query`? The query is split into
@@ -2430,6 +2664,126 @@ fn render_pill(ui: &mut egui::Ui, label: &str, fg: egui::Color32, bg: egui::Colo
         });
 }
 
+/// What the burst header's hover says. Its job is to answer the question a
+/// collapsed row raises — "what did you just stop showing me" — and the answer
+/// has to lead with the fact that nothing was lost, because the reader's
+/// alternative is to distrust the whole view.
+const AUDIT_BURST_HOVER: &str =
+    "Requests that differ only in when they ran and which pids were involved.\n\
+     Every one of them is still its own line in audit.log; only this view\n\
+     groups them, so one flood can't bury the rest of your history.\n\
+     Click to show each.";
+
+/// One burst: a header stating what is being folded, then either the newest
+/// member standing in for the run, or every member of it.
+///
+/// A run of one is not a burst and draws no header — the overwhelming majority
+/// of the timeline, unchanged.
+fn render_audit_burst(
+    ui: &mut egui::Ui,
+    burst: &AuditBurst<'_>,
+    now: u64,
+    expanded: &mut std::collections::HashSet<String>,
+    rules_draft: &mut Option<RuleDraft>,
+    view: &mut ManagerView,
+) {
+    if burst.rows.len() == 1 {
+        render_audit_entry(ui, burst.lead, now, rules_draft, view);
+        return;
+    }
+
+    let th = Theme::of(ui.ctx());
+    let is_open = expanded.contains(&burst.key);
+    if render_burst_header(ui, &th, burst, is_open) {
+        if is_open {
+            expanded.remove(&burst.key);
+        } else {
+            expanded.insert(burst.key.clone());
+        }
+    }
+    ui.add_space(5.0);
+
+    if !is_open {
+        // The newest member, verbatim. Its footer already says how long ago
+        // *it* was, and the header above says how far back the run reaches —
+        // between them, "47 attempts over 3 seconds, the last one 2m ago".
+        render_audit_entry(ui, burst.lead, now, rules_draft, view);
+        return;
+    }
+
+    // Indented, so the eye can see where the group ends: expanded members are
+    // otherwise indistinguishable from the ungrouped rows below them, and a
+    // header that says "6" above an unbounded list is not an improvement.
+    // egui draws its own left rule down an indent, which is the same hairline
+    // vocabulary the row separators already use.
+    //
+    // Bodies only — the group's one "Create rule…" hangs off the bottom, since
+    // every member would build the same draft.
+    ui.indent(("audit-burst", burst.key.as_str()), |ui| {
+        let mut first = true;
+        for row in &burst.rows {
+            if !first {
+                audit_row_separator(ui, &th);
+            }
+            render_audit_row_body(ui, row, now);
+            first = false;
+        }
+    });
+    render_create_rule_affordance(ui, burst.lead, rules_draft, view);
+}
+
+/// The clickable line above a collapsed or expanded burst. Returns whether it
+/// was clicked.
+///
+/// One label rather than a styled run of them, because it is a hit target
+/// first: a reader who wants the individual rows should not have to find the
+/// clickable third of a sentence. It borrows the weight and colour of
+/// "Create rule from this ask…" — the audit view's existing "this does
+/// something" signal — so the affordance needs no separate learning.
+fn render_burst_header(
+    ui: &mut egui::Ui,
+    th: &Theme,
+    burst: &AuditBurst<'_>,
+    is_open: bool,
+) -> bool {
+    let glyph = if is_open { "\u{25be}" } else { "\u{25b8}" };
+    let count = burst.rows.len();
+    let span = burst_span_text(burst.span_secs);
+    let mut clicked = false;
+    ui.horizontal(|ui| {
+        let resp = ui.add(
+            egui::Label::new(
+                egui::RichText::new(format!("{glyph} {count} identical requests \u{b7} {span}"))
+                    .size(11.0)
+                    .color(th.accent_text),
+            )
+            .sense(egui::Sense::click()),
+        );
+        clicked = resp.clicked();
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        resp.on_hover_text(AUDIT_BURST_HOVER);
+    });
+    clicked
+}
+
+/// How far back a burst reaches, in the timeline's own vocabulary (the row
+/// footers say `3s ago`, so a span says `over 3s`).
+///
+/// The span is the half of the header that a bare count cannot carry:
+/// 47 attempts over 3s is a script hammering the socket, 47 over 3h is
+/// something running on a timer, and a reader reconstructing an incident
+/// needs to tell them apart without expanding the group.
+fn burst_span_text(span_secs: u64) -> String {
+    if span_secs == 0 {
+        // Not "over 0s". Every row landed inside the same second, and saying
+        // so is both shorter and the more alarming reading.
+        return "within a second".to_owned();
+    }
+    format!("over {}", humanize_duration(Duration::from_secs(span_secs)))
+}
+
 /// One audit entry as a flat, hairline-separated row (the separator is
 /// the page loop's job). No card frame — the timeline reads as a list,
 /// not a stack of boxes.
@@ -2440,12 +2794,26 @@ fn render_audit_entry(
     rules_draft: &mut Option<RuleDraft>,
     view: &mut ManagerView,
 ) {
-    let th = Theme::of(ui.ctx());
     render_audit_row_body(ui, entry, now);
-    // "Create rule from this ask…" — small affordance at the bottom of
-    // each row. We deliberately don't make it a context-menu (would
-    // require right-click discovery) or hover-only (would hide a
-    // not-obvious feature).
+    render_create_rule_affordance(ui, entry, rules_draft, view);
+}
+
+/// "Create rule from this ask…" — small affordance at the bottom of each row.
+/// We deliberately don't make it a context-menu (would require right-click
+/// discovery) or hover-only (would hide a not-obvious feature).
+///
+/// Its own function because an expanded burst draws **one** of these for the
+/// whole group rather than one per member: every row in a burst has the same
+/// wrap, argv, decision and caller chain, so [`RuleDraft::from_audit_entry`]
+/// would build the identical draft from any of them. Six copies of a control
+/// that does one thing is six chances to wonder which one you want.
+fn render_create_rule_affordance(
+    ui: &mut egui::Ui,
+    entry: &AuditEntry,
+    rules_draft: &mut Option<RuleDraft>,
+    view: &mut ManagerView,
+) {
+    let th = Theme::of(ui.ctx());
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -4013,6 +4381,192 @@ mod tests {
         // predicate is vacuously true — mirrors the empty-query case.
         let e = audit_entry_for_search("gh", &["api"], "zsh", &[], "approve");
         assert!(audit_entry_matches(&e, "   "));
+    }
+
+    // ── burst collapsing ─────────────────────────────────────────
+    //
+    // A guest can drive an unbounded run of near-identical asks. The *log*
+    // keeps every one; the view folds a run into one row and a count. These
+    // pin what "identical" and "a run" mean, because both are answers the
+    // feature is wrong without.
+
+    /// A day well clear of any bucket boundary, so a test that moves a
+    /// timestamp by seconds never accidentally crosses into "Yesterday".
+    const BURST_NOW: u64 = 1_700_000_000 + 12 * 3600;
+
+    fn burst_row(ts: u64, pid: u32) -> AuditEntry {
+        let mut e = audit_entry_for_search(
+            "agent:brain-nx-t5",
+            &[],
+            "node",
+            &["secret://op/Prod/aws/root_key"],
+            "deny+out-of-scope",
+        );
+        e.ts_unix = ts;
+        e.callers[0].pid = pid;
+        e
+    }
+
+    fn groups_of(rows: &[AuditEntry]) -> Vec<usize> {
+        let refs: Vec<&AuditEntry> = rows.iter().collect();
+        group_audit_bursts(&refs, BURST_NOW)
+            .iter()
+            .map(|b| b.rows.len())
+            .collect()
+    }
+
+    /// The case the whole feature exists for. A different pid and a different
+    /// second are exactly what two occurrences of one request differ by, so an
+    /// identity that read either would collapse nothing on the only input
+    /// anyone is worried about.
+    #[test]
+    fn rows_differing_only_in_time_and_pid_are_one_burst() {
+        let rows = [
+            burst_row(BURST_NOW - 15, 90210),
+            burst_row(BURST_NOW - 16, 90204),
+            burst_row(BURST_NOW - 17, 90199),
+        ];
+        assert_eq!(groups_of(&rows), vec![3]);
+    }
+
+    /// The forensically important half. 47 refusals with one approval in the
+    /// middle must never render as 47 uninterrupted refusals — a run is
+    /// *adjacent*, and anything else in it ends the run.
+    #[test]
+    fn an_interleaved_row_breaks_the_run() {
+        let mut odd = burst_row(BURST_NOW - 16, 90204);
+        odd.decision = "approve".to_owned();
+        let rows = [
+            burst_row(BURST_NOW - 15, 90210),
+            odd,
+            burst_row(BURST_NOW - 17, 90199),
+        ];
+        assert_eq!(groups_of(&rows), vec![1, 1, 1]);
+    }
+
+    /// A group is drawn under one day header, so it cannot contain rows that
+    /// belong under another — the header would be counting rows that are not
+    /// beneath it.
+    #[test]
+    fn a_burst_never_straddles_a_day_bucket() {
+        const DAY: u64 = 24 * 3600;
+        let rows = [
+            burst_row(BURST_NOW, 1),
+            // Same request, one day earlier: "Today" and "Yesterday".
+            burst_row(BURST_NOW - DAY, 2),
+        ];
+        assert_eq!(groups_of(&rows), vec![1, 1]);
+    }
+
+    /// **The invariant that keeps a burst from hiding a search hit.**
+    ///
+    /// `audit_entry_matches` reads a strict subset of the fields
+    /// [`audit_row_identity`] reads, so two rows in one burst are
+    /// search-equivalent and no query can match one without matching the
+    /// others. This asserts that subset relation the only way a test can:
+    /// change each searched field in turn and require the group to break.
+    ///
+    /// It fails the day someone teaches the search a new field and forgets
+    /// the identity — which is the day a group starts hiding a hit.
+    #[test]
+    fn identity_reads_every_field_the_search_reads() {
+        /// A named edit to one field the search reads.
+        type FieldEdit = (&'static str, fn(&mut AuditEntry));
+        let mutators: [FieldEdit; 7] = [
+            ("wrap", |e| e.wrap = "agent:other".to_owned()),
+            ("decision", |e| e.decision = "approve".to_owned()),
+            ("args", |e| e.args.push("--force".to_owned())),
+            ("caller name", |e| e.callers[0].name = "pnpm".to_owned()),
+            ("caller command", |e| {
+                e.callers[0].command = "node ./probe.js".to_owned();
+            }),
+            ("secrets", |e| {
+                e.secrets[0] = "secret://op/Prod/gh/token".to_owned();
+            }),
+            ("guest chain", |e| {
+                e.unverified_guest_chain = Some("node \u{2192} postinstall".to_owned());
+            }),
+        ];
+        for (field, mutate) in mutators {
+            let mut changed = burst_row(BURST_NOW - 16, 90204);
+            mutate(&mut changed);
+            let rows = [burst_row(BURST_NOW - 15, 90210), changed];
+            assert_eq!(
+                groups_of(&rows),
+                vec![1, 1],
+                "a difference in {field} is searchable, so it must break the burst"
+            );
+        }
+    }
+
+    /// The count is only half the header. Someone reconstructing an incident
+    /// has to tell 47 attempts over three seconds from 47 over three hours
+    /// without opening the group.
+    #[test]
+    fn a_burst_reports_the_span_it_covers() {
+        let rows = [burst_row(BURST_NOW - 15, 1), burst_row(BURST_NOW - 20, 2)];
+        let refs: Vec<&AuditEntry> = rows.iter().collect();
+        let bursts = group_audit_bursts(&refs, BURST_NOW);
+        assert_eq!(bursts[0].span_secs, 5);
+        assert_eq!(burst_span_text(bursts[0].span_secs), "over 5s");
+
+        // Same run, handed over oldest-first. The span is a fact about the
+        // rows, not about which end of the list they arrived from — read off
+        // the two ends it would have collapsed to zero here.
+        let rows = [burst_row(BURST_NOW - 20, 2), burst_row(BURST_NOW - 15, 1)];
+        let refs: Vec<&AuditEntry> = rows.iter().collect();
+        assert_eq!(group_audit_bursts(&refs, BURST_NOW)[0].span_secs, 5);
+
+        assert_eq!(burst_span_text(3 * 3600), "over 3h");
+        // Not "over 0s": a run inside one second is the shape a probing loop
+        // makes, and saying so reads as the event it is.
+        assert_eq!(burst_span_text(0), "within a second");
+    }
+
+    /// The expansion key is built off the **oldest** member, so a burst that
+    /// is still growing keeps the key it was opened under. Keying on the
+    /// newest row would collapse the group under the reader every time the
+    /// flood ticked.
+    #[test]
+    fn a_growing_burst_keeps_its_expansion_key() {
+        let rows = [burst_row(BURST_NOW - 15, 1), burst_row(BURST_NOW - 20, 2)];
+        let refs: Vec<&AuditEntry> = rows.iter().collect();
+        let before = group_audit_bursts(&refs, BURST_NOW)[0].key.clone();
+
+        let grown = [
+            burst_row(BURST_NOW - 2, 3),
+            rows[0].clone(),
+            rows[1].clone(),
+        ];
+        let refs: Vec<&AuditEntry> = grown.iter().collect();
+        let after = group_audit_bursts(&refs, BURST_NOW)[0].key.clone();
+        assert_eq!(before, after);
+        // And it is the key the harness / a caller reaches for by naming the
+        // oldest row, so the public entry point can't drift from the private
+        // one.
+        assert_eq!(after, audit_burst_key(&rows[1]));
+    }
+
+    /// A run of one is not a burst: no header, no count, and the row renders
+    /// exactly as it did before any of this existed.
+    #[test]
+    fn an_ordinary_timeline_groups_nothing() {
+        let mut later = burst_row(BURST_NOW - 15, 1);
+        later.wrap = "gh".to_owned();
+        let rows = [later, burst_row(BURST_NOW - 30, 2)];
+        assert_eq!(groups_of(&rows), vec![1, 1]);
+    }
+
+    /// A guest supplies its own claimed chain and the refs it asks for, so it
+    /// writes part of the identity string. Length-prefixing is what stops it
+    /// moving a field boundary to make two different rows fold together.
+    #[test]
+    fn a_guest_cannot_forge_a_field_boundary_in_the_identity() {
+        let mut a = burst_row(BURST_NOW - 15, 1);
+        a.secrets = vec!["ab".to_owned(), "c".to_owned()];
+        let mut b = burst_row(BURST_NOW - 16, 2);
+        b.secrets = vec!["a".to_owned(), "bc".to_owned()];
+        assert_ne!(audit_row_identity(&a), audit_row_identity(&b));
     }
 
     #[test]

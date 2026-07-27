@@ -222,7 +222,27 @@ claim, the tree above it is not.
 
 ::shot{id=48-audit-search-guest-claim}
 
-Up to 200 rows render at once; the cache holds a soft ceiling of 5,000.
+A run of requests that differ only in when they ran and which pids were
+involved folds into one row with a count and a span. A sandbox can ask as
+often as it likes, and without the fold a long enough run of refusals pushes
+everything else off the page. The span is there because the count alone does
+not say what happened: 47 attempts inside three seconds is a loop on the
+socket, 47 across three hours is something on a timer.
+
+::shot{id=49-audit-burst-collapsed}
+
+Opening the group puts every attempt back, each with its own time. The fold
+never crosses a day, and anything unlike the run ends it, so 47 refusals with
+one approval among them are never drawn as 47 in a row. Search filters before
+the fold, so a group cannot hide a row you searched for.
+
+::shot{id=50-audit-burst-expanded}
+
+None of this touches the file. `audit.log` keeps every request as its own
+line, unchanged, whatever the view does with it.
+
+Up to 200 groups render at once; the cache holds a soft ceiling of 5,000
+rows.
 
 ## The audit log file
 

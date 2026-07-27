@@ -2591,6 +2591,102 @@ fn audit_tab_search_finds_guest_claim() {
     );
 }
 
+/// The timeline these two burst fixtures share: a probing sandbox, and the
+/// ordinary history it would otherwise bury.
+///
+/// **Written oldest-first**, which is what an append-only `audit.log` actually
+/// holds and what the view reverses to put the newest row on top. Several
+/// older audit fixtures here write their vec newest-first and so publish their
+/// timeline upside down; a burst cannot borrow that, because the run's span is
+/// the thing the fixture is documenting.
+///
+/// Four refusals rather than the forty-odd a real probe would produce, because
+/// the expanded fixture has to show the group *ending* — the indent stopping
+/// and an ungrouped row resuming under it is half of what that fixture is for,
+/// and a burst that runs past the fold shows a list instead of a group. The
+/// count and the span in the header are what stand in for scale.
+fn probing_guest_timeline() -> Vec<AuditEntry> {
+    let mut audit = vec![audit_line_traced(
+        60 * 12,
+        "gh",
+        &["api", "/repos/acme/web/issues"],
+        &[(52318, "node", "node ./scripts/publish.js")],
+        &["GITHUB_TOKEN"],
+        "approve+remember",
+    )];
+    // The burst: same scope, same ref, same refusal, one per second.
+    // `NotRead` because the scope's own allowlist refused these before any
+    // daemon was dialled — nothing read a peer, and the row must not dress
+    // that up as a reading.
+    for secs_ago in [18u64, 17, 16, 15] {
+        audit.push(agent_audit_line(
+            secs_ago,
+            "brain-nx-t5",
+            "secret://op/Prod/aws/root_key",
+            Decision::DenyOutOfScope,
+            ScopeDeclarant::NotRead,
+        ));
+    }
+    audit
+}
+
+#[test]
+fn audit_tab_burst_collapsed() {
+    // A guest that can ask as often as it likes used to be able to push
+    // everything else off the page one identical row at a time. It now costs
+    // one row and a count, and the `gh` grant from twelve minutes ago is still
+    // where a reader would look for it.
+    //
+    // The count and the span are the whole header: four attempts inside three
+    // seconds is a loop hammering the socket, and the same four spread over
+    // three hours would be something on a timer. Nothing is dropped — the
+    // rows are still in `audit.log`, and the caret opens them (fixture 50).
+    render_manager_fixture(
+        Shot::new("49-audit-burst-collapsed").caption(
+            "A sandbox asking over and over for a secret outside its scope folds \
+             into one row. The count and the span say how hard it tried and for \
+             how long, so a flood cannot push the rest of your history off the \
+             page. Every attempt is still its own line in <code>audit.log</code>.",
+        ),
+        probing_guest_timeline(),
+        ManagerExtras {
+            window_state: Some(Box::new(
+                secreq::daemon::manager_ui::ManagerWindowState::focus_audit_view,
+            )),
+            ..ManagerExtras::default()
+        },
+    );
+}
+
+#[test]
+fn audit_tab_burst_expanded() {
+    // The other half, and the reason the collapsing is honest: the view is
+    // folding rows, not withholding them. Opened, each attempt is back with
+    // its own timestamp, under an indent that says where the group ends.
+    let audit = probing_guest_timeline();
+    // The burst is keyed on its oldest member — the first agent row in the
+    // vec, since this timeline is written oldest-first.
+    let oldest_of_burst = audit
+        .iter()
+        .find(|e| e.decision == "deny+out-of-scope")
+        .expect("the timeline's burst")
+        .clone();
+    render_manager_fixture(
+        Shot::new("50-audit-burst-expanded").caption(
+            "Opening the group puts every attempt back, each with its own time. \
+             The view folds rows together; it never withholds them.",
+        ),
+        audit,
+        ManagerExtras {
+            window_state: Some(Box::new(move |ws| {
+                ws.focus_audit_view();
+                ws.expand_audit_burst(&oldest_of_burst);
+            })),
+            ..ManagerExtras::default()
+        },
+    );
+}
+
 #[test]
 fn audit_tab_forwarded_sign() {
     // The two things an SSH sign row can say about agent forwarding that a
