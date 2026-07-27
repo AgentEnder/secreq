@@ -13,6 +13,7 @@
 //! `$XDG_CONFIG_HOME/secreq/wraps.json5` follows the link and reads the right
 //! file.
 
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -136,7 +137,20 @@ fn ensure_symlink(link: &Path, target: &Path) -> Result<()> {
         }
     }
     if let Some(parent) = link.parent() {
-        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+        // 0700. This is the one directory the migration creates *outside*
+        // `$SECREQ_HOME` — the legacy config dir, recreated when the config
+        // is already at the new root and the old directory is gone — so the
+        // 0700 root is not containing it the way it contains the snapshots.
+        // A bare `create_dir_all` left it at the umask's 0755, or **0777**
+        // under the `umask 000` that CI and container images set, and what
+        // goes in it is the compatibility symlink an older secreq follows to
+        // find `wraps.json5`: a directory anyone can write to is one in which
+        // anyone can repoint that link at a config of their own.
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(super::OWNER_ONLY_DIR)
+            .create(parent)
+            .with_context(|| format!("create {}", parent.display()))?;
     }
     std::os::unix::fs::symlink(target, link)
         .with_context(|| format!("symlink {} -> {}", link.display(), target.display()))
@@ -162,7 +176,15 @@ fn migrate_audit_log(ctx: &Ctx) -> Result<()> {
     if !old.is_file() || new.exists() {
         return Ok(());
     }
-    std::fs::create_dir_all(&ctx.root).with_context(|| format!("create {}", ctx.root.display()))?;
+    // `run_pending_in` already made the root at 0700 before any migration
+    // ran, so today this only ever finds it there. It names the mode anyway:
+    // a bare `create_dir_all` here is one reordering away from being the call
+    // that creates the root, and it would create it at the umask.
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(super::OWNER_ONLY_DIR)
+        .create(&ctx.root)
+        .with_context(|| format!("create {}", ctx.root.display()))?;
 
     match std::fs::rename(&old, &new) {
         Ok(()) => Ok(()),

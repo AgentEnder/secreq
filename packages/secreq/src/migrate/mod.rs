@@ -32,7 +32,7 @@ mod m0001_secreq_root;
 mod m0002_ssh_agent_socket;
 
 use std::fs::{File, OpenOptions};
-use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
@@ -490,7 +490,18 @@ fn restore_in(root: &Path, level: u32, assume_yes: bool) -> Result<i32> {
         // than restoring the old layout.
         let _ = std::fs::remove_file(&entry.restore_to);
         if let Some(parent) = entry.restore_to.parent() {
-            std::fs::create_dir_all(parent)
+            // 0700, and this one lands *outside* `$SECREQ_HOME` — the restore
+            // targets are the pre-migration paths, so this recreates
+            // `~/.config/secreq` (and `~/.ssh` for 0002) when the forward
+            // migration removed it. The 0700 root does not contain these, so
+            // the umask's 0755 here published a directory holding the config
+            // being restored into it. Only directories this actually creates
+            // are affected: an existing `~/.ssh` or `~/.config` keeps its own
+            // mode, so this narrows nothing the user chose.
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(OWNER_ONLY_DIR)
+                .create(parent)
                 .with_context(|| format!("create {}", parent.display()))?;
         }
         atomic::replace(
@@ -594,11 +605,20 @@ struct LockGuard {
 /// defend against.
 fn acquire_lock(root: &Path) -> Result<LockGuard> {
     let path = root.join(LOCK_FILE);
+    // 0600, because `create` alone takes `0666 & !umask` — 0644 ordinarily and
+    // **0666** under `umask 000`. The file is empty, so there is nothing in it
+    // to read; the mode is about who may *hold* it. `flock` needs only an open
+    // descriptor, so a world-writable lock lets any local user take `LOCK_EX`
+    // and park every `secreq x` on the machine behind a lock the user cannot
+    // see. Applies on creation only, which is all this can do — an install
+    // that already has one keeps its mode, and the 0700 root is what covers
+    // that case.
     let file = OpenOptions::new()
         .create(true)
         .read(true)
         .write(true)
         .truncate(false)
+        .mode(OWNER_ONLY)
         .open(&path)
         .with_context(|| format!("open migration lock {}", path.display()))?;
     let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
@@ -661,7 +681,24 @@ fn snapshot_if_absent(ctx: &Ctx, m: &Migration) -> Result<()> {
     // half-written snapshot that `dir.exists()` would then treat as good.
     let staging = snapshot_root(&ctx.root).join(format!(".{level}.tmp"));
     let _ = std::fs::remove_dir_all(&staging);
-    std::fs::create_dir_all(&staging).with_context(|| format!("create {}", staging.display()))?;
+    // Recursive at 0700, which is two directories: the staging dir *and*
+    // `migration-snapshots/` itself on the first migration that captures
+    // anything. A bare `create_dir_all` gave both the umask's 0755, and the
+    // staging dir's mode is not transient — the `rename` below publishes this
+    // inode as `migration-snapshots/<level>/`, so whatever it is created with
+    // is the mode the committed snapshot keeps forever. What it holds is
+    // `fs::copy` of every file the migration is about to move, which for 0002
+    // reaches outside the secreq tree to `~/.ssh/config` and the shell rc
+    // files; the copies carry their own modes, but the listing is a map of the
+    // user's config paths. Inlined rather than routed through
+    // `paths::ensure_private_dir` for the same reason as the root and the
+    // pre-restore save: migrations resolve no locations through `paths`, and a
+    // mode is a constant, not a location.
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(OWNER_ONLY_DIR)
+        .create(&staging)
+        .with_context(|| format!("create {}", staging.display()))?;
 
     let mut files = Vec::new();
     for src in &sources {

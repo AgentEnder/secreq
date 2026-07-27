@@ -1918,6 +1918,187 @@ fn migrate_restore_names_available_levels_when_the_snapshot_is_missing() {
     assert!(stderr.contains("no snapshot"), "unhelpful: {stderr}");
 }
 
+/// The migration runner's own bookkeeping is the last corner of the tree that
+/// still took its mode from the umask. `run_pending_in` creates the root at
+/// 0700 and `restore_in` creates the pre-restore save at 0700, but the lock it
+/// opens and the snapshot tree it stages named no mode at all — so they landed
+/// at `0666 & !umask` and `0777 & !umask`, which is 0644 and 0755 on an
+/// ordinary box and **0666 and 0777** under the `umask 000` that CI and
+/// container images routinely set.
+///
+/// What the snapshot tree holds is the point: `migration-snapshots/<level>/`
+/// is `fs::copy` of every file a migration is about to move, and migration
+/// 0002's list reaches outside the secreq tree to `~/.ssh/config` and the
+/// shell rc files. The copies carry their source modes, but the directory
+/// listing is a map of the user's config paths, and at 0777 it is a map
+/// anyone can also write to. The lock is the quieter one: it is empty, so
+/// there is nothing to read, but at 0666 any local user can take `LOCK_EX`
+/// on it and park every `secreq x` on the machine for as long as they like.
+///
+/// Two deliberate choices, the same two the other umask tests here make:
+///
+/// - **The child runs under `umask 000`**, set from `pre_exec` so it never
+///   touches the test process every other test in this binary shares. A
+///   developer whose shell sets 077 gets 0700 out of a bare `create_dir_all`
+///   for free, and the assertion would pass while proving nothing.
+/// - **The modes are asserted exactly.** `mode & 0o022 == 0` is satisfied by
+///   the 0755 a umask-022 machine hands out, which is the bug wearing a
+///   passing test.
+#[test]
+fn the_migration_lock_and_snapshot_tree_a_lax_umask_creates_are_owner_only() {
+    let sb = Sandbox::new();
+    seed_legacy_config(sb.path(), r#"{ gh: { $reason: "x", env: {} } }"#);
+    // A root that does not exist yet: `Sandbox` pre-creates its own at the
+    // test runner's umask, which would seed the tree from the wrong mode.
+    let root = sb.path().join("fresh-root");
+
+    let mut cmd = sb.cmd(&["wraps"]);
+    cmd.env("SECREQ_HOME", &root);
+    // SAFETY: `umask` is async-signal-safe and touches only the child.
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            libc::umask(0);
+            Ok(())
+        });
+    }
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let lock = root.join(".migration.lock");
+    let snapshots = root.join("migration-snapshots");
+    // The level-0 snapshot is what migration 0001 captured on the way past.
+    // Assert it exists rather than letting a missing directory surface as an
+    // unwrap panic on `metadata` — an absent snapshot means the run did not
+    // migrate anything and this test proved nothing.
+    let level_0 = snapshots.join("0");
+    assert!(lock.is_file(), "no migration lock at {}", lock.display());
+    assert!(
+        level_0.is_dir(),
+        "no level-0 snapshot at {}; did the run migrate?",
+        level_0.display()
+    );
+
+    let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(
+        mode(&lock),
+        0o600,
+        "{} is {:o}",
+        lock.display(),
+        mode(&lock)
+    );
+    for dir in [&snapshots, &level_0] {
+        assert_eq!(mode(dir), 0o700, "{} is {:o}", dir.display(), mode(dir));
+    }
+}
+
+/// Migration 0001 leaves a symlink behind at the legacy path so an older
+/// secreq keeps resolving its config, and in the "new real, old missing" case
+/// it has to create the directory to put that symlink in. That
+/// `create_dir_all` named no mode either — and unlike everything else in this
+/// module it writes **outside** `$SECREQ_HOME`, so the 0700 root is not
+/// quietly containing it.
+///
+/// Under `umask 000` the compat directory lands at 0777, and a directory
+/// anyone can write to is a directory in which anyone can swap the symlink
+/// and point an older secreq's `wraps.json5` at a config of their choosing —
+/// which is a config that names the wraps and the reasons the user will be
+/// asked to approve.
+#[test]
+fn the_legacy_compat_dir_migration_0001_creates_is_owner_only() {
+    let sb = Sandbox::new();
+    // "new real, old missing": the config is already at the new root and the
+    // legacy directory is absent, so 0001 has only the symlink left to plant.
+    // `Sandbox` leaves the `legacy-*` subdirectories uncreated for exactly
+    // this kind of seeding.
+    let root = sb.path().join("fresh-root");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("wraps.json5"),
+        r#"{ gh: { $reason: "x", env: {} } }"#,
+    )
+    .unwrap();
+
+    let mut cmd = sb.cmd(&["wraps"]);
+    cmd.env("SECREQ_HOME", &root);
+    // SAFETY: `umask` is async-signal-safe and touches only the child.
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            libc::umask(0);
+            Ok(())
+        });
+    }
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let compat_dir = sb.path().join("legacy-config/secreq");
+    assert!(
+        compat_dir
+            .join("wraps.json5")
+            .symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink()),
+        "0001 should have planted a compat symlink in {}",
+        compat_dir.display()
+    );
+    let mode = fs::metadata(&compat_dir).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o700, "{} is {mode:o}", compat_dir.display());
+}
+
+/// The same directory, reached from the other direction. `restore` writes
+/// each file back to the path it came from, and it has to recreate that
+/// path's parent when it is gone — which the module's own docs describe as a
+/// thing users do: `rm -rf ~/.config/secreq/` against the directory of
+/// compatibility symlinks unlinks the links and leaves the real files alone,
+/// so it is a reasonable thing to run after migrating, and it takes the
+/// directory with it.
+///
+/// A restore then rebuilds it at the umask and puts the restored `wraps.json5`
+/// inside. Like the compat directory above this is outside `$SECREQ_HOME`, so
+/// nothing else narrows it.
+#[test]
+fn the_legacy_dir_a_restore_rebuilds_is_owner_only() {
+    let sb = Sandbox::new();
+    seed_legacy_config(sb.path(), r#"{ gh: { $reason: "original", env: {} } }"#);
+    sb.run(&["wraps"]); // migrate forward
+
+    // The user cleans up what now looks like a leftover directory of links.
+    let legacy_dir = sb.path().join("legacy-config/secreq");
+    fs::remove_dir_all(&legacy_dir).unwrap();
+
+    let mut cmd = sb.cmd(&["--yes", "migrate", "restore", "0"]);
+    // SAFETY: `umask` is async-signal-safe and touches only the child.
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            libc::umask(0);
+            Ok(())
+        });
+    }
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The restore has to have rebuilt the directory, or this proves nothing.
+    assert_eq!(
+        fs::read_to_string(legacy_dir.join("wraps.json5")).unwrap(),
+        r#"{ gh: { $reason: "original", env: {} } }"#
+    );
+    let mode = fs::metadata(&legacy_dir).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o700, "{} is {mode:o}", legacy_dir.display());
+}
+
 /// `secreq x` bypasses clap, but it must NOT bypass the migration gate: on a
 /// shim-only machine (hooks, wraps) `x` is the only foreground command that
 /// ever runs, and services (the daemon) refuse to apply migrations. If `x`
