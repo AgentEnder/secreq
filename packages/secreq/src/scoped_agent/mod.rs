@@ -270,13 +270,18 @@ impl GuestChain {
 /// the bytes.
 fn display_ref(reference: &Reference) -> String {
     const MAX_REF_DISPLAY_CHARS: usize = 200;
-    let rendered: String = reference
+    let visible: String = reference
         .to_string()
         .chars()
         .filter(|c| !crate::provenance::is_invisible_or_reordering(*c))
-        .take(MAX_REF_DISPLAY_CHARS)
         .collect();
-    if rendered.chars().count() == MAX_REF_DISPLAY_CHARS {
+    // Filter, then cap — the cap counts what a reader will see, not what the
+    // guest sent. And cap through `truncate_at_cluster_edge`, not `.take()`: a
+    // `char` is not a grapheme, so a scalar-wise cut can keep a base character
+    // and drop the marks that say which character it was.
+    let (rendered, truncated) =
+        crate::provenance::truncate_at_cluster_edge(&visible, MAX_REF_DISPLAY_CHARS);
+    if truncated {
         format!("{rendered}… (truncated)")
     } else {
         rendered
@@ -285,12 +290,16 @@ fn display_ref(reference: &Reference) -> String {
 
 /// One link of a claimed chain: visible characters only, trimmed, capped.
 fn sanitize_link(link: &str) -> String {
-    link.chars()
+    let visible: String = link
+        .chars()
         .filter(|c| !crate::provenance::is_invisible_or_reordering(*c))
-        .take(MAX_GUEST_CHAIN_LINK_CHARS)
-        .collect::<String>()
-        .trim()
-        .to_owned()
+        .collect();
+    // Trim *before* the cap. Trimming afterwards can strip a leading space and
+    // leave a combining mark at the front of the link, which is the case
+    // `truncate_at_cluster_edge` is there to prevent.
+    let (capped, _) =
+        crate::provenance::truncate_at_cluster_edge(visible.trim(), MAX_GUEST_CHAIN_LINK_CHARS);
+    capped.trim_end().to_owned()
 }
 
 /// The consent door, and the resolve behind it — deliberately two methods.
@@ -2063,6 +2072,47 @@ mod tests {
             rendered.ends_with("…"),
             "a truncated chain must not present itself as the whole story: {rendered}"
         );
+    }
+
+    /// Both guest-facing caps count `char`s, which are Unicode scalar values and
+    /// not graphemes: a cut can land between a base character and the marks that
+    /// finish it. `=` plus `U+0338` renders as `≠`, so a cut between them
+    /// publishes the opposite claim — and the marks left over at a cut render on
+    /// the `… (truncated)` marker we append next to them.
+    ///
+    /// The pair is repeated past both caps and tried at both parities, so one of
+    /// the two runs must land mid-cluster whatever the cap happens to be.
+    #[test]
+    fn a_cap_never_lands_inside_a_grapheme() {
+        const PAIR: &str = "=\u{0338}";
+
+        for pad in ["", "z"] {
+            let claimed = format!("{pad}{}", PAIR.repeat(500));
+            let link = sanitize_link(&claimed);
+            assert_eq!(
+                link.matches('=').count(),
+                link.matches('\u{0338}').count(),
+                "sanitize_link left a bare `=` where the source said `≠`: {link:?}"
+            );
+
+            let reference = Reference::parse(&format!("secret://op/{pad}{}", PAIR.repeat(500)))
+                .expect("any locator character is legal");
+            let rendered = display_ref(&reference);
+            assert_eq!(
+                rendered.matches('=').count(),
+                rendered.matches('\u{0338}').count(),
+                "display_ref left a bare `=` where the source said `≠`: {rendered:?}"
+            );
+        }
+    }
+
+    /// A link whose visible characters begin with a combining mark has no base
+    /// of its own; the marks bind leftwards onto the row the prompt drew before
+    /// it. Stripping the invisible characters is what exposes this — the
+    /// zero-width space here was standing in front of the mark.
+    #[test]
+    fn a_link_cannot_open_with_a_combining_mark() {
+        assert_eq!(sanitize_link("\u{200B}\u{0301}\u{20E3}pnpm"), "pnpm");
     }
 
     #[test]

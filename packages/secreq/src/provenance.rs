@@ -88,6 +88,73 @@ pub fn is_invisible_or_reordering(c: char) -> bool {
     )
 }
 
+/// True for a combining mark: a character that renders *on* the one before it
+/// rather than beside it.
+///
+/// All three mark categories, because all three bind leftwards: Mn (the
+/// accents), Mc (the spacing marks of the Indic scripts) and Me (the enclosing
+/// marks). They are not stripped — a name in Devanagari or Hebrew is made of
+/// them — only refused as a *boundary*.
+fn is_combining_mark(c: char) -> bool {
+    use unicode_general_category::{get_general_category, GeneralCategory};
+
+    matches!(
+        get_general_category(c),
+        GeneralCategory::NonspacingMark
+            | GeneralCategory::SpacingMark
+            | GeneralCategory::EnclosingMark
+    )
+}
+
+/// Cut `s` to at most `max` characters without splitting a character in half,
+/// and report whether anything was dropped.
+///
+/// A `char` is a Unicode scalar value, not a grapheme, so a plain `.take(max)`
+/// counts the wrong unit. Two things go wrong at the cut:
+///
+/// - **The base keeps a character the marks contradict.** `=` followed by
+///   `U+0338` renders as `≠`. Cut between them and the string published to the
+///   reader says the opposite of the string that arrived. The whole partial
+///   cluster is dropped instead — a character we cannot show completely is one
+///   we do not get to show a *different* version of.
+/// - **A mark with no base reaches out of the string.** Marks bind leftwards, so
+///   one at the front renders on whatever was drawn before it: the label beside
+///   a process name, the `[secreq …]` prefix on a log line, the `… (truncated)`
+///   marker a caller appends. Leading marks are dropped for the same reason the
+///   cluster is: they can only modify text that is not theirs.
+///
+/// Not a grapheme segmenter, and it does not need to be. The clusters that
+/// survive [`is_invisible_or_reordering`] are base-plus-marks: the joiners that
+/// build the harder ones — ZWJ, the variation selectors, the regional-indicator
+/// modifiers' companions — are all invisible, and are gone before this runs.
+/// Which is also why order matters: filter first, *then* cap, or the cap counts
+/// characters the reader will never see.
+pub fn truncate_at_cluster_edge(s: &str, max: usize) -> (String, bool) {
+    let mut kept: Vec<char> = Vec::new();
+    let mut truncated = false;
+
+    for c in s.chars() {
+        if kept.is_empty() && is_combining_mark(c) {
+            continue;
+        }
+        if kept.len() == max {
+            truncated = true;
+            if is_combining_mark(c) {
+                // The cap fell inside a cluster. Drop the marks we did keep and
+                // the base they belong to.
+                while kept.last().copied().is_some_and(is_combining_mark) {
+                    kept.pop();
+                }
+                kept.pop();
+            }
+            break;
+        }
+        kept.push(c);
+    }
+
+    (kept.into_iter().collect(), truncated)
+}
+
 /// Every class of character [`is_invisible_or_reordering`] must reject, named,
 /// with one representative from each.
 ///
@@ -155,7 +222,8 @@ pub(crate) const INVISIBLE_OR_REORDERING_CLASSES: &[(&str, char)] = &[
 /// several (the prompt tree, the audit view, the SSH title), and the audit log
 /// keeps these strings for later reading too.
 fn sanitize_display(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len().min(MAX_DISPLAY_CHARS));
+    let mut visible = String::new();
+    let mut visible_chars = 0usize;
     let mut last_was_space = false;
     for c in raw.chars() {
         // Whitespace first, and deliberately before the invisible-character
@@ -164,8 +232,9 @@ fn sanitize_display(raw: &str) -> String {
         // (`"node\n└ zsh"` → `"node└ zsh"`). Turning it into a space keeps the
         // name to one row while still showing the reader two tokens.
         if c.is_whitespace() {
-            if !last_was_space && !out.is_empty() {
-                out.push(' ');
+            if !last_was_space && !visible.is_empty() {
+                visible.push(' ');
+                visible_chars += 1;
                 last_was_space = true;
             }
             continue;
@@ -174,14 +243,23 @@ fn sanitize_display(raw: &str) -> String {
             continue;
         }
         last_was_space = false;
-        out.push(c);
-        if out.chars().count() >= MAX_DISPLAY_CHARS {
-            out.push('…');
+        visible.push(c);
+        visible_chars += 1;
+        // The cap is applied below, on what is left after filtering — the only
+        // count that means anything to a reader. One character past it is all
+        // `truncate_at_cluster_edge` needs to find the boundary, and an argv is
+        // unbounded, so there is no reason to walk the rest of one.
+        if visible_chars > MAX_DISPLAY_CHARS {
             break;
         }
     }
+
+    let (mut out, truncated) = truncate_at_cluster_edge(&visible, MAX_DISPLAY_CHARS);
     while out.ends_with(' ') {
         out.pop();
+    }
+    if truncated {
+        out.push('…');
     }
     out
 }
@@ -1298,6 +1376,32 @@ mod tests {
         }
         // Decomposed: a base plus its combining acute. Both must survive.
         assert_eq!(sanitize_display("cafe\u{0301}"), "cafe\u{0301}");
+    }
+
+    /// A `char` is a Unicode scalar value, not a grapheme, so a cap counted in
+    /// `char`s can fall between a base character and the marks that finish it —
+    /// and the marks are what say *which* character it is. `=` followed by
+    /// `U+0338` COMBINING LONG SOLIDUS OVERLAY renders as `≠`; drop the mark and
+    /// the prompt shows the reader the opposite of what the process said.
+    #[test]
+    fn a_cut_never_lands_inside_a_grapheme() {
+        let raw = format!("{}={}", "A".repeat(MAX_DISPLAY_CHARS - 1), '\u{0338}');
+        let out = sanitize_display(&raw);
+        assert!(
+            !out.contains('='),
+            "the cap kept `=` after dropping the U+0338 that made it `≠`: {out:?}"
+        );
+        assert!(out.ends_with('…'), "{out:?}");
+    }
+
+    /// A combining mark at the *start* of a string has no base of its own, so it
+    /// renders on whatever the UI painted before it — the label beside the name,
+    /// the prefix on a log line. Marks bind leftwards; a string with none of its
+    /// own reaches out of itself.
+    #[test]
+    fn a_leading_combining_mark_cannot_decorate_the_row_beside_it() {
+        // U+0301 is Mn, U+20E3 is Me, U+0903 is Mc — one of each mark category.
+        assert_eq!(sanitize_display("\u{0301}\u{20E3}\u{0903}node"), "node");
     }
 
     /// An argv is unbounded, and the prompt's body scrolls: a long enough one
