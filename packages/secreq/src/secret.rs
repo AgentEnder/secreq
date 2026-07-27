@@ -15,14 +15,23 @@
 //! both sides of a provider call: the batch reader's stdout (one buffer holding
 //! every value the batch resolved) and the argv a `store` builds.
 //!
-//! **The environment and the wire do not**, so this type is not a claim that
-//! plaintext exists nowhere else in the process. `commands/run.rs` and
-//! `daemon/state.rs` move resolved values straight into a
+//! **The environment and the daemon's own wire do not**, so this type is not a
+//! claim that plaintext exists nowhere else in the process. `commands/run.rs`
+//! and `daemon/state.rs` move resolved values straight into a
 //! `Vec<(String, String)>` and a `HashMap<String, String>` on the way to the
-//! child's environment and across the daemon socket, and
-//! `scoped_agent/mod.rs` does the same on its own wire. Wrapping the local
-//! there changes nothing; the fix is a different collection and wire type,
-//! which was judged not worth the churn.
+//! child's environment and across `consent.sock`. Wrapping the local there
+//! changes nothing; the fix is a different collection and wire type. **That
+//! remainder of finding 018 is declined, not pending** — the daemon's
+//! long-lived copy is already encrypted (`daemon/cache.rs`), what is left is a
+//! transient map, and the same plaintext sits in the child's environment for
+//! the child's whole life regardless. The decline expires if tokens ever leave
+//! the env channel; see the security review in brain.
+//!
+//! The **scoped agent's** wire is not in that list any more:
+//! `scoped_agent::write_response` scrubs both the response's own string and
+//! the encoded frame on every path out, including the `MAX_FRAME_LEN` bail a
+//! certificate or a large key can reach. It borrows `&mut Response` so that is
+//! a postcondition a test can observe, rather than a claim.
 //!
 //! **Nor does a copy we hand to another process.** `std`'s `Command` keeps its
 //! own `CString` of every argument and every env value, out of reach behind a
