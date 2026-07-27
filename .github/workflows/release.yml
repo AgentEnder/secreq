@@ -65,7 +65,7 @@ jobs:
     steps:
       # Full history so build.rs sees the tagged commit's real short sha
       # (and a clean tree, so the id carries no `-dirty` marker).
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ inputs.tag || github.ref }}
@@ -156,7 +156,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
 
@@ -373,7 +373,7 @@ jobs:
       id-token: write # mint the crates.io token
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
 
