@@ -230,6 +230,45 @@ pub enum ClientMsg {
     SetRuleEnabled { id: String, enabled: bool },
 }
 
+impl ClientMsg {
+    /// The Rust variant name, for the daemon's `← ClientMsg::…` log line.
+    ///
+    /// Deliberately *not* the `snake_case` wire name serde derives from
+    /// `#[serde(tag = "kind")]`: the log is read against this source, and
+    /// the only way to recover the derived name is to serialize the whole
+    /// message — which on an [`ClientMsg::Ask`] means walking payload the
+    /// daemon has no business writing to a log to name it.
+    ///
+    /// Lives here rather than in the server so that adding a variant is one
+    /// file's edit; the `match` is exhaustive, so forgetting one is a
+    /// compile error rather than a silently wrong log line.
+    pub fn tag(&self) -> &'static str {
+        match self {
+            ClientMsg::Ping => "Ping",
+            ClientMsg::Hello { .. } => "Hello",
+            ClientMsg::ShowWindow => "ShowWindow",
+            ClientMsg::ShowViewer => "ShowViewer",
+            ClientMsg::Ask(_) => "Ask",
+            ClientMsg::Shutdown => "Shutdown",
+            ClientMsg::ConsentWindowAttach { .. } => "ConsentWindowAttach",
+            ClientMsg::ConsentDecision { .. } => "ConsentDecision",
+            ClientMsg::ConsentWindowDetach => "ConsentWindowDetach",
+            ClientMsg::ConsentWindowFocus { .. } => "ConsentWindowFocus",
+            ClientMsg::ManagerWindowAttach { .. } => "ManagerWindowAttach",
+            ClientMsg::OpenManager { .. } => "OpenManager",
+            ClientMsg::BadgeWindowAttach { .. } => "BadgeWindowAttach",
+            ClientMsg::BadgeWindowDetach => "BadgeWindowDetach",
+            ClientMsg::RaiseConsentRequested => "RaiseConsentRequested",
+            ClientMsg::ListRules => "ListRules",
+            ClientMsg::AddRule { .. } => "AddRule",
+            ClientMsg::AddWasmRule { .. } => "AddWasmRule",
+            ClientMsg::UpdateRule { .. } => "UpdateRule",
+            ClientMsg::DeleteRule { .. } => "DeleteRule",
+            ClientMsg::SetRuleEnabled { .. } => "SetRuleEnabled",
+        }
+    }
+}
+
 /// Everything the daemon needs to render the prompt **and** resolve the
 /// secrets after the user approves. Carries no secret *values* — only
 /// addresses (locators) and the templates needed to fetch them.

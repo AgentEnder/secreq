@@ -644,30 +644,7 @@ fn handle_badge_window_connection(
 }
 
 fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
-    let tag = match &msg {
-        ClientMsg::Ping => "Ping",
-        ClientMsg::Hello { .. } => "Hello",
-        ClientMsg::ShowWindow => "ShowWindow",
-        ClientMsg::ShowViewer => "ShowViewer",
-        ClientMsg::Ask(_) => "Ask",
-        ClientMsg::Shutdown => "Shutdown",
-        ClientMsg::ConsentWindowAttach { .. } => "ConsentWindowAttach",
-        ClientMsg::ConsentDecision { .. } => "ConsentDecision",
-        ClientMsg::ConsentWindowDetach => "ConsentWindowDetach",
-        ClientMsg::ConsentWindowFocus { .. } => "ConsentWindowFocus",
-        ClientMsg::ManagerWindowAttach { .. } => "ManagerWindowAttach",
-        ClientMsg::OpenManager { .. } => "OpenManager",
-        ClientMsg::BadgeWindowAttach { .. } => "BadgeWindowAttach",
-        ClientMsg::BadgeWindowDetach => "BadgeWindowDetach",
-        ClientMsg::RaiseConsentRequested => "RaiseConsentRequested",
-        ClientMsg::ListRules => "ListRules",
-        ClientMsg::AddRule { .. } => "AddRule",
-        ClientMsg::AddWasmRule { .. } => "AddWasmRule",
-        ClientMsg::UpdateRule { .. } => "UpdateRule",
-        ClientMsg::DeleteRule { .. } => "DeleteRule",
-        ClientMsg::SetRuleEnabled { .. } => "SetRuleEnabled",
-    };
-    super::log::log_at("server", format_args!("← ClientMsg::{tag}"));
+    super::log::log_at("server", format_args!("← ClientMsg::{}", msg.tag()));
     // Pick up any external hand-edits to the auto-rules file before
     // processing this request. Cheap mtime check; reloads in place
     // (no daemon restart, no in-flight error). See
