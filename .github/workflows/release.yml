@@ -58,10 +58,16 @@ jobs:
             os: ubuntu-latest
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
+          # Pinned to a GA image, and pinned rather than `macos-latest`,
+          # because a release matrix should not change hosts on GitHub's
+          # schedule. `macos-13` was retired, which does not fail a job — it
+          # queues it forever, so the first v0.1.0 attempt sat waiting for a
+          # runner that no longer exists while its three siblings finished in
+          # seconds. `macos-14` is deprecated and would have gone the same way.
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-15-intel
           - target: aarch64-apple-darwin
-            os: macos-14
+            os: macos-15
     steps:
       # Full history so build.rs sees the tagged commit's real short sha
       # (and a clean tree, so the id carries no `-dirty` marker).
