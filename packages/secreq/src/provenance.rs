@@ -21,20 +21,121 @@ const MAX_DISPLAY_CHARS: usize = 300;
 /// True for a character that renders as nothing, or that reorders what
 /// follows it.
 ///
-/// `char::is_control` covers only Unicode category Cc. The bidi overrides and
-/// isolates and the zero-width formatting characters are category Cf, and they
-/// are the ones that make a rendered string differ from the string that was
-/// read.
+/// This is asked of every string a *process* picks for itself and every string
+/// a *guest* claims, at the only place either becomes something a human reads
+/// to make a security decision. So the bar is not "looks odd" but "present in
+/// the string and absent from its rendering".
+///
+/// ## Why this asks a library instead of listing code points
+///
+/// It used to be a hand-written list of five ranges, and two audits found it
+/// short: first the bidi controls and zero-width characters (category Cf, which
+/// `char::is_control` — exactly category Cc — does not cover), then `U+061C`
+/// ARABIC LETTER MARK, `U+00AD` SOFT HYPHEN, `U+180E`, the interlinear
+/// annotation characters and the whole tag block. Every one of those is Cf. The
+/// list was never wrong about what it named; it was a person recalling which
+/// code points are format characters, and that is a question the UCD answers
+/// exactly. `unicode_general_category` answers it from generated tables, so a
+/// code point Unicode classifies as Cf cannot be missing from this predicate
+/// without the crate itself being wrong.
+///
+/// ## What is still named by hand, and why that part is stable
+///
+/// Cc and Cf leave a residue: the characters that are
+/// `Default_Ignorable_Code_Point` — Unicode's own name for "a conforming
+/// renderer shows nothing" — but fall in some other category. No crate in this
+/// tree exposes that property, so those are enumerated below. They are not the
+/// kind of list that drifts: each is a closed allocation Unicode does not extend
+/// (the variation selectors fill their space, the tag block is a fixed,
+/// deprecated block, the fillers and the Mongolian selectors are frozen), and
+/// the reserved holes inside them are *permanently* reserved as ignorable,
+/// which is why the plane-14 range is matched whole rather than by assignment.
+///
+/// Category Cn is deliberately *not* rejected wholesale. It would sweep the
+/// reserved ignorables in, but it would also reject every code point assigned
+/// after the table's Unicode 16 — turning a stale dependency into mangled
+/// process names for real users.
 pub fn is_invisible_or_reordering(c: char) -> bool {
-    c.is_control()
-        || matches!(c,
-            '\u{200B}'..='\u{200F}'   // zero-width space/joiners, LRM, RLM
-            | '\u{202A}'..='\u{202E}' // bidi embeddings and overrides
-            | '\u{2060}'..='\u{2064}' // word joiner, invisible operators
-            | '\u{2066}'..='\u{2069}' // bidi isolates
-            | '\u{FEFF}'              // BOM / zero-width no-break space
-        )
+    use unicode_general_category::{get_general_category, GeneralCategory};
+
+    // Cc is the C0/C1 controls, Cf the format characters: the bidi overrides
+    // and isolates, the zero-width space and joiners, the soft hyphen, the
+    // interlinear annotation marks, the language tag.
+    if matches!(
+        get_general_category(c),
+        GeneralCategory::Control | GeneralCategory::Format
+    ) {
+        return true;
+    }
+
+    matches!(c,
+        '\u{034F}'                // combining grapheme joiner (Mn)
+        | '\u{115F}'..='\u{1160}' // Hangul choseong/jungseong filler (Lo)
+        | '\u{17B4}'..='\u{17B5}' // Khmer inherent vowels AQ/AA (Mn)
+        | '\u{180B}'..='\u{180D}' // Mongolian free variation selectors 1-3 (Mn)
+        | '\u{180F}'              // Mongolian free variation selector 4 (Mn)
+        | '\u{2065}'              // reserved, permanently ignorable (Cn)
+        | '\u{3164}'              // Hangul filler (Lo) — renders as blank width
+        | '\u{FE00}'..='\u{FE0F}' // variation selectors 1-16 (Mn)
+        | '\u{FFA0}'              // halfwidth Hangul filler (Lo)
+        | '\u{FFF0}'..='\u{FFF8}' // reserved, permanently ignorable (Cn)
+        // Plane 14 whole: the language tag and tag characters (Cf), the
+        // variation selectors 17-256 (Mn), and the reserved holes between them
+        // (Cn) — every code point in `E0000..=E0FFF` is default-ignorable. The
+        // tag block is how "invisible instructions" are smuggled into a string
+        // that reads as plain ASCII.
+        | '\u{E0000}'..='\u{E0FFF}'
+    )
 }
+
+/// Every class of character [`is_invisible_or_reordering`] must reject, named,
+/// with one representative from each.
+///
+/// Shared by the provenance and `scoped_agent` test modules so the two sanitizers
+/// are held to one table rather than to two lists that drift apart — which is
+/// how `scoped_agent` came to have its own copy of the predicate in the first
+/// place.
+///
+/// A hand-written range list has now been audited twice and been found short
+/// both times. The table is the durable half of the fix: a class nobody thought
+/// of is a *failing test naming it*, not a finding in the next audit.
+#[cfg(test)]
+pub(crate) const INVISIBLE_OR_REORDERING_CLASSES: &[(&str, char)] = &[
+    ("C0 control (BEL)", '\u{0007}'),
+    ("ANSI escape introducer", '\u{001B}'),
+    ("C1 control (DCS)", '\u{0090}'),
+    ("soft hyphen", '\u{00AD}'),
+    ("combining grapheme joiner", '\u{034F}'),
+    ("Arabic number sign", '\u{0600}'),
+    ("Arabic letter mark (bidi)", '\u{061C}'),
+    ("Hangul choseong filler", '\u{115F}'),
+    ("Khmer vowel inherent AQ", '\u{17B4}'),
+    ("Mongolian free variation selector one", '\u{180B}'),
+    ("Mongolian vowel separator", '\u{180E}'),
+    ("zero width space", '\u{200B}'),
+    ("zero width joiner", '\u{200D}'),
+    ("right-to-left mark", '\u{200F}'),
+    ("right-to-left override (bidi)", '\u{202E}'),
+    ("word joiner", '\u{2060}'),
+    ("reserved default-ignorable (U+2065)", '\u{2065}'),
+    ("left-to-right isolate (bidi)", '\u{2066}'),
+    ("Hangul filler", '\u{3164}'),
+    ("variation selector-1", '\u{FE00}'),
+    ("variation selector-16", '\u{FE0F}'),
+    ("byte order mark / zero width no-break space", '\u{FEFF}'),
+    ("halfwidth Hangul filler", '\u{FFA0}'),
+    ("reserved default-ignorable (U+FFF0)", '\u{FFF0}'),
+    ("interlinear annotation anchor", '\u{FFF9}'),
+    ("interlinear annotation terminator", '\u{FFFB}'),
+    ("shorthand format letter overlap", '\u{1BCA0}'),
+    ("musical symbol begin beam", '\u{1D173}'),
+    ("tag block: reserved head", '\u{E0000}'),
+    ("tag block: language tag", '\u{E0001}'),
+    ("tag block: tag latin small letter a", '\u{E0061}'),
+    ("tag block: cancel tag", '\u{E007F}'),
+    ("variation selector-17", '\u{E0100}'),
+    ("variation selector-256", '\u{E01EF}'),
+];
 
 /// Make one process-supplied string safe to render and to match on.
 ///
@@ -1145,13 +1246,58 @@ mod tests {
     }
 
     /// Trojan-Source in the widget the user is reading to make a security
-    /// decision. `char::is_control` is category Cc only and misses these.
+    /// decision, plus every other way a character can be present in a string
+    /// and absent from its rendering.
+    ///
+    /// One assertion per named class, so a gap reports itself by name.
     #[test]
-    fn bidi_and_zero_width_characters_are_stripped() {
-        for bad in ['\u{202E}', '\u{200B}', '\u{2066}', '\u{FEFF}'] {
+    fn every_invisible_or_reordering_class_is_stripped() {
+        for &(class, bad) in INVISIBLE_OR_REORDERING_CLASSES {
+            assert!(
+                is_invisible_or_reordering(bad),
+                "{class} (U+{:04X}) is not recognised",
+                bad as u32
+            );
             let out = sanitize_display(&format!("gh{bad}api"));
-            assert!(!out.contains(bad), "{bad:?} survived: {out:?}");
+            assert!(
+                !out.contains(bad),
+                "{class} (U+{:04X}) survived: {out:?}",
+                bad as u32
+            );
         }
+    }
+
+    /// The tag block spells ASCII in invisible characters — the "invisible
+    /// instructions" trick — so a range check that looks right by eye is not
+    /// evidence. This is a real payload: `U+E0001` then `sudo rm -rf /` in tag
+    /// characters, then `U+E007F`.
+    #[test]
+    fn a_tag_block_payload_leaves_nothing_behind() {
+        let payload: String = std::iter::once('\u{E0001}')
+            .chain(
+                "sudo rm -rf /"
+                    .chars()
+                    .map(|c| char::from_u32(0xE_0000 + c as u32).expect("a tag character")),
+            )
+            .chain(std::iter::once('\u{E007F}'))
+            .collect();
+        assert_eq!(payload.chars().count(), 15);
+
+        let out = sanitize_display(&format!("node{payload}"));
+        assert_eq!(out, "node", "the invisible instructions survived: {out:?}");
+    }
+
+    /// Ordinary text in scripts that are not Latin must survive intact. A
+    /// category-driven predicate is only an improvement if it still says yes to
+    /// the process names real people run.
+    #[test]
+    fn ordinary_non_latin_text_survives() {
+        for good in ["中文命令", "команда", "コマンド", "café", "naïve", "מסוף"]
+        {
+            assert_eq!(sanitize_display(good), good);
+        }
+        // Decomposed: a base plus its combining acute. Both must survive.
+        assert_eq!(sanitize_display("cafe\u{0301}"), "cafe\u{0301}");
     }
 
     /// An argv is unbounded, and the prompt's body scrolls: a long enough one

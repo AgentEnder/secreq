@@ -2019,6 +2019,31 @@ mod tests {
         assert!(rendered.contains("rekcatta") && rendered.contains("pnpm"));
     }
 
+    /// The same table that guards the provenance sanitizer, run through the two
+    /// guest-facing ones. Sharing the table is the point: `sanitize_link` grew
+    /// its own copy of the predicate once already, and a second table would be
+    /// the same drift in test form.
+    #[test]
+    fn every_invisible_or_reordering_class_is_stripped_from_guest_strings() {
+        for &(class, bad) in crate::provenance::INVISIBLE_OR_REORDERING_CLASSES {
+            let link = sanitize_link(&format!("np{bad}m"));
+            assert!(
+                !link.contains(bad),
+                "{class} (U+{:04X}) survived sanitize_link: {link:?}",
+                bad as u32
+            );
+
+            let reference = Reference::parse(&format!("secret://op/Dev/x{bad}y/token"))
+                .expect("any locator character is legal");
+            let rendered = display_ref(&reference);
+            assert!(
+                !rendered.contains(bad),
+                "{class} (U+{:04X}) survived display_ref: {rendered:?}",
+                bad as u32
+            );
+        }
+    }
+
     /// A guest can put ~64 KiB in a frame. A prompt it can flood is a prompt
     /// whose true content scrolls out of view, so the claim is capped — and
     /// says when it was.

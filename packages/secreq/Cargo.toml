@@ -108,6 +108,20 @@ wasmtime = { version = "46.0.1", default-features = false, features = [
 textwrap = "0.16"
 console = "0.15"
 
+# The Unicode general category of a char, from tables generated out of the UCD
+# (`UNICODE_VERSION` 16.0.0). `provenance::is_invisible_or_reordering` is the
+# only caller, and it is the reason for the dependency: that predicate spent two
+# audits as a hand-written range list and came up short in both — first the bidi
+# and zero-width characters, then U+061C, the soft hyphen and the tag block.
+# Each gap was one person recalling which code points are "format characters",
+# which is a question the UCD answers exactly and memory does not.
+#
+# Chosen for what it costs: `no_std`, zero dependencies, no `unsafe`, and a
+# `build.rs` that only compresses the crate's own committed table (no network,
+# no codegen from the environment). It buys categories Cc and Cf outright; the
+# residue this crate still names by hand is documented at the predicate.
+unicode-general-category = "1.1"
+
 # macOS-only.
 #
 # `winit` re-exported for platform extension traits in `daemon/mod.rs`.
