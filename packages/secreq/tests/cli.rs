@@ -1147,6 +1147,101 @@ fn a_rules_file_the_daemon_writes_under_a_lax_umask_is_owner_only() {
     assert_eq!(mode, 0o600, "{} is {mode:o}", rules_file.display());
 }
 
+/// The same defect on the config that is the bigger prize. `wraps.json5`
+/// carries the `providers` block, and a provider is a **shell command secreq
+/// runs** to fetch a secret — so a world-writable one is arbitrary code
+/// execution as the user on the next resolve, not merely a disclosure of which
+/// secrets exist.
+///
+/// It stayed hidden because every writer used `fs::write`, which preserves an
+/// *existing* file's mode; only creation took the umask. Measured before the
+/// fix, real binary, `umask 000`: `-rw-rw-rw-`.
+///
+/// `pre_exec` sets the umask in the child only — never in the test process,
+/// where it is global state two parallel tests would fight over. The root is
+/// one the sandbox has *not* pre-created, so the migration runner makes it and
+/// the whole path, directory and file, is under test.
+#[test]
+fn a_wraps_file_ssh_add_creates_under_a_lax_umask_is_owner_only() {
+    let sb = Sandbox::new();
+    let root = sb.path().join("fresh-root");
+
+    let mut cmd = sb.cmd(&[
+        "ssh",
+        "add",
+        "work",
+        "--public-key",
+        TEST_ED25519_PUB,
+        "--private-key",
+        "secret://op/Private/GitHub/private key",
+    ]);
+    cmd.env("SECREQ_HOME", &root);
+    // SAFETY: `umask` is async-signal-safe and touches only the child.
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            libc::umask(0);
+            Ok(())
+        });
+    }
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "ssh add failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let config = root.join("wraps.json5");
+    // Exactly, not `mode & 0o022 == 0`: that passes on any 022 machine while
+    // the file is still world-readable, which is the disclosure half of the
+    // finding shipping under a green test.
+    let mode = fs::metadata(&config).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "{} is {mode:o}", config.display());
+    // An owner-only file inside a directory anyone can write is still a file
+    // anyone can replace by rename, so the root is half the claim.
+    let dir_mode = fs::metadata(&root).unwrap().permissions().mode() & 0o777;
+    assert_eq!(dir_mode, 0o700, "{} is {dir_mode:o}", root.display());
+}
+
+/// The third writer, and the one nothing else reaches: `secreq edit` seeds an
+/// empty config when none exists before handing the path to `$EDITOR`. Same
+/// `fs::write`, same 0666 under `umask 000` — and it is the writer a user hits
+/// *first*, before any wrap or identity exists to write.
+///
+/// `$EDITOR=true` exits immediately, so the seed is all this exercises.
+#[test]
+fn the_config_secreq_edit_seeds_under_a_lax_umask_is_owner_only() {
+    let sb = Sandbox::new();
+    let root = sb.path().join("fresh-root");
+
+    let mut cmd = sb.cmd(&["edit"]);
+    cmd.env("SECREQ_HOME", &root);
+    cmd.env("EDITOR", "true");
+    // SAFETY: `umask` is async-signal-safe and touches only the child.
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            libc::umask(0);
+            Ok(())
+        });
+    }
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "edit failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let config = root.join("wraps.json5");
+    assert!(
+        config.is_file(),
+        "`secreq edit` should have seeded {}",
+        config.display()
+    );
+    let mode = fs::metadata(&config).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "{} is {mode:o}", config.display());
+}
+
 // ── ssh setup ─────────────────────────────────────────────────────────────
 
 /// Run `secreq ssh setup` in the sandbox, so it writes into the sandboxed

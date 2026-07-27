@@ -245,8 +245,34 @@ pub fn preferred_editor() -> Option<String> {
 /// the store/retrieve details the full serializer would drop). A missing
 /// config file is created as `{ $editor: "id" }`.
 pub fn save_preferred_editor(id: &str) -> Result<()> {
+    // The parent is the secreq root (`paths::wraps_path`), never a
+    // user-named path, so narrowing it is safe and is what
+    // `ensure_private_dir` is for — unlike `commands::config::write_config`,
+    // whose path can come from `--config`. Propagated rather than `.ok()`d: a
+    // root secreq cannot make private is not a detail to swallow while
+    // writing the wrap config into it.
+    //
+    // Here rather than in `save_preferred_editor_at`, which the unit tests
+    // point at a tempdir: narrowing is only ever right for a path secreq
+    // resolved itself, and that resolution happens on this line.
     let path = paths::wraps_path()?;
-    let existing = match std::fs::read_to_string(&path) {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        paths::ensure_private_dir(parent)
+            .with_context(|| format!("create dir {}", parent.display()))?;
+    }
+    save_preferred_editor_at(&path, id)
+}
+
+/// The body of [`save_preferred_editor`] against an explicit path, so the
+/// mode it leaves is testable without `$SECREQ_HOME` — which is process-global
+/// and races across threads in the same test binary.
+///
+/// Same `Mode::Like` as `commands::config::write_config`, and it has to be:
+/// these two write the same file, and a pair of writers that disagreed
+/// about whose mode wins would make the file's permissions depend on which
+/// command touched it last.
+fn save_preferred_editor_at(path: &Path, id: &str) -> Result<()> {
+    let existing = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{\n}\n".to_owned(),
         Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
@@ -264,16 +290,8 @@ pub fn save_preferred_editor(id: &str) -> Result<()> {
             path.display()
         );
     }
-    // The parent is the secreq root (`paths::wraps_path`), never a
-    // user-named path, so narrowing it is safe and is what
-    // `ensure_private_dir` is for. Propagated rather than `.ok()`d: a
-    // root secreq cannot make private is not a detail to swallow while
-    // writing the wrap config into it.
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        paths::ensure_private_dir(parent)
-            .with_context(|| format!("create dir {}", parent.display()))?;
-    }
-    std::fs::write(&path, updated).with_context(|| format!("write {}", path.display()))
+    crate::atomic::replace(path, updated.as_bytes(), crate::atomic::Mode::Like(path))
+        .with_context(|| format!("write {}", path.display()))
 }
 
 /// Insert-or-replace the top-level `$editor: "<id>"` assignment in a
@@ -419,6 +437,38 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tmp");
         assert!(scaffold_rule(tmp.path(), "../escape").is_err());
         assert!(scaffold_rule(tmp.path(), "").is_err());
+    }
+
+    /// The editor pick is written into `wraps.json5`, so this writer creates
+    /// the same file `write_config` does — and created it at the umask for the
+    /// same reason (`fs::write` only takes the umask's answer on creation).
+    /// The `providers` block in that file is a set of shell commands secreq
+    /// executes; picking an editor must not be the click that publishes it.
+    #[test]
+    fn saving_an_editor_pick_creates_an_owner_only_config() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let path = tmp.path().join("wraps.json5");
+
+        save_preferred_editor_at(&path, "zed").expect("save");
+
+        assert_eq!(mode_of(&path), 0o600, "{}", path.display());
+        let c = crate::wraps::WrapsConfig::load(&path).expect("load");
+        assert_eq!(c.editor.as_deref(), Some("zed"));
+    }
+
+    /// Same policy boundary as `write_config`: the two writers of this one
+    /// file must not disagree about whose mode wins.
+    #[test]
+    fn saving_an_editor_pick_keeps_a_mode_the_user_chose() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().expect("tmp");
+        let path = tmp.path().join("wraps.json5");
+        save_preferred_editor_at(&path, "vim").expect("first save");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).expect("chmod");
+
+        save_preferred_editor_at(&path, "zed").expect("re-save");
+
+        assert_eq!(mode_of(&path), 0o640);
     }
 
     #[test]

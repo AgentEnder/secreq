@@ -214,11 +214,18 @@ pub fn edit_cmd(config_path: Option<&Path>) -> Result<i32> {
         .or_else(|_| std::env::var("VISUAL"))
         .unwrap_or_else(|_| "vi".to_owned());
 
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    // Seed an empty config so `$EDITOR` opens something. The third writer of
+    // this file, and the first one a new user reaches — it created the config
+    // at the umask for the same reason [`write_config`] did, and takes the
+    // same `Mode::Like` (which resolves to 0600 here, the destination being
+    // absent by construction). `atomic::replace` makes the parent, so the
+    // `create_dir_all` this replaced is no longer needed.
     if !config_path.exists() {
-        std::fs::write(&config_path, "{\n}\n")?;
+        crate::atomic::replace(
+            &config_path,
+            b"{\n}\n",
+            crate::atomic::Mode::Like(&config_path),
+        )?;
     }
     let status = Command::new(&editor)
         .arg(&config_path)
@@ -415,17 +422,46 @@ fn parse_env_assignments(envs: &[String]) -> Result<BTreeMap<String, String>> {
 /// Serialize a `WrapsConfig` to JSON-pretty (the parser accepts JSON5, so
 /// this is a valid input). Same caveat as `store`: comments and exact
 /// formatting from a hand-edited file aren't preserved through a write.
+///
+/// **`Mode::Like` the destination, not `Mode::Exactly(0o600)`.** The fallback
+/// is the fix: `Like` resolves to 0600 when the mode source does not exist, and
+/// on a create it does not — which is the whole bug, since the `fs::write`
+/// this replaces preserved an *existing* file's mode and so only ever handed
+/// the umask's `0666 & !umask` to a file it created.
+///
+/// Forcing 0600 was the tempting answer here in a way it was not for
+/// `auto-rules.json5`, because this file's `providers` entries are shell
+/// commands secreq executes: a world-writable one is arbitrary code execution
+/// as the user on the next resolve, not a disclosure of which secrets exist.
+/// It is still the wrong answer, for two reasons that do not apply next door:
+///
+/// - **`path` is not always secreq's.** The global `--config` points this
+///   function at any file the user names. Clamping would mean `secreq wrap`
+///   chmods a file secreq does not own, every time.
+/// - **Migration 0001 already promises to carry this exact filename's mode**
+///   across an upgrade (`wraps.json5` is in its `CONFIG_FILES`, copied with
+///   `Mode::Like`). Clamping here would make that promise expire on the
+///   user's next `wrap add` — worse than either policy alone, because the
+///   upgrade would still have said it preserved the mode.
+///
+/// What actually bounds the code-execution risk is the *directory*, and it is
+/// already owner-only: the migration runner creates `~/.secreq` at 0700 from
+/// `cli::run` before any command sees control, and `init` narrows an existing
+/// one. So no [`crate::paths::ensure_private_dir`] call belongs here — it
+/// would be redundant on the default path and actively dangerous on the
+/// `--config` one, where `--config /tmp/x.json5` would `chmod 0700 /tmp`.
 pub(super) fn write_config(path: &Path, config: &WrapsConfig) -> Result<()> {
     let value = config_to_json_value(config)?;
     let text = serde_json::to_string_pretty(&value)?;
     // Validate by round-tripping before writing.
     WrapsConfig::parse(&text, &path.display().to_string())
         .context("internal: serialized config doesn't re-parse")?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, format!("{text}\n"))
-        .with_context(|| format!("failed to write {}", path.display()))
+    crate::atomic::replace(
+        path,
+        format!("{text}\n").as_bytes(),
+        crate::atomic::Mode::Like(path),
+    )
+    .with_context(|| format!("failed to write {}", path.display()))
 }
 
 fn config_to_json_value(config: &WrapsConfig) -> Result<serde_json::Value> {
@@ -594,5 +630,75 @@ mod tests {
         let reloaded = WrapsConfig::load(&path).unwrap();
         assert_eq!(reloaded.editor.as_deref(), Some("zed"));
         assert_eq!(reloaded.wait_indicator, Some(false));
+    }
+
+    // ── The config's mode ─────────────────────────────────────────────
+
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).expect("stat").permissions().mode() & 0o777
+    }
+
+    /// `fs::write` preserves an existing file's mode, so the umask only ever
+    /// reached this file on **creation** — which is why it went unnoticed.
+    /// A created `wraps.json5` came out at `0666 & !umask`: 0644 under the
+    /// common 022, 0666 under the `umask 000` container and CI images set.
+    /// The `providers` block in there is a set of shell commands secreq
+    /// executes, so a writable one is code execution, not disclosure.
+    ///
+    /// Asserted exactly, and no umask is touched to make it bite: the old
+    /// code gave 0644 on an ordinary developer box, which `mode & 0o022 == 0`
+    /// would have called clean while the file was still world-readable.
+    #[test]
+    fn a_config_secreq_creates_is_owner_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wraps.json5");
+
+        write_config(&path, &WrapsConfig::default()).unwrap();
+
+        assert_eq!(mode_of(&path), 0o600, "{}", path.display());
+    }
+
+    /// The reason the mode source is the destination rather than a blanket
+    /// `Mode::Exactly(0o600)`. This file is hand-editable with a published
+    /// schema, migration 0001 already promises to carry its mode across an
+    /// upgrade (`moved_config_keeps_the_mode_the_user_chose` moves a
+    /// `wraps.json5`), and `--config` points `write_config` at files secreq
+    /// does not own at all. Clamping here would make the migration's promise
+    /// last until the user's next `wrap add`.
+    #[test]
+    fn a_config_write_keeps_a_mode_the_user_chose() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wraps.json5");
+        write_config(&path, &WrapsConfig::default()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+
+        write_config(&path, &WrapsConfig::default()).unwrap();
+
+        assert_eq!(mode_of(&path), 0o640);
+    }
+
+    /// The side effect worth having: `fs::write` truncates in place, so a
+    /// process killed mid-write left the user with a *half* `wraps.json5` —
+    /// on a file they hand-edit and whose comments they care about. Staging
+    /// and renaming means a reader sees the old contents or the new ones.
+    #[test]
+    fn a_config_write_replaces_the_inode_rather_than_truncating_it() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wraps.json5");
+        write_config(&path, &WrapsConfig::default()).unwrap();
+        let before = std::fs::metadata(&path).unwrap().ino();
+
+        write_config(&path, &WrapsConfig::default()).unwrap();
+
+        assert_ne!(std::fs::metadata(&path).unwrap().ino(), before);
+        // And no staging litter beside it.
+        let names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["wraps.json5".to_string()]);
     }
 }
