@@ -1242,6 +1242,70 @@ fn the_config_secreq_edit_seeds_under_a_lax_umask_is_owner_only() {
     assert_eq!(mode, 0o600, "{} is {mode:o}", config.display());
 }
 
+/// The same registration writes a second thing the same way, one function
+/// over: `State::add_wasm_rule` reached the module store with a bare
+/// `create_dir_all` and an `fs::write` + `rename`, so `rules/` came out at
+/// **0777** under `umask 000` and the `.wasm` inside it at 0666.
+///
+/// A world-writable store does not get a stranger's module *executed* — the
+/// sha256 in `auto-rules.json5` pins the bytes, so a swap surfaces as a
+/// visible REFUSED rule. It gets the rule silenced, which for a `deny` rule
+/// is the whole of what that rule was for.
+///
+/// End-to-end for the reason the sibling test above is: a unit test observes
+/// whatever mode the *test runner's* umask hands out, so on a developer whose
+/// shell sets 077 the old code produced 0600 by luck and proved nothing.
+/// `pre_exec` sets the umask in the child only.
+#[test]
+fn a_wasm_module_the_daemon_stores_under_a_lax_umask_is_owner_only() {
+    let sb = Sandbox::new();
+    // `daemon` is service-gated and refuses a fresh, unstamped root.
+    sb.stamp_migrations();
+    let module =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/wasm_rules/always_pass.wasm");
+
+    let mut cmd = sb.cmd_with_daemon(&[
+        "rules",
+        "add-wasm",
+        module.to_str().unwrap(),
+        "--secret",
+        "GITHUB_TOKEN",
+    ]);
+    // SAFETY: `umask` is async-signal-safe and touches only the child.
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            libc::umask(0);
+            Ok(())
+        });
+    }
+    let out = cmd.output().unwrap();
+    // Reap the daemon this test spawned before the sandbox tempdir goes.
+    let _ = sb.cmd_with_daemon(&["daemon", "stop"]).output();
+    assert!(
+        out.status.success(),
+        "rules add-wasm failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let store_dir = sb.root().join("rules");
+    let mode = fs::metadata(&store_dir).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o700, "{} is {mode:o}", store_dir.display());
+
+    let modules: Vec<_> = fs::read_dir(&store_dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(
+        modules.len(),
+        1,
+        "one module, no staging litter: {modules:?}"
+    );
+    let stored = &modules[0];
+    let mode = fs::metadata(stored).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "{} is {mode:o}", stored.display());
+}
+
 // ── ssh setup ─────────────────────────────────────────────────────────────
 
 /// Run `secreq ssh setup` in the sandbox, so it writes into the sandboxed

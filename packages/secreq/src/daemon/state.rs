@@ -1930,25 +1930,38 @@ impl State {
             );
         }
         let store_dir = crate::paths::rule_wasm_dir()?;
-        std::fs::create_dir_all(&store_dir)
+        // `ensure_private_dir`, not `create_dir_all`, which takes the umask's
+        // answer — measured at **0777** under the `umask 000` that container
+        // and CI images routinely set. A world-writable module store is a
+        // denial of service aimed squarely at the protective *deny* rules:
+        // the sha256 pin in `auto-rules.json5` means a swapped module becomes
+        // a visible REFUSED rule rather than executing, but a refused rule is
+        // a rule that no longer denies anything.
+        //
+        // `ensure_private_dir` narrows as well as creates, so it must never
+        // be pointed at a path a user typed. This one is
+        // `paths::secreq_root()` joined with the literal `rules` — no
+        // argument reaches it, and only that final component is narrowed.
+        crate::paths::ensure_private_dir(&store_dir)
             .with_context(|| format!("create wasm rule store {}", store_dir.display()))?;
-        // Temp-write + rename so a crash mid-copy can't leave a
-        // half-written module that later hash-verifies as tampered. A
-        // failed write/rename cleans its own temp file up — a refused
-        // registration leaves nothing in the store, `.tmp` included.
-        let tmp = store.with_extension("wasm.tmp");
-        if let Err(err) =
-            std::fs::write(&tmp, module_bytes).with_context(|| format!("write {}", tmp.display()))
-        {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(err);
-        }
-        if let Err(err) = std::fs::rename(&tmp, &store)
-            .with_context(|| format!("rename {} -> {}", tmp.display(), store.display()))
-        {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(err);
-        }
+        // Stage + rename so a crash mid-copy can't leave a half-written
+        // module that later hash-verifies as tampered — via `atomic::replace`,
+        // which also sweeps its own staging file and draws a name no other
+        // writer can hold. The old fixed `.wasm.tmp` was one inode every
+        // writer of this destination shared.
+        //
+        // `Exactly(0o600)`, not the `Like(destination)` that `save_rules`
+        // uses for `auto-rules.json5`. That call preserves a mode because
+        // migration 0001 commits to preserving one the user chose for a
+        // hand-editable, schema-published config. A compiled `.wasm` is the
+        // opposite: build output nobody edits, with no schema and no editor
+        // audience, so there is no user choice here to preserve. `Like` would
+        // also be a lie about what it does — the `store.exists()` refusal
+        // above means the destination never exists at this point, so `Like`
+        // would resolve through its missing-source fallback to 0600 every
+        // single time while reading as "preserve".
+        crate::atomic::replace(&store, module_bytes, crate::atomic::Mode::Exactly(0o600))
+            .with_context(|| format!("write wasm module {}", store.display()))?;
 
         // Record the store path relative to the rules file's directory
         // when it lives underneath it (the production layout: both
@@ -4426,6 +4439,88 @@ mod tests {
             .expect("load")
             .rules
             .is_empty());
+    }
+
+    /// The store held `create_dir_all` + `fs::write` + `rename`, so both the
+    /// directory and the module carried whatever the umask handed out — the
+    /// directory measured at **0777** under the `umask 000` that container and
+    /// CI images set. A world-writable module store is a denial of service
+    /// aimed at the protective *deny* rules: the sha256 pin turns a swapped
+    /// module into a visible REFUSED rule rather than executing code, and a
+    /// refused rule is a rule that denies nothing.
+    ///
+    /// Both assertions are exact, and both are umask-independent. The
+    /// directory is planted at 0777 first, so this is red on an ordinary 022
+    /// machine as well as a lax one; the file's old mode was `0666 & !umask`,
+    /// which is 0644 at 022 and 0666 at 000 — never 0600.
+    #[test]
+    fn add_wasm_rule_stores_the_module_and_its_directory_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let _store = store_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        let mut state = State::with_rules_path(path);
+
+        // Plant a store directory anyone could write, as an install predating
+        // this would have left one. `ensure_private_dir` narrows as well as
+        // creates, and the narrowing half is what a fresh tempdir can't see.
+        let store_dir = crate::paths::rule_wasm_dir().expect("store dir");
+        std::fs::create_dir_all(&store_dir).expect("plant store dir");
+        std::fs::set_permissions(&store_dir, std::fs::Permissions::from_mode(0o777))
+            .expect("widen store dir");
+
+        let rule = state
+            .add_wasm_rule("owner only", APPROVE_IF_BYTES, trained_github(), false)
+            .expect("register");
+
+        let mode = std::fs::metadata(&store_dir)
+            .expect("stat store dir")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700, "{} is {mode:o}", store_dir.display());
+
+        let store = crate::paths::rule_wasm_path(&rule.id).expect("store path");
+        let mode = std::fs::metadata(&store)
+            .expect("stat module")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "{} is {mode:o}", store.display());
+
+        state.delete_rule(&rule.id).expect("delete");
+    }
+
+    /// The staging name was a fixed `<id>.wasm.tmp`, and the write was a plain
+    /// `fs::write` into it. `atomic::replace` draws a name carrying this
+    /// process's pid and a counter, so two writers can no longer interleave
+    /// into one inode — and it sweeps its own staging file, so a registration
+    /// leaves the store holding the module and nothing else.
+    ///
+    /// The id is minted at random inside `add_wasm_rule`, so the old fixed
+    /// name cannot be planted the way the `save_rules` test plants
+    /// `auto-rules.json5.tmp`. What is observable is the litter: a listing
+    /// with exactly one entry.
+    #[test]
+    fn add_wasm_rule_leaves_no_staging_file_in_the_store() {
+        let _store = store_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        let mut state = State::with_rules_path(path);
+        let before = store_listing();
+
+        let rule = state
+            .add_wasm_rule("no litter", APPROVE_IF_BYTES, trained_github(), false)
+            .expect("register");
+
+        let added: Vec<String> = store_listing().difference(&before).cloned().collect();
+        assert_eq!(
+            added,
+            vec![format!("{}.wasm", rule.id)],
+            "registration must add the module and nothing else"
+        );
+
+        state.delete_rule(&rule.id).expect("delete");
     }
 
     #[test]
