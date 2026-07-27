@@ -44,7 +44,7 @@
 }
 
 /* ── The stage ──
-   The scene is built at the window's own point size — 500×470 for a
+   The scene is built at the window's own point size — 500×510 for a
    prompt — and scaled once, as a whole, to whatever width the column
    gives it. Scaling here rather than baking a factor into every
    coordinate keeps the numbers in the DOM the same numbers as in the

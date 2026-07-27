@@ -143,7 +143,7 @@ type WindowShape = RectShape | CircleShape | LineShape | TextShape | OpaqueShape
 
 /** One variant of one fixture, as the Vite plugin publishes it. */
 export interface WindowScene {
-  /** The logical window size in points — 500×470 for a prompt. */
+  /** The logical window size in points — 500×510 for a prompt. */
   size: [number, number];
   shapes: WindowShape[];
 }
