@@ -1,6 +1,6 @@
 [package]
 name = "secreq"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Per-binary CLI wrapper that injects credentials from your secret store of choice — 1Password Shell Plugins, but generic and multi-provider"
 license = "MIT"
