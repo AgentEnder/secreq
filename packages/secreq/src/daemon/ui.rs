@@ -68,14 +68,20 @@ const AUDIT_HISTORY_LIMIT: usize = 5_000;
 const AUDIT_VERDICT_COL_WIDTH: f32 = 132.0;
 
 /// One pending decision queued for after the render pass. Carries the
-/// scope so the approval entry is written at the intended
-/// `(pid, start_time)`. Public because the prompt-window child process
-/// collects these and ships them back to the daemon over the socket.
+/// scope so the approval entry is written at the intended process. Public
+/// because the prompt-window child process collects these and ships them
+/// back to the daemon over the socket.
+///
+/// `scope` is `None` when the row's [`crate::daemon::proto::AskAnchor`]
+/// names no process — a `run` session or a scoped agent's socket. The
+/// prompt used to coerce those anchors into a [`ProcessIdentity`] and offer
+/// it as the scope to remember at; a session nonce is not a start time, so
+/// there is now no such value to offer.
 #[derive(Debug, Clone)]
 pub struct PendingAction {
     pub key: DedupeKey,
     pub decision: Decision,
-    pub scope: ProcessIdentity,
+    pub scope: Option<ProcessIdentity>,
 }
 
 /// Form-state for the rule create/edit modal. Holds raw strings so the

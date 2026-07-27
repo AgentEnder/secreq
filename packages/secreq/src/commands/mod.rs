@@ -153,10 +153,12 @@ pub(crate) struct AskSpec<'a> {
 /// Build the daemon [`proto::Ask`] from explicit pieces. Pure — no I/O
 /// beyond reading the providers snapshot already loaded into `config`.
 ///
-/// Note the `ppid`/`parent_start_time` fall back to `0` when the caller
-/// chain is empty. The `x` path guards against that case *before* calling
-/// here (a meaningless dedupe key is a fail-closed condition for `x`); a
-/// future `run` caller is the only one that would ever rely on the fallback.
+/// Note the anchor's [`provenance::ProcessIdentity`] falls back to a zeroed
+/// pair when the caller chain is empty. The `x` path guards against that case
+/// *before* calling here (a meaningless dedupe key is a fail-closed condition
+/// for `x`); a future `run` caller is the only one that would ever rely on the
+/// fallback. Either way the daemon replaces it from its own walk of the socket
+/// peer (`server::adopt_peer_provenance`).
 pub(crate) fn build_ask(
     spec: AskSpec<'_>,
     callers: &[provenance::Caller],
@@ -187,8 +189,10 @@ pub(crate) fn build_ask(
         command: spec.command,
         dedupe_key: proto::DedupeKey {
             wrap: spec.dedupe_wrap,
-            ppid: parent.map_or(0, |p| p.pid),
-            parent_start_time: parent.map_or(0, |p| p.start_time),
+            anchor: proto::AskAnchor::Process(provenance::ProcessIdentity {
+                pid: parent.map_or(0, |p| p.pid),
+                start_time: parent.map_or(0, |p| p.start_time),
+            }),
             subject_digest: None,
         },
         subject: proto::AskSubject::Wrap(proto::WrapSubject {
@@ -279,6 +283,12 @@ mod tests {
         assert_eq!(ask.secrets()[0].name, "DATABASE_URL");
         assert_eq!(ask.secrets()[0].provider, "op");
         assert_eq!(ask.secrets()[0].locator, "Work/PG/url");
-        assert_eq!(ask.dedupe_key.ppid, 42);
+        assert_eq!(
+            ask.dedupe_key.anchor,
+            proto::AskAnchor::Process(provenance::ProcessIdentity {
+                pid: 42,
+                start_time: 7,
+            })
+        );
     }
 }

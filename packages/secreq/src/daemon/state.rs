@@ -31,7 +31,7 @@ use crate::rules::{self, EvalCtx, Rule, RuleHit};
 
 use super::cache::{CacheKey, SecretCache};
 use super::in_flight::{Acquired, InFlightGuard, InFlightMap};
-use super::proto::{Ask, AskSubject, DedupeKey, RowStatus, WireProvider};
+use super::proto::{Ask, AskAnchor, AskSubject, DedupeKey, RowStatus, WireProvider};
 
 /// One coalesced queue entry. Multiple clients with the same dedupe key
 /// share a single entry; resolving it sends the same outcome to every
@@ -157,13 +157,6 @@ fn audit_sign_anchor(info: &super::proto::SshAnchorInfo) -> AuditSignAnchor {
     }
 }
 
-/// The fixed `dedupe_key.wrap` every `secreq run` ask carries.
-///
-/// A run ask's `(ppid, parent_start_time)` is a *session* identity — the
-/// outer run's pid plus a random nonce, propagated to descendants through
-/// [`crate::RUN_SESSION_ENV`] — not a process identity.
-pub(super) const RUN_SESSION_WRAP: &str = "run";
-
 /// Which `run` session an ask belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct RunSession {
@@ -172,13 +165,19 @@ pub(super) struct RunSession {
 }
 
 impl RunSession {
-    /// `Some` when `ask` is a `run` ask, which is the only kind whose dedupe
-    /// key carries a session rather than a process.
+    /// `Some` when `ask` is anchored to a run session rather than to a
+    /// process or a scoped agent's socket.
+    ///
+    /// This used to ask `dedupe_key.wrap == "run"` and then read the anchor
+    /// pair as a session — a string comparison that had to agree with the
+    /// producer in `commands::run` and with the matching exception in
+    /// `server::adopt_peer_provenance`, in three files, or a run tree
+    /// stopped coalescing. The variant is the question now.
     fn of(ask: &Ask) -> Option<RunSession> {
-        (ask.dedupe_key.wrap == RUN_SESSION_WRAP).then_some(RunSession {
-            pid: ask.dedupe_key.ppid,
-            nonce: ask.dedupe_key.parent_start_time,
-        })
+        match ask.dedupe_key.anchor {
+            AskAnchor::RunSession { pid, nonce } => Some(RunSession { pid, nonce }),
+            AskAnchor::Process(_) | AskAnchor::AgentSocket { .. } => None,
+        }
     }
 }
 
@@ -1193,11 +1192,13 @@ impl State {
     /// Resolve a queue entry. **Returns immediately** — the UI must not
     /// block on a provider invocation.
     ///
-    /// `scope` is the `(pid, start_time)` tuple recorded in the approvals
-    /// cache when `decision == ApproveRemember`. For per-row approve
-    /// it's just the wrap's direct parent; for "Approve all from
-    /// ancestor X" it's X's pid/start_time, so any future descendant
-    /// of X can ride the approval.
+    /// `scope` is the process recorded in the approvals cache when
+    /// `decision == ApproveRemember`. For per-row approve it's just the
+    /// wrap's direct parent; for "Approve all from ancestor X" it's X, so
+    /// any future descendant of X can ride the approval. `None` when the
+    /// row's [`AskAnchor`] names no process — a `run` session or a scoped
+    /// agent's socket — in which case nothing is written whatever the
+    /// decision says.
     ///
     /// What happens synchronously here, under the state mutex:
     /// - Remove the entry from the queue.
@@ -1220,7 +1221,7 @@ impl State {
         &mut self,
         key: &DedupeKey,
         decision: Decision,
-        scope: ProcessIdentity,
+        scope: Option<ProcessIdentity>,
         shared: &SharedState,
     ) {
         self.last_activity = Instant::now();
@@ -1231,19 +1232,28 @@ impl State {
             return;
         };
 
-        // SSH asks track their session grants separately via `SshGrant`
-        // (keyed on the anchor, inserted on the SSH path) and guest asks
-        // through the `agent open` process's own `ScopeApprovals`; the wrap
-        // approvals cache is never read for either, so skip the insert to
-        // avoid polluting it with dead entries. `allow_remember()` answers
-        // `false` for both, which is the whole guard.
+        // Two independent conditions, and both are load-bearing.
+        //
+        // `scope` is `Some` only when the row's anchor named a process, so a
+        // `run` session's nonce and a scoped agent's socket pid have no value
+        // to arrive here as — the prompt cannot mint one (see
+        // `prompt_ui::row_scope`).
+        //
+        // `allow_remember()` still answers the different question of whether
+        // *this kind of ask* reads that cache at all. An SSH sign is anchored
+        // to a genuine process, so its scope is `Some`; its grants live in
+        // `SshGrant` (keyed on the sign anchor, inserted on the SSH path) and
+        // the wrap cache is never read for it, so an insert here would only
+        // pollute it with dead entries.
         if decision == Decision::ApproveRemember && entry.representative.allow_remember() {
-            let new = ApprovalEntry {
-                wrap: key.wrap.clone(),
-                parent: scope,
-            };
-            if !self.approvals.contains(&new) {
-                self.approvals.push(new);
+            if let Some(parent) = scope {
+                let new = ApprovalEntry {
+                    wrap: key.wrap.clone(),
+                    parent,
+                };
+                if !self.approvals.contains(&new) {
+                    self.approvals.push(new);
+                }
             }
         }
 
@@ -2130,19 +2140,24 @@ pub type SharedState = Arc<Mutex<State>>;
 /// Order: direct parent first, then each ancestor outwards. Direct
 /// parent wins ties — most-specific approval scope is the most informative.
 pub fn approval_scope_for(approvals: &[ApprovalEntry], ask: &Ask) -> Option<ProcessIdentity> {
-    // Direct parent: encoded in the dedupe key, which is the same pair as
-    // `callers[0]` for a wrap ask — `adopt_peer_provenance` re-derives both
-    // from the same walk. Checked first because it is the most specific
-    // scope, not because the chain might be missing a start time: the
-    // `BUILD_ID` handshake restarts a daemon whose client is a different
-    // build, so the "legacy client with `start_time == 0`" this comment used
-    // to describe cannot reach here.
-    let direct = ProcessIdentity {
-        pid: ask.dedupe_key.ppid,
-        start_time: ask.dedupe_key.parent_start_time,
-    };
-    if has_entry(approvals, &ask.dedupe_key.wrap, direct) {
-        return Some(direct);
+    // Direct parent: named by the dedupe key's anchor, which for a wrap ask
+    // is the same identity as `callers[0]` — `adopt_peer_provenance`
+    // re-derives both from the same walk. Checked first because it is the
+    // most specific scope, not because the chain might be missing a start
+    // time: the `BUILD_ID` handshake restarts a daemon whose client is a
+    // different build, so the "legacy client with `start_time == 0`" this
+    // comment used to describe cannot reach here.
+    //
+    // `None` when the ask is anchored to a run session or a scoped agent's
+    // socket, and that is the point of the match: this line used to build a
+    // `ProcessIdentity` from the anchor pair unconditionally, so a random
+    // session nonce arrived here dressed as a kernel-verified start time.
+    // Only `run`'s `allow_remember: false`, enforced in another file, kept
+    // the lookup from having anything to hit.
+    if let Some(direct) = ask.dedupe_key.anchor.process_identity() {
+        if has_entry(approvals, &ask.dedupe_key.wrap, direct) {
+            return Some(direct);
+        }
     }
     // Then each ancestor past the direct parent.
     for caller in ask.callers().iter().skip(1) {
@@ -2286,14 +2301,19 @@ impl State {
 
     /// Test hook: store the remembered approval `resolve` would on
     /// `ApproveRemember`.
+    ///
+    /// Panics for an ask that is not anchored to a process, because there is
+    /// no approval `resolve` would store for one — see [`AskAnchor`].
     #[cfg(test)]
     pub(super) fn remember_approval_for_test(&mut self, ask: &Ask) {
+        let parent = ask
+            .dedupe_key
+            .anchor
+            .process_identity()
+            .expect("only a process-anchored ask has an approval to remember");
         self.approvals.push(ApprovalEntry {
             wrap: ask.dedupe_key.wrap.clone(),
-            parent: ProcessIdentity {
-                pid: ask.dedupe_key.ppid,
-                start_time: ask.dedupe_key.parent_start_time,
-            },
+            parent,
         });
     }
 
@@ -2826,8 +2846,10 @@ mod tests {
     fn mk_ask(wrap: &str, callers: Vec<(u32, u64)>) -> Ask {
         let dedupe_key = DedupeKey {
             wrap: wrap.to_owned(),
-            ppid: callers.first().map_or(0, |c| c.0),
-            parent_start_time: callers.first().map_or(0, |c| c.1),
+            anchor: AskAnchor::Process(ProcessIdentity {
+                pid: callers.first().map_or(0, |c| c.0),
+                start_time: callers.first().map_or(0, |c| c.1),
+            }),
             subject_digest: None,
         };
         Ask {
@@ -2964,7 +2986,7 @@ mod tests {
         {
             let mut guard = shared.lock().expect("state mutex");
             guard.submit_ask(ssh_ask, tx);
-            guard.resolve(&ssh_key, Decision::ApproveRemember, scope, &shared);
+            guard.resolve(&ssh_key, Decision::ApproveRemember, Some(scope), &shared);
             assert!(
                 guard.approvals.is_empty(),
                 "an SSH ask must not write the wrap approvals cache"
@@ -2978,7 +3000,7 @@ mod tests {
         {
             let mut guard = shared.lock().expect("state mutex");
             guard.submit_ask(wrap_ask, tx);
-            guard.resolve(&wrap_key, Decision::ApproveRemember, scope, &shared);
+            guard.resolve(&wrap_key, Decision::ApproveRemember, Some(scope), &shared);
             assert_eq!(
                 guard.approvals.len(),
                 1,
@@ -3006,7 +3028,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
         let mut guard = shared.lock().expect("state mutex");
         guard.submit_ask(ask, tx);
-        guard.resolve(&key, Decision::ApproveRemember, scope, &shared);
+        guard.resolve(&key, Decision::ApproveRemember, Some(scope), &shared);
         assert!(
             guard.approvals.is_empty(),
             "a run ask must not persist an approval even on ApproveRemember"
@@ -3058,10 +3080,10 @@ mod tests {
             guard.resolve(
                 &key,
                 Decision::Deny,
-                ProcessIdentity {
+                Some(ProcessIdentity {
                     pid: 100,
                     start_time: 1_700_000_000,
-                },
+                }),
                 &shared,
             );
             assert!(guard.queue_is_empty());
@@ -3127,6 +3149,116 @@ mod tests {
         );
         let scope = approval_scope_for(&approvals, &ask).expect("hit at ancestor");
         assert_eq!(scope.pid, 2831);
+    }
+
+    /// **The hazard `AskAnchor` closes.** `approval_scope_for` used to build
+    /// a `ProcessIdentity` out of the dedupe key's `(ppid, parent_start_time)`
+    /// unconditionally, so a `run` ask arrived at the approvals cache with the
+    /// outer run's pid beside a **random session nonce** dressed as a
+    /// kernel-verified start time. It never hit — but only because `run` sets
+    /// `allow_remember: false`, so no `ApprovalEntry` under the `"run"` wrap
+    /// is ever stored and a lookup needs an entry to hit. A flag in
+    /// `commands/run.rs`, checked in `State::resolve`, was the whole guard.
+    ///
+    /// So this test removes that guard. It plants exactly the entry
+    /// `allow_remember: false` prevents — `("run", ProcessIdentity { pid,
+    /// start_time: nonce })`, the old coercion spelled out — and then asks
+    /// with a session anchor carrying those same two integers.
+    ///
+    /// The two asks below differ in nothing but the anchor's *variant*. Under
+    /// the old pair they were the same value and both hit; a session cannot
+    /// reach the cache now because the type gives it no way to become a
+    /// `ProcessIdentity`.
+    #[test]
+    fn a_session_anchor_cannot_reach_the_approvals_cache() {
+        const PID: u32 = 6042;
+        const NONCE: u64 = 12_345_678_901_234_567_890;
+
+        // The entry `allow_remember: false` is supposed to make unreachable.
+        let approvals = vec![ApprovalEntry {
+            wrap: "run".into(),
+            parent: ProcessIdentity {
+                pid: PID,
+                start_time: NONCE,
+            },
+        }];
+
+        // A run ask: same integers, anchored to a session. Its caller chain
+        // is empty so the ancestor walk cannot rescue the lookup either —
+        // the direct-parent shortcut is the whole question here.
+        let mut session_ask = mk_ask("run", vec![]);
+        session_ask.dedupe_key.anchor = AskAnchor::RunSession {
+            pid: PID,
+            nonce: NONCE,
+        };
+        assert_eq!(
+            approval_scope_for(&approvals, &session_ask),
+            None,
+            "a session nonce must not be spendable as a start time"
+        );
+
+        // The same two integers under a process anchor are a genuine
+        // identity, and do hit. This is the control: the miss above is the
+        // variant, not the numbers.
+        let mut process_ask = mk_ask("run", vec![]);
+        process_ask.dedupe_key.anchor = AskAnchor::Process(ProcessIdentity {
+            pid: PID,
+            start_time: NONCE,
+        });
+        assert_eq!(
+            approval_scope_for(&approvals, &process_ask),
+            Some(ProcessIdentity {
+                pid: PID,
+                start_time: NONCE,
+            }),
+            "the numbers are not what makes the session miss"
+        );
+    }
+
+    /// The same closure for the third thing the old pair carried: a scoped
+    /// agent wrote its own pid beside a placeholder `0`, which
+    /// `approval_scope_for` also read as a `ProcessIdentity`. A guest's
+    /// principal is the host-declared scope and its grants live in
+    /// `scoped_agent::ScopeApprovals`, so the daemon's parent-keyed cache
+    /// must be unreachable from here — and now is, without depending on
+    /// `AskSubject::ScopedAgent` answering `allow_remember()` with `false`.
+    #[test]
+    fn an_agent_socket_anchor_cannot_reach_the_approvals_cache() {
+        let approvals = vec![ApprovalEntry {
+            wrap: "agent:sandbox:secret://op/a/b".into(),
+            parent: ProcessIdentity {
+                pid: 4242,
+                start_time: 0,
+            },
+        }];
+        let mut ask = mk_ask("agent:sandbox:secret://op/a/b", vec![]);
+        ask.dedupe_key.anchor = AskAnchor::AgentSocket { pid: 4242 };
+        assert_eq!(approval_scope_for(&approvals, &ask), None);
+    }
+
+    /// `State::resolve` is the writing half of the same property. The prompt
+    /// sends the scope a decision should be remembered at, and for a session
+    /// row it now has none to send — so even `ApproveRemember` on an ask that
+    /// *permits* remembering writes nothing.
+    #[test]
+    fn a_decision_with_no_scope_writes_no_approval() {
+        use std::sync::mpsc;
+
+        let shared: SharedState = Arc::new(Mutex::new(State::new()));
+        let ask = mk_ask("gh", vec![(4242, 1_700_000_000)]);
+        assert!(
+            ask.allow_remember(),
+            "the ask must permit remembering, or this proves nothing"
+        );
+        let key = ask.dedupe_key.clone();
+        let (tx, _rx) = mpsc::channel();
+        let mut guard = shared.lock().expect("state mutex");
+        guard.submit_ask(ask, tx);
+        guard.resolve(&key, Decision::ApproveRemember, None, &shared);
+        assert!(
+            guard.approvals.is_empty(),
+            "with no scope there is nothing to write an approval against"
+        );
     }
 
     #[test]
@@ -3240,8 +3372,10 @@ mod tests {
             command: argv.iter().map(|s| (*s).to_owned()).collect(),
             dedupe_key: DedupeKey {
                 wrap: wrap.to_owned(),
-                ppid: 0,
-                parent_start_time: 0,
+                anchor: AskAnchor::Process(ProcessIdentity {
+                    pid: 0,
+                    start_time: 0,
+                }),
                 subject_digest: None,
             },
             subject: AskSubject::Wrap(super::super::proto::WrapSubject {
@@ -3405,8 +3539,10 @@ mod tests {
             // Unknown key: nothing removed, no panic.
             let bogus_key = DedupeKey {
                 wrap: "nope".to_owned(),
-                ppid: 999,
-                parent_start_time: 1,
+                anchor: AskAnchor::Process(ProcessIdentity {
+                    pid: 999,
+                    start_time: 1,
+                }),
                 subject_digest: None,
             };
             state.withdraw_waiter(&bogus_key, id);
@@ -3652,16 +3788,29 @@ mod tests {
 
     #[test]
     fn nested_run_skips_window_only_when_nested_and_fully_cached() {
+        // Every ask below belongs to one session, which is what
+        // `AskAnchor::RunSession` says and what the helper stamps. It used to
+        // be said by `wrap == "run"` alone, so a run ask assembled without a
+        // session anchor still counted as one.
+        fn session_run_ask() -> Ask {
+            let mut ask = ask_with_secret("run", &["run", "cmd"], "TOKEN");
+            ask.dedupe_key.anchor = AskAnchor::RunSession {
+                pid: 6042,
+                nonce: 12345,
+            };
+            ask
+        }
+
         // A session consented for the ask's ref, with the value cached — the
         // state a nested run legitimately skips the window from.
         let mut state = State::new();
-        let seed = ask_with_secret("run", &["run", "cmd"], "TOKEN");
+        let seed = session_run_ask();
         state.record_run_release_for_test(&seed);
         state.put_cached_for_test(&seed, "cached-value");
 
         // Unnested run, even fully cached → must NOT skip. This is the
         // load-bearing invariant: a top-level run always prompts.
-        let mut unnested = ask_with_secret("run", &["run", "cmd"], "TOKEN");
+        let mut unnested = session_run_ask();
         wrap_of(&mut unnested).nested_run = false;
         assert!(
             !state.nested_run_may_skip_window(&unnested),
@@ -3669,16 +3818,30 @@ mod tests {
         );
 
         // Nested + fully cached → skip the window.
-        let mut nested = ask_with_secret("run", &["run", "cmd"], "TOKEN");
+        let mut nested = session_run_ask();
         wrap_of(&mut nested).nested_run = true;
         assert!(
             state.nested_run_may_skip_window(&nested),
             "a nested, fully-cached run should resolve without prompting"
         );
 
+        // A different session, same everything else → must NOT skip. The
+        // nonce is what separates two run trees, and it is the only field
+        // that differs here.
+        let mut other_session = session_run_ask();
+        wrap_of(&mut other_session).nested_run = true;
+        other_session.dedupe_key.anchor = AskAnchor::RunSession {
+            pid: 6042,
+            nonce: 999,
+        };
+        assert!(
+            !state.nested_run_may_skip_window(&other_session),
+            "a release belongs to one session, not to the `run` wrap"
+        );
+
         // Nested but one secret uncached → must NOT skip (prompts for the
         // uncached var).
-        let mut nested_uncached = ask_with_secret("run", &["run", "cmd"], "TOKEN");
+        let mut nested_uncached = session_run_ask();
         wrap_of(&mut nested_uncached).nested_run = true;
         wrap_of(&mut nested_uncached)
             .secrets
@@ -3748,8 +3911,10 @@ mod tests {
             );
         }
         let mut ask = ask_with_secret("gh", &["gh", "api"], "GITHUB_TOKEN");
-        ask.dedupe_key.ppid = 9999;
-        ask.dedupe_key.parent_start_time = 9999;
+        ask.dedupe_key.anchor = AskAnchor::Process(ProcessIdentity {
+            pid: 9999,
+            start_time: 9999,
+        });
         match super::resolve_for_ask(&ask, cache, in_flight) {
             WaiterReply::Decision { decision, secrets } => {
                 assert_eq!(decision, Decision::Approve);
@@ -4033,8 +4198,10 @@ mod tests {
     fn session_key() -> DedupeKey {
         DedupeKey {
             wrap: "run".to_owned(),
-            ppid: 6042,
-            parent_start_time: 12345,
+            anchor: AskAnchor::RunSession {
+                pid: 6042,
+                nonce: 12345,
+            },
             subject_digest: None,
         }
     }
@@ -4058,10 +4225,10 @@ mod tests {
             guard.resolve(
                 &key,
                 Decision::Approve,
-                ProcessIdentity {
-                    pid: 6042,
-                    start_time: 12345,
-                },
+                // A session row offers no scope, which is what the prompt
+                // sends for one — `AskAnchor::RunSession` has no
+                // `ProcessIdentity` to hand over.
+                None,
                 &shared,
             );
         }
@@ -4113,10 +4280,10 @@ mod tests {
             guard.resolve(
                 &key,
                 Decision::Approve,
-                ProcessIdentity {
-                    pid: 6042,
-                    start_time: 12345,
-                },
+                // A session row offers no scope, which is what the prompt
+                // sends for one — `AskAnchor::RunSession` has no
+                // `ProcessIdentity` to hand over.
+                None,
                 &shared,
             );
         }
@@ -4150,10 +4317,10 @@ mod tests {
             guard.resolve(
                 &key,
                 Decision::Approve,
-                ProcessIdentity {
-                    pid: 6042,
-                    start_time: 12345,
-                },
+                // A session row offers no scope, which is what the prompt
+                // sends for one — `AskAnchor::RunSession` has no
+                // `ProcessIdentity` to hand over.
+                None,
                 &shared,
             );
         }
@@ -4199,8 +4366,10 @@ mod tests {
             command: vec![format!("ssh-sign {key_id}")],
             dedupe_key: DedupeKey {
                 wrap: format!("ssh:{key_id}"),
-                ppid: 0,
-                parent_start_time: 0,
+                anchor: AskAnchor::Process(ProcessIdentity {
+                    pid: 0,
+                    start_time: 0,
+                }),
                 subject_digest: None,
             },
             subject: AskSubject::SshSign(super::super::proto::SshSubject {
@@ -5143,10 +5312,10 @@ mod tests {
             guard.resolve(
                 &key,
                 Decision::Deny,
-                ProcessIdentity {
+                Some(ProcessIdentity {
                     pid: 100,
                     start_time: 1_700_000_000,
-                },
+                }),
                 &shared,
             );
         }
@@ -5179,10 +5348,10 @@ mod tests {
             guard.resolve(
                 &key,
                 Decision::Deny,
-                ProcessIdentity {
+                Some(ProcessIdentity {
                     pid: 100,
                     start_time: 1_700_000_000,
-                },
+                }),
                 &shared,
             );
         }
@@ -5304,9 +5473,8 @@ mod tests {
         let mut ask = ask_with_secret("run", &["./whatever"], "TOKEN");
         wrap_of(&mut ask).nested_run = true;
         ask.dedupe_key = DedupeKey {
-            wrap: RUN_SESSION_WRAP.to_owned(),
-            ppid: pid,
-            parent_start_time: nonce,
+            wrap: "run".to_owned(),
+            anchor: AskAnchor::RunSession { pid, nonce },
             subject_digest: None,
         };
         wrap_of(&mut ask).secrets[0].provider = provider.to_owned();

@@ -63,12 +63,13 @@ use secreq::consent::Decision;
 use secreq::daemon::manager_ui::{render_manager_panel, ManagerWindowState};
 use secreq::daemon::prompt_ui::{render_prompt_panel, PromptWindowState, PROMPT_DEFAULT_SIZE};
 use secreq::daemon::proto::{
-    AgentAskInfo, Ask, AskSubject, Caller, DedupeKey, SecretAsk, SshAskInfo, SshSubject,
+    AgentAskInfo, Ask, AskAnchor, AskSubject, Caller, DedupeKey, SecretAsk, SshAskInfo, SshSubject,
     WrapSubject,
 };
 use secreq::daemon::state::{SharedState, State};
 use secreq::daemon::theme::OsFlavor;
 use secreq::daemon::ui::{AutoDenyToastView, RuleAction, RuleSort};
+use secreq::provenance::ProcessIdentity;
 use secreq::recommendations::SuggestionSort;
 use secreq::rule_scaffold::Editor;
 use secreq::rules::{
@@ -257,8 +258,10 @@ fn submit(
     let Chain { frames, truncated } = callers.into();
     let dedupe_key = DedupeKey {
         wrap: wrap.to_owned(),
-        ppid: frames.first().map_or(0, |c| c.pid),
-        parent_start_time: frames.first().map_or(0, |c| c.start_time),
+        anchor: AskAnchor::Process(ProcessIdentity {
+            pid: frames.first().map_or(0, |c| c.pid),
+            start_time: frames.first().map_or(0, |c| c.start_time),
+        }),
         subject_digest: None,
     };
     let ask = Ask {
@@ -324,8 +327,10 @@ fn submit_run(
 ) -> mpsc::Receiver<secreq::daemon::state::WaiterReply> {
     let dedupe_key = DedupeKey {
         wrap: "run".to_owned(),
-        ppid: callers.first().map_or(0, |c| c.pid),
-        parent_start_time: callers.first().map_or(0, |c| c.start_time),
+        anchor: AskAnchor::RunSession {
+            pid: callers.first().map_or(0, |c| c.pid),
+            nonce: callers.first().map_or(0, |c| c.start_time),
+        },
         subject_digest: None,
     };
     let ask = Ask {
@@ -376,12 +381,14 @@ fn submit_ssh(
     let anchor = anchor_of(peer.as_ref(), &callers);
     let dedupe_key = DedupeKey {
         wrap: format!("ssh:{key_id}"),
-        ppid: anchor.as_ref().map_or(0, |a| a.pid),
-        parent_start_time: peer
-            .iter()
-            .chain(callers.iter())
-            .find(|c| Some(c.pid) == anchor.as_ref().map(|a| a.pid))
-            .map_or(0, |c| c.start_time),
+        anchor: AskAnchor::Process(ProcessIdentity {
+            pid: anchor.as_ref().map_or(0, |a| a.pid),
+            start_time: peer
+                .iter()
+                .chain(callers.iter())
+                .find(|c| Some(c.pid) == anchor.as_ref().map(|a| a.pid))
+                .map_or(0, |c| c.start_time),
+        }),
         subject_digest: None,
     };
     let ask = Ask {
@@ -425,8 +432,7 @@ fn submit_agent(
 ) -> mpsc::Receiver<secreq::daemon::state::WaiterReply> {
     let dedupe_key = DedupeKey {
         wrap: format!("agent:{scope}:{reference}"),
-        ppid: 4242,
-        parent_start_time: 0,
+        anchor: AskAnchor::AgentSocket { pid: 4242 },
         subject_digest: None,
     };
     let ask = Ask {
@@ -466,8 +472,10 @@ fn pending(
 ) {
     let dedupe_key = DedupeKey {
         wrap: wrap.to_owned(),
-        ppid: callers.first().map_or(0, |c| c.pid),
-        parent_start_time: callers.first().map_or(0, |c| c.start_time),
+        anchor: AskAnchor::Process(ProcessIdentity {
+            pid: callers.first().map_or(0, |c| c.pid),
+            start_time: callers.first().map_or(0, |c| c.start_time),
+        }),
         subject_digest: None,
     };
     let ask = Ask {

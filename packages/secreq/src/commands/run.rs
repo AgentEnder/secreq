@@ -515,14 +515,21 @@ fn mint_session_token() -> String {
 }
 
 /// Parse a session token into the dedupe key every descendant run of the
-/// tree shares. `parent_start_time` holds the nonce — opaque to the
-/// daemon, used only to group same-session asks into one queue entry.
+/// tree shares. The nonce is opaque to the daemon, used only to group
+/// same-session asks into one queue entry.
+///
+/// [`proto::AskAnchor::RunSession`] is what makes it a session rather than a
+/// process: it carries no [`crate::provenance::ProcessIdentity`], so the
+/// nonce cannot be read as a start time by the daemon's approvals cache, and
+/// nothing has to compare `wrap` against `"run"` to find that out.
 fn session_dedupe_key(token: &str) -> Option<proto::DedupeKey> {
     let (pid, nonce) = token.split_once(':')?;
     Some(proto::DedupeKey {
         wrap: "run".to_owned(),
-        ppid: pid.parse().ok()?,
-        parent_start_time: nonce.parse().ok()?,
+        anchor: proto::AskAnchor::RunSession {
+            pid: pid.parse().ok()?,
+            nonce: nonce.parse().ok()?,
+        },
         subject_digest: None,
     })
 }
@@ -680,14 +687,16 @@ mod tests {
 
     #[test]
     fn session_token_round_trips_to_a_dedupe_key() {
-        // "pid:nonce" → DedupeKey { wrap:"run", ppid:pid, parent_start_time:nonce }
+        // "pid:nonce" → DedupeKey { wrap:"run", anchor: RunSession{pid,nonce} }
         let key = session_dedupe_key("6042:12345678901234567890");
         assert_eq!(
             key,
             Some(proto::DedupeKey {
                 wrap: "run".to_owned(),
-                ppid: 6042,
-                parent_start_time: 12345678901234567890,
+                anchor: proto::AskAnchor::RunSession {
+                    pid: 6042,
+                    nonce: 12345678901234567890,
+                },
                 subject_digest: None,
             })
         );
@@ -700,7 +709,23 @@ mod tests {
         let token = mint_session_token();
         let key = session_dedupe_key(&token).expect("minted token must parse");
         assert_eq!(key.wrap, "run");
-        assert_eq!(key.ppid, std::process::id());
+        assert_eq!(key.anchor.pid(), std::process::id());
+    }
+
+    /// The nonce is a session identifier, and the type has to say so: a run
+    /// ask must never present the daemon with a [`ProcessIdentity`] whose
+    /// `start_time` is a random `u64`. Before `AskAnchor` this was the
+    /// producer's half of a three-file convention (`wrap == "run"` here, in
+    /// `state::RunSession::of`, and in `server::adopt_peer_provenance`);
+    /// now the variant carries it.
+    #[test]
+    fn a_session_key_offers_no_process_identity() {
+        let key = session_dedupe_key("6042:12345678901234567890").expect("parses");
+        assert_eq!(
+            key.anchor.process_identity(),
+            None,
+            "a session nonce must have no way to be read as a start time"
+        );
     }
 
     #[test]

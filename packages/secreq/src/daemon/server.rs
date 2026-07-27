@@ -14,7 +14,7 @@ use std::thread;
 
 use anyhow::{Context, Result};
 
-use super::proto::{Ask, AskSubject, ClientMsg, DaemonMsg, DedupeKey};
+use super::proto::{Ask, AskAnchor, AskSubject, ClientMsg, DaemonMsg, DedupeKey};
 use super::state::{SharedState, WaiterId, WaiterReply};
 
 /// Bind the daemon socket and start accepting connections.
@@ -302,8 +302,13 @@ fn handle_consent_window_connection(
                 super::log::log_at(
                     "server",
                     format_args!(
-                        "← ConsentDecision wrap={} decision={:?} scope=({},{})",
-                        key.wrap, decision, scope.pid, scope.start_time
+                        "← ConsentDecision wrap={} decision={:?} scope={}",
+                        key.wrap,
+                        decision,
+                        scope.map_or_else(
+                            || "none".to_owned(),
+                            |s| format!("({},{})", s.pid, s.start_time)
+                        )
                     ),
                 );
                 // `resolve` hands a clone of `state` to its off-thread
@@ -1062,22 +1067,34 @@ fn adopt_peer_provenance(ask: &mut Ask, stream: &UnixStream) -> Result<()> {
     // the client's claim is not a fallback — it is the thing being replaced.
     *cwd = crate::provenance::cwd_for_pid(peer).unwrap_or_default();
 
-    // The dedupe key's process half keys the approvals cache, so a forged one
-    // is a cache-scope escape, not just a display lie. Re-derive it from the
+    // A process anchor keys the approvals cache, so a forged one is a
+    // cache-scope escape and not just a display lie. Re-derive it from the
     // same walk that produced the chain.
     //
-    // A `run` ask is the exception: its `(ppid, parent_start_time)` is a
-    // *session* identity — the outer run's pid plus a random nonce, shared
-    // across the tree — not a process identity, and re-deriving it per
-    // process would dissolve the session into one entry per nested run.
-    // Nothing keys the approvals cache on it (`run` sets
-    // `allow_remember: false`, so no `ApprovalEntry` under that wrap is ever
-    // stored, and a lookup needs an entry to hit), and what a session may be
-    // served without prompting is bounded separately by
-    // `State::nested_run_may_skip_window`.
-    if ask.dedupe_key.wrap != super::state::RUN_SESSION_WRAP {
-        ask.dedupe_key.ppid = parent_pid;
-        ask.dedupe_key.parent_start_time = parent_start_time;
+    // The other two variants are not processes and are left exactly as the
+    // client sent them. This used to be `wrap != "run"` — a string
+    // comparison that had to agree with `state::RunSession::of` and with
+    // `commands::run::session_dedupe_key` to keep a run tree coalescing, and
+    // that carried a paragraph explaining why leaving a *session* in a field
+    // the approvals cache reads was safe. There is no such field now:
+    // `AskAnchor::process_identity` hands back `None` for both, so neither
+    // can reach that cache whatever this function does.
+    match &mut ask.dedupe_key.anchor {
+        AskAnchor::Process(identity) => {
+            *identity = crate::provenance::ProcessIdentity {
+                pid: parent_pid,
+                start_time: parent_start_time,
+            };
+        }
+        // A run session's `(pid, nonce)` is shared across the whole tree;
+        // re-deriving it per process would dissolve it into one entry per
+        // nested run, which is the coalescing this exception exists to
+        // protect. What a session may be served without prompting is bounded
+        // separately by `State::nested_run_may_skip_window`.
+        //
+        // A scoped-agent ask returns above and never reaches this line; the
+        // arm is here because the answer for it is the same one.
+        AskAnchor::RunSession { .. } | AskAnchor::AgentSocket { .. } => {}
     }
 
     Ok(())
@@ -1520,8 +1537,10 @@ mod tests {
                 command: vec!["gh".to_owned(), "pr".to_owned(), "view".to_owned()],
                 dedupe_key: DedupeKey {
                     wrap: "gh".to_owned(),
-                    ppid: 4242,
-                    parent_start_time: 7,
+                    anchor: AskAnchor::Process(crate::provenance::ProcessIdentity {
+                        pid: 4242,
+                        start_time: 7,
+                    }),
                     subject_digest: None,
                 },
                 subject: AskSubject::Wrap(WrapSubject {
@@ -1782,8 +1801,10 @@ mod tests {
             command: vec!["gh".to_owned(), "api".to_owned()],
             dedupe_key: DedupeKey {
                 wrap: wrap.to_owned(),
-                ppid: FORGED_PID,
-                parent_start_time: 12345,
+                anchor: AskAnchor::Process(crate::provenance::ProcessIdentity {
+                    pid: FORGED_PID,
+                    start_time: 12345,
+                }),
                 subject_digest: None,
             },
             subject: AskSubject::Wrap(WrapSubject {
@@ -1851,36 +1872,83 @@ mod tests {
 
         adopt_peer_provenance(&mut ask, &server_conn).expect("provenance");
 
-        assert_ne!(ask.dedupe_key.ppid, FORGED_PID);
-        assert_ne!(ask.dedupe_key.parent_start_time, 12345);
+        let identity = ask
+            .dedupe_key
+            .anchor
+            .process_identity()
+            .expect("a wrap ask is anchored to a process");
+        assert_ne!(identity.pid, FORGED_PID);
+        assert_ne!(identity.start_time, 12345);
         // It agrees with the chain the daemon just walked, which is how the
         // client derives it too.
-        assert_eq!(ask.dedupe_key.ppid, ask.callers()[0].pid);
-        assert_eq!(
-            ask.dedupe_key.parent_start_time,
-            ask.callers()[0].start_time
-        );
+        assert_eq!(identity, ask.callers()[0].identity());
         // The wrap half is config, not provenance, and is left alone.
         assert_eq!(ask.dedupe_key.wrap, "gh");
     }
 
-    /// A `run` ask's dedupe key is a *session* identity: the outer run's pid
-    /// plus a random nonce, shared by every descendant so one consent covers
-    /// the tree. Re-deriving it per-process would dissolve the session into
-    /// one entry per nested run. Its caller chain is still corrected.
+    /// A `run` ask's dedupe key is anchored to a *session*: the outer run's
+    /// pid plus a random nonce, shared by every descendant so one consent
+    /// covers the tree. Re-deriving it per-process would dissolve the session
+    /// into one entry per nested run. Its caller chain is still corrected.
+    ///
+    /// The exception used to be `wrap != "run"`, so this test had to name the
+    /// same constant the production check compared against. It asks the
+    /// anchor now, and the wrap is free to be anything.
     #[test]
     fn a_run_session_dedupe_key_survives_but_its_chain_does_not() {
         let (server_conn, _client) = connected_pair();
-        let mut ask = forged_ask(super::super::state::RUN_SESSION_WRAP);
+        let mut ask = Ask {
+            dedupe_key: DedupeKey {
+                anchor: AskAnchor::RunSession {
+                    pid: FORGED_PID,
+                    nonce: 12345,
+                },
+                ..forged_ask("run").dedupe_key
+            },
+            ..forged_ask("run")
+        };
 
         adopt_peer_provenance(&mut ask, &server_conn).expect("provenance");
 
         assert_eq!(
-            ask.dedupe_key.ppid, FORGED_PID,
+            ask.dedupe_key.anchor,
+            AskAnchor::RunSession {
+                pid: FORGED_PID,
+                nonce: 12345,
+            },
             "session identity preserved"
         );
-        assert_eq!(ask.dedupe_key.parent_start_time, 12345);
         assert!(!ask.callers().iter().any(|c| c.pid == FORGED_PID));
+    }
+
+    /// The session that survives that walk is also, now, a session that
+    /// cannot be spent as a process. Before `AskAnchor`, the pair left
+    /// standing above was read by `state::approval_scope_for` as a
+    /// `ProcessIdentity` — a random `u64` looked up as a kernel-verified
+    /// start time — and only `run`'s `allow_remember: false`, enforced in a
+    /// third file, kept the lookup from having anything to hit.
+    #[test]
+    fn the_surviving_session_identity_is_not_a_process_identity() {
+        let (server_conn, _client) = connected_pair();
+        let mut ask = Ask {
+            dedupe_key: DedupeKey {
+                anchor: AskAnchor::RunSession {
+                    pid: FORGED_PID,
+                    nonce: 12345,
+                },
+                ..forged_ask("run").dedupe_key
+            },
+            ..forged_ask("run")
+        };
+
+        adopt_peer_provenance(&mut ask, &server_conn).expect("provenance");
+
+        assert_eq!(
+            ask.dedupe_key.anchor.process_identity(),
+            None,
+            "the one anchor the daemon declines to re-derive must also be \
+             the one anchor that reaches no approvals cache"
+        );
     }
 
     /// A scoped-agent ask, built the way `scoped_agent::agent_ask` builds
@@ -1905,6 +1973,10 @@ mod tests {
                     exe: Some("/usr/local/bin/secreq".to_owned()),
                 }),
             }),
+            dedupe_key: DedupeKey {
+                anchor: AskAnchor::AgentSocket { pid: FORGED_PID },
+                ..forged_ask("agent:sandbox:secret://op/a/b").dedupe_key
+            },
             ..forged_ask("agent:sandbox:secret://op/a/b")
         }
     }
@@ -1925,7 +1997,13 @@ mod tests {
             "a guest ask must not gain a host chain"
         );
         assert!(ask.cwd().is_empty());
-        assert_eq!(ask.dedupe_key.ppid, FORGED_PID);
+        assert_eq!(
+            ask.dedupe_key.anchor,
+            AskAnchor::AgentSocket { pid: FORGED_PID }
+        );
+        // And a socket is not a process: nothing here can be spent as a
+        // remembered approval, whatever the guest claimed.
+        assert_eq!(ask.dedupe_key.anchor.process_identity(), None);
     }
 
     /// **Kind forgery, the residue and the closure.** The exemption above is

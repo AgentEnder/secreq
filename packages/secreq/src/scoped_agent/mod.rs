@@ -97,7 +97,7 @@ use zeroize::Zeroize;
 
 use crate::audit::{self, AuditEntry, ScopeDeclarant};
 use crate::consent::{AgentAnchor, AgentGrant, Decision};
-use crate::daemon::proto::{AgentAskInfo, Ask, AskSubject, DedupeKey};
+use crate::daemon::proto::{AgentAskInfo, Ask, AskAnchor, AskSubject, DedupeKey};
 use crate::manifest::{Manifest, Provider};
 use crate::reference::Reference;
 use crate::resolve::{resolve_all, ResolutionPlan, SecretRequest, Source};
@@ -399,10 +399,12 @@ impl Clock for SystemClock {
 /// Lives in the agent process rather than the daemon, which is what makes
 /// "the second request is silent" true at the [`Gate`] — the daemon is never
 /// dialled at all on a cache hit, so no prompt can even be queued. It also
-/// keeps the daemon's parent-keyed approvals cache out of this path entirely
-/// (`Ask::allow_remember` stays `false`): that cache keys on
-/// `(wrap, ppid, parent_start_time)`, and a guest has no host parent to key
-/// on, so its notion of identity is meaningless here.
+/// keeps the daemon's parent-keyed approvals cache out of this path entirely:
+/// that cache keys on `(wrap, ProcessIdentity)`, and a guest has no host
+/// parent to key on, so its notion of identity is meaningless here. A guest
+/// ask is anchored to [`AskAnchor::AgentSocket`], which has no
+/// `ProcessIdentity` to hand over, so that is now a fact about the type
+/// rather than a consequence of `Ask::allow_remember` staying `false`.
 ///
 /// The lifetime story falls out of where it lives: the cache is this
 /// process's memory, and this process is the socket, and the socket is the
@@ -609,8 +611,13 @@ fn agent_ask(scope: &Scope, reference: &Reference, guest_chain: &GuestChain) -> 
             wrap: format!("agent:{}:{reference}", scope.name),
             // Our own pid: the scoped socket's lifetime is this process's
             // lifetime, so it's the honest "who is parked on this decision".
-            ppid: std::process::id(),
-            parent_start_time: 0,
+            // Its own variant rather than a `ProcessIdentity` with a
+            // placeholder `start_time: 0`, because the guest's principal is
+            // the host-declared scope and nothing here may become a key in
+            // the daemon's parent-keyed approvals cache — see [`AskAnchor`].
+            anchor: AskAnchor::AgentSocket {
+                pid: std::process::id(),
+            },
             subject_digest: None,
         },
         subject: AskSubject::ScopedAgent(AgentAskInfo {

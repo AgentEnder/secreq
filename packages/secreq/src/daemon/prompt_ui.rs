@@ -229,13 +229,17 @@ fn current_row(snapshot: &QueueSnapshot) -> Option<&QueueRow> {
 }
 
 /// Approval scope for the current ask: its direct parent, which is what
-/// the dedupe key already names. A remembered approval written there
-/// covers subsequent asks from the same parent process.
-fn row_scope(row: &QueueRow) -> ProcessIdentity {
-    ProcessIdentity {
-        pid: row.key.ppid,
-        start_time: row.key.parent_start_time,
-    }
+/// the dedupe key's anchor already names. A remembered approval written
+/// there covers subsequent asks from the same parent process.
+///
+/// `None` for a row anchored to a `run` session or a scoped agent's socket.
+/// Those carry a pid beside a number that is not a start time — a random
+/// nonce, a placeholder zero — and this function used to pack both into a
+/// [`ProcessIdentity`] and send it to the daemon as the scope to remember
+/// at. Nothing stored it, because those asks answer `allow_remember()` with
+/// `false`; that was a flag in another file standing where a type belongs.
+fn row_scope(row: &QueueRow) -> Option<ProcessIdentity> {
+    row.key.anchor.process_identity()
 }
 
 /// What "Approve" means for this ask. A wrap ask remembers at the parent
@@ -1925,8 +1929,8 @@ mod tests {
     // where every control landed, no content between them moved anything.
 
     use super::super::proto::{
-        Ask, AskSubject, DedupeKey, RowStatus, SecretAsk, SshAnchorInfo, SshAskInfo, SshSubject,
-        WrapSubject,
+        Ask, AskAnchor, AskSubject, DedupeKey, RowStatus, SecretAsk, SshAnchorInfo, SshAskInfo,
+        SshSubject, WrapSubject,
     };
     use super::super::state::{QueueRow, QueueSnapshot};
 
@@ -1950,8 +1954,10 @@ mod tests {
         });
         let key = DedupeKey {
             wrap: "ssh:github".to_owned(),
-            ppid: callers.first().map_or(0, |c| c.pid),
-            parent_start_time: 0,
+            anchor: AskAnchor::Process(ProcessIdentity {
+                pid: callers.first().map_or(0, |c| c.pid),
+                start_time: 0,
+            }),
             subject_digest: None,
         };
         QueueRow {
@@ -1981,8 +1987,10 @@ mod tests {
     fn wrap_row(callers: Vec<Caller>, truncated: bool, secrets: Vec<SecretAsk>) -> QueueRow {
         let key = DedupeKey {
             wrap: "npm".to_owned(),
-            ppid: callers.first().map_or(0, |c| c.pid),
-            parent_start_time: 0,
+            anchor: AskAnchor::Process(ProcessIdentity {
+                pid: callers.first().map_or(0, |c| c.pid),
+                start_time: 0,
+            }),
             subject_digest: None,
         };
         QueueRow {
@@ -2017,6 +2025,45 @@ mod tests {
             reason: None,
             requested_by: vec![],
         }
+    }
+
+    /// The scope the prompt offers is the value the daemon writes into the
+    /// approvals cache. For a row anchored to a `run` session or a scoped
+    /// agent's socket there is no honest one — the second number is a random
+    /// nonce or a placeholder — and this function used to invent it anyway,
+    /// packing both into a `ProcessIdentity` and shipping it over the socket.
+    /// Nothing stored it, because those asks answer `allow_remember()` with
+    /// `false`; a flag in the daemon was standing in for a type here.
+    #[test]
+    fn a_row_that_names_no_process_offers_no_scope() {
+        let process_row = wrap_row(vec![caller(7926, "-zsh")], false, vec![]);
+        assert_eq!(
+            row_scope(&process_row),
+            Some(ProcessIdentity {
+                pid: 7926,
+                start_time: 0,
+            }),
+            "a wrap row's parent is a real process and is the scope"
+        );
+
+        let mut session_row = process_row.clone();
+        session_row.key.anchor = AskAnchor::RunSession {
+            pid: 7926,
+            nonce: 12_345_678_901_234_567_890,
+        };
+        assert_eq!(
+            row_scope(&session_row),
+            None,
+            "a session nonce is not a start time, so there is no scope to send"
+        );
+
+        let mut agent_row = process_row;
+        agent_row.key.anchor = AskAnchor::AgentSocket { pid: 4242 };
+        assert_eq!(
+            row_scope(&agent_row),
+            None,
+            "a guest's principal is its scope, and the socket pid is not a scope"
+        );
     }
 
     /// The worst chain the wire admits: the walk's full 16 frames, each with

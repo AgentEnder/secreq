@@ -109,7 +109,12 @@ pub enum ClientMsg {
         /// rather than a `scope_pid` / `scope_start_time` pair: what lands in
         /// the approvals cache is a [`ProcessIdentity`], and every hop that
         /// takes it apart is a hop that can put it back together wrong.
-        scope: ProcessIdentity,
+        ///
+        /// `None` when the row's [`AskAnchor`] is not a process — a `run`
+        /// session or a scoped agent's socket. The prompt used to coerce
+        /// those into a `ProcessIdentity` anyway and send it; there was
+        /// nothing honest to send, so now it sends nothing.
+        scope: Option<ProcessIdentity>,
     },
     /// "I'm closing cleanly." Daemon removes me from its subscriber list.
     ConsentWindowDetach,
@@ -283,7 +288,9 @@ pub struct Ask {
     /// prompt's subtitle and the audit row have something to print.
     pub command: Vec<String>,
     /// Coalescing key: parallel asks with the same key fold into one queue
-    /// entry. Today: `(wrap_name, ppid, parent_start_time)`.
+    /// entry. Today: `(wrap_name, anchor, subject_digest)`, where the anchor
+    /// is a process, a `run` session, or a scoped agent's socket — see
+    /// [`AskAnchor`].
     pub dedupe_key: DedupeKey,
     /// What is being asked for, and everything that is only meaningful for
     /// that kind of request.
@@ -738,26 +745,107 @@ pub struct LocalPeer {
     pub exe: Option<String>,
 }
 
+/// What an ask's queue identity hangs off — and, for exactly one variant,
+/// what a remembered approval may be written against.
+///
+/// This used to be a bare `(ppid: u32, parent_start_time: u64)` pair on
+/// [`DedupeKey`], and three producers put three different things in it: a
+/// wrap or sign ask's kernel-verified parent, a `run` tree's `(outer pid,
+/// random session nonce)`, and a scoped agent's own socket pid beside a
+/// placeholder zero. Four consumers then read it, and they disagreed
+/// visibly, in the names they bound it to — `RunSession { pid, nonce }` in
+/// one place, `ProcessIdentity { pid, start_time }` in three others.
+///
+/// The three that read it as a [`ProcessIdentity`] did so *unconditionally*,
+/// so a session nonce was looked up in the approvals cache as if it were a
+/// start time, and the prompt offered that same coerced pair back to the
+/// daemon as the scope to remember at. Neither misfired, and the reason was
+/// never the type: `run` and scoped-agent asks set `allow_remember: false`,
+/// so no [`crate::consent::ApprovalEntry`] under those wraps is ever stored
+/// and a lookup needs an entry to hit. A flag in another file was all that
+/// stood between a random `u64` and a cache key.
+///
+/// As a sum type the coercion has nowhere to happen:
+/// [`AskAnchor::process_identity`] is the only door into
+/// [`ProcessIdentity`], and it is shut for the two variants that are not
+/// processes. The scope a decision may be remembered at is `Option` all the
+/// way out to the prompt and back, so a session row has no honest value to
+/// send and does not send one.
+///
+/// It also retires two `wrap == "run"` string comparisons —
+/// `state::RunSession::of` and `server::adopt_peer_provenance` — that had to
+/// agree with each other and with the producer, across three files, to keep
+/// a run tree coalescing into one queue entry.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AskAnchor {
+    /// The requesting process's direct parent, as the kernel described it.
+    /// Wrap asks (re-derived from the socket peer by
+    /// `server::adopt_peer_provenance`, never trusted from the client) and
+    /// SSH sign asks (the sign anchor the daemon selected itself).
+    ///
+    /// **The only variant that reaches the approvals cache**, which is the
+    /// whole point of the enum.
+    Process(ProcessIdentity),
+    /// A `secreq run` tree: the outer run's pid plus a random nonce minted
+    /// by `commands::run::mint_session_token` and inherited verbatim by
+    /// every nested run through [`crate::RUN_SESSION_ENV`].
+    ///
+    /// A session, not a process. The pid is here to make a queue entry
+    /// legible to a human reading a log, not to identify anything; the nonce
+    /// is what makes two trees never collide and one tree always coalesce.
+    /// `server::adopt_peer_provenance` leaves it alone — re-deriving it per
+    /// process would dissolve the tree into one entry per nested run — and
+    /// `state::RunSession::of` is its only reader.
+    RunSession { pid: u32, nonce: u64 },
+    /// A scoped agent's socket, named by the agent process's own pid.
+    ///
+    /// Neither a process identity nor a session. The scoped agent's
+    /// principal is the host-declared scope (see
+    /// `brain: areas/secreq/design/2026-07-16-remote-secret-agent.md`), and
+    /// its grants live in `scoped_agent::ScopeApprovals` rather than the
+    /// daemon's parent-keyed cache. The pid is the honest answer to "who is
+    /// parked on this decision" and nothing more: the socket's lifetime is
+    /// this process's lifetime.
+    AgentSocket { pid: u32 },
+}
+
+impl AskAnchor {
+    /// The process a remembered approval may be written against, or `None`
+    /// when this ask is not anchored to a process at all.
+    ///
+    /// The single door from an anchor to a [`ProcessIdentity`]. Everything
+    /// that keys the approvals cache goes through it, so "a session nonce
+    /// cannot become a start time" is a fact about the type rather than a
+    /// convention held up by `allow_remember`.
+    pub fn process_identity(self) -> Option<ProcessIdentity> {
+        match self {
+            AskAnchor::Process(identity) => Some(identity),
+            AskAnchor::RunSession { .. } | AskAnchor::AgentSocket { .. } => None,
+        }
+    }
+
+    /// The pid this anchor names, for display and for checking that a
+    /// prompt's label describes the row it belongs to.
+    ///
+    /// **Not an identity**, and deliberately not convertible into one: a
+    /// freed pid goes to whatever starts next, which is why
+    /// [`ProcessIdentity`] exists at all. Nothing may key a cache on this.
+    pub fn pid(self) -> u32 {
+        match self {
+            AskAnchor::Process(identity) => identity.pid,
+            AskAnchor::RunSession { pid, .. } | AskAnchor::AgentSocket { pid } => pid,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct DedupeKey {
     pub wrap: String,
-    /// **Not a [`ProcessIdentity`], deliberately.** Every other place in this
-    /// codebase that holds a pid beside a start time now holds that type; this
-    /// pair does not, because on the `run` path it is not a process at all.
-    /// `commands::run::session_dedupe_key` puts the outer run's pid here and a
-    /// random **session nonce** in `parent_start_time`, shared verbatim by
-    /// every nested run in the tree — and `server::adopt_peer_provenance`
-    /// re-derives this pair from the socket peer for every ask *except* that
-    /// one, precisely to leave the session identity alone.
-    ///
-    /// So the two halves mean "a process" for a wrap ask and "a session" for a
-    /// run ask. Naming them as one identity would let a reader — or an
-    /// approvals-cache lookup — treat a nonce as a kernel-verified start time,
-    /// which is the opposite of what the type is for. Making the difference
-    /// structural (a sum type over the two kinds of key) is a real change to
-    /// the ask protocol and wants its own slice.
-    pub ppid: u32,
-    pub parent_start_time: u64,
+    /// What this ask's queue identity hangs off — a process, a `run`
+    /// session, or a scoped agent's socket. See [`AskAnchor`] for why the
+    /// three are a sum type rather than a pid beside a `u64`.
+    pub anchor: AskAnchor,
     /// Distinguishes asks that agree on every other field but authorize
     /// different things.
     ///
@@ -1133,6 +1221,81 @@ pub struct WireQueueRow {
     /// snapshot treats unknown rows as the common Awaiting case.
     #[serde(default)]
     pub status: RowStatus,
+}
+
+#[cfg(test)]
+mod anchor_tests {
+    use super::{AskAnchor, DedupeKey};
+    use crate::provenance::ProcessIdentity;
+
+    fn key(anchor: AskAnchor) -> DedupeKey {
+        DedupeKey {
+            wrap: "gh".to_owned(),
+            anchor,
+            subject_digest: None,
+        }
+    }
+
+    const PROCESS: AskAnchor = AskAnchor::Process(ProcessIdentity {
+        pid: 6042,
+        start_time: 12345,
+    });
+    const SESSION: AskAnchor = AskAnchor::RunSession {
+        pid: 6042,
+        nonce: 12345,
+    };
+    const SOCKET: AskAnchor = AskAnchor::AgentSocket { pid: 6042 };
+
+    /// The anchor crosses `consent.sock` inside every `Ask`, so its encoding
+    /// is the ask protocol. Tagged rather than positional, so a daemon log
+    /// or a packet capture says which of the three a row is holding.
+    #[test]
+    fn each_anchor_round_trips_through_the_wire_form() {
+        for anchor in [PROCESS, SESSION, SOCKET] {
+            let json = serde_json::to_string(&key(anchor)).expect("serialize");
+            let back: DedupeKey = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(back.anchor, anchor, "{json}");
+        }
+        let json = serde_json::to_string(&key(SESSION)).expect("serialize");
+        assert!(json.contains("run_session"), "{json}");
+    }
+
+    /// Coalescing folds asks with an equal [`DedupeKey`] into one queue entry
+    /// answered by one decision, so what counts as "equal" here is what
+    /// counts as "the same authorization".
+    ///
+    /// Three anchors carrying the same pid and the same second number are
+    /// three different things, and the enum is what makes them three
+    /// different values. Under the old `(ppid, parent_start_time)` pair the
+    /// first two below were byte-identical, and `wrap == "run"` — checked in
+    /// two other files — was the only thing telling them apart.
+    #[test]
+    fn anchors_of_different_kinds_never_coalesce() {
+        assert_ne!(PROCESS, SESSION);
+        assert_ne!(PROCESS, SOCKET);
+        assert_ne!(SESSION, SOCKET);
+        assert_ne!(key(PROCESS), key(SESSION));
+    }
+
+    /// The property the rest of the daemon leans on: only a process anchor
+    /// yields a [`ProcessIdentity`], which is the only thing the approvals
+    /// cache can be keyed on.
+    #[test]
+    fn only_a_process_anchor_yields_a_process_identity() {
+        assert_eq!(
+            PROCESS.process_identity(),
+            Some(ProcessIdentity {
+                pid: 6042,
+                start_time: 12345,
+            })
+        );
+        assert_eq!(SESSION.process_identity(), None);
+        assert_eq!(SOCKET.process_identity(), None);
+        // All three still name a pid, which is display and nothing else.
+        for anchor in [PROCESS, SESSION, SOCKET] {
+            assert_eq!(anchor.pid(), 6042);
+        }
+    }
 }
 
 #[cfg(test)]

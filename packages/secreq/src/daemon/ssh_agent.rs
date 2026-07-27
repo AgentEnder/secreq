@@ -34,7 +34,9 @@ use anyhow::{Context, Result};
 
 use super::cache::{CacheKey, SecretCache};
 use super::in_flight::InFlightMap;
-use super::proto::{Ask, AskSubject, Caller, DedupeKey, SshAnchorInfo, SshAskInfo, SshSubject};
+use super::proto::{
+    Ask, AskAnchor, AskSubject, Caller, DedupeKey, SshAnchorInfo, SshAskInfo, SshSubject,
+};
 use super::ssh_proto::{self, AgentRequest};
 use super::state::{SharedState, WaiterReply};
 use crate::consent::{Decision, SshGrant, SshGrantScope};
@@ -723,8 +725,11 @@ fn sign_ask(
         command: vec![format!("ssh-sign {}", identity.key_id)],
         dedupe_key: DedupeKey {
             wrap,
-            ppid: anchor.identity.pid,
-            parent_start_time: anchor.identity.start_time,
+            // The sign anchor is a real process the daemon selected itself
+            // (`provenance::select_sign_anchor`) — the shell, IDE or `ssh`
+            // client the grant binds to — so the anchor is a genuine process
+            // identity, and the prompt's "Approve for 30 min" scope is it.
+            anchor: AskAnchor::Process(anchor.identity),
             // What this ask authorizes is `data`, and `data` appears nowhere
             // else in the key. Without this, two signs for the same key from
             // the same anchor coalesce into one card and one Approve signs
@@ -1114,8 +1119,8 @@ mod tests {
     }
 
     /// The named session must be the one the grant actually keys on. A label
-    /// naming a different frame than `dedupe_key.ppid` would be a prompt that
-    /// tells the truth about nothing.
+    /// naming a different frame than the one `dedupe_key.anchor` holds would
+    /// be a prompt that tells the truth about nothing.
     #[test]
     fn the_named_session_is_the_one_the_grant_keys_on() {
         // The attacker sits under the shell and calls itself `zsh`; the
@@ -1140,7 +1145,8 @@ mod tests {
         let info = ssh.info.anchor.as_ref().expect("anchor info");
         assert_eq!(info.pid, 7926);
         assert_eq!(
-            info.pid, ask.dedupe_key.ppid,
+            info.pid,
+            ask.dedupe_key.anchor.pid(),
             "the session the prompt names must be the session the grant keys on"
         );
     }
@@ -1183,7 +1189,8 @@ mod tests {
             "the prompt has to show a frame the caller tree cannot"
         );
         assert_eq!(
-            info.pid, ask.dedupe_key.ppid,
+            info.pid,
+            ask.dedupe_key.anchor.pid(),
             "the session the prompt names must be the session the grant keys on"
         );
     }
@@ -1544,7 +1551,7 @@ mod tests {
         );
         // Everything else still agrees — it is only the subject that differs.
         assert_eq!(a.dedupe_key.wrap, b.dedupe_key.wrap);
-        assert_eq!(a.dedupe_key.ppid, b.dedupe_key.ppid);
+        assert_eq!(a.dedupe_key.anchor, b.dedupe_key.anchor);
     }
 
     /// A genuine retry of the same challenge should still coalesce, which is

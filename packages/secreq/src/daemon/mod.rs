@@ -1,7 +1,9 @@
 //! Consent daemon — **headless background service**.
 //!
 //! The daemon process owns:
-//! - The pending-consent queue (asks coalesce by `(wrap, ppid, start_time)`).
+//! - The pending-consent queue (asks coalesce by `(wrap, anchor)`, where
+//!   the anchor is a process, a `run` session, or a scoped agent's socket
+//!   — see [`proto::AskAnchor`]).
 //! - The in-memory approvals cache.
 //! - A Unix socket where wrap clients submit `Ask`s and consent-window
 //!   child processes stream snapshots back and forth.
