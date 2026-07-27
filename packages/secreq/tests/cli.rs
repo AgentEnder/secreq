@@ -1870,6 +1870,69 @@ fn migrate_restore_saves_the_current_config_before_overwriting_it() {
     );
 }
 
+/// The pre-restore save directory holds copies of everything the restore is
+/// about to overwrite, and on migration 0002 that includes the user's
+/// `~/.ssh/config`. The copies carry the live file's own mode, but the
+/// directory around them was created at the umask's 0755 — so the *listing*,
+/// which is a map of every config path on the machine, was readable by anyone
+/// on the box.
+///
+/// This lives out here rather than beside `restore_in` for the reason
+/// `a_fresh_init_leaves_no_directory_others_can_write_under_the_root` does,
+/// and it is the same two choices that make it evidence rather than
+/// decoration:
+///
+/// - **The child runs under `umask 000`**, set in `pre_exec` so it touches
+///   only the child. The in-process version of this test took the ambient
+///   umask and so passed against unfixed code on any developer whose shell
+///   sets 077 — which is the shell most likely to be running it. Setting the
+///   umask in the *test* process instead would be global state that parallel
+///   tests fight over.
+/// - **The mode is asserted exactly.** `mode & 0o022 == 0` is satisfied by
+///   the 0755 that a umask-022 machine hands out, which is the bug wearing a
+///   passing test. That weakness is exactly what the old test had.
+#[test]
+fn the_pre_restore_save_dir_is_owner_only_under_a_hostile_umask() {
+    let sb = Sandbox::new();
+    seed_legacy_config(sb.path(), r#"{ gh: { $reason: "original", env: {} } }"#);
+    // The forward migration, which creates the snapshot the restore rolls back
+    // to. Its own umask does not matter here: the directory under test is made
+    // by the restore below.
+    sb.run(&["wraps"]);
+
+    let mut cmd = sb.cmd(&["--yes", "migrate", "restore", "0"]);
+    // SAFETY: `umask` is async-signal-safe and touches only the child.
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            libc::umask(0);
+            Ok(())
+        });
+    }
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "restore exited with {:?}; stderr:\n{}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let saved: Vec<_> = fs::read_dir(sb.root().join("migration-snapshots"))
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("current-"))
+        .map(|e| e.path())
+        .collect();
+    assert_eq!(
+        saved.len(),
+        1,
+        "the restore should have saved the config it overwrote; without that \
+         directory this test pins nothing"
+    );
+    let mode = fs::metadata(&saved[0]).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o700, "{} is {mode:o}", saved[0].display());
+}
+
 #[test]
 fn migrate_restore_is_reachable_even_when_the_gate_refuses_to_run() {
     // The deadlock this guards: the downgrade error tells the user to run

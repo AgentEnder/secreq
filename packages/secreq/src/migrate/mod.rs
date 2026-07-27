@@ -1168,34 +1168,13 @@ mod tests {
         assert_eq!(read_state(&ctx.root).unwrap().migration_level, 1);
     }
 
-    /// `restore` copies the live config aside before overwriting it, and that
-    /// copy can be the user's `~/.ssh/config`. The copies are owner-only, but
-    /// the directory holding them was still created at the umask's 0755 — so
-    /// the *names* of everything a restore touches, which is a map of the
-    /// user's config paths, were listable by anyone on the machine.
-    #[test]
-    fn the_pre_restore_save_dir_is_owner_only() {
-        let tmp = TempDir::new().unwrap();
-        let ctx = ctx_in(&tmp);
-        write(
-            &ctx.legacy_config_dir.clone().unwrap().join("wraps.json5"),
-            "{ gh: {} }",
-        );
-
-        run_pending_in(&ctx).unwrap();
-        restore_in(&ctx.root, 0, true).unwrap();
-
-        let saved = std::fs::read_dir(snapshot_root(&ctx.root))
-            .unwrap()
-            .flatten()
-            .map(|e| e.path())
-            .find(|p| {
-                p.file_name()
-                    .is_some_and(|n| n.to_string_lossy().starts_with("current-"))
-            })
-            .expect("restore saves the config it is about to overwrite");
-        assert_eq!(mode_of(&saved), 0o700);
-    }
+    // The pre-restore save directory's mode is pinned by
+    // `the_pre_restore_save_dir_is_owner_only_under_a_hostile_umask` in
+    // `tests/cli.rs`, not here. An in-process test takes the ambient umask,
+    // so on a developer whose shell sets `umask 077` it passed against
+    // unfixed code — and the shell that sets 077 is the shell most likely to
+    // be running these tests. That test drives the real binary with
+    // `umask 000` set in the child.
 
     #[test]
     fn corrupt_state_file_says_how_to_recover() {
