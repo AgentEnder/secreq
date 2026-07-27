@@ -265,6 +265,50 @@ fn toast_to_render(
     })
 }
 
+/// How many top-level keys [`describe_line`] names, and how long each may be.
+const MAX_DESCRIBED_KEYS: usize = 12;
+const MAX_DESCRIBED_KEY_CHARS: usize = 40;
+
+/// Describe a line that failed to deserialize as a [`DaemonMsg`] — its shape,
+/// never its content.
+///
+/// `DaemonMsg` hand-writes a `Debug` that renders `Decision::secrets` as a
+/// count, so no `{msg:?}` can print a resolved value. **This is the one path
+/// that routes around it**, because a line that fails to parse never becomes a
+/// `DaemonMsg` at all; logging it raw put the whole wire frame — every
+/// resolved value of that ask — into the child's log, and the likeliest cause
+/// of a parse failure is exactly the version skew where the daemon is sending
+/// a well-formed `Decision` this build doesn't understand.
+///
+/// So: the byte length, and the top-level key names when the line is an
+/// object. `DaemonMsg` is internally tagged (`#[serde(tag = "kind")]`), so the
+/// keys are the field names of one variant — the fact a skew debugging session
+/// needs, and structurally never a value. serde's own error, logged beside
+/// this, already names the unknown variant or the field that was missing or
+/// mistyped, which is most of what the raw line used to be read for.
+///
+/// A line that isn't valid JSON gets its length alone. That deliberately
+/// includes the truncated-write case: a half-written `Decision` doesn't parse
+/// either, and it still holds the values.
+fn describe_line(raw: &str) -> String {
+    let bytes = raw.len();
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return format!("{bytes} bytes, not valid json");
+    };
+    let serde_json::Value::Object(map) = value else {
+        return format!("{bytes} bytes, json but not an object");
+    };
+    let mut keys: Vec<String> = map
+        .keys()
+        .take(MAX_DESCRIBED_KEYS)
+        .map(|k| k.chars().take(MAX_DESCRIBED_KEY_CHARS).collect())
+        .collect();
+    if map.len() > keys.len() {
+        keys.push(format!("… {} more", map.len() - keys.len()));
+    }
+    format!("{bytes} bytes, object with keys [{}]", keys.join(", "))
+}
+
 fn spawn_reader(
     stream: UnixStream,
     snapshot: Arc<Mutex<WireSnapshot>>,
@@ -303,7 +347,7 @@ fn spawn_reader(
                     Err(err) => {
                         super::log::log_at(
                             "child",
-                            format_args!("malformed daemon msg: {err}; line=[{trimmed}]"),
+                            format_args!("malformed daemon msg: {err}; {}", describe_line(trimmed)),
                         );
                         continue;
                     }
@@ -637,5 +681,61 @@ mod tests {
         let mut t = None;
         assert!(toast_to_render(&mut t, false, Instant::now()).is_none());
         assert!(toast_to_render(&mut t, true, Instant::now()).is_none());
+    }
+
+    /// A `DaemonMsg::Decision` that fails to deserialize never reaches the
+    /// redacting `Debug`, because it never becomes a `DaemonMsg`. The line the
+    /// reader logs instead must carry the shape and none of the content — a
+    /// version skew that renames one field would otherwise put every resolved
+    /// value of that ask into the child's log.
+    #[test]
+    fn a_malformed_decision_line_is_described_without_its_values() {
+        let line = r#"{"kind":"decision","decision":"approve","secrets":{"GITHUB_TOKEN":"ghp_PLANTED_VALUE"},"unknown_field":7}"#;
+
+        let described = describe_line(line);
+
+        assert!(
+            !described.contains("ghp_PLANTED_VALUE"),
+            "the value reached the log: {described}"
+        );
+        assert!(
+            described.contains("secrets"),
+            "keys are the point: {described}"
+        );
+        assert!(described.contains("kind"), "{described}");
+    }
+
+    /// A key name is not a value, but it is still attacker-adjacent text on a
+    /// socket, so it is bounded like everything else written to a log file.
+    #[test]
+    fn described_keys_are_bounded_in_count_and_length() {
+        let long_key = "K".repeat(500);
+        let mut obj = format!(r#"{{"{long_key}":1"#);
+        for i in 0..50 {
+            obj.push_str(&format!(r#","f{i}":1"#));
+        }
+        obj.push('}');
+
+        let described = describe_line(&obj);
+        assert!(
+            described.chars().count() < 600,
+            "{} chars",
+            described.chars().count()
+        );
+    }
+
+    /// A line that is not JSON at all is the truncated-write / stray-print
+    /// case. It gets its length and nothing else: a truncated `Decision` is
+    /// not valid JSON either, and it still holds the values.
+    #[test]
+    fn a_non_json_line_is_reported_by_length_only() {
+        let truncated = r#"{"kind":"decision","secrets":{"A":"ghp_PLANTED"#;
+        let described = describe_line(truncated);
+        assert!(!described.contains("ghp_PLANTED"), "{described}");
+        assert_eq!(
+            described,
+            format!("{} bytes, not valid json", truncated.len()),
+            "the length is the whole of what can be said"
+        );
     }
 }
