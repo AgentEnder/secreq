@@ -100,7 +100,7 @@ consent**. Nobody else covers all three.
   no `/proc`, so `ps -E` or `sysctl KERN_PROCARGS2`), as can root. Other users
   cannot, and neither can the world. So a same-UID adversary, say a script you
   were tricked into running, can lift a live token and use it outside secreq's
-  consent and audit entirely. Rules and consent gate the wrap *invocation*,
+  consent and audit entirely. Rules and consent gate the wrap _invocation_,
   not the credential once it is injected. Masking, zeroizing and the audit log
   narrow this; an environment variable does not stop being readable. SSH
   sidesteps the whole problem, because the key never enters an environment and

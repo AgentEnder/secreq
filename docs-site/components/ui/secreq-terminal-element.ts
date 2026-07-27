@@ -52,6 +52,7 @@ import { THROBBER_TICK_MS } from './throbber';
 export type ScriptStep =
   | { k: 'f'; i: number; hold?: number }
   | { k: 't'; text: string; row: number; col: number }
+  | { k: 'p'; text: string; row: number; col: number }
   | { k: 'k'; key: string }
   | { k: 'g'; action: 'show' | 'hide'; id: string }
   | {
@@ -581,6 +582,9 @@ export class SecreqTerminal extends HTMLElement {
       } else if (step.k === 't') {
         await this.#type(step, run);
         await sleep(KEY_BEAT);
+      } else if (step.k === 'p') {
+        await this.#paste(step, run);
+        await sleep(KEY_BEAT);
       } else if (step.k === 's') {
         // Carries its own frame and its own beat — see `#spin`.
         await this.#spin(step, run);
@@ -686,6 +690,38 @@ export class SecreqTerminal extends HTMLElement {
       overlay.textContent = step.text.slice(0, i);
       this.#placeCaret(row, step.col + i);
     }
+  }
+
+  /**
+   * Paste text into the visible frame at the recorded cell.
+   *
+   * The same overlay as [`#type`], filled in one go rather than a character
+   * at a time, behind a keycap naming the shortcut. That is the whole visual
+   * difference, and it is the right one: typing is a rhythm, pasting is an
+   * event, and a reader who sees a secret reference appear whole understands
+   * they were meant to copy it rather than transcribe it.
+   *
+   * The shortcut follows the reader's declared desktop, the same
+   * `<html data-os>` the screenshots and `<secreq-window>` follow, because a
+   * Windows reader shown `⌘V` has been handed an instruction they cannot
+   * carry out.
+   */
+  async #paste(step: Extract<ScriptStep, { k: 'p' }>, run: number) {
+    const body = this.#body;
+    if (!body) return;
+
+    this.#showKey(document.documentElement.dataset.os === 'macos' ? 'Cmd+V' : 'Ctrl+V');
+    await sleep(KEY_BEAT);
+    if (this.#run !== run) return;
+
+    const row = step.row + this.#frameRow;
+    const overlay = document.createElement('span');
+    overlay.className = 'term-typed';
+    overlay.style.setProperty('--row', String(row));
+    overlay.style.setProperty('--col', String(step.col));
+    overlay.textContent = step.text;
+    body.appendChild(overlay);
+    this.#placeCaret(row, step.col + step.text.length);
   }
 
   /**

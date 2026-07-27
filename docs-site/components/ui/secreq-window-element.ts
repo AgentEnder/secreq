@@ -178,6 +178,17 @@ const XML_NS = 'http://www.w3.org/XML/1998/namespace';
 const FALLBACK_VARIANT = 'macos-dark';
 
 /**
+ * `macos-dark` -> `['macos', 'dark']`, the pair the renders are tagged with.
+ *
+ * Split on the first dash, not the last: an appearance never contains one
+ * and an OS flavour could grow one.
+ */
+function splitVariant(variant: string): [string, string] {
+  const cut = variant.indexOf('-');
+  return cut < 0 ? [variant, ''] : [variant.slice(0, cut), variant.slice(cut + 1)];
+}
+
+/**
  * Fetched scenes, keyed by URL and shared across every element on the page.
  *
  * A page that shows the same window twice — the guide and the flow beside
@@ -702,6 +713,15 @@ export class SecreqWindow extends HTMLElement {
    * is hidden — an absolutely positioned scene contributes none — and
    * `aspect-ratio` from the captured size gives it exactly the height the
    * image was giving it a moment ago, so nothing on the page moves.
+   *
+   * The stage goes *inside* `.shot-zoom` rather than beside it, and the
+   * renders are hidden individually. Hiding the button instead — which is
+   * what this did first — silently took the figure's enlarge affordance
+   * with it: the button is the click target, the keyboard stop and the
+   * `cursor: zoom-in`, and a reconstruction that costs the reader the
+   * ability to open the window is a worse figure than the picture it
+   * replaced. Scaled into a landing-page column the window is half size,
+   * which is exactly where enlarging matters most.
    */
   #mount(scene: HTMLElement, [width, height]: [number, number]) {
     if (!this.#stage) {
@@ -710,12 +730,7 @@ export class SecreqWindow extends HTMLElement {
 
       const zoom = this.querySelector<HTMLElement>('.shot-zoom');
       if (zoom) {
-        zoom.before(stage);
-        // Inline, because the rule that shows the reader's own render is
-        // a six-attribute selector on `:root` that a class here would
-        // lose to. The images stay in the DOM: they are what the figure
-        // falls back to, and hiding them is not the same as removing them.
-        zoom.style.display = 'none';
+        zoom.prepend(stage);
       } else {
         this.appendChild(stage);
       }
@@ -725,11 +740,38 @@ export class SecreqWindow extends HTMLElement {
       this.#resize.observe(stage);
     }
 
+    this.#standIn();
+
     this.#stage.style.aspectRatio = `${width} / ${height}`;
     this.#scene?.remove();
     this.#scene = scene;
     this.#stage.appendChild(scene);
     this.#rescale();
+  }
+
+  /**
+   * Hide the renders, and mark the one this scene is standing in front of.
+   *
+   * Hidden inline, because the rule that shows the reader's own render is a
+   * six-attribute selector on `:root` that a class here would lose to. The
+   * images stay in the DOM: they are what the figure falls back to, and
+   * hiding them is not the same as removing them.
+   *
+   * `data-standing` is the answer to a question only this element can
+   * answer. With a window up, no render is visible, so "which render is
+   * the reader looking at" stops being something CSS can be asked — and
+   * `<secreq-shot>`, which has to hand the viewer a full-size image, has
+   * no business re-deriving the reader's desktop for itself. The element
+   * that chose the variant says which one it drew.
+   */
+  #standIn() {
+    const [os, appearance] = splitVariant(this.#variant);
+    for (const img of this.querySelectorAll<HTMLImageElement>('.shot-img')) {
+      img.style.display = 'none';
+      const standing = img.dataset.os === os && img.dataset.appearance === appearance;
+      if (standing) img.dataset.standing = 'true';
+      else delete img.dataset.standing;
+    }
   }
 
   /**

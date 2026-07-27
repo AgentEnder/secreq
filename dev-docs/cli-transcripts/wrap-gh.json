@@ -780,9 +780,9 @@
     },
     {
       "col": 3,
-      "kind": "type",
+      "kind": "paste",
       "row": 12,
-      "text": "Personal/GitHub/credential"
+      "text": "op://Personal/GitHub/credential"
     },
     {
       "key": "Enter",
@@ -910,7 +910,22 @@
           },
           {
             "s": 2,
-            "t": "Personal/GitHub/credential"
+            "t": "op://Personal/GitHub/credential"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "4",
+            "t": "●"
+          },
+          {
+            "t": "  Reading that as locator `Personal/GitHub/credential`"
           }
         ],
         [
@@ -1106,7 +1121,22 @@
           },
           {
             "s": 2,
-            "t": "Personal/GitHub/credential"
+            "t": "op://Personal/GitHub/credential"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "4",
+            "t": "●"
+          },
+          {
+            "t": "  Reading that as locator `Personal/GitHub/credential`"
           }
         ],
         [
@@ -1306,7 +1336,22 @@
           },
           {
             "s": 2,
-            "t": "Personal/GitHub/credential"
+            "t": "op://Personal/GitHub/credential"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "4",
+            "t": "●"
+          },
+          {
+            "t": "  Reading that as locator `Personal/GitHub/credential`"
           }
         ],
         [
@@ -1395,7 +1440,7 @@
     {
       "col": 3,
       "kind": "type",
-      "row": 20,
+      "row": 22,
       "text": "GitHub API access"
     },
     {
@@ -1523,7 +1568,22 @@
           },
           {
             "s": 2,
-            "t": "Personal/GitHub/credential"
+            "t": "op://Personal/GitHub/credential"
+          }
+        ],
+        [
+          {
+            "f": "8",
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "f": "4",
+            "t": "●"
+          },
+          {
+            "t": "  Reading that as locator `Personal/GitHub/credential`"
           }
         ],
         [

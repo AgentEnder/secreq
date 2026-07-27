@@ -165,12 +165,12 @@ const spanPages = new Map();
 for (const [i, text] of texts.entries()) {
   const page = rel(allPages[i]);
   for (const m of new Set([...prose(text).matchAll(/`([^`\n]{4,40})`/g)].map((m) => m[1]))) {
-    if (!/^[-$~.\/\w]/.test(m)) continue;
+    if (!/^[-$~./\w]/.test(m)) continue;
     // A bare single identifier (`secreq`, `pass`, `PATH`) appears everywhere
     // by nature and says nothing about redundancy. What is worth reading is a
     // specific invocation, flag or path — all of which carry a space or
     // punctuation.
-    if (!/[ \-\/._]/.test(m)) continue;
+    if (!/[ \-/._]/.test(m)) continue;
     if (!spanPages.has(m)) spanPages.set(m, new Set());
     spanPages.get(m).add(page);
   }
@@ -297,6 +297,45 @@ for (const [i, text] of texts.entries()) {
   if (hits.length) formulas.push(`${rel(allPages[i])}: ${hits.join('; ')}`);
 }
 add('Default-model prose (see VOICE.md)', formulas);
+
+// ── Sections that say too much ────────────────────────────────────────────
+// A list whose every item is a bolded sentence followed by a paragraph. The
+// giveaway is not the bold: it is that each item has grown to a paragraph, so
+// the list is carrying prose it never announced. VOICE.md called this out
+// from the start and nothing detected it, which is how five of them shipped.
+//
+// The fix is almost never to unbullet the list. It is to find the fact each
+// item exists to state and drop the rest — twice here, the paragraph was
+// describing the screenshot directly beneath it.
+const bulky = [];
+for (const [i, text] of texts.entries()) {
+  const lines = prose(text).split('\n');
+  const groups = [];
+  let run = [];
+  for (const line of lines) {
+    if (/^[-*] /.test(line)) run.push(line);
+    else if (/^\s+\S/.test(line) && run.length) run[run.length - 1] += ` ${line.trim()}`;
+    else if (line.trim() === '' && run.length) continue;
+    else {
+      if (run.length) groups.push(run);
+      run = [];
+    }
+  }
+  if (run.length) groups.push(run);
+
+  for (const g of groups) {
+    if (g.length < 3) continue;
+    // Every item bolded, and most of those bolds are whole sentences rather
+    // than the short labels a feature list legitimately uses.
+    if (!g.every((b) => /^[-*] \*\*/.test(b))) continue;
+    const sentences = g.filter((b) => /^[-*] \*\*[^*]*[.:?]\*\*/.test(b)).length;
+    const avg = Math.round(g.reduce((n, b) => n + b.split(/\s+/).length, 0) / g.length);
+    if (sentences >= Math.ceil(g.length * 0.6) && avg >= 25) {
+      bulky.push(`${rel(allPages[i])}: ${g.length} bullets averaging ${avg} words`);
+    }
+  }
+}
+add('Bulleted paragraphs (cut the bullet down, do not unbullet it)', bulky);
 
 // ── Size ──────────────────────────────────────────────────────────────────
 add(

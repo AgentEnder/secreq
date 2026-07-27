@@ -80,6 +80,22 @@ interface Shot {
   caption: string;
 }
 
+/**
+ * What the viewer should morph out of, or back into.
+ *
+ * Normally the thumbnail is the render itself. Where a `<secreq-window>`
+ * has rebuilt the window as DOM, the render is still the thing being
+ * enlarged — it is the full-size picture of this exact window — but it is
+ * hidden, and a `display: none` element captures nothing, so naming it for
+ * the transition would open the viewer with no animation at all. The scene
+ * standing in its place is what the reader can actually see, so that is
+ * what grows into the dialog.
+ */
+function morphSource(render: HTMLImageElement): HTMLElement {
+  if (render.offsetParent !== null) return render;
+  return render.closest('.shot-zoom')?.querySelector<HTMLElement>('.sqw-stage') ?? render;
+}
+
 export function ShotLightbox() {
   const [shot, setShot] = useState<Shot | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -107,9 +123,10 @@ export function ShotLightbox() {
       };
 
       clearTransitionNames();
-      source.style.viewTransitionName = VT_NAME;
+      const morph = morphSource(source);
+      morph.style.viewTransitionName = VT_NAME;
       withTransition(() => {
-        source.style.viewTransitionName = '';
+        morph.style.viewTransitionName = '';
         setShot(next);
       });
     };
@@ -122,9 +139,14 @@ export function ShotLightbox() {
     // Morph back to whichever thumbnail this came from, if it is still on
     // screen — after a client-side navigation it may not be.
     const src = dialogRef.current?.querySelector('img')?.src;
-    const thumb = [...document.querySelectorAll<HTMLImageElement>('.shot-img')].find(
-      (candidate) => candidate.src === src && candidate.offsetParent !== null,
+    const render = [...document.querySelectorAll<HTMLImageElement>('.shot-img')].find(
+      (candidate) =>
+        candidate.src === src &&
+        // Visible, or hidden behind the window that replaced it — either
+        // way there is something on screen to fall back into.
+        (candidate.offsetParent !== null || candidate.dataset.standing === 'true'),
     );
+    const thumb = render && morphSource(render);
 
     withTransition(() => {
       if (thumb) thumb.style.viewTransitionName = VT_NAME;

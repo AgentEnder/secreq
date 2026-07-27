@@ -307,7 +307,7 @@ there when the change lands — the repo has no copy to fall out of sync.
   the wraps parser a config using every key the schema declares — that last one
   is what holds the hand-written `wraps.json5` parser to its `schemars(rename)`
   attributes. The round-trip suite in `rules.rs` is still the guard for the
-  *bytes* (exact serialized objects, written key order, a hand-authored JSON5
+  _bytes_ (exact serialized objects, written key order, a hand-authored JSON5
   file through load→save→load→save requiring byte-stable output).
 
 ## Tool versions come from `mise.toml`

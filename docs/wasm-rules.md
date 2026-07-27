@@ -78,13 +78,13 @@ export function decide(ctx: RuleCtx): Decision;
 `RuleCtx` (from the `secreq-rule` package) mirrors the daemon's
 evaluation context:
 
-| Field        | Type       | Meaning                                                                                                                                             |
-| ------------ | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `wrap`       | `string`   | The wrap being asked for (e.g. `gh`, `npm`).                                                                                                        |
-| `joinedArgv` | `string`   | Joined argv of the wrapped command (e.g. `gh api --get /repos/x`).                                                                                  |
+| Field        | Type       | Meaning                                                                                                                                                                                                              |
+| ------------ | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wrap`       | `string`   | The wrap being asked for (e.g. `gh`, `npm`).                                                                                                                                                                         |
+| `joinedArgv` | `string`   | Joined argv of the wrapped command (e.g. `gh api --get /repos/x`).                                                                                                                                                   |
 | `callers`    | `Caller[]` | Caller chain, **nearest-first**. Each entry has `name` (`comm`), `command` (joined argv), and `exe` (absolute path, `''` when unknown). `name` and `command` are chosen by the process; `exe` is not. Gate on `exe`. |
-| `cwd`        | `string`   | Working directory of the requesting process.                                                                                                        |
-| `secrets`    | `string[]` | What the ask would release, by name: env-var names for a wrap run, or the single identity `ssh:<key_id>` for an SSH sign. Names only, never values. |
+| `cwd`        | `string`   | Working directory of the requesting process.                                                                                                                                                                         |
+| `secrets`    | `string[]` | What the ask would release, by name: env-var names for a wrap run, or the single identity `ssh:<key_id>` for an SSH sign. Names only, never values.                                                                  |
 
 The decision is built with four constructors:
 

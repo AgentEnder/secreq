@@ -10,9 +10,9 @@ import remarkRehype from 'remark-rehype';
 import { unified } from 'unified';
 import { DOC_SLUGS } from '../../docs.nav';
 import { flowHtml } from '../../flow-markup';
-import { shotHtml } from '../../shot-markup';
 import { termHtml } from '../../term-markup';
 import { applyBaseUrl } from '../../utils/base-url';
+import { windowHtml } from '../../window-markup';
 
 // Minimal hast node types — avoids depending on the `hast` package directly
 interface HastNode {
@@ -147,8 +147,8 @@ function walkNodes(node: DirectiveNode, fn: (node: DirectiveNode) => void) {
 }
 
 /**
- * Remark plugin: turn `::shot{id=02-single-pending}` into a product
- * screenshot, framed exactly as `<Shot />` frames one.
+ * Remark plugin: turn `::shot{id=02-single-pending}` into the captured
+ * window, rebuilt from its geometry.
  *
  * A guide can then illustrate itself with the same PNG the test harness
  * renders, placed against the paragraph that explains it:
@@ -159,6 +159,26 @@ function walkNodes(node: DirectiveNode, fn: (node: DirectiveNode) => void) {
  * The caption, window label and light-appearance render all come from the
  * fixture; `caption` is only for the rare case where a guide needs to say
  * something different about an image than the fixture does.
+ *
+ * ## Why this emits a window rather than the PNG
+ *
+ * `windowHtml` wraps the exact figure `shotHtml` produces, so the markup a
+ * reader without JavaScript receives is unchanged: the published screenshot,
+ * same bytes, same caption, same frame. What the wrapper adds is a
+ * `<secreq-window>` that fetches the fixture's geometry and rebuilds the
+ * window as DOM in front of it.
+ *
+ * That is worth doing for every guide screenshot, not just the flows that
+ * used to be the only caller. The interesting part of these windows is small
+ * type — a process chain, a rule's match clause, a row of the audit log —
+ * and rebuilt it is text: selectable, indexed by Pagefind, read aloud by a
+ * screen reader, and sharp at whatever width the column gives it. One cell
+ * of geometry is also a kilobyte or two against tens of kilobytes of PNG,
+ * and the renders are lazy, so a figure below the fold usually draws before
+ * its screenshot is ever requested.
+ *
+ * A fixture whose geometry is missing or unfetchable stays the picture; the
+ * element leaves the image alone rather than failing.
  *
  * An unknown id throws, failing the build. A guide that references a
  * screenshot which no longer exists should not quietly publish a hole.
@@ -178,7 +198,7 @@ function remarkShot() {
       }
 
       const caption = node.attributes?.caption ?? undefined;
-      const html = shotHtml(id, caption === undefined ? {} : { caption });
+      const html = windowHtml(id, caption === undefined ? {} : { caption });
 
       // Replace the directive with a raw HTML node. `rehypeRaw` later parses
       // it, so the figure lands in the tree as real elements rather than an
@@ -205,6 +225,15 @@ function remarkShot() {
  * guide needs to say something different about a session than the fixture
  * does.
  *
+ * The command is drawn as a typed shell line above the frames rather than as
+ * a label in the title bar, which is `prompt` in `term-markup.ts` and what
+ * `::flow` has always asked for. A recording is spawned straight onto a pty
+ * with no shell in it, so it opens on the program already running its first
+ * question — and a guide was then obliged to put a fenced code block above
+ * the player saying what had been run. That block is the guide narrating what
+ * the animation should be showing, and it is one more copy of the command to
+ * keep in step. With the prompt line, the recording states it itself.
+ *
  * An unknown id throws, failing the build — same contract as `::shot`. A
  * guide claiming to demonstrate a flow nobody recorded should not publish.
  */
@@ -223,7 +252,7 @@ function remarkTerm() {
       }
 
       const caption = node.attributes?.caption ?? undefined;
-      const html = termHtml(id, caption === undefined ? {} : { caption });
+      const html = termHtml(id, { prompt: true, ...(caption === undefined ? {} : { caption }) });
 
       node.type = 'html';
       (node as { value?: string }).value = html;

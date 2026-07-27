@@ -100,7 +100,7 @@ Reports in these areas are especially valuable:
   peer's argv **and** checks the peer is SSH-family by its executable path,
   and the two failure directions are deliberately asymmetric — over-detecting
   narrows the grant, under-detecting leaves it as wide as it would have been
-  anyway. A report showing a process can *widen* its own grant that way is a
+  anyway. A report showing a process can _widen_ its own grant that way is a
   vulnerability; one showing it can narrow it is not.
   Forwarding declared only in `~/.ssh/config` or a `-F` file is **not**
   detected, and that limit is known rather than a finding.

@@ -62,6 +62,24 @@
   filter: drop-shadow(0 8px 22px rgb(16 20 26 / 0.16));
 }
 
+/* The stage stands inside `.shot-zoom`, so it inherits the figure's
+   enlarge affordance and has to answer the hover the same way the render
+   it replaced did — same lift, same deepened shadow. Without this a
+   reconstructed window is the one figure on the page that goes dead under
+   the pointer while still showing `cursor: zoom-in`. */
+.shot-zoom .sqw-stage {
+  transition:
+    transform 0.2s ease,
+    filter 0.2s ease;
+}
+.shot-zoom:hover .sqw-stage {
+  transform: translateY(-2px);
+  filter: drop-shadow(0 14px 34px rgb(0 0 0 / 0.55));
+}
+:root[data-theme='light'] .shot-zoom:hover .sqw-stage {
+  filter: drop-shadow(0 14px 34px rgb(16 20 26 / 0.24));
+}
+
 /* A badge is a 184pt pill, and blown to column width it stops reading as
    the small floating thing it is — the same cap `.shot-img` takes, for
    the same reason. */
@@ -94,6 +112,13 @@
 }
 .sqw-scene text {
   pointer-events: auto;
+  /* The scene stands inside `.shot-zoom`, which is a real `<button>`, and
+     several browsers refuse to let a selection start inside one. Selectable
+     text is most of the point of rebuilding the window rather than showing
+     a picture of it, so it is asserted here rather than left to whichever
+     UA stylesheet the reader arrived with. */
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 /* ── Typesetting the way epaint does ──

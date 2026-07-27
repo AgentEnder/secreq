@@ -107,6 +107,22 @@ interface TypeStep {
   col: number;
 }
 
+/**
+ * Text the user pasted rather than typed, and the cell it landed in.
+ *
+ * A pty cannot tell the two apart, so the fixture records which one it meant;
+ * see `Step::Paste` in `tests/cli_transcripts.rs`. The player draws this one
+ * as a clipboard shortcut followed by the whole string arriving at once,
+ * because that is what pasting looks like and because a secret reference is
+ * something you copy out of your store, never something you retype.
+ */
+interface PasteStep {
+  kind: 'paste';
+  text: string;
+  row: number;
+  col: number;
+}
+
 interface KeyStep {
   kind: 'key';
   key: string;
@@ -127,7 +143,7 @@ export interface GuiStep {
   id: string;
 }
 
-type Step = FrameStep | TypeStep | KeyStep | GuiStep;
+type Step = FrameStep | TypeStep | PasteStep | KeyStep | GuiStep;
 
 interface TermEntry {
   id: string;
@@ -363,6 +379,10 @@ function planSteps(steps: Step[]): Plan {
 
     if (step.kind === 'type') {
       script.push({ k: 't', text: step.text, row: step.row, col: step.col });
+      continue;
+    }
+    if (step.kind === 'paste') {
+      script.push({ k: 'p', text: step.text, row: step.row, col: step.col });
       continue;
     }
     if (step.kind === 'gui') {

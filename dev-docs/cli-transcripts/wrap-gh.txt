@@ -12,7 +12,9 @@ $ secreq wrap gh
 │  GITHUB_TOKEN
 │
 ◇  Locator
-│  Personal/GitHub/credential
+│  op://Personal/GitHub/credential
+│
+●  Reading that as locator `Personal/GitHub/credential`
 │
 ◇  Locator resolves ✓
 │

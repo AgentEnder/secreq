@@ -87,6 +87,40 @@ Notes:
   The screenshot tests are `#[ignore]`-gated (they need wgpu), so a
   normal `cargo test` won't run them, but CI does.
 
+## Isolate every dev build from your real `~/.secreq`
+
+This is the one trap that can brick a working setup, and it has actually
+happened during a `cargo test`.
+
+secreq keeps everything under one root (`$SECREQ_HOME`, else `~/.secreq`) and
+applies pending **migrations** on every deliberate foreground command,
+stamping the schema level it reached. Point a dev build at the same home as
+your installed release and it goes wrong two ways. A newer dev build migrates
+your live config and bumps the level, after which the release refuses to run
+until you `secreq migrate restore <level>`. Worse, a test that pins
+`$SECREQ_HOME` but leaves `$HOME` alone aims the migration's legacy probe at
+your **real** `~/.config/secreq` and moves your live config into a tempdir
+that is deleted moments later.
+
+`$SECREQ_HOME` on its own is not enough: migrations resolve pre-migration
+locations through frozen XDG logic, and the socket directory prefers
+`$XDG_RUNTIME_DIR` over the root.
+
+```sh
+export SECREQ_HOME="$(mktemp -d)"
+export XDG_RUNTIME_DIR="$SECREQ_HOME/run"   # sockets don't hang off SECREQ_HOME
+mkdir -p "$XDG_RUNTIME_DIR"
+export HOME="$SECREQ_HOME"                   # backstop: makes a forgotten pin harmless
+export XDG_CONFIG_HOME="$SECREQ_HOME/config" # the migration's legacy probe
+export XDG_STATE_HOME="$SECREQ_HOME/state"
+
+cargo run -- doctor        # now safely sandboxed
+```
+
+Pinning `$HOME` is what makes a forgotten pin harmless rather than
+destructive. The integration tests do this; see
+`tests/ssh_agent.rs::isolate_paths`.
+
 ## Where things live
 
 The mental model in one line: a shim on your `PATH` intercepts a wrapped

@@ -76,6 +76,11 @@ The short list, in the order it shows up here:
   exactly._ If a choice was deliberate, the reason shows it.
 - **The rule of three.** Three items is what a model writes when it doesn't
   know how many there are.
+- **Bulleted paragraphs.** Every item a bolded sentence plus a paragraph.
+  Fix by cutting the item down, never by converting the list to prose —
+  same words, no gain. `mise run docs-audit` flags these; hits in
+  `README.md` and the contributor pages are usually the conventional
+  short-label feature list and can stand.
 - **"Not just X, but Y"** and other parallel contrasts used to sound profound.
 - **The safe conclusion.** A closing paragraph that recaps and commits to
   nothing. Delete it; end on the last useful sentence or a link.

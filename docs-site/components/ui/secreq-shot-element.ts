@@ -29,11 +29,13 @@ export class SecreqShot extends HTMLElement {
     const button = (event.target as HTMLElement | null)?.closest('.shot-zoom');
     if (!button) return;
 
-    // The figure carries one render per OS appearance and hides the rest,
-    // so the visible one is the only one worth enlarging.
-    const image = [...this.querySelectorAll<HTMLImageElement>('.shot-img')].find(
-      (candidate) => candidate.offsetParent !== null,
-    );
+    // A `<secreq-window>` standing in this figure is real text, and text
+    // gets selected by dragging across it — which ends in a click on this
+    // button. Opening the viewer on top of the words someone just
+    // highlighted is not what they asked for.
+    if (!document.getSelection()?.isCollapsed) return;
+
+    const image = this.#enlargeable();
     if (!image) return;
 
     this.dispatchEvent(
@@ -47,6 +49,27 @@ export class SecreqShot extends HTMLElement {
       }),
     );
   };
+
+  /**
+   * The render to enlarge: whichever one the reader is actually looking at.
+   *
+   * Normally that is simply the visible one — the figure carries one render
+   * per cell of the chrome matrix and CSS shows the reader's. When a
+   * `<secreq-window>` has rebuilt the window as DOM, none of them is
+   * visible, and the element that drew the scene has marked the render it
+   * stands in front of. `data-fallback` catches the remaining case: a
+   * reader on a desktop the harness never rendered, where the figure was
+   * already showing the fallback cell.
+   */
+  #enlargeable(): HTMLImageElement | null {
+    const renders = [...this.querySelectorAll<HTMLImageElement>('.shot-img')];
+    return (
+      renders.find((candidate) => candidate.offsetParent !== null) ??
+      renders.find((candidate) => candidate.dataset.standing === 'true') ??
+      renders.find((candidate) => candidate.dataset.fallback === 'true') ??
+      null
+    );
+  }
 }
 
 if (!customElements.get('secreq-shot')) {

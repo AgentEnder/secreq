@@ -1021,26 +1021,36 @@ dialog.shot-lightbox figcaption {
   transform: scaleX(1);
 }
 
-.icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-sq-sm, 5px);
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--sq-text-3);
-  cursor: pointer;
-  transition:
-    color 0.14s ease,
-    background-color 0.14s ease,
-    border-color 0.14s ease;
-}
-.icon-btn:hover {
-  color: var(--sq-text);
-  background: var(--sq-well);
-  border-color: var(--sq-hairline);
+/* In `@layer components` because this one sets `display`, and a caller
+   overrides that with a utility: the header's menu button is
+   `icon-btn md:hidden`. Unlayered CSS beats every cascade layer no matter
+   how specific the layered rule is, so an unlayered `display: inline-flex`
+   here silently outranks `.md\:hidden` from Tailwind's utilities layer —
+   which is how the hamburger came to render on desktop, opening a menu
+   panel that `md:hidden` correctly kept hidden. Inside the layer, the
+   utility wins, which is what the markup already assumes. */
+@layer components {
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-sq-sm, 5px);
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--sq-text-3);
+    cursor: pointer;
+    transition:
+      color 0.14s ease,
+      background-color 0.14s ease,
+      border-color 0.14s ease;
+  }
+  .icon-btn:hover {
+    color: var(--sq-text);
+    background: var(--sq-well);
+    border-color: var(--sq-hairline);
+  }
 }
 
 /* ── Sidebar rail ── */

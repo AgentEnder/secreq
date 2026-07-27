@@ -1,5 +1,5 @@
 import { Link } from '../../components/Link';
-import { InstallTabs, Interception, SectionHeader, Shot, Term } from '../../components/ui';
+import { InstallTabs, Interception, SectionHeader, Term, Window } from '../../components/ui';
 import type { InstallMethod } from '../../components/ui';
 
 export default function LandingPage() {
@@ -106,6 +106,24 @@ function Path() {
 
 /* ── Capabilities, each shown as the screen it actually is ──────────── */
 
+/**
+ * These are `<Window />` rather than `<Shot />`: the windows are rebuilt
+ * from the captured geometry instead of shown as pictures of themselves.
+ *
+ * The section's whole claim is that you can see what the product puts in
+ * front of you, and at half a column each the interesting part of these
+ * screens is small type — a process chain, a rule's match clause, a row of
+ * the audit log. Rebuilt, that type is text: it stays sharp, it selects,
+ * Pagefind can index it and a screen reader can read it. It also weighs a
+ * fraction of the renders it replaces, which matters most on the one page
+ * that carries six of them.
+ *
+ * Three of these fixtures paint a `mesh` or `path` shape that the capture
+ * does not pin, so they rebuild with a small icon missing — see
+ * `secreq-window-element.ts`. Any one of them can go back to `<Shot />`
+ * on its own if that ever reads as a defect rather than as nothing.
+ */
+
 interface Capability {
   eyebrow: string;
   title: string;
@@ -188,7 +206,7 @@ function Capabilities() {
               </div>
 
               <div className={i % 2 === 1 ? 'lg:order-1' : undefined}>
-                <Shot id={cap.shot} />
+                <Window id={cap.shot} />
               </div>
             </article>
           ))}

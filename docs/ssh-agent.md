@@ -172,7 +172,7 @@ process; this one expires on a clock, because an anchor like a shell or an
 IDE can stay open for hours.
 
 Two caches are in play and they hold different things. The grant above
-caches the *decision*. The private key is cached separately, encrypted, in
+caches the _decision_. The private key is cached separately, encrypted, in
 the same daemon secret cache a wrap's secrets live in, so your provider
 (and its biometric) runs at most once per key rather than once per
 signature. Plaintext exists only inside the signing call, which zeroizes

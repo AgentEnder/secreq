@@ -63,6 +63,25 @@ nothing measurable. Replace with the number, the constraint, or nothing.
 **Metronome rhythm.** Paragraphs of near-identical length, each opening the
 same way (four consecutive `**BOLD** — gloss` paragraphs, say). Vary or merge.
 
+**Bulleted paragraphs.** A list where every item is a bolded sentence
+followed by three or four lines of explanation. The bold is not the problem —
+a feature list with short labels is ordinary README form, and an error-message
+list should bold the error. The problem is that each item has grown into a
+paragraph, so the section is delivering prose while presenting as a summary.
+
+**Do not fix this by deleting the hyphens.** Converting the bullets to
+paragraphs moves the same words around and changes nothing; measure the
+word count before and after and you will see it. These sections are long
+because they say too much. Find the fact each item exists to state, keep
+that, and drop the rest. Two useful questions:
+
+- **Is it describing the screenshot below it?** The `::shot` is already
+  showing the reader that. Cut the paraphrase, keep the fact the picture
+  cannot state.
+- **Is another section saying it too?** `wasm-rules.md` explained sha256
+  pinning and error-fallthrough in both "The security model" and
+  "Operational notes". One of the two is the canonical home.
+
 **The safe conclusion.** A closing paragraph that summarises what was just
 said and commits to nothing. Real docs end at the last useful sentence, or on
 a link. Delete the recap.
