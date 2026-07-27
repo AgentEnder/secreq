@@ -359,3 +359,93 @@ fn ssh_selftest_run_errors_when_agent_does_not_hold_the_key() {
         "error should explain the agent refused, got: {err}"
     );
 }
+
+/// The agent socket spawned one unbounded OS thread per accept, with no read
+/// timeout. A peer that connects and says nothing therefore parked a thread —
+/// and its stack reservation — for the daemon's lifetime, as many times as it
+/// liked. This socket is not local-only: `ssh -A` forwards a *remote* host's
+/// agent connections here, so the party opening them need not be on this
+/// machine.
+///
+/// Concurrency is what the cap bounds, so the observable is not a refusal —
+/// past the cap a client waits. Sixteen silent connections fill every slot;
+/// the seventeenth then gets no answer to a request the agent would otherwise
+/// serve without consent and without resolving anything. Closing the silent
+/// ones frees a slot and that same request is answered, which is what
+/// separates "capped" from "wedged".
+///
+/// The idle timeout that stops a silent connection holding its slot *forever*
+/// is 120s and is not exercised here — what it triggers is unit-tested in
+/// `ssh_agent::tests` against a 50ms timeout instead.
+#[test]
+fn a_flood_of_silent_connections_cannot_starve_the_agent_forever() {
+    // Must match `ssh_agent::MAX_CONCURRENT_CONNECTIONS`, which is private.
+    // Filling every slot is the whole setup, so a raised cap has to be
+    // reflected here; this test going red on a bump is the intended cost.
+    const CAP: usize = 16;
+
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
+
+    let mut ssh: BTreeMap<String, SshIdentity> = BTreeMap::new();
+    ssh.insert(
+        "github".to_owned(),
+        SshIdentity {
+            reason: None,
+            public_key: TEST_PUBLIC_KEY.to_owned(),
+            private_key: Reference::parse("secret://nonexistent-provider/never/resolves")
+                .expect("parse bogus reference"),
+        },
+    );
+    let ctx = SignContext {
+        identities: Arc::new(ssh_agent::prepare_identities(&ssh)),
+        providers: Arc::new(BTreeMap::new()),
+        state: None,
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sock_path = dir.path().join("agent.sock");
+    let listener = UnixListener::bind(&sock_path).expect("bind agent socket");
+    thread::spawn(move || ssh_agent::serve_on(listener, ctx));
+
+    // Connect and say nothing, `CAP` times over. Each is accepted and handed
+    // to a handler that then blocks on its first read.
+    let silent: Vec<UnixStream> = (0..CAP)
+        .map(|_| UnixStream::connect(&sock_path).expect("connect a silent peer"))
+        .collect();
+
+    // Let the accept loop take all of them. Without this the assertion below
+    // could pass because the flood had not landed yet rather than because the
+    // cap held.
+    thread::sleep(std::time::Duration::from_millis(500));
+
+    // A request needing no consent and no provider call: if anything is going
+    // to be answered, this is it.
+    let mut starved = UnixStream::connect(&sock_path).expect("connect past the cap");
+    starved
+        .set_read_timeout(Some(std::time::Duration::from_millis(750)))
+        .expect("set read timeout");
+    starved
+        .write_all(&[0, 0, 0, 1, ssh_proto::SSH_AGENTC_REQUEST_IDENTITIES])
+        .expect("send request");
+
+    let mut len_buf = [0u8; 4];
+    assert!(
+        starved.read_exact(&mut len_buf).is_err(),
+        "a 17th connection must wait behind the cap, not be served"
+    );
+
+    // Free the slots: each handler sees EOF, returns, and drops its permit.
+    drop(silent);
+
+    // …and the connection that was waiting gets served, so the cap delays
+    // rather than refuses.
+    starved
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .expect("set read timeout");
+    let frame = read_frame(&mut starved);
+    assert_eq!(
+        frame[4], SSH_AGENT_IDENTITIES_ANSWER,
+        "the waiting connection is served once a slot frees"
+    );
+}

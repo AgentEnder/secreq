@@ -195,25 +195,86 @@ pub fn start(
     Ok(Some(listener))
 }
 
-/// Accept loop for the agent socket: one thread per connection.
+/// Connections served at once.
+///
+/// The bound is on *concurrency*, not on total connections: past the cap the
+/// accept loop waits rather than refusing, so a burst of `git push`es is
+/// delayed instead of broken. Sixteen is far more than the user's own tools
+/// need — `ssh` opens one connection per authentication, lists, signs and
+/// hangs up — and it matches the scoped agent's cap of the same name,
+/// deliberately: two different numbers for the same bound on the same crate's
+/// two agent sockets would only invite someone to wonder which is right.
+///
+/// This socket is reachable from *another host*: an `ssh -A` forward carries a
+/// remote process's agent connections here. Unbounded `thread::spawn` per
+/// accept therefore let a remote end park thousands of threads — each with a
+/// stack reservation — by connecting and saying nothing.
+const MAX_CONCURRENT_CONNECTIONS: usize = 16;
+
+/// How long a connection may stay silent *between frames* before it is
+/// dropped.
+///
+/// Pairs with the cap: without it a peer that connects and never writes holds
+/// one of the sixteen slots for the daemon's lifetime, so the cap alone would
+/// only make the wedge cheaper.
+///
+/// It does not cut a user's deliberation short. The consent wait is a channel
+/// `recv_timeout` ([`SIGN_DECISION_TIMEOUT`], 300s) inside `handle_request`,
+/// not a socket read, so this clock only runs while we are waiting for a
+/// *client* to speak — and a real client sends its first frame immediately
+/// after connecting and its next one immediately after reading a reply.
+const CONNECTION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Accept loop for the agent socket: one thread per connection, up to
+/// [`MAX_CONCURRENT_CONNECTIONS`].
 ///
 /// This is the testable entry point — a test can bind a `UnixListener` on
 /// a tempdir path and call `serve_on` directly with a synthetic
 /// [`SignContext`], without spawning the whole daemon.
 pub fn serve_on(listener: UnixListener, ctx: SignContext) {
+    // A permit per in-flight connection. Cloned into each handler thread and
+    // dropped when it finishes, so the count falls back as connections close.
+    let live = Arc::new(());
+
     for incoming in listener.incoming() {
         // A failed accept means the listener is closed or unrecoverably
         // broken; either way there is nothing left to serve.
         let Ok(stream) = incoming else { break };
+
+        // `Arc::strong_count` is the live handler count plus our own handle.
+        // Racy between two accepts by nature, which is fine: this bounds a
+        // resource rather than enforcing a policy, and being off by one under
+        // a burst costs nothing.
+        while Arc::strong_count(&live) > MAX_CONCURRENT_CONNECTIONS {
+            thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        // A peer that connects and never speaks must not hold a slot.
+        let _ = stream.set_read_timeout(Some(CONNECTION_IDLE_TIMEOUT));
+
         let ctx = ctx.clone();
-        thread::Builder::new()
+        let permit = Arc::clone(&live);
+        if let Err(err) = thread::Builder::new()
             .name("secreqd-ssh-conn".to_owned())
             .spawn(move || {
+                let _permit = permit;
                 if let Err(err) = handle_connection(stream, &ctx) {
                     super::log::log_at("ssh-agent", format_args!("connection error: {err:#}"));
                 }
             })
-            .ok();
+        {
+            // Previously `.ok()`. A daemon that has run out of threads answers
+            // no signs at all, and swallowing that left `git push` hanging on
+            // a socket nothing was reading with not a word in the log. The
+            // connection is dropped with the closure, so the client sees a
+            // hang-up rather than silence.
+            super::log::log_at(
+                "ssh-agent",
+                format_args!(
+                    "could not spawn a connection handler ({err}); dropped the connection"
+                ),
+            );
+        }
     }
 }
 
@@ -823,6 +884,16 @@ fn read_frame(stream: &mut UnixStream) -> Result<Option<Vec<u8>>> {
     let mut len_buf = [0u8; 4];
     match read_exact_or_eof(stream, &mut len_buf)? {
         ReadOutcome::Eof => return Ok(None),
+        ReadOutcome::Idle => {
+            super::log::log_at(
+                "ssh-agent",
+                format_args!(
+                    "dropping a connection that said nothing for {}s",
+                    CONNECTION_IDLE_TIMEOUT.as_secs()
+                ),
+            );
+            return Ok(None);
+        }
         ReadOutcome::Filled => {}
     }
     let payload_len = u32::from_be_bytes(len_buf) as usize;
@@ -851,12 +922,23 @@ fn read_frame(stream: &mut UnixStream) -> Result<Option<Vec<u8>>> {
 enum ReadOutcome {
     Filled,
     Eof,
+    /// The read timeout ([`CONNECTION_IDLE_TIMEOUT`]) expired before the
+    /// first byte: the peer is still connected and has nothing to say.
+    Idle,
 }
 
 /// Like `read_exact`, but a clean EOF *before the first byte* is reported
 /// as `Eof` rather than an error — that's the peer closing the socket
 /// between frames, which is expected. An EOF *partway* through the buffer
 /// is a truncated frame and still errors.
+///
+/// A **read timeout** before the first byte is reported as `Idle` and gets the
+/// same treatment as `Eof` for the same reason: an idle connection between
+/// frames is a connection that is finished with us, and reaping it is what
+/// `CONNECTION_IDLE_TIMEOUT` exists to do — reporting it as a connection
+/// *error* would put a line in the log for every ordinary reap. A timeout
+/// partway through a frame is a half-sent frame and still errors, exactly as a
+/// truncating EOF does.
 fn read_exact_or_eof(stream: &mut UnixStream, buf: &mut [u8]) -> Result<ReadOutcome> {
     let wanted = buf.len();
     let mut filled = 0;
@@ -877,6 +959,16 @@ fn read_exact_or_eof(stream: &mut UnixStream, buf: &mut [u8]) -> Result<ReadOutc
             }
             Ok(n) => filled += n,
             Err(ref e) if e.kind() == io::ErrorKind::Interrupted => {}
+            // A socket read timeout surfaces as `WouldBlock` on Linux and
+            // `TimedOut` on macOS; both spellings mean the same thing here.
+            Err(ref e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) && filled == 0 =>
+            {
+                return Ok(ReadOutcome::Idle);
+            }
             Err(e) => return Err(e).context("read agent frame length prefix"),
         }
     }
@@ -1372,6 +1464,50 @@ mod tests {
             .expect("read_frame ok")
             .expect("frame present");
         assert_eq!(frame, input);
+    }
+
+    /// A connection that goes quiet between frames is finished with us, and
+    /// `CONNECTION_IDLE_TIMEOUT` is what stops it holding one of the sixteen
+    /// slots forever. The timeout firing must therefore read as a hang-up
+    /// (`Ok(None)`, close the connection) and not as a connection *error* —
+    /// that would put a log line and an error path on every ordinary reap.
+    ///
+    /// The real timeout is 120s, far too long to sit through; the behavior it
+    /// triggers is the same at 50ms, which is what makes it testable at all.
+    /// That the accept loop *applies* the 120s value is one line of `serve_on`
+    /// and is not covered here.
+    #[test]
+    fn an_idle_connection_reads_as_a_hang_up_rather_than_an_error() {
+        let (client, mut server) = UnixStream::pair().expect("create UnixStream pair");
+        server
+            .set_read_timeout(Some(std::time::Duration::from_millis(50)))
+            .expect("set read timeout");
+
+        // Deliberately held open and silent: `drop(client)` would be an EOF,
+        // which is the case the other test already covers.
+        let outcome = read_frame(&mut server).expect("an idle peer is not an error");
+        assert!(outcome.is_none(), "an idle peer must end the connection");
+        drop(client);
+    }
+
+    /// The other half of the same rule: a peer that sent *part* of a length
+    /// prefix and then stalled has left a half-frame behind, and resuming the
+    /// read loop there would parse the next frame from the wrong offset. That
+    /// is an error, exactly as a truncating EOF is.
+    #[test]
+    fn a_timeout_partway_through_a_frame_is_still_an_error() {
+        let (mut client, mut server) = UnixStream::pair().expect("create UnixStream pair");
+        server
+            .set_read_timeout(Some(std::time::Duration::from_millis(50)))
+            .expect("set read timeout");
+        client.write_all(&[0u8, 0]).expect("write half a prefix");
+
+        let err = read_frame(&mut server).expect_err("a half-sent frame must error");
+        assert!(
+            format!("{err:#}").contains("length prefix"),
+            "should name the truncated read: {err:#}"
+        );
+        drop(client);
     }
 
     /// The SIGN path reuses the wrap queue's coalescing, which folds asks
