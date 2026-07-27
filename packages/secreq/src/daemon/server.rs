@@ -772,86 +772,39 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
             },
         },
         ClientMsg::AddRule { rule } => {
-            let mut guard = state.lock().expect("state mutex");
-            match guard.add_rule(rule) {
-                Ok(()) => DaemonMsg::Ok,
-                Err(err) => DaemonMsg::Err {
-                    message: format!("{err:#}"),
-                },
-            }
+            mutation_reply(state.lock().expect("state mutex").add_rule(rule))
         }
         ClientMsg::UpdateRule { rule } => {
-            let mut guard = state.lock().expect("state mutex");
-            match guard.update_rule(rule) {
-                Ok(()) => DaemonMsg::Ok,
-                Err(err) => DaemonMsg::Err {
-                    message: format!("{err:#}"),
-                },
-            }
+            mutation_reply(state.lock().expect("state mutex").update_rule(rule))
         }
         ClientMsg::DeleteRule { id } => {
-            let mut guard = state.lock().expect("state mutex");
-            match guard.delete_rule(&id) {
-                Ok(()) => DaemonMsg::Ok,
-                Err(err) => DaemonMsg::Err {
-                    message: format!("{err:#}"),
-                },
-            }
+            mutation_reply(state.lock().expect("state mutex").delete_rule(&id))
         }
-        ClientMsg::SetRuleEnabled { id, enabled } => {
-            let mut guard = state.lock().expect("state mutex");
-            match guard.set_rule_enabled(&id, enabled) {
-                Ok(()) => DaemonMsg::Ok,
-                Err(err) => DaemonMsg::Err {
-                    message: format!("{err:#}"),
-                },
-            }
-        }
+        ClientMsg::SetRuleEnabled { id, enabled } => mutation_reply(
+            state
+                .lock()
+                .expect("state mutex")
+                .set_rule_enabled(&id, enabled),
+        ),
     };
-    let reply_tag = match &reply {
-        DaemonMsg::Ok => "Ok",
-        DaemonMsg::Hello { .. } => "Hello",
-        DaemonMsg::WindowOpened { child_pid } => match child_pid {
-            Some(_) => "WindowOpened(existing)",
-            None => "WindowOpened(spawning)",
-        },
-        DaemonMsg::Decision { decision, .. } => match decision {
-            crate::consent::Decision::Approve => "Decision::Approve",
-            crate::consent::Decision::ApproveRemember => "Decision::ApproveRemember",
-            crate::consent::Decision::ApproveCached => "Decision::ApproveCached",
-            crate::consent::Decision::ApproveAuto => "Decision::ApproveAuto",
-            // SSH-only decisions; they ride the in-process sign waiter, not
-            // this wrap socket reply, but Decision is shared so list them.
-            crate::consent::Decision::ApproveSshSession => "Decision::ApproveSshSession",
-            crate::consent::Decision::ApproveSshSessionAll => "Decision::ApproveSshSessionAll",
-            // Scoped-agent only: the user anchored a TTL'd grant to the
-            // scope. It crosses this socket as a normal decision reply — the
-            // *agent process* is the client that acts on it, remembering the
-            // grant in its own `ScopeApprovals`. The daemon deliberately
-            // remembers nothing here (`Ask::allow_remember` is false on these
-            // asks); a guest has no host parent for the daemon's cache to key
-            // on.
-            crate::consent::Decision::ApproveAgentSession => "Decision::ApproveAgentSession",
-            crate::consent::Decision::Deny => "Decision::Deny",
-            crate::consent::Decision::DenyAuto => "Decision::DenyAuto",
-            // Scoped-agent only, and never sent as a reply from here: an
-            // out-of-scope ref is refused by `scoped_agent::handle_request`
-            // before any ask reaches this daemon. Named because Decision is
-            // shared.
-            crate::consent::Decision::DenyOutOfScope => "Decision::DenyOutOfScope",
-            // Never sent as a wrap reply — an abandoned ask has no live
-            // client to receive it — but Decision is shared, so name it.
-            crate::consent::Decision::Abandoned => "Decision::Abandoned",
-        },
-        DaemonMsg::Err { .. } => "Err",
-        DaemonMsg::ConsentUpdate { .. } => "ConsentUpdate",
-        DaemonMsg::ConsentExitPlease => "ConsentExitPlease",
-        DaemonMsg::RulesList(_) => "RulesList",
-        DaemonMsg::RuleAdded { .. } => "RuleAdded",
-        DaemonMsg::AutoDenyToast { .. } => "AutoDenyToast",
-    };
-    super::log::log_at("server", format_args!("→ DaemonMsg::{reply_tag}"));
+    super::log::log_at("server", format_args!("→ DaemonMsg::{}", reply.tag()));
     reply
+}
+
+/// The reply for a rules mutation that either worked or didn't.
+///
+/// `add_rule` / `update_rule` / `delete_rule` / `set_rule_enabled` all
+/// return `Result<()>` and all answer the same way, so they share one
+/// mapping rather than four copies of it. The `{err:#}` is deliberate:
+/// these errors are `anyhow` chains ("rule 'x' is refused: bad glob at …")
+/// and the alternate form is what carries the cause to the CLI.
+fn mutation_reply(result: Result<()>) -> DaemonMsg {
+    match result {
+        Ok(()) => DaemonMsg::Ok,
+        Err(err) => DaemonMsg::Err {
+            message: format!("{err:#}"),
+        },
+    }
 }
 
 /// Outcome of `handle_ask`. A fast path resolves synchronously (reply the

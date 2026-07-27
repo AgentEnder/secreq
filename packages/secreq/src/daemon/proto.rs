@@ -974,6 +974,56 @@ pub enum DaemonMsg {
     },
 }
 
+impl DaemonMsg {
+    /// The Rust variant name, for the daemon's `→ DaemonMsg::…` log line.
+    ///
+    /// The counterpart to [`ClientMsg::tag`], and here for the same reason:
+    /// naming a reply is the protocol's business, not the server's, so
+    /// adding a variant is one file's edit.
+    ///
+    /// Two variants say more than their name. `WindowOpened` distinguishes
+    /// the pid-carrying "a child was already up" reply from the `None`
+    /// "one is being spawned" reply, which is the only way to read a raise
+    /// out of the log. And a [`DaemonMsg::Decision`] is named by its
+    /// [`Decision`] — the outcome is the whole content of that reply, and
+    /// a log full of undifferentiated `Decision` would say nothing.
+    ///
+    /// Several `Decision` variants can never appear on this reply: the SSH
+    /// ones ride the in-process sign waiter, and the scoped-agent ones are
+    /// either acted on by the agent process or refused before an ask is
+    /// made. They are named anyway because [`Decision`] is shared and the
+    /// match is exhaustive.
+    pub fn tag(&self) -> &'static str {
+        match self {
+            DaemonMsg::Ok => "Ok",
+            DaemonMsg::Hello { .. } => "Hello",
+            DaemonMsg::WindowOpened { child_pid } => match child_pid {
+                Some(_) => "WindowOpened(existing)",
+                None => "WindowOpened(spawning)",
+            },
+            DaemonMsg::Decision { decision, .. } => match decision {
+                Decision::Approve => "Decision::Approve",
+                Decision::ApproveRemember => "Decision::ApproveRemember",
+                Decision::ApproveCached => "Decision::ApproveCached",
+                Decision::ApproveAuto => "Decision::ApproveAuto",
+                Decision::ApproveSshSession => "Decision::ApproveSshSession",
+                Decision::ApproveSshSessionAll => "Decision::ApproveSshSessionAll",
+                Decision::ApproveAgentSession => "Decision::ApproveAgentSession",
+                Decision::Deny => "Decision::Deny",
+                Decision::DenyAuto => "Decision::DenyAuto",
+                Decision::DenyOutOfScope => "Decision::DenyOutOfScope",
+                Decision::Abandoned => "Decision::Abandoned",
+            },
+            DaemonMsg::Err { .. } => "Err",
+            DaemonMsg::ConsentUpdate { .. } => "ConsentUpdate",
+            DaemonMsg::ConsentExitPlease => "ConsentExitPlease",
+            DaemonMsg::RulesList(_) => "RulesList",
+            DaemonMsg::RuleAdded { .. } => "RuleAdded",
+            DaemonMsg::AutoDenyToast { .. } => "AutoDenyToast",
+        }
+    }
+}
+
 /// Hand-written so `{:?}` cannot print resolved secret values.
 ///
 /// [`SecretValue`](crate::secret::SecretValue) goes to real trouble to redact
