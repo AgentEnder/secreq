@@ -1,43 +1,268 @@
-//! JSON Schema for `wraps.json5` — the source of truth.
-//!
-//! Hand-constructed as a [`serde_json::Value`] tree because the on-disk
-//! format has dynamic keys (arbitrary binary names alongside reserved
-//! `providers` / `$`-prefixed metadata) and a few Rust↔JSON shape
-//! mismatches (`ValueMode::Stdin` vs `value: "stdin"`).
-//!
-//! ## Regenerating `docs/wraps.schema.json`
+//! The two published JSON Schemas, derived from the types that read the files.
 //!
 //! ```sh
-//! cargo run --example gen-schema > docs/wraps.schema.json
+//! cargo run --example gen-schema             > docs/wraps.schema.json
+//! cargo run --example gen-auto-rules-schema  > docs/auto-rules.schema.json
 //! ```
 //!
-//! A test in `tests/schema_drift.rs` fails CI if the committed file falls
-//! out of sync with [`wraps_schema`].
+//! ## Where the schema comes from
 //!
-//! ## Every `description` here is unchecked prose about the parser
+//! Everything under `definitions` is `schemars`, run over [`crate::rules`],
+//! [`crate::wraps`] and [`crate::manifest`]: the property names, which of them
+//! are required, their types, and — because `schemars` reads doc comments —
+//! their prose. **A field's `description` is written at the field**, next to
+//! the code the description is a claim about.
 //!
-//! `schema_drift` compares the committed JSON against *this generator*, so it
-//! catches "someone forgot to regenerate" and nothing else. A `description`
-//! is a claim about how `manifest.rs` or `rules.rs` actually behaves, and no
-//! test ties the two together. Both published schemas drifted exactly that
-//! way and stayed green: `cwd` still read "pattern against the current
-//! working directory" a month after `Pattern::matches_path_prefix` made it
-//! segment-aware, `ancestor` still said the `exe` path was not part of the
-//! match input after it became the *primary* input, and `store.value` still
-//! advertised `default: "{value}"` after the parser inverted the default to
-//! stdin — the one that puts a secret in `/proc/<pid>/cmdline`.
+//! That is the whole point of the arrangement. This module used to be a
+//! hand-written `serde_json::json!` tree, and `tests/schema_drift.rs` compares
+//! the committed JSON to *this generator*, never to `rules.rs` or
+//! `manifest.rs` — so a description could contradict the parser indefinitely,
+//! and three did: `cwd` documented as a plain prefix after
+//! `Pattern::matches_path_prefix` made it segment-aware, `ancestor` claiming
+//! the `exe` path was "NOT currently part of the match input" after it became
+//! the *primary* input, and `store.value` advertising `{value}` as its default
+//! after the parser inverted it to stdin — the mode that keeps a secret out of
+//! `/proc/<pid>/cmdline`.
 //!
-//! So: **when you change matching or parsing semantics, the description here
-//! is part of the change.** Grep this file for the field you touched. Nothing
-//! else will remind you.
+//! ## What is still written by hand, and why
+//!
+//! Two things a Rust type cannot say, both of them here rather than scattered:
+//!
+//! - **The file envelope.** `wraps.json5` is keyed by names the user chooses —
+//!   binary names — which is `patternProperties`, not a struct. `$schema` is
+//!   in the same category: secreq ignores the key, so no type has a field for
+//!   it, but an editor writes it and must not be told it is invalid.
+//! - **Constraints that are not shapes.** Declarative-XOR-wasm is a `oneOf`
+//!   ([`crate::rules::rule_one_of`], stated next to the `TryFrom` that
+//!   enforces it), and a provider's `retrieve`/`read` pair is an `anyOf`
+//!   ([`provider_any_of`]).
+//!
+//! ## The `wraps.json5` parser is hand-written, so its key names are too
+//!
+//! `manifest.rs` and `wraps.rs` walk a [`serde_json::Value`] rather than
+//! deriving `Deserialize`, because a wraps file's top level is arbitrary binary
+//! names beside a reserved `providers` key. So the JSON name of a field whose
+//! Rust name differs (`env_value_template` → `env_value`, `locator_template` →
+//! `locator`, `value_mode` → `value`) is a `schemars(rename)` beside that
+//! field, not something the compiler derives.
+//! `schema_covers_every_key_the_parser_accepts` in `tests/schema_drift.rs` is
+//! what holds those two halves together: it feeds the parser a config using
+//! every key the schema declares, and one key the schema does not.
 
 use serde_json::{json, Value};
 
-/// The complete JSON Schema for `wraps.json5`.
-pub fn wraps_schema() -> Value {
+use crate::manifest::Provider;
+use crate::rules::RulesFile;
+use crate::wraps::{SshIdentity, Wrap};
+
+/// `$id` of the auto-rules schema. Read by [`RulesFile`]'s derive.
+pub const AUTO_RULES_ID: &str = "https://secreq.dev/schema/auto-rules.schema.json";
+
+/// `$id` of the wraps schema.
+pub const WRAPS_ID: &str = "https://secreq.dev/schema/wraps.schema.json";
+
+/// The reserved top-level `$schema` key, which both of these files may carry
+/// and neither of them reads.
+///
+/// Not a field on any type: secreq's loaders skip `$`-prefixed metadata
+/// wholesale, so there is nothing in Rust for it to be derived from. Declaring
+/// it stops an editor from flagging the pointer it wrote itself.
+pub fn schema_pointer_property() -> Value {
     json!({
+        "$schema": {
+            "type": "string",
+            "description": "URL or path of this JSON Schema. Ignored by `secreq`."
+        }
+    })
+}
+
+/// `retrieve` is required, but `read` satisfies it — see `parse_provider`,
+/// which accepts either. Stated as an `anyOf` because a plain
+/// `required: ["retrieve"]` would invalidate every config written against the
+/// design doc's name.
+pub fn provider_any_of() -> Value {
+    json!([
+        { "required": ["retrieve"] },
+        { "required": ["read"] }
+    ])
+}
+
+/// The three legacy spellings `parse_provider` still accepts. They are not
+/// fields on [`Provider`] — the parser folds each into its modern name on the
+/// way in — so they cannot be derived, but a file using them is valid and the
+/// schema has to say so.
+pub fn provider_legacy_properties() -> Value {
+    json!({
+        "read": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1,
+            "description": "Legacy name for `retrieve` (the design doc §6 uses this name). Both are accepted; prefer `retrieve`."
+        },
+        "write": {
+            "$ref": "#/definitions/StoreCapability",
+            "description": "Legacy name for `store`. Both are accepted; prefer `store`."
+        },
+        "retrieveBatch": {
+            "$ref": "#/definitions/BatchRetrieve",
+            "description": "camelCase alias for `retrieve_batch`."
+        }
+    })
+}
+
+/// `optional: true` is sugar for `required: false` — `parse_field_spec` reads
+/// it and inverts. Sugar has no field of its own to be derived from.
+pub fn field_spec_optional_property() -> Value {
+    json!({
+        "optional": {
+            "type": "boolean",
+            "description": "Sugar for `required: false`."
+        }
+    })
+}
+
+/// `$description` on a wrap: accepted and ignored by `parse_wrap`, so there is
+/// no field to derive it from — but a file carrying one loads, and an editor
+/// should not underline it.
+pub fn wrap_description_property() -> Value {
+    json!({
+        "$description": {
+            "type": "string",
+            "description": "Optional free-form description (currently unused at runtime; kept for parity with future tooling)."
+        }
+    })
+}
+
+/// A wrap's `env` map: env-var name to `secret://provider/locator` reference.
+///
+/// A named type so [`Wrap`]'s `env` values carry the reference pattern that
+/// `BTreeMap<String, String>` alone would not. Never constructed — it exists
+/// to be a `schemars(with = …)` target.
+pub struct SecretRefMap;
+
+impl schemars::JsonSchema for SecretRefMap {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "SecretRefMap".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "object",
+            "additionalProperties": {
+                "type": "string",
+                "pattern": r"^secret://[^/]+/.+$",
+                "description": "A `secret://provider/locator` reference."
+            }
+        })
+    }
+}
+
+/// A fresh draft-07 generator.
+///
+/// Draft-07 rather than schemars' 2020-12 default because that is what both
+/// committed files declare and what the editors pointed at them support:
+/// `definitions` rather than `$defs`, and no `$ref` siblings.
+fn generator() -> schemars::SchemaGenerator {
+    schemars::generate::SchemaSettings::draft07().into_generator()
+}
+
+/// Add properties to an already-generated object schema, keeping the derived
+/// ones.
+///
+/// `schemars(extend("properties" = …))` would *replace* them, silently
+/// emptying the definition it was meant to add one key to.
+fn add_properties(schema: &mut Value, extra: &Value) {
+    let (Some(properties), Some(extra)) = (
+        schema.get_mut("properties").and_then(Value::as_object_mut),
+        extra.as_object(),
+    ) else {
+        panic!("add_properties needs an object schema with properties, and an object to merge");
+    };
+    for (key, value) in extra {
+        properties.insert(key.clone(), value.clone());
+    }
+}
+
+/// Render every `description` as the prose it is: a doc comment's line breaks
+/// are the author's wrapping, not the reader's.
+///
+/// Paragraph breaks (a blank line) survive; a lone newline becomes a space.
+/// Without this, whether a description reads as one sentence or six on
+/// secreq.dev would depend on where a `///` happened to wrap in the source.
+fn flatten_descriptions(schema: &mut Value) {
+    match schema {
+        Value::Object(map) => {
+            if let Some(Value::String(text)) = map.get_mut("description") {
+                *text = text
+                    .split("\n\n")
+                    .map(|para| para.split('\n').collect::<Vec<_>>().join(" "))
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+            }
+            for value in map.values_mut() {
+                flatten_descriptions(value);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(flatten_descriptions),
+        _ => {}
+    }
+}
+
+/// The complete JSON Schema for `auto-rules.json5`.
+///
+/// The root is [`RulesFile`] — `{ rules: [...] }` really is a struct — so
+/// there is nothing to assemble beyond letting the derive run and declaring
+/// the `$schema` pointer no type has a field for.
+pub fn auto_rules_schema() -> Value {
+    let mut schema = generator().into_root_schema_for::<RulesFile>().to_value();
+    add_properties(&mut schema, &schema_pointer_property());
+    flatten_descriptions(&mut schema);
+    schema
+}
+
+/// The complete JSON Schema for `wraps.json5`.
+///
+/// Assembled rather than derived from [`crate::wraps::WrapsConfig`], because
+/// the top level is *dynamic*: every key that isn't `providers`, `ssh`, or
+/// `$`-prefixed metadata is a binary name the user chose, which no struct
+/// field can stand for. Every definition it points at is derived.
+pub fn wraps_schema() -> Value {
+    let mut generator = generator();
+
+    // Registering each definition yields the `$ref` that points at it.
+    let wrap = generator.subschema_for::<Wrap>().to_value();
+    let provider = generator.subschema_for::<Provider>().to_value();
+    let ssh_identity = generator.subschema_for::<SshIdentity>().to_value();
+    let mut definitions = Value::Object(generator.take_definitions(true));
+
+    // The keys the parser accepts that are not fields on any type: legacy
+    // spellings it folds away, sugar it inverts, and metadata it ignores.
+    add_properties(
+        definitions
+            .get_mut("Provider")
+            .expect("Provider was just registered"),
+        &provider_legacy_properties(),
+    );
+    add_properties(
+        definitions
+            .get_mut("FieldSpec")
+            .expect("FieldSpec is reachable from Provider"),
+        &field_spec_optional_property(),
+    );
+    add_properties(
+        definitions
+            .get_mut("Wrap")
+            .expect("Wrap was just registered"),
+        &wrap_description_property(),
+    );
+
+    let mut schema = json!({
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "$id": "https://secreq.dev/schema/wraps.schema.json",
+        "$id": WRAPS_ID,
         "title": "secreq wraps config",
         "description": "Per-binary wrap configuration for `secreq` \
             (`~/.secreq/wraps.json5`, or `$SECREQ_HOME/wraps.json5`). Top-level keys are \
@@ -45,10 +270,9 @@ pub fn wraps_schema() -> Value {
             `$`-prefixed metadata. See docs/wraps.md.",
         "type": "object",
         "properties": {
-            "$schema": {
-                "type": "string",
-                "description": "URL or path of this JSON Schema. Ignored by `secreq`."
-            },
+            "$schema": schema_pointer_property()
+                .get("$schema")
+                .expect("schema_pointer_property declares exactly that key"),
             "$editor": {
                 "type": "string",
                 "description": "Editor the rule editor's 'Open in editor' split-button opens by default (an editor id such as `code`, `cursor`, `zed`, or `nvim`). Machine-local, like `$shim_dir`; written when you pick an editor in the Rules view of `secreq view`."
@@ -64,320 +288,29 @@ pub fn wraps_schema() -> Value {
             "providers": {
                 "type": "object",
                 "description": "Provider scheme definitions. Built-in providers (`op`, `keychain` on macOS, `lastpass` / `pass` on Unix) are available without an explicit entry; entries here override or add new schemes.",
-                "additionalProperties": { "$ref": "#/definitions/Provider" }
+                "additionalProperties": provider
             },
             "ssh": {
                 "type": "object",
                 "description": "SSH identities served by the consent-gated SSH agent, keyed by identity name. Each identity stores its public key inline (not secret) so the agent can answer REQUEST_IDENTITIES without a resolve; the private key is a `secret://` reference resolved only at SIGN time.",
-                "additionalProperties": { "$ref": "#/definitions/SshIdentity" }
+                "additionalProperties": ssh_identity
             }
         },
-        "patternProperties": {
-            "^[A-Za-z_][A-Za-z0-9_.+-]*$": { "$ref": "#/definitions/Wrap" }
-        },
-        "additionalProperties": false,
-        "definitions": {
-            "Wrap":            wrap_schema(),
-            "Provider":        provider_schema(),
-            "StoreCapability": store_capability_schema(),
-            "FieldSpec":       field_spec_schema(),
-            "BatchRetrieve":   batch_retrieve_schema(),
-            "SshIdentity":     ssh_identity_schema()
-        }
-    })
-}
-
-/// JSON Schema for `auto-rules.json5` — the persisted ruleset the
-/// daemon evaluates before prompting the user. Source of truth in
-/// `src/rules.rs`; see `brain: areas/secreq/design/2026-06-02-auto-rules.md`.
-///
-/// Regenerate:
-/// ```sh
-/// cargo run --example gen-auto-rules-schema > docs/auto-rules.schema.json
-/// ```
-pub fn auto_rules_schema() -> Value {
-    json!({
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "$id": "https://secreq.dev/schema/auto-rules.schema.json",
-        "title": "secreq auto-rules config",
-        "description": "Persisted auto-approve / auto-deny rules for `secreq` \
-            (`~/.secreq/auto-rules.json5`, or `$SECREQ_HOME/auto-rules.json5`). Owned by the consent \
-            daemon; clients normally don't edit the file directly.",
-        "type": "object",
-        "properties": {
-            "$schema": {
-                "type": "string",
-                "description": "URL or path of this JSON Schema. Ignored by `secreq`."
-            },
-            "rules": {
-                "type": "array",
-                "description": "Ordered list of rules. Order does not affect precedence (deny-wins, then most-specific approve), but is preserved on read/write so hand-edits stay stable.",
-                "items": { "$ref": "#/definitions/Rule" }
-            }
-        },
-        "additionalProperties": false,
-        "definitions": {
-            "Rule": rule_schema(),
-            "RuleMatch": rule_match_schema(),
-            "WasmRule": wasm_rule_schema()
-        }
-    })
-}
-
-fn rule_schema() -> Value {
-    json!({
-        "type": "object",
-        "description": "One auto-decision rule. Exactly one of two shapes: declarative (`decide` + `match`, `wasm` absent) or wasm (`wasm` alone — the compiled module returns approve/pass/deny at evaluation time, so `decide` and `deny_message` must be absent).",
-        "required": ["id", "name", "enabled"],
-        "oneOf": [
-            {
-                "description": "Declarative rule: static decide + match clause.",
-                "required": ["decide", "match"],
-                "not": { "required": ["wasm"] }
-            },
-            {
-                "description": "Wasm rule: the module decides. `decide`/`match`/`deny_message` are forbidden — the decision (and any deny reason) is the module's return value.",
-                "required": ["wasm"],
-                "allOf": [
-                    { "not": { "required": ["decide"] } },
-                    { "not": { "required": ["match"] } },
-                    { "not": { "required": ["deny_message"] } }
-                ]
-            }
-        ],
-        "properties": {
-            "id": {
-                "type": "string",
-                "description": "Stable identifier (12 random bytes as lowercase hex, generated by `secreq` when the rule is created). Never re-mint for an existing rule — surfaces in the audit log."
-            },
-            "name": {
-                "type": "string",
-                "description": "Human label shown in the UI and the audit pill."
-            },
-            "enabled": {
-                "type": "boolean",
-                "description": "`false` ⇒ rule is in the file but the evaluator skips it. Used for `pause this rule without losing the configuration`."
-            },
-            "decide": {
-                "type": "string",
-                "enum": ["approve", "deny"],
-                "description": "Direction a declarative rule fires when it matches. Among matching rules, any deny wins; otherwise the most-specific approve wins (a wasm rule that returns a decision counts as maximally specific). Forbidden on wasm rules."
-            },
-            "match": { "$ref": "#/definitions/RuleMatch" },
-            "wasm": { "$ref": "#/definitions/WasmRule" },
-            "trained_secrets": {
-                "type": "array",
-                "items": { "type": "string" },
-                "uniqueItems": true,
-                "description": "Snapshot of env-var names the rule was created against. Rule will NOT fire if the ask requests anything outside this set — the trained-secrets guard, applied to declarative and wasm rules alike (a wasm module is never even run for an out-of-snapshot ask). Empty array disables the guard (legit for hand-edited rules)."
-            },
-            "deny_message": {
-                "type": "string",
-                "description": "Message printed to stderr on auto-deny and shown in the consent window's toast. Belongs to `decide: deny`: an approve rule refuses nobody, so a `deny_message` beside `decide: approve` is ignored, warned about by rule name in the daemon log, and removed the next time secreq writes the file. Forbidden outright on wasm rules (the module returns its own reason)."
-            },
-            "created_at_unix": {
-                "type": "integer",
-                "minimum": 0,
-                "description": "Seconds since the Unix epoch at creation. Informational only."
-            }
-        },
-        "additionalProperties": false
-    })
-}
-
-fn wasm_rule_schema() -> Value {
-    json!({
-        "type": "object",
-        "description": "Reference to a compiled wasm rule module, evaluated in the secreq sandbox (no WASI, fuel-metered, memory-capped). The module exports `decide(ctx)` returning approve, pass (rule does not match), or deny with a reason. A runtime error makes the rule not match — the ask falls through to the interactive prompt, never to an auto-approve.",
-        "required": ["path", "sha256"],
-        "properties": {
-            "path": {
-                "type": "string",
-                "description": "Path to the compiled `.wasm` module. Relative paths resolve against the directory containing `auto-rules.json5`; the canonical home is `rules/<id>.wasm` under the secreq root."
-            },
-            "sha256": {
-                "type": "string",
-                "pattern": "^[0-9a-fA-F]{64}$",
-                "description": "Hex SHA-256 of the module bytes, recorded at registration and verified on every load. A mismatch refuses this rule (it can never fire) with a loud daemon-log error; other rules keep working."
-            }
-        },
-        "additionalProperties": false
-    })
-}
-
-fn rule_match_schema() -> Value {
-    json!({
-        "type": "object",
-        "description": "The match clause. All present fields must match (logical AND). `wrap` is required and exact; the rest are patterns: glob if they contain `*`, `?`, or `[`, otherwise literal. A literal `argv` matches as a plain prefix; a literal `cwd` matches as a path-segment-aware prefix; a literal `ancestor` matches as a substring against the caller's executable path (friendlier for `.app` bundle names, and not self-reported).",
-        "required": ["wrap"],
-        "properties": {
-            "wrap": {
-                "type": "string",
-                "description": "Wrap name (exact match)."
-            },
-            "argv": {
-                "type": "string",
-                "description": "Pattern against the joined argv of the wrapped command (`secreq` reconstructs this as `command.join(\" \")`)."
-            },
-            "ancestor": {
-                "type": "string",
-                "description": "Pattern matched against each caller in the process tree; the clause matches if ANY caller satisfies it. Tested against the caller's executable path as the kernel reports it (e.g. `/Applications/Cursor.app/Contents/MacOS/Cursor`). Only when the kernel gives no `exe` does it fall back to the process's self-reported short name (typically the basename, like `zsh` or `Cursor`) and its joined command line. Preferring `exe` is what stops a process from satisfying `ancestor: \"Cursor.app\"` by putting that text in an argv it chose for itself. Substring match for literals, full-string glob for wildcards."
-            },
-            "cwd": {
-                "type": "string",
-                "description": "Pattern against the requesting process's current working directory. A literal matches as a path-segment-aware prefix: it must cover the whole path or stop on a `/` boundary, so `/Users/me/oss` matches `/Users/me/oss` and `/Users/me/oss/pkg` but NOT `/Users/me/ossuary`. A trailing `/` on the pattern is optional and means the same thing. A glob is matched against the whole path."
-            }
-        },
-        "additionalProperties": false
-    })
-}
-
-fn wrap_schema() -> Value {
-    json!({
-        "type": "object",
-        "description": "One per-binary wrap. `env` is optional: a wrap with no env entries is *gate-only* — consent is required before the binary runs, but nothing is injected (used to gate tools like `op` that have no secret to pass). Everything else is metadata.",
-        "properties": {
-            "$reason": {
-                "type": "string",
-                "description": "Rationale shown in the consent prompt when this wrap is invoked."
-            },
-            "$description": {
-                "type": "string",
-                "description": "Optional free-form description (currently unused at runtime; kept for parity with future tooling)."
-            },
-            "env": {
-                "type": "object",
-                "description": "Environment variables to inject. Each value is a `secret://provider/locator` reference; resolution happens at invocation time. Omit (or leave empty) for a gate-only wrap.",
-                "additionalProperties": {
-                    "type": "string",
-                    "pattern": "^secret://[^/]+/.+$",
-                    "description": "A `secret://provider/locator` reference."
-                }
-            }
-        },
-        "additionalProperties": false
-    })
-}
-
-fn ssh_identity_schema() -> Value {
-    json!({
-        "type": "object",
-        "description": "One SSH identity served by the agent. `public_key` is the inline OpenSSH public key (not secret); `private_key` is a `secret://provider/locator` reference resolved only at SIGN time.",
-        "required": ["public_key", "private_key"],
-        "properties": {
-            "$reason": {
-                "type": "string",
-                "description": "Rationale shown in the consent prompt when this identity is used to sign."
-            },
-            "public_key": {
-                "type": "string",
-                "description": "Inline OpenSSH public key (`ssh-ed25519 AAAA… comment`). Answered to REQUEST_IDENTITIES without a resolve."
-            },
-            "private_key": {
-                "type": "string",
-                "pattern": "^secret://[^/]+/.+$",
-                "description": "A `secret://provider/locator` reference to the private key, resolved only at SIGN time."
-            }
-        },
-        "additionalProperties": false
-    })
-}
-
-fn provider_schema() -> Value {
-    json!({
-        "type": "object",
-        "description": "A provider scheme. Required `retrieve`, optional `store`, optional `retrieve_batch`.",
-        "anyOf": [
-            { "required": ["retrieve"] },
-            { "required": ["read"] }
-        ],
-        "properties": {
-            "retrieve": {
-                "type": "array",
-                "items": { "type": "string" },
-                "minItems": 1,
-                "description": "Argv template for fetching a secret. `{locator}` is substituted with the secret's locator; stdout is the value (one trailing newline stripped)."
-            },
-            "read": {
-                "type": "array",
-                "items": { "type": "string" },
-                "minItems": 1,
-                "description": "Legacy name for `retrieve` (the design doc §6 uses this name). Both are accepted; prefer `retrieve`."
-            },
-            "store": { "$ref": "#/definitions/StoreCapability" },
-            "write": {
-                "$ref": "#/definitions/StoreCapability",
-                "description": "Legacy name for `store`. Both are accepted; prefer `store`."
-            },
-            "retrieve_batch": { "$ref": "#/definitions/BatchRetrieve" },
-            "retrieveBatch": {
-                "$ref": "#/definitions/BatchRetrieve",
-                "description": "camelCase alias for `retrieve_batch`."
-            }
-        },
-        "additionalProperties": false
-    })
-}
-
-fn store_capability_schema() -> Value {
-    json!({
-        "type": "object",
-        "description": "How this provider persists a new value (currently exposed via custom CLIs the user may write that drive `secreq` programmatically — the public `secreq` CLI no longer exposes a `store` verb).",
-        "required": ["command", "locator"],
-        "properties": {
-            "command": {
-                "type": "array",
-                "items": { "type": "string" },
-                "minItems": 1,
-                "description": "Argv template. `{field}` placeholders are filled from caller-supplied inputs; `{value}` (argv mode) is the secret. Prefer stdin mode."
-            },
-            "fields": {
-                "type": "object",
-                "additionalProperties": { "$ref": "#/definitions/FieldSpec" }
-            },
-            "value": {
-                "type": "string",
-                "default": "stdin",
-                "description": "How the secret reaches `command`. Omitted or `\"stdin\"` pipes it in on stdin, which is the default. Any other string (typically `\"{value}\"`) opts into argv-substitution mode, where the secret appears in the process's command line and is readable by other users on Linux at the default `hidepid=0`. Prefer stdin."
-            },
-            "locator": {
-                "type": "string",
-                "description": "Template that builds the retrieve-side locator from the same field inputs."
-            }
-        },
-        "additionalProperties": false
-    })
-}
-
-fn field_spec_schema() -> Value {
-    json!({
-        "type": "object",
-        "description": "Schema for one field in a provider's `store.fields`.",
-        "properties": {
-            "required": { "type": "boolean", "default": false },
-            "optional": { "type": "boolean", "description": "Sugar for `required: false`." },
-            "default":  { "type": ["string", "null"] }
-        },
-        "additionalProperties": false
-    })
-}
-
-fn batch_retrieve_schema() -> Value {
-    json!({
-        "type": "object",
-        "description": "Batched-retrieve: one command invocation resolves many secrets at once (e.g. `op run -- printenv`). Used automatically when a wrap's `env` references the same provider for ≥2 entries, cutting biometric prompts from N to 1. Protocol: per requested (name, locator), set env var `name` to `env_value` with `{locator}` substituted; spawn `command`; parse stdout as `KEY=VALUE` lines.",
-        "required": ["command", "env_value"],
-        "properties": {
-            "command": {
-                "type": "array",
-                "items": { "type": "string" },
-                "minItems": 1
-            },
-            "env_value": {
-                "type": "string",
-                "description": "Template for each synthetic env entry's value. For 1Password: `\"op://{locator}\"`."
-            }
-        },
-        "additionalProperties": false
-    })
+        // `WrapsConfig::parse`'s `match` arms, in schema form: the reserved
+        // keys above, then any other `$`-prefixed key ignored as metadata,
+        // then every remaining key read as a binary name.
+        //
+        // Not `patternProperties: { "<binary name>": Wrap }`, which is what
+        // this was. Draft-07 applies `properties` and `patternProperties`
+        // *both*, so a pattern loose enough to match a binary name also
+        // matched `providers` and `ssh` — and validated each of them a second
+        // time as a wrap, where `additionalProperties: false` refused every
+        // provider a user had. Any wraps file with a `providers` block failed
+        // its own published schema.
+        "patternProperties": { "^\\$": true },
+        "additionalProperties": wrap,
+        "definitions": definitions
+    });
+    flatten_descriptions(&mut schema);
+    schema
 }

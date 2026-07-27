@@ -281,19 +281,34 @@ there when the change lands — the repo has no copy to fall out of sync.
   `cargo run --example gen-auto-rules-schema`. A test in
   `tests/schema_drift.rs` fails CI if either is stale.
 
-  **`schema_drift` does not guard the on-disk format.** The schemas are built
-  from a hand-written `serde_json::json!` tree in `schema.rs` — there is no
-  `schemars` in the crate and nothing derives them from `Rule` or `Wrap`. So
-  the generator and the committed file can agree with each other while both
-  disagree with the Rust type. The test catches "someone forgot to
-  regenerate"; it cannot catch "the serialized shape moved".
+  **A field's description is written at the field.** Both schemas are derived
+  with `schemars` from the types that read those files — `RuleWire`,
+  `RuleMatch` and `WasmRule` in `rules.rs`, `Wrap` and `SshIdentity` in
+  `wraps.rs`, `Provider` and friends in `manifest.rs`. Every `///` on those
+  fields is published verbatim as that property's `description`, so
+  **changing what a matcher does means editing the doc comment above it**,
+  and forgetting to is a failing `schema_drift`, not a silent lie on
+  secreq.dev. Three descriptions contradicted the parser for a month each
+  under the hand-written `json!` tree this replaced.
 
-  What does guard it is the round-trip suite in `rules.rs` — exact serialized
-  objects for each legal shape, the written key order (`save_rules` rewrites
-  the whole file on every mutation, so key order is user-visible churn), and a
-  hand-authored JSON5 file through load→save→load→save requiring byte-stable
-  output. **If you change a serialized type, that suite is your evidence, not
-  `schema_drift`.**
+  `schemars` is optional and behind the `schema` feature, switched on for the
+  test/example build by the self dev-dependency (the `harness` trick). A plain
+  `cargo build` or `cargo install secreq` never compiles it — check with
+  `cargo tree --package secreq -e normal`.
+
+  What `schema.rs` still writes by hand is the file envelope (`wraps.json5`'s
+  dynamic binary-name keys, the `$schema` pointer nothing reads) and the two
+  constraints no field implies: declarative-XOR-wasm, and `retrieve`/`read`.
+  Each sits next to the code that enforces it.
+
+  `schema_drift` no longer only compares the generator to the file. It
+  validates rules `secreq` actually writes against the committed schema, checks
+  that the shapes the loader refuses are refused by the schema too, and feeds
+  the wraps parser a config using every key the schema declares — that last one
+  is what holds the hand-written `wraps.json5` parser to its `schemars(rename)`
+  attributes. The round-trip suite in `rules.rs` is still the guard for the
+  *bytes* (exact serialized objects, written key order, a hand-authored JSON5
+  file through load→save→load→save requiring byte-stable output).
 
 ## Tool versions come from `mise.toml`
 

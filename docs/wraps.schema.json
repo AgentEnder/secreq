@@ -1,13 +1,16 @@
 {
   "$id": "https://secreq.dev/schema/wraps.schema.json",
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "additionalProperties": false,
+  "additionalProperties": {
+    "$ref": "#/definitions/Wrap"
+  },
   "definitions": {
     "BatchRetrieve": {
       "additionalProperties": false,
-      "description": "Batched-retrieve: one command invocation resolves many secrets at once (e.g. `op run -- printenv`). Used automatically when a wrap's `env` references the same provider for ≥2 entries, cutting biometric prompts from N to 1. Protocol: per requested (name, locator), set env var `name` to `env_value` with `{locator}` substituted; spawn `command`; parse stdout as `KEY=VALUE` lines.",
+      "description": "Batched-retrieve: one command invocation resolves many secrets at once (e.g. `op run -- printenv`). Used automatically when a wrap's `env` references the same provider for two or more entries, cutting biometric prompts from N to 1. Protocol: per requested (name, locator), set env var `name` to `env_value` with `{locator}` substituted; spawn `command`; parse stdout as `KEY=VALUE` lines.",
       "properties": {
         "command": {
+          "description": "argv to execute. The synthetic env entries are added to the child's environment; no placeholder substitution happens on `command` itself.",
           "items": {
             "type": "string"
           },
@@ -15,7 +18,7 @@
           "type": "array"
         },
         "env_value": {
-          "description": "Template for each synthetic env entry's value. For 1Password: `\"op://{locator}\"`.",
+          "description": "Template for each synthetic env entry's value. `{locator}` is substituted per secret; the env-var name is the secret's name. For 1Password: `\"op://{locator}\"`.",
           "type": "string"
         }
       },
@@ -71,6 +74,7 @@
           "type": "array"
         },
         "retrieve": {
+          "default": [],
           "description": "Argv template for fetching a secret. `{locator}` is substituted with the secret's locator; stdout is the value (one trailing newline stripped).",
           "items": {
             "type": "string"
@@ -83,10 +87,26 @@
           "description": "camelCase alias for `retrieve_batch`."
         },
         "retrieve_batch": {
-          "$ref": "#/definitions/BatchRetrieve"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BatchRetrieve"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Batched retrieve: one command invocation resolves many secrets at once (e.g. `op run -- printenv`). Used automatically when a wrap's `env` references the same provider for two or more entries, cutting biometric prompts from N to 1."
         },
         "store": {
-          "$ref": "#/definitions/StoreCapability"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StoreCapability"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How this provider persists a new value. Optional — a provider without it is retrieve-only."
         },
         "write": {
           "$ref": "#/definitions/StoreCapability",
@@ -101,7 +121,10 @@
       "properties": {
         "$reason": {
           "description": "Rationale shown in the consent prompt when this identity is used to sign.",
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "private_key": {
           "description": "A `secret://provider/locator` reference to the private key, resolved only at SIGN time.",
@@ -163,7 +186,10 @@
         },
         "$reason": {
           "description": "Rationale shown in the consent prompt when this wrap is invoked.",
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "env": {
           "additionalProperties": {
@@ -171,6 +197,7 @@
             "pattern": "^secret://[^/]+/.+$",
             "type": "string"
           },
+          "default": {},
           "description": "Environment variables to inject. Each value is a `secret://provider/locator` reference; resolution happens at invocation time. Omit (or leave empty) for a gate-only wrap.",
           "type": "object"
         }
@@ -180,9 +207,7 @@
   },
   "description": "Per-binary wrap configuration for `secreq` (`~/.secreq/wraps.json5`, or `$SECREQ_HOME/wraps.json5`). Top-level keys are binary names; reserved keys are `providers` and any `$`-prefixed metadata. See docs/wraps.md.",
   "patternProperties": {
-    "^[A-Za-z_][A-Za-z0-9_.+-]*$": {
-      "$ref": "#/definitions/Wrap"
-    }
+    "^\\$": true
   },
   "properties": {
     "$editor": {

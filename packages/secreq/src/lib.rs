@@ -72,6 +72,10 @@ pub mod reference;
 pub mod resolve;
 pub mod rule_scaffold;
 pub mod rules;
+/// Generates the two published JSON Schemas. Behind the `schema` feature so
+/// `schemars` stays out of a shipped binary; the feature is on for the test
+/// and example build. See the module docs for what that costs.
+#[cfg(feature = "schema")]
 pub mod schema;
 pub mod scoped_agent;
 pub mod secret;

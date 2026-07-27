@@ -43,7 +43,7 @@ use serde_json::Value;
 
 // We reuse the provider model and the json-helpers from the existing
 // `manifest` module. They aren't config-shape-specific.
-use crate::manifest::{builtin_providers, parse_providers_value, Provider};
+use crate::manifest::{builtin_providers, parse_providers_value, present, Provider};
 use crate::reference::Reference;
 
 /// The reserved top-level key holding provider scheme definitions.
@@ -86,36 +86,50 @@ pub struct WrapsConfig {
     pub editor: Option<String>,
 }
 
-/// One SSH identity served by the agent. The public key is stored inline
-/// (it isn't secret) so the agent can answer REQUEST_IDENTITIES without a
-/// resolve. The private key is a `secret://` reference resolved only at
-/// SIGN time.
+/// One SSH identity served by the agent. `public_key` is the inline OpenSSH
+/// public key (not secret); `private_key` is a `secret://provider/locator`
+/// reference resolved only at SIGN time.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct SshIdentity {
-    /// `$reason` — shown in the consent prompt for context.
+    /// Rationale shown in the consent prompt when this identity is used to
+    /// sign.
+    #[cfg_attr(feature = "schema", schemars(rename = "$reason"))]
     pub reason: Option<String>,
-    /// The inline OpenSSH public key (`ssh-ed25519 AAAA… comment`).
+    /// Inline OpenSSH public key (`ssh-ed25519 AAAA… comment`). Answered to
+    /// REQUEST_IDENTITIES without a resolve.
     pub public_key: String,
-    /// The private key, as a `secret://provider/locator` reference resolved
+    /// A `secret://provider/locator` reference to the private key, resolved
     /// only at SIGN time.
     pub private_key: Reference,
 }
 
-/// One per-binary wrap declaration.
+/// One per-binary wrap. `env` is optional: a wrap with no env entries is
+/// *gate-only* — consent is required before the binary runs, but nothing is
+/// injected (used to gate tools like `op` that have no secret to pass).
+/// Everything else is metadata.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct Wrap {
-    /// The binary name this wrap applies to (the top-level key).
+    /// The binary name is the key this wrap is filed under, not a property of
+    /// the object, so it is absent from the schema.
+    #[cfg_attr(feature = "schema", schemars(skip))]
     pub name: String,
-    /// `$reason` — shown in the consent prompt for context.
+    /// Rationale shown in the consent prompt when this wrap is invoked.
+    #[cfg_attr(feature = "schema", schemars(rename = "$reason"))]
     pub reason: Option<String>,
-    /// Environment variables this binary should be invoked with. Each value
-    /// is a `secret://provider/locator` reference string; resolution is
-    /// deferred to run-time (so an unreachable provider doesn't break
-    /// config loading).
-    ///
-    /// **Empty means gate-only:** a wrap with no env entries still routes
-    /// the binary through the consent daemon, but injects nothing. Used to
-    /// gate tools (e.g. `op`) that have no secret to pass.
+    /// Environment variables to inject. Each value is a
+    /// `secret://provider/locator` reference; resolution happens at invocation
+    /// time. Omit (or leave empty) for a gate-only wrap.
+    //
+    // Resolution is deferred to run-time so an unreachable provider doesn't
+    // break config loading.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(default, with = "crate::schema::SecretRefMap")
+    )]
     pub env: BTreeMap<String, String>,
 }
 
@@ -249,11 +263,16 @@ fn parse_wrap(name: &str, value: &Value, source: &str) -> Result<Wrap> {
     for (key, val) in obj {
         match key.as_str() {
             "$reason" => {
-                wrap.reason = Some(
-                    val.as_str()
-                        .with_context(|| format!("{source}: `{name}.$reason` must be a string"))?
-                        .to_owned(),
-                );
+                wrap.reason = match present(Some(val)) {
+                    None => None,
+                    Some(val) => Some(
+                        val.as_str()
+                            .with_context(|| {
+                                format!("{source}: `{name}.$reason` must be a string")
+                            })?
+                            .to_owned(),
+                    ),
+                };
             }
             "$description" => {
                 // Future-proof: accept and ignore alongside $reason.
@@ -313,13 +332,16 @@ fn parse_ssh_identity(name: &str, value: &Value, source: &str) -> Result<SshIden
     for (key, val) in obj {
         match key.as_str() {
             "$reason" => {
-                reason = Some(
-                    val.as_str()
-                        .with_context(|| {
-                            format!("{source}: `ssh.{name}.$reason` must be a string")
-                        })?
-                        .to_owned(),
-                );
+                reason = match present(Some(val)) {
+                    None => None,
+                    Some(val) => Some(
+                        val.as_str()
+                            .with_context(|| {
+                                format!("{source}: `ssh.{name}.$reason` must be a string")
+                            })?
+                            .to_owned(),
+                    ),
+                };
             }
             "public_key" => {
                 public_key = Some(
@@ -595,6 +617,29 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("private_key"));
+    }
+
+    #[test]
+    fn an_explicit_null_reason_means_no_reason() {
+        // Same contract as the provider capabilities: the published schema
+        // derives `$reason` from an `Option<String>`, which reads as "absent
+        // or a string", so a null has to load rather than error.
+        let c = WrapsConfig::parse(
+            r#"{
+                gh: { $reason: null, env: { X: "secret://op/x" } },
+                ssh: {
+                    k: {
+                        $reason: null,
+                        public_key: "ssh-ed25519 AAAA k",
+                        private_key: "secret://op/k",
+                    },
+                },
+            }"#,
+            "t",
+        )
+        .expect("a null $reason loads as an absent one");
+        assert_eq!(c.wrap("gh").expect("gh wrap").reason, None);
+        assert_eq!(c.ssh["k"].reason, None);
     }
 
     #[test]

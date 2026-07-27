@@ -60,6 +60,30 @@ impl std::fmt::Display for Reference {
     }
 }
 
+/// On disk a reference is the string [`Reference::parse`] reads, so that is
+/// what the published schema says — with the pattern that parse enforces, so
+/// an editor rejects `op/thing` before secreq has to.
+///
+/// Inlined rather than referenced: a `$ref` cannot carry the sibling
+/// `description` its field wants under draft-07.
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for Reference {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Reference".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "pattern": r"^secret://[^/]+/.+$"
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

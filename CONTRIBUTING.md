@@ -67,9 +67,11 @@ Notes:
 - **Tests never pop a GUI.** Integration tests set `SECREQ_NO_DAEMON=1`
   so the consent daemon window never opens. Tests that should succeed
   pass `--yes`; deny-path tests rely on the fail-closed default.
-- **Schema drift is a build failure.** `tests/schema_drift.rs` fails if
-  `docs/wraps.schema.json` or `docs/auto-rules.schema.json` fall out of
-  sync with their generators. Regenerate with:
+- **Schema drift is a build failure.** Both schemas are derived from the
+  types that read those files, and every doc comment on those fields is
+  published as that property's description, so renaming a field or
+  rewording a `///` above one is a schema change. `tests/schema_drift.rs`
+  fails until you regenerate:
   ```sh
   cargo run --example gen-schema > docs/wraps.schema.json
   cargo run --example gen-auto-rules-schema > docs/auto-rules.schema.json
@@ -110,7 +112,7 @@ output.
 | Audit log (names only)             | `src/audit.rs`      |
 | PTY / piped exec                   | `src/exec.rs`       |
 | PATH shim management               | `src/shim.rs`       |
-| JSON Schema source of truth        | `src/schema.rs`     |
+| JSON Schema assembly (derived)     | `src/schema.rs`     |
 | Secret value (zeroizing)           | `src/secret.rs`     |
 
 ### Invariants you must not break
@@ -128,9 +130,10 @@ output.
    `(wrap_name, ppid, parent_start_time)`. A postinstall hook has a
    different ppid; a recycled pid has a different start time. Both
    re-prompt.
-5. **Schema drift is a build failure.** `tests/schema_drift.rs` fails if
-   `docs/wraps.schema.json` falls out of sync with
-   `schema::wraps_schema()`. Regenerate with
+5. **The published schema describes the parser.** `tests/schema_drift.rs`
+   validates rules `secreq` writes against `docs/auto-rules.schema.json`,
+   and feeds the wraps parser a config using every key
+   `docs/wraps.schema.json` declares. Regenerate with
    `cargo run --example gen-schema > docs/wraps.schema.json`.
 6. **The shim sentinel is load-bearing.** `shim::install` won't clobber a
    file that doesn't carry the sentinel; `shim::remove` won't delete one.

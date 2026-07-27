@@ -6,9 +6,16 @@
 //! cargo run --example gen-auto-rules-schema > docs/auto-rules.schema.json
 //! ```
 //!
-//! A drift test ensures the committed file matches what this example
-//! produces. See `brain: areas/secreq/design/2026-06-02-auto-rules.md` for the
-//! design and `src/rules.rs` for the data model.
+//! The schema is derived from `RuleWire` in `src/rules.rs` — the flat object a
+//! user's file actually holds — so a field's doc comment is what a reader of
+//! the published schema sees. `tests/schema_drift.rs` fails when the committed
+//! file and this output disagree, and when either disagrees with the loader.
+//!
+//! Needs the `schema` feature, which the crate's self dev-dependency turns on
+//! for any example or test build. Nothing else does, so a released binary
+//! carries no `schemars`.
+//!
+//! See `brain: areas/secreq/design/2026-06-02-auto-rules.md` for the design.
 
 fn main() {
     let schema = secreq::schema::auto_rules_schema();

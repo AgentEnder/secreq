@@ -108,6 +108,17 @@ wasmtime = { version = "46.0.1", default-features = false, features = [
 textwrap = "0.16"
 console = "0.15"
 
+# Derives `docs/wraps.schema.json` and `docs/auto-rules.schema.json` from the
+# types that read those files, so a field cannot reach disk without reaching
+# the published schema. See `src/schema.rs`.
+#
+# **Optional, and off in every build a user runs.** `cargo build` and `cargo
+# install secreq` resolve without it; the `schema` feature is switched on only
+# for the test/example build, by the self dev-dependency below — the same trick
+# `harness` uses, and for the same reason: `tests/schema_drift.rs` is a separate
+# crate that links this lib as an ordinary dependency.
+schemars = { version = "1", optional = true }
+
 # The Unicode general category of a char, from tables generated out of the UCD
 # (`UNICODE_VERSION` 16.0.0). `provenance::is_invisible_or_reordering` is the
 # only caller, and it is the reason for the dependency: that predicate spent two
@@ -141,12 +152,17 @@ objc2-foundation = "0.3"
 # has to remember a flag — and a plain `cargo build` never sees them.
 harness = []
 
+# `src/schema.rs` and the `schemars` derives it reads. Carried by the same self
+# dev-dependency as `harness`, so `cargo test` and `cargo run --example
+# gen-schema` have it and a plain `cargo build` does not.
+schema = ["dep:schemars"]
+
 [dev-dependencies]
 # Depending on ourselves is how a feature is turned on for the test build only.
 # Integration tests under `tests/` are separate crates that link this lib as an
 # ordinary dependency, so `#[cfg(test)]` would hide `harness` from exactly the
 # code that needs it.
-secreq = { path = ".", features = ["harness"] }
+secreq = { path = ".", features = ["harness", "schema"] }
 tempfile = "3"
 egui_kittest = { version = "0.34", features = ["wgpu", "snapshot", "eframe"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
@@ -154,6 +170,10 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # at test time. Dev-only: the production loader accepts binaries only.
 wat = "1.253.0"
 vt100 = "0.16.2"
+# A JSON Schema validator, so `tests/schema_drift.rs` can check the published
+# contract against values `secreq` actually writes rather than against the
+# generator that produced it. Draft-07, which is what both schemas declare.
+boon = "0.6"
 oxipng = { version = "10.1.1", default-features = false, features = ["parallel"] }
 
 # Lints enabled because the codebase is already clean of them, so each one is

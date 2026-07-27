@@ -64,80 +64,128 @@ pub struct SecretDecl {
     pub reason: Option<String>,
 }
 
-/// A provider scheme — its **retrieve** capability (required), plus optional
-/// **store** (write) and **retrieve_batch** (single-invocation multi-read)
-/// capabilities.
+/// A provider scheme. Required `retrieve`, optional `store`, optional
+/// `retrieve_batch`.
+//
+// The published `providers` block in `docs/wraps.schema.json` is derived from
+// this type (`schema.rs`), so every `///` below reaches secreq.dev as that
+// property's `description`. The parser walks `serde_json::Value` by hand
+// rather than deserializing, so the JSON key names are the `schemars(rename)`
+// beside each field; `schema_covers_every_key_the_parser_accepts` in
+// `tests/schema_drift.rs` is what holds the two together.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", schemars(extend("anyOf" = crate::schema::provider_any_of())))]
 pub struct Provider {
+    /// The provider's name is the key it is filed under, not a property of the
+    /// object, so it is absent from the schema.
+    #[cfg_attr(feature = "schema", schemars(skip))]
     pub name: String,
-    /// The retrieve command template; contains `{locator}` placeholders. (This
-    /// is the `retrieve` field in JSON5; named `read` in the design doc §6.)
+    /// Argv template for fetching a secret. `{locator}` is substituted with the
+    /// secret's locator; stdout is the value (one trailing newline stripped).
+    //
+    // Required, but declared through the `anyOf` above rather than
+    // `required: ["retrieve"]`, because `read` satisfies it too.
+    #[cfg_attr(feature = "schema", schemars(default, length(min = 1)))]
     pub retrieve: Vec<String>,
-    /// Optional write capability. Present ⇒ provider can persist new values (§6, §10).
+    /// How this provider persists a new value. Optional — a provider without
+    /// it is retrieve-only.
     pub store: Option<StoreCapability>,
-    /// Optional batched retrieve: one command invocation that resolves many
-    /// secrets at once. The classic use case is `op run -- printenv`, which
-    /// requires a single biometric prompt regardless of how many `op://` refs
-    /// it resolves. When present and ≥2 secrets share this provider in one
-    /// `run`, the resolver uses this path instead of per-secret reads.
+    /// Batched retrieve: one command invocation resolves many secrets at once
+    /// (e.g. `op run -- printenv`). Used automatically when a wrap's `env`
+    /// references the same provider for two or more entries, cutting biometric
+    /// prompts from N to 1.
+    #[cfg_attr(feature = "schema", schemars(rename = "retrieve_batch"))]
     pub retrieve_batch: Option<BatchRetrieve>,
 }
 
-/// A provider's batched-retrieve descriptor.
-///
-/// The protocol is "synthetic env in, env-like output out":
-/// 1. For each `(name, locator)` we want to resolve, set the env var `name`
-///    to `env_value_template` with `{locator}` substituted (e.g.
-///    `DATABASE_URL=op://Work/db/url`).
-/// 2. Spawn `command` with that env layered onto the inherited environment.
-/// 3. The command's stdout is parsed as `KEY=VALUE` lines; lines whose key
-///    matches one of our requested names yield resolved values.
-///
-/// Limitation: line-based output can't carry multi-line values intact. If
-/// any value contains a newline, the resolver falls back to per-secret
-/// retrieve (this is detected when the parsed output is missing names we
-/// asked for).
+/// Batched-retrieve: one command invocation resolves many secrets at once
+/// (e.g. `op run -- printenv`). Used automatically when a wrap's `env`
+/// references the same provider for two or more entries, cutting biometric
+/// prompts from N to 1. Protocol: per requested (name, locator), set env var
+/// `name` to `env_value` with `{locator}` substituted; spawn `command`; parse
+/// stdout as `KEY=VALUE` lines.
+//
+// Limitation: line-based output can't carry multi-line values intact. If any
+// value contains a newline, the resolver falls back to per-secret retrieve
+// (this is detected when the parsed output is missing names we asked for).
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct BatchRetrieve {
     /// argv to execute. The synthetic env entries are added to the child's
     /// environment; no placeholder substitution happens on `command` itself.
+    #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
     pub command: Vec<String>,
-    /// Template for each synthetic env entry's *value*. `{locator}` is
-    /// substituted per secret; the env-var *name* is the secret's name.
+    /// Template for each synthetic env entry's value. `{locator}` is
+    /// substituted per secret; the env-var name is the secret's name. For
+    /// 1Password: `"op://{locator}"`.
+    #[cfg_attr(feature = "schema", schemars(rename = "env_value"))]
     pub env_value_template: String,
 }
 
-/// A provider's write capability descriptor (§6).
-///
-/// The `command` template is executed with `{field}` placeholders substituted
-/// from the caller's `--field key=value` inputs. The secret value is supplied
-/// according to `value_mode` (either as the `{value}` placeholder in argv, or
-/// piped on the child's stdin). The `locator_template` then constructs the
-/// retrieve-side locator from the same field inputs so a subsequent `retrieve`
-/// finds the value just written.
+/// How this provider persists a new value (currently exposed via custom CLIs
+/// the user may write that drive `secreq` programmatically — the public
+/// `secreq` CLI no longer exposes a `store` verb).
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct StoreCapability {
+    /// Argv template. `{field}` placeholders are filled from caller-supplied
+    /// inputs; `{value}` (argv mode) is the secret. Prefer stdin mode.
+    #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
     pub command: Vec<String>,
+    #[cfg_attr(feature = "schema", schemars(default))]
     pub fields: BTreeMap<String, FieldSpec>,
+    /// How the secret reaches `command`. Omitted or `"stdin"` pipes it in on
+    /// stdin, which is the default. Any other string (typically `"{value}"`)
+    /// opts into argv-substitution mode, where the secret appears in the
+    /// process's command line and is readable by other users on Linux at the
+    /// default `hidepid=0`. Prefer stdin.
+    //
+    // `ValueMode` is an enum in Rust and a free string on disk, because
+    // `parse_store_capability` reads anything that isn't `"stdin"` as argv
+    // mode. `default: "stdin"` below is that inversion; it was published as
+    // `"{value}"` for a month after the parser changed.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            rename = "value",
+            with = "String",
+            default,
+            extend("default" = "stdin")
+        )
+    )]
     pub value_mode: ValueMode,
+    /// Template that builds the retrieve-side locator from the same field
+    /// inputs.
+    #[cfg_attr(feature = "schema", schemars(rename = "locator"))]
     pub locator_template: String,
 }
 
-/// Schema for one field of a [`StoreCapability`].
+/// Schema for one field in a provider's `store.fields`.
 #[derive(Debug, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct FieldSpec {
+    #[cfg_attr(feature = "schema", schemars(default))]
     pub required: bool,
     pub default: Option<String>,
 }
 
 /// How the secret value is delivered to the store command.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ValueMode {
     /// Substitute the value into argv (any `{value}` placeholder is replaced).
     /// Convenient, but exposes the value to `ps eww` for the child's lifetime.
     Arg,
     /// Pipe the value on the child's stdin. Keeps the value out of argv —
     /// preferred for any built-in (§11).
+    ///
+    /// The default, and `parse_store_capability` says so too — omitting
+    /// `value:` selects this. Argv delivery is the explicit opt-in.
+    #[default]
     Stdin,
 }
 
@@ -277,15 +325,15 @@ fn parse_provider(name: &str, def: &Value, source: &str) -> Result<Provider> {
         bail!("{source}: provider `{name}`.retrieve must not be empty");
     }
 
-    let store = match obj.get("store").or_else(|| obj.get("write")) {
+    let store = match present(obj.get("store").or_else(|| obj.get("write"))) {
         Some(value) => Some(parse_store_capability(name, value, source)?),
         None => None,
     };
 
-    let retrieve_batch = match obj
-        .get("retrieve_batch")
-        .or_else(|| obj.get("retrieveBatch"))
-    {
+    let retrieve_batch = match present(
+        obj.get("retrieve_batch")
+            .or_else(|| obj.get("retrieveBatch")),
+    ) {
         Some(value) => Some(parse_batch_retrieve(name, value, source)?),
         None => None,
     };
@@ -415,6 +463,16 @@ fn parse_field_spec(
         };
     }
     Ok(spec)
+}
+
+/// Read an optional key: an explicit `null` means the same as an absent key.
+///
+/// The distinction is not one a config file can usefully draw — `store: null`
+/// says "no store capability" as plainly as omitting it — and the published
+/// schema derives these from `Option<T>`, which is exactly "absent or a T".
+/// Without this the schema would have to declare a `null` the parser rejects.
+pub(crate) fn present(value: Option<&Value>) -> Option<&Value> {
+    value.filter(|v| !v.is_null())
 }
 
 fn parse_string_array(value: &Value) -> Result<Vec<String>> {
@@ -866,6 +924,24 @@ mod tests {
             m.providers["p"].store.as_ref().unwrap().value_mode,
             ValueMode::Stdin
         );
+    }
+
+    #[test]
+    fn an_explicit_null_capability_means_the_provider_has_none() {
+        // `Option<StoreCapability>` is what the published schema derives from,
+        // and it says "absent or a store" — so `store: null` has to load as
+        // "no store", not as "a store that isn't an object".
+        let m = Manifest::parse(
+            r#"{
+                providers: {
+                    p: { retrieve: ["true"], store: null, retrieve_batch: null },
+                },
+            }"#,
+            "t",
+        )
+        .expect("null capabilities load as absent ones");
+        assert!(m.providers["p"].store.is_none());
+        assert!(m.providers["p"].retrieve_batch.is_none());
     }
 
     #[test]
