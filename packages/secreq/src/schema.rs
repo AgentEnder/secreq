@@ -13,6 +13,23 @@
 //!
 //! A test in `tests/schema_drift.rs` fails CI if the committed file falls
 //! out of sync with [`wraps_schema`].
+//!
+//! ## Every `description` here is unchecked prose about the parser
+//!
+//! `schema_drift` compares the committed JSON against *this generator*, so it
+//! catches "someone forgot to regenerate" and nothing else. A `description`
+//! is a claim about how `manifest.rs` or `rules.rs` actually behaves, and no
+//! test ties the two together. Both published schemas drifted exactly that
+//! way and stayed green: `cwd` still read "pattern against the current
+//! working directory" a month after `Pattern::matches_path_prefix` made it
+//! segment-aware, `ancestor` still said the `exe` path was not part of the
+//! match input after it became the *primary* input, and `store.value` still
+//! advertised `default: "{value}"` after the parser inverted the default to
+//! stdin — the one that puts a secret in `/proc/<pid>/cmdline`.
+//!
+//! So: **when you change matching or parsing semantics, the description here
+//! is part of the change.** Grep this file for the field you touched. Nothing
+//! else will remind you.
 
 use serde_json::{json, Value};
 
@@ -191,7 +208,7 @@ fn wasm_rule_schema() -> Value {
 fn rule_match_schema() -> Value {
     json!({
         "type": "object",
-        "description": "The match clause. All present fields must match (logical AND). `wrap` is required and exact; the rest are patterns: glob if they contain `*`, `?`, or `[`, otherwise literal. Literal `argv`/`cwd` match as prefix; literal `ancestor` matches as substring against the caller's executable path (friendlier for `.app` bundle names, and not self-reported).",
+        "description": "The match clause. All present fields must match (logical AND). `wrap` is required and exact; the rest are patterns: glob if they contain `*`, `?`, or `[`, otherwise literal. A literal `argv` matches as a plain prefix; a literal `cwd` matches as a path-segment-aware prefix; a literal `ancestor` matches as a substring against the caller's executable path (friendlier for `.app` bundle names, and not self-reported).",
         "required": ["wrap"],
         "properties": {
             "wrap": {
@@ -204,11 +221,11 @@ fn rule_match_schema() -> Value {
             },
             "ancestor": {
                 "type": "string",
-                "description": "Pattern matched against each caller in the process tree. For each caller, the pattern is checked against BOTH its short process name (sysinfo `name()`, typically the executable basename like `zsh` or `Cursor`) AND its full joined command line (sysinfo `cmd()` joined with spaces, e.g. `/Applications/Cursor.app/Contents/MacOS/Cursor --psn_0_12345`). Match if ANY caller's name or command satisfies the pattern. Substring match for literals, full-string glob for wildcards. The `exe` path is NOT currently part of the match input."
+                "description": "Pattern matched against each caller in the process tree; the clause matches if ANY caller satisfies it. Tested against the caller's executable path as the kernel reports it (e.g. `/Applications/Cursor.app/Contents/MacOS/Cursor`). Only when the kernel gives no `exe` does it fall back to the process's self-reported short name (typically the basename, like `zsh` or `Cursor`) and its joined command line. Preferring `exe` is what stops a process from satisfying `ancestor: \"Cursor.app\"` by putting that text in an argv it chose for itself. Substring match for literals, full-string glob for wildcards."
             },
             "cwd": {
                 "type": "string",
-                "description": "Pattern against the requesting process's current working directory."
+                "description": "Pattern against the requesting process's current working directory. A literal matches as a path-segment-aware prefix: it must cover the whole path or stop on a `/` boundary, so `/Users/me/oss` matches `/Users/me/oss` and `/Users/me/oss/pkg` but NOT `/Users/me/ossuary`. A trailing `/` on the pattern is optional and means the same thing. A glob is matched against the whole path."
             }
         },
         "additionalProperties": false
@@ -320,8 +337,8 @@ fn store_capability_schema() -> Value {
             },
             "value": {
                 "type": "string",
-                "default": "{value}",
-                "description": "`\"stdin\"` (preferred) pipes via stdin; anything else (typically `\"{value}\"`) selects argv-substitution mode."
+                "default": "stdin",
+                "description": "How the secret reaches `command`. Omitted or `\"stdin\"` pipes it in on stdin, which is the default. Any other string (typically `\"{value}\"`) opts into argv-substitution mode, where the secret appears in the process's command line and is readable by other users on Linux at the default `hidepid=0`. Prefer stdin."
             },
             "locator": {
                 "type": "string",
