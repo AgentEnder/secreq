@@ -26,6 +26,15 @@ git_release_enable = false
 # does not start a workflow.
 git_tag_enable = true
 
+# Pinned, though it is already the default. release-plz names tags
+# `v{{ version }}` for a workspace with one public package and
+# `{{ package }}-v{{ version }}` for one with several — and `webfonts` is only
+# out of the running because it carries `publish = false`. Making that crate
+# publishable would silently rename every future tag to `secreq-v…`, which
+# `release.yml`'s `v*` trigger and the `install.sh` version lookup would both
+# quietly stop matching. Stating the format keeps that a deliberate change.
+git_tag_name = "v{{ version }}"
+
 # Keep a Changelog, which is what CHANGELOG.md already is.
 [changelog]
 protect_breaking_commits = true
