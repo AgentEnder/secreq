@@ -531,6 +531,25 @@ fn substitute_fields(template: &str, fields: &BTreeMap<String, String>) -> Strin
 /// substitute `{value}` in argv; when `Stdin`, `{value}` is left in place so a
 /// stray literal in argv is visible (rather than silently swallowed).
 ///
+/// **Two constraints pull in opposite directions here, and the split-then-join
+/// shape below is what satisfies both.**
+///
+/// 1. *Where the secret lands is the template author's decision.* Field inputs
+///    are not trusted: they reach here from a locator, and a locator can come
+///    out of a repo's `.env` under `secreq run`. A plain fields-first pass
+///    lets a field whose content is the literal `{value}` open a substitution
+///    site the author never wrote, splicing the secret into an argv position
+///    of the input's choosing. So the `{value}` positions are read off the
+///    **template** — `split(VALUE_PLACEHOLDER)` runs before any field is
+///    expanded, and a `{value}` a field expands to is left as text.
+/// 2. *No intermediate ever holds the plaintext un-zeroized.* The obvious
+///    reading of (1) — substitute the value first, then the fields — breaks
+///    this, because each later `replace` drops the string it replaced and that
+///    string holds the secret. Instead the value is written exactly once, into
+///    the [`Zeroizing`] buffer that is returned, and the buffer is sized
+///    exactly so `push_str` cannot reallocate and free an un-scrubbed copy of
+///    a partly-built argument.
+///
 /// The elements are [`Zeroizing`] because under [`ValueMode::Arg`] one of them
 /// holds the plaintext value, and the property belongs on the type rather than
 /// on a scrub at this one call site — the same choice `exec.rs` and `mask.rs`
@@ -549,17 +568,31 @@ fn substitute_fields_and_value(
     template
         .iter()
         .map(|arg| {
-            let mut s = arg.clone();
-            for (key, val) in fields {
-                s = s.replace(&format!("{{{key}}}"), val);
+            if mode != ValueMode::Arg {
+                // `{value}` is not a placeholder in this mode; whatever the
+                // template or a field says about it is literal text.
+                return Zeroizing::new(substitute_fields(arg, fields));
             }
-            if mode == ValueMode::Arg {
-                // Field substitution runs first deliberately: every `replace`
-                // drops the string it replaced, so doing the value last means
-                // no intermediate ever held the plaintext un-zeroized.
-                s = s.replace(VALUE_PLACEHOLDER, value.expose());
+            // Constraint 1: the split is against `arg`, the untouched
+            // template, so the seams are the author's.
+            let segments: Vec<String> = arg
+                .split(VALUE_PLACEHOLDER)
+                .map(|segment| substitute_fields(segment, fields))
+                .collect();
+            // Constraint 2: exact capacity, so the only allocation the
+            // plaintext is ever written into is the one that scrubs on drop.
+            let exposed = value.expose();
+            let len = segments.iter().map(String::len).sum::<usize>()
+                + exposed.len() * segments.len().saturating_sub(1);
+            let mut out = Zeroizing::new(String::with_capacity(len));
+            for (i, segment) in segments.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(exposed);
+                }
+                out.push_str(segment);
             }
-            Zeroizing::new(s)
+            debug_assert_eq!(out.capacity(), len, "the buffer must not reallocate");
+            out
         })
         .collect()
 }
@@ -877,6 +910,65 @@ mod tests {
         let locator = store(&p, &fields, &value).unwrap();
         assert_eq!(locator, "k1");
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "argvalue");
+    }
+
+    /// A field input carrying the literal `{value}` must not become a
+    /// substitution site. Field inputs reach here from a locator, and a
+    /// locator can come from a repo's `.env` under `secreq run` — so the set
+    /// of argv positions the secret lands in has to be the template author's
+    /// decision, not the input's.
+    #[test]
+    fn a_field_containing_the_value_placeholder_is_not_a_substitution_site() {
+        let fields = BTreeMap::from([("f".to_owned(), "{value}".to_owned())]);
+        let argv = substitute_fields_and_value(
+            &["--field={f}".to_owned(), "{value}".to_owned()],
+            &fields,
+            &SecretValue::new("hunter2".to_owned()),
+            ValueMode::Arg,
+        );
+        assert_eq!(
+            argv.iter().map(|a| a.as_str()).collect::<Vec<_>>(),
+            ["--field={value}", "hunter2"],
+            "the field's `{{value}}` must stay literal; only the template's own is substituted"
+        );
+    }
+
+    /// The same input under `Stdin`: nothing is substituted at all, and the
+    /// template's own `{value}` stays visible rather than being swallowed.
+    #[test]
+    fn stdin_mode_substitutes_no_value_anywhere() {
+        let fields = BTreeMap::from([("f".to_owned(), "{value}".to_owned())]);
+        let argv = substitute_fields_and_value(
+            &["--field={f}".to_owned(), "{value}".to_owned()],
+            &fields,
+            &SecretValue::new("hunter2".to_owned()),
+            ValueMode::Stdin,
+        );
+        assert_eq!(
+            argv.iter().map(|a| a.as_str()).collect::<Vec<_>>(),
+            ["--field={value}", "{value}"]
+        );
+    }
+
+    /// The ordinary cases the reorder must not disturb: a `{value}` inside a
+    /// larger argument, several in one argument, and none at all.
+    #[test]
+    fn value_substitution_handles_repeats_embedding_and_absence() {
+        let fields = BTreeMap::from([("k".to_owned(), "k1".to_owned())]);
+        let argv = substitute_fields_and_value(
+            &[
+                "pre-{value}-post".to_owned(),
+                "{value}{value}".to_owned(),
+                "--key={k}".to_owned(),
+            ],
+            &fields,
+            &SecretValue::new("s3cr3t".to_owned()),
+            ValueMode::Arg,
+        );
+        assert_eq!(
+            argv.iter().map(|a| a.as_str()).collect::<Vec<_>>(),
+            ["pre-s3cr3t-post", "s3cr3ts3cr3t", "--key=k1"]
+        );
     }
 
     #[test]
