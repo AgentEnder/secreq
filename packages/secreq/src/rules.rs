@@ -1042,23 +1042,41 @@ pub fn load_rules(path: &Path) -> Result<LoadedRules> {
 /// AddRule / UpdateRule / DeleteRule / SetRuleEnabled IPC paths. The
 /// daemon owns all writes; users hand-edit only when the daemon is
 /// stopped.
+///
+/// **Why this goes through `atomic::replace`.** The two things
+/// that module exists to prevent were both live here: a fixed
+/// `.json5.tmp` staging name every writer of this destination shared,
+/// and a staging file created at `0666 & !umask` whose mode the rename
+/// then published. Under the `umask 000` that container and CI images
+/// routinely set, the second one left `auto-rules.json5`
+/// **world-writable** — and this file is the list of commands that skip
+/// the consent prompt, so a stranger who can append to it can approve
+/// their own.
+///
+/// **Why `Mode::Like` and not `Mode::Exactly(0o600)`.** The mode source is
+/// the destination itself: preserve whatever the user chose, fall back
+/// to owner-only when there is nothing to preserve. That fallback is the
+/// fix — a file secreq creates is 0600 whatever the umask says — while
+/// the preservation keeps secreq from undoing a deliberate `chmod`.
+/// This is a config users hand-edit (there is a published schema for
+/// their editor), and migration 0001 already commits to exactly this
+/// policy for this exact filename: its
+/// `moved_config_keeps_the_mode_the_user_chose` migrates an
+/// `auto-rules.json5` at 0640 and asserts it survives. Forcing 0600 here
+/// would mean secreq preserves the user's mode across an upgrade and
+/// then clobbers it on their next rule edit.
+///
+/// `.migration-state` and `filemap.json` chose `Exactly(0o600)` because
+/// nothing but secreq ever writes or reads them, so there is no user
+/// choice to preserve; `~/.ssh/config` is forced because its *reader*
+/// dictates the mode. Neither is true of this file.
 pub fn save_rules(path: &Path, rules: &[Rule]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create dir {}", parent.display()))?;
-    }
     let file = RulesFile {
         rules: rules.to_vec(),
     };
     // Pretty JSON. JSON5 is a superset, so this round-trips cleanly.
     let json = serde_json::to_string_pretty(&file).context("serialize rules")?;
-    // Write through a temp file + rename for atomic replace, so a
-    // crash mid-write can't leave a half-written file.
-    let tmp = path.with_extension("json5.tmp");
-    std::fs::write(&tmp, json).with_context(|| format!("write {}", tmp.display()))?;
-    std::fs::rename(&tmp, path)
-        .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
-    Ok(())
+    crate::atomic::replace(path, json.as_bytes(), crate::atomic::Mode::Like(path))
 }
 
 /// `mtime` of the rules file, or `None` if it doesn't exist. The
@@ -2192,6 +2210,88 @@ mod tests {
         let loaded = load_rules(&path).expect("load");
         assert_eq!(loaded.rules, rules);
         assert!(loaded.mtime.is_some());
+    }
+
+    // ── The rules file's mode and staging (finding A8) ────────────────
+
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).expect("stat").permissions().mode() & 0o777
+    }
+
+    /// A8's second half, which the pass that fixed `audit.log` missed.
+    /// `save_rules` staged through `fs::write`, so the destination came
+    /// out of the rename carrying the staging file's `0666 & !umask` —
+    /// 0644 under the common 022 and **0666** under the `umask 000` that
+    /// container and CI images set. This file lists the commands that
+    /// skip the consent prompt: readable, it is a map of what a stranger
+    /// can run unprompted; writable, it is where they add themselves.
+    ///
+    /// Asserted exactly. `mode & 0o022 == 0` passes on any 022 machine
+    /// while the file is world-*readable*, which is the disclosure half
+    /// of the finding still shipping under a green test.
+    #[test]
+    fn a_rules_file_secreq_creates_is_owner_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+
+        save_rules(&path, &[]).expect("save");
+
+        assert_eq!(mode_of(&path), 0o600, "{}", path.display());
+    }
+
+    /// The other direction, and the reason the mode source is the
+    /// destination rather than a blanket `Mode::Exactly(0o600)`: a mode
+    /// the user chose survives every subsequent rule edit. Migration
+    /// 0001 already promises this for this exact filename
+    /// (`moved_config_keeps_the_mode_the_user_chose`), and a save path
+    /// that clamped would make the migration's promise last until the
+    /// user's next click.
+    #[test]
+    fn saving_keeps_a_mode_the_user_chose() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        save_rules(&path, &[]).expect("first save");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).expect("chmod");
+
+        save_rules(&path, &[]).expect("re-save");
+
+        assert_eq!(mode_of(&path), 0o640);
+    }
+
+    /// The M5 shape in this file: the staging name was a fixed
+    /// `auto-rules.json5.tmp`, one inode every writer of this
+    /// destination shared. Planting the old name is how a test can see
+    /// that we no longer touch it — and the directory listing catches
+    /// staging litter left beside the destination on the happy path.
+    #[test]
+    fn saving_does_not_reuse_the_old_fixed_staging_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        let squatted = path.with_extension("json5.tmp");
+        std::fs::write(&squatted, b"another writer's half-written payload").expect("plant");
+
+        save_rules(&path, &[]).expect("save");
+
+        assert_eq!(
+            std::fs::read_to_string(&squatted).expect("read back"),
+            "another writer's half-written payload",
+            "staging files must not be shared between writers"
+        );
+        let mut names: Vec<String> = std::fs::read_dir(dir.path())
+            .expect("read_dir")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                "auto-rules.json5".to_owned(),
+                "auto-rules.json5.tmp".to_owned()
+            ],
+            "a successful save leaves no staging file behind"
+        );
     }
 
     #[test]

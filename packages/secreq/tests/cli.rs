@@ -1086,6 +1086,67 @@ fn init_narrows_a_root_that_already_exists_too_permissively() {
     assert_eq!(mode, 0o700, "{} is {mode:o}", root.display());
 }
 
+/// Finding A8 covered `audit.log` **and** `auto-rules.json5`; only the first
+/// was actually fixed. `rules::save_rules` still staged through `fs::write`,
+/// so the rename published the staging file's `0666 & !umask` — and under the
+/// `umask 000` that container and CI images routinely set, that is a
+/// **world-writable** list of the commands which skip the consent prompt.
+/// Anyone on the box could append a rule that auto-approves their own.
+///
+/// End-to-end rather than a unit test because the mode a unit test observes is
+/// the mode the *test runner's* umask hands out: on a developer whose shell
+/// sets 077 the old code produced 0600 by luck and the assertion proved
+/// nothing. `pre_exec` sets the umask in the child only — never in the test
+/// process, where it is global state two parallel tests would fight over.
+///
+/// `rules add-wasm` is the one CLI verb that reaches `save_rules`, so the
+/// daemon it auto-spawns is doing the write. It never needs a window: no ask
+/// is pending, so no consent child is spawned.
+#[test]
+fn a_rules_file_the_daemon_writes_under_a_lax_umask_is_owner_only() {
+    let sb = Sandbox::new();
+    // `daemon` is service-gated and refuses a fresh, unstamped root.
+    sb.stamp_migrations();
+    let module =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/wasm_rules/always_pass.wasm");
+
+    let mut cmd = sb.cmd_with_daemon(&[
+        "rules",
+        "add-wasm",
+        module.to_str().unwrap(),
+        "--secret",
+        "GITHUB_TOKEN",
+    ]);
+    // SAFETY: `umask` is async-signal-safe and touches only the child.
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            libc::umask(0);
+            Ok(())
+        });
+    }
+    let out = cmd.output().unwrap();
+    // Reap the daemon this test spawned before the sandbox tempdir goes.
+    let _ = sb.cmd_with_daemon(&["daemon", "stop"]).output();
+    assert!(
+        out.status.success(),
+        "rules add-wasm failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let rules_file = sb.root().join("auto-rules.json5");
+    assert!(
+        rules_file.is_file(),
+        "the daemon should have written {}",
+        rules_file.display()
+    );
+    // Exactly, not `mode & 0o022 == 0`: that passes on any 022 machine while
+    // the file is still world-readable, which is the disclosure half of the
+    // finding shipping under a green test.
+    let mode = fs::metadata(&rules_file).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "{} is {mode:o}", rules_file.display());
+}
+
 // ── ssh setup ─────────────────────────────────────────────────────────────
 
 /// Run `secreq ssh setup` in the sandbox, so it writes into the sandboxed
