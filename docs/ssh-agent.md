@@ -17,9 +17,9 @@ shell, IDE, or git session) opens the consent window instead. `ssh` itself is
 treated as a transport frame and skipped, so the prompt names the real
 initiator rather than `ssh`.
 
-On approval secreq reads the private key from your provider, signs
-in-process, and zeroizes the key material. Only the signature leaves the
-daemon.
+On approval secreq resolves the private key through your provider and
+signs in-process. Only the signature leaves the daemon; the plaintext key
+exists for the length of that one signing call.
 
 ::shot{id=24-ssh-sign-pending}
 
@@ -51,8 +51,10 @@ the consent prompt.
 
 - `public_key`: the full OpenSSH public-key line. Answers identity
   listings directly.
-- `private_key`: a `secret://<provider>/<locator>` reference. Resolved
-  fresh at every sign; never cached.
+- `private_key`: a `secret://<provider>/<locator>` reference. Resolved at
+  the first signature, then held in the daemon's encrypted secret cache
+  for the daemon's lifetime, like any other secret. See
+  [Behavior](#behavior).
 - `$reason`: optional human label, shown in the consent prompt.
 
 ## The `op`-export requirement
@@ -163,24 +165,63 @@ things up.
 
 ## Behavior
 
-Approving "remember" caches the decision, not the key, for that anchor for
-about five minutes. Signs inside the window are silent, and each still
-resolves the key fresh and zeroizes it. The wrap cache lives as long as the
-parent process; this one expires on a clock, because an anchor like a shell
-or an IDE can stay open for hours.
+Approving "remember" gives that anchor thirty minutes of silent signing:
+"Approve for 30 min" covers the one key, "All keys for 30 min" covers
+every configured identity. The wrap cache lives as long as the parent
+process; this one expires on a clock, because an anchor like a shell or an
+IDE can stay open for hours.
+
+Two caches are in play and they hold different things. The grant above
+caches the *decision*. The private key is cached separately, encrypted, in
+the same daemon secret cache a wrap's secrets live in, so your provider
+(and its biometric) runs at most once per key rather than once per
+signature. Plaintext exists only inside the signing call, which zeroizes
+it on the way out, and the key is never sent to a client. `secreq daemon
+stop` clears both caches.
 
 Every signature is audited whether approved or denied, with the key id,
 fingerprint, decision, and caller chain. Never the key or the signature
 bytes.
 
+### Agent forwarding ends a grant with the SSH session
+
+`ssh -A` puts a second party inside your terminal. A grant anchored on the
+shell would mean that approving thirty minutes during a `git push` also
+covered every signature the forwarded host cared to request over that half
+hour: silently, with no window, on your keys.
+
+So when the `ssh` client that opened the agent connection is forwarding,
+the grant binds to that client rather than to the shell. "30 minutes" then
+also means "and no longer than this SSH session": close the session and
+the grant goes with it. Behind a jump host the innermost forwarding `ssh`
+wins, which is the tightest live bound the process tree offers.
+
+The prompt says which anchor it is offering. A forwarded ask draws a
+`FORWARDED BY` row naming the host, and its grant row reads `Forwarded:`
+where a local one reads `Session:`.
+
+::shot{id=41-ssh-forwarded-agent}
+
+Detection reads the `ssh` process's own command line (`-A`, `-tA`,
+`-o ForwardAgent=yes`, and the spellings that fold into those) and asks
+the kernel whether that process really is SSH-family. Argv is read, not
+trusted: over-claiming forwarding can only narrow a grant, so nothing a
+process writes there widens its own reach.
+
+**Forwarding declared only in `~/.ssh/config` or in a `-F` file is not
+detected.** A sign under one of those falls back to the shell anchor, so
+put `-A` on the command line when you want a grant that ends with the
+session.
+
 ## Trust-model note: key custody is downgraded
 
 This is the important tradeoff. **Unlike 1Password's sealed SSH agent,
-secreq's agent resolves the private key into the daemon's memory to sign,
-then zeroizes it.** 1Password's agent keeps the key hardware-sealed: the
-key never leaves 1Password, and a signature is produced inside the sealed
-boundary. secreq cannot do that: it signs in-process, so the key is
-briefly decrypted in the daemon's RAM.
+secreq's agent resolves the private key into the daemon's memory to
+sign.** 1Password's agent keeps the key hardware-sealed: the key never
+leaves 1Password, and a signature is produced inside the sealed boundary.
+secreq cannot do that: it signs in-process, so the key is decrypted in the
+daemon's RAM for each signature, and an encrypted copy sits there between
+them until the daemon stops.
 
 What you gain is provenance-aware consent (you see who's asking, and can
 deny) and a single agent across every provider. What you give up is
@@ -188,6 +229,7 @@ hardware sealing. If your threat model requires the key to never enter
 process memory, keep using 1Password's sealed agent for those keys and
 don't route them through secreq.
 
-Mitigations on the secreq side: the resolved key is zeroized immediately
-after signing, it is never sent to a client, and consent gates every use,
-which the audit log then records.
+Mitigations on the secreq side: plaintext lives only inside the signing
+call and is zeroized on the way out, the cached copy is encrypted and dies
+with the daemon, the key is never sent to a client, and consent gates
+every use, which the audit log then records.
