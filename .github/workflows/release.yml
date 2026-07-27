@@ -277,28 +277,61 @@ jobs:
               "${ASSETS[@]}"
           fi
 
-      # Hand the tap the formula this job just built and attached. The tap's
-      # own workflow downloads the `secreq.rb` asset verbatim, so there is no
-      # templating or re-hashing on that side and no second source of truth
-      # for the checksums.
+      # Push the formula this job just generated straight into the tap.
       #
-      # `repository_dispatch` has no OIDC path, so this is the one stored
-      # credential in the release pipeline. `TAP_GITHUB_TOKEN` is a
-      # fine-grained PAT scoped to `homebrew-secreq` with Contents:write and
-      # nothing else — scoped that tightly because it lives in this repo's
-      # secrets, so it is exactly what an attacker gets if these Actions are
-      # compromised. It expires; a silently expired PAT looks like a release
-      # that succeeded while the tap quietly stopped updating.
+      # `TAP_GITHUB_TOKEN` holds an **SSH deploy key** for
+      # `AgentEnder/homebrew-secreq`, not a token, which decides the mechanism:
+      # a deploy key authenticates git transport and nothing else, so there is
+      # no `repository_dispatch` available — that is a REST call and needs a
+      # bearer token. So this writes to the tap directly rather than asking the
+      # tap to come and fetch.
+      #
+      # The trade is worth naming. A deploy key is scoped to one repository by
+      # construction rather than by a setting someone has to get right, and it
+      # does not expire, so the tap cannot silently stop updating the way an
+      # expired PAT would. In exchange the formula arrives as a push from here
+      # instead of a job whose logs live in the tap.
       - name: Update the Homebrew tap
         if: ${{ !contains(steps.ver.outputs.version, '-') }}
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.TAP_GITHUB_TOKEN }}
-          repository: AgentEnder/homebrew-secreq
-          event-type: release
-          client-payload: >-
-            {"version": "${{ steps.ver.outputs.version }}",
-             "tag": "${{ steps.ver.outputs.tag }}"}
+        env:
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # `printf` rather than `echo "$KEY"`: a secret pasted without a
+          # trailing newline makes OpenSSH reject the file as malformed, and
+          # the error it gives says nothing about newlines.
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$TAP_DEPLOY_KEY" > ~/.ssh/tap_key
+          chmod 600 ~/.ssh/tap_key
+          ssh-keyscan -t ed25519,rsa github.com >> ~/.ssh/known_hosts 2>/dev/null
+
+          # `IdentitiesOnly` so the runner's own agent, if it has one, cannot
+          # offer a different key and get us rejected before this one is tried.
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap_key -o IdentitiesOnly=yes"
+
+          git clone --depth 1 git@github.com:AgentEnder/homebrew-secreq.git tap
+          cp dist/secreq.rb tap/Formula/secreq.rb
+
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/secreq.rb
+          if git diff --staged --quiet; then
+            echo "formula unchanged; nothing to push"
+            exit 0
+          fi
+          git commit -m "secreq ${VERSION}"
+          git push
+
+      # The key is on an ephemeral runner, but a release job that fails
+      # partway should not leave it sitting in the workspace for whatever
+      # runs next in the same job.
+      - name: Remove the tap deploy key
+        if: always()
+        run: rm -f ~/.ssh/tap_key
 
   # Publishing the crate is the one irreversible step in the pipeline: a
   # version on crates.io can be yanked but never replaced. So it is its own
