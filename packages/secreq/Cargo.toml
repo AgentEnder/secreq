@@ -164,8 +164,8 @@ oxipng = { version = "10.1.1", default-features = false, features = ["parallel"]
 #   print_stdout      — this crate is a CLI; printing is its job.
 #   expect_used       — the house style is `expect` with a sentence explaining
 #                       the invariant, which reads better than a silent `?`.
-#   unwrap_used       — near-clean in `src` but pervasive in the inline test
-#                       modules, where a panic *is* the assertion.
+#                       Not a volume artifact: it is a decision about how a
+#                       panic should read, and it stands.
 #   pedantic          — 615 warnings, overwhelmingly cast and doc nits.
 #
 # `indexing_slicing` took the longest to land and is worth the note. It sat out
@@ -182,10 +182,27 @@ oxipng = { version = "10.1.1", default-features = false, features = ["parallel"]
 # untrusted-input parser is covered without anyone remembering to ask.
 # `daemon/ssh_proto.rs` needed a hand-placed `#![deny]` precisely because
 # nothing else would have caught it.
+#
+# `unwrap_used` was declined on the same premise and turned out to be the same
+# artifact. The old note here read "near-clean in `src` but pervasive in the
+# inline test modules, where a panic *is* the assertion" — which is true, and is
+# a description of what `allow-unwrap-in-tests` is for. Measured: 942 sites
+# crate-wide, 781 of them inside an inline `mod tests`. One line in
+# `clippy.toml` takes that to 29, and the library is at **zero** — nothing in
+# `src` was ever unwrapping, so this lint is a ratchet on day one rather than a
+# backlog.
+#
+# The 29 are helper functions in `tests/*.rs` — separate crates, with no
+# `#[cfg(test)]` module and no enclosing `#[test]` fn for the key to recognise,
+# so it cannot reach them. Four file-level `#![allow]`s say that where a reader
+# of those files will see it, rather than 29 hand-placed ones.
 [lints.clippy]
 # A panic reachable from an index is a denial of service when the indexed
 # bytes came off a socket. Tests are exempt via `clippy.toml`.
 indexing_slicing = "deny"
+# An `unwrap` in `src` is an invariant nobody wrote down. Say it with `expect`
+# and a sentence, or handle the `None`. Tests are exempt via `clippy.toml`.
+unwrap_used = "deny"
 # CLAUDE.md forbids TODOs in shipped code. This is that rule, enforced.
 todo = "deny"
 unimplemented = "deny"

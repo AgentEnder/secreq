@@ -7,6 +7,13 @@
 //! A `printf`/`sh` "fake provider" stands in for real stores so the tests
 //! never trigger Touch ID / `op` biometrics.
 
+// Every line in this crate is test code, so an `unwrap` is an assertion —
+// which is what `clippy.toml`'s `allow-unwrap-in-tests` already says. That key
+// only reaches inside a `#[test]` fn, and an integration test has no
+// `#[cfg(test)]` module for it to recognise, so the setup helpers the tests
+// call fall outside it. Said once here rather than at each helper.
+#![allow(clippy::unwrap_used)]
+
 mod common;
 
 use common::Sandbox;

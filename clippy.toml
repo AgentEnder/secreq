@@ -14,3 +14,15 @@
 # restated — or not — thirty times over. Saying it once keeps the production
 # half of the lint honest, which is the half worth having.
 allow-indexing-slicing-in-tests = true
+
+# `unwrap_used` is the same shape of argument. In a test a panic *is* the
+# assertion — `parse(…).unwrap()` says "this must parse" as directly as an
+# `assert!` would, and the failure output names the file and line either way.
+# In `src` an `unwrap` is a claim nobody wrote down, which is the half worth
+# denying. The lint sat out as "pervasive in the inline test modules"; 781 of
+# its 942 hits were exactly that, and the library itself was already at zero.
+#
+# Same reasoning as above for putting it here rather than in each `mod tests`:
+# one decision, stated once, instead of thirty copies of an `#![allow]` nobody
+# re-reads.
+allow-unwrap-in-tests = true

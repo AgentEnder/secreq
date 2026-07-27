@@ -21,6 +21,11 @@
 //! nowhere and the run hangs at the first prompt.
 
 #![cfg(unix)]
+// This module is test-harness code, so an `unwrap` is an assertion — which is
+// what `clippy.toml`'s `allow-unwrap-in-tests` already says. That key only
+// reaches inside a `#[test]` fn, and nothing here is one: the harness is what
+// the tests call. Said once here rather than at each site.
+#![allow(clippy::unwrap_used)]
 
 use std::fs::File;
 use std::io::{Read, Write};

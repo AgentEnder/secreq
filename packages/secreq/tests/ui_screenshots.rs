@@ -41,6 +41,13 @@
 //!   normal `AuditCache` path), at the manager's production viewport
 //!   size.
 
+// Every line in this crate is test code, so an `unwrap` is an assertion —
+// which is what `clippy.toml`'s `allow-unwrap-in-tests` already says. That key
+// only reaches inside a `#[test]` fn, and an integration test has no
+// `#[cfg(test)]` module for it to recognise, so the fixture builders the tests
+// call fall outside it. Said once here rather than at each helper.
+#![allow(clippy::unwrap_used)]
+
 mod common;
 mod ui_layout;
 
