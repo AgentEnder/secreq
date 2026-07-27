@@ -5,9 +5,9 @@ edition = "2021"
 description = "Per-binary CLI wrapper that injects credentials from your secret store of choice — 1Password Shell Plugins, but generic and multi-provider"
 license = "MIT"
 readme = "README.md"
-homepage = "https://secreq.dev"
+homepage = "https://craigory.dev/secreq"
 repository = "https://github.com/AgentEnder/secreq"
-documentation = "https://secreq.dev"
+documentation = "https://craigory.dev/secreq"
 # crates.io caps this at 5; each must be <= 20 chars and start alphanumeric.
 keywords = ["secrets", "credentials", "1password", "ssh-agent", "cli"]
 # Both are canonical crates.io category slugs (see `cargo publish` validation).

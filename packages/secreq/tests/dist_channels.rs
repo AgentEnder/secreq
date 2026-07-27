@@ -5,7 +5,8 @@
 //!   - `.github/workflows/release.yml` cross-compiles four target triples.
 //!   - `dist/install.sh` maps `uname` output onto those same triples.
 //!   - `dist/homebrew/secreq.rb` links the release tarball for each triple.
-//!   - `Cargo.toml` / `release.toml` carry the crates.io publish metadata.
+//!   - `Cargo.toml` carries the crates.io metadata, and `release-plz.toml`
+//!     plus `release.yml` decide which of them publishes.
 //!
 //! When they fall out of lockstep the failure surfaces at a stranger's install
 //! time — a 404 tarball, an "unsupported arch", or a `cargo publish`
@@ -168,14 +169,40 @@ fn crate_metadata_is_crates_io_publishable() {
     }
 }
 
-/// `cargo install secreq` only works if the release actually pushes the crate;
-/// cargo-release skips the publish step unless `release.toml` opts in.
+/// `cargo install secreq` only works if a release actually pushes the crate,
+/// and exactly one thing must do it.
+///
+/// release-plz would publish from the runner that opens the release PR, using
+/// a stored registry token. It is turned off so the crate ships from
+/// `release.yml`'s `publish-crate` job instead, which mints a short-lived
+/// crates.io token from GitHub's OIDC identity and runs only after the signed
+/// binaries are out.
+///
+/// Both halves are asserted because either one alone fails quietly. Delete the
+/// workflow job and nothing publishes; flip release-plz back on and the crate
+/// ships from a commit CI never verified, before the tag exists.
 #[test]
-fn release_toml_enables_crates_io_publish() {
-    let release = read("release.toml");
-    let enabled = release.lines().any(|l| l.trim() == "publish = true");
+fn exactly_one_thing_publishes_to_crates_io() {
+    let plz = read("../../release-plz.toml");
     assert!(
-        enabled,
-        "release.toml must set `publish = true` for crates.io"
+        plz.lines().any(|l| l.trim() == "publish = false"),
+        "release-plz.toml must set `publish = false`; the crate is published \
+         by release.yml's publish-crate job, over OIDC"
+    );
+
+    let yml = read("../../.github/workflows/release.yml");
+    assert!(
+        yml.contains("publish-crate:"),
+        ".github/workflows/release.yml must keep the `publish-crate` job, or \
+         nothing publishes the crate at all"
+    );
+    assert!(
+        yml.contains("cargo publish"),
+        "the publish-crate job must actually run `cargo publish`"
+    );
+    assert!(
+        yml.contains("crates-io-auth-action"),
+        "publish-crate must mint its token over OIDC rather than read a \
+         stored CARGO_REGISTRY_TOKEN"
     );
 }

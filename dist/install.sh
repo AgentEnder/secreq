@@ -3,7 +3,7 @@
 # GitHub Release, verify its checksum against the signed SHA256SUMS manifest,
 # and drop `secreq` on your PATH.
 #
-#   curl -fsSL https://secreq.dev/install.sh | sh
+#   curl -fsSL https://craigory.dev/secreq/install.sh | sh
 #
 # Knobs (all optional, via environment):
 #   SECREQ_VERSION      tag to install, e.g. v0.1.0 (default: latest release)

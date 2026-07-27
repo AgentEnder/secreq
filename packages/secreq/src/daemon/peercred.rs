@@ -79,8 +79,8 @@ fn peer_ucred<F: AsRawFd>(conn: &F) -> Option<libc::ucred> {
             fd,
             libc::SOL_SOCKET,
             libc::SO_PEERCRED,
-            (&mut cred as *mut libc::ucred).cast::<libc::c_void>(),
-            &mut len,
+            (&raw mut cred).cast::<libc::c_void>(),
+            &raw mut len,
         )
     };
     (rc == 0).then_some(cred)

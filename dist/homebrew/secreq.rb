@@ -6,7 +6,7 @@
 # real sha256 values from the signed SHA256SUMS manifest).
 class Secreq < Formula
   desc "Per-binary CLI wrapper that injects credentials from your secret store"
-  homepage "https://secreq.dev"
+  homepage "https://craigory.dev/secreq"
   version "0.1.0"
   license "MIT"
 
