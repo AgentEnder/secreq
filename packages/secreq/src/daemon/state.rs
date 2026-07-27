@@ -1712,7 +1712,11 @@ impl State {
     /// entirely, and that opt-in belongs to `rules add-wasm
     /// --all-secrets` (whose path enters through [`State::admit_rule`]
     /// after enforcing it) — both doors carry the same lock.
+    ///
+    /// It also refuses a glob the loader will refuse — see
+    /// [`State::refuse_broken_patterns`].
     pub fn add_rule(&mut self, rule: Rule) -> Result<()> {
+        Self::refuse_broken_patterns(&rule)?;
         if rule.is_wasm() && rule.trained_secrets.is_empty() {
             anyhow::bail!(
                 "refusing wasm rule `{}` with an empty trained-secrets snapshot: \
@@ -1724,6 +1728,44 @@ impl State {
             );
         }
         self.admit_rule(rule)
+    }
+
+    /// Refuse a rule carrying a pattern `glob::Pattern` will not
+    /// compile — the check the Rules-tab form has made since
+    /// `848018c`, applied where the form is not the only way in.
+    ///
+    /// The raw `AddRule` / `UpdateRule` IPC reaches [`State::add_rule`]
+    /// and [`State::update_rule`] without passing the form at all, so
+    /// without this a refused glob could still be admitted: a rule that
+    /// matches nothing, says so only in a badge, and — since `987dd32`
+    /// made a refused **deny** send its ask to the human — quietly
+    /// turns a block into a prompt.
+    ///
+    /// The validator is [`crate::rules::pattern_refusals`], the loader's
+    /// own and the form's own. There is deliberately exactly one
+    /// definition of "broken": a second one is how the two surfaces come
+    /// to disagree about which rules are admissible.
+    ///
+    /// **Not in `save_rules`**, which is the tempting single choke point
+    /// every writer crosses. It also persists Delete and
+    /// SetRuleEnabled, so a guard there would make it impossible to
+    /// disable or delete a rule whose glob is already broken — secreq
+    /// refusing to let the user fix their own file. Admission is the
+    /// right boundary; a ruleset already on disk stays loadable and
+    /// editable.
+    fn refuse_broken_patterns(rule: &Rule) -> Result<()> {
+        let refusals = rules::pattern_refusals(std::slice::from_ref(rule));
+        if refusals.is_empty() {
+            return Ok(());
+        }
+        // Every broken clause, not just the first: an author who fixes
+        // the `argv` typo should not have to round-trip to discover the
+        // `cwd` one. Same accounting the Rules tab shows.
+        let reasons: Vec<&str> = refusals.iter().map(|r| r.reason.as_str()).collect();
+        anyhow::bail!(
+            "refusing a rule the loader will refuse: {}",
+            reasons.join("; ")
+        );
     }
 
     /// The guarded insert behind [`State::add_rule`] and
@@ -1752,7 +1794,13 @@ impl State {
     /// failure the previous rule, its compiled-module entry, and its
     /// refusal state are all restored — an update that never reached
     /// disk must not change what can fire in memory.
+    ///
+    /// Refuses a glob the loader will refuse, like [`State::add_rule`] —
+    /// see [`State::refuse_broken_patterns`]. Checked before the
+    /// existence lookup would matter, so a refused edit leaves the
+    /// stored rule exactly as it was.
     pub fn update_rule(&mut self, rule: Rule) -> Result<()> {
+        Self::refuse_broken_patterns(&rule)?;
         if !self.rules.iter().any(|r| r.id == rule.id) {
             anyhow::bail!("no rule with id `{}`", rule.id);
         }
@@ -4602,6 +4650,136 @@ mod tests {
         let err = format!("{:#}", state.add_rule(rule).expect_err("must refuse"));
         assert!(err.contains("trained-secrets"), "{err}");
         assert!(err.contains("--all-secrets"), "{err}");
+        assert!(state.rules_snapshot().is_empty());
+    }
+
+    /// A glob the loader refuses is a glob the form has refused to save
+    /// since `848018c` — but the form is not the only way in. The raw
+    /// `AddRule` IPC reaches `State::add_rule` directly, and it admitted a
+    /// rule that matches nothing and announces it only in a badge.
+    ///
+    /// The unclosed `[` is the real one from `Pattern::parse`'s history: an
+    /// operator's deny on `gh api /repos/*/actions/secrets*[` covered nothing
+    /// while still reading correct in the file.
+    #[test]
+    fn add_rule_refuses_a_glob_the_loader_will_refuse() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        let mut state = State::with_rules_path(path.clone());
+
+        let rule = mk_rule(
+            "r1",
+            "gh",
+            RuleDecision::Deny,
+            Some("gh api /repos/*/actions/secrets*["),
+        );
+        let err = format!("{:#}", state.add_rule(rule).expect_err("must refuse"));
+
+        assert!(err.contains("the loader will refuse"), "{err}");
+        // The message is `rules::pattern_refusals`', so it names the clause
+        // and quotes the consequence the Rules tab and the form both quote.
+        assert!(err.contains("argv"), "{err}");
+        assert!(
+            err.contains(crate::rules::refused_pattern_consequence(
+                RuleDecision::Deny
+            )),
+            "{err}"
+        );
+        assert!(state.rules_snapshot().is_empty());
+        // Nothing reached disk either, so a restart does not resurrect it.
+        assert!(crate::rules::load_rules(&path)
+            .expect("load")
+            .rules
+            .is_empty());
+    }
+
+    /// Both decisions, because they fail in opposite directions and neither
+    /// is the rule its author meant to write. `987dd32` made a refused deny
+    /// send its ask to the human, so admitting one silently converts a block
+    /// into a prompt; a refused approve simply never fires.
+    #[test]
+    fn add_rule_refuses_a_broken_glob_on_an_approve_too() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        let mut state = State::with_rules_path(path);
+
+        let rule = mk_rule("r1", "gh", RuleDecision::Approve, Some("gh api [0-"));
+        let err = format!("{:#}", state.add_rule(rule).expect_err("must refuse"));
+
+        assert!(err.contains("the loader will refuse"), "{err}");
+        assert!(
+            err.contains(crate::rules::refused_pattern_consequence(
+                RuleDecision::Approve
+            )),
+            "{err}"
+        );
+        assert!(state.rules_snapshot().is_empty());
+    }
+
+    /// The `UpdateRule` door, and the half that matters most: a refused edit
+    /// must leave the stored rule exactly as it was, in memory and on disk.
+    /// An edit that half-lands is worse than one that is refused.
+    #[test]
+    fn update_rule_refuses_a_glob_the_loader_will_refuse() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        let mut state = State::with_rules_path(path.clone());
+
+        let good = mk_rule("r1", "gh", RuleDecision::Deny, Some("gh api /repos/*"));
+        state.add_rule(good.clone()).expect("a valid glob saves");
+
+        let mut broken = good.clone();
+        broken.body = RuleBody::Declarative {
+            r#match: RuleMatch {
+                wrap: "gh".to_owned(),
+                argv: Some(crate::rules::Pattern::parse("gh api /repos/*[")),
+                ancestor: None,
+                cwd: None,
+            },
+            decide: RuleDecision::Deny.into(),
+        };
+        let err = format!("{:#}", state.update_rule(broken).expect_err("must refuse"));
+
+        assert!(err.contains("the loader will refuse"), "{err}");
+        assert_eq!(
+            state.rules_snapshot(),
+            vec![good.clone()],
+            "a refused edit must not change what can fire"
+        );
+        assert_eq!(
+            crate::rules::load_rules(&path).expect("load").rules,
+            vec![good],
+            "…nor what a restart would load"
+        );
+    }
+
+    /// The guard is on admission, not persistence: `save_rules` also carries
+    /// Delete and SetRuleEnabled, so a check there would leave a user unable
+    /// to disable or delete a rule whose glob is already broken — secreq
+    /// refusing to let them fix their own file. A ruleset loaded from disk
+    /// with a refused glob stays fully editable.
+    #[test]
+    fn a_rule_whose_glob_is_already_broken_can_still_be_disabled_and_deleted() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.json5");
+        // Author the broken rule through the file, the way a hand-edit or an
+        // older secreq would have — `add_rule` will no longer admit it.
+        let broken = mk_rule("r1", "gh", RuleDecision::Deny, Some("gh api /repos/*["));
+        crate::rules::save_rules(&path, std::slice::from_ref(&broken)).expect("save");
+
+        let mut state = State::with_rules_path(path);
+        assert_eq!(state.rules_snapshot(), vec![broken.clone()]);
+        assert!(
+            !state.snapshot_for_wire().refusals.patterns.is_empty(),
+            "the refusal is still reported"
+        );
+
+        state
+            .set_rule_enabled(&broken.id, false)
+            .expect("a broken rule must stay disableable");
+        state
+            .delete_rule(&broken.id)
+            .expect("a broken rule must stay deletable");
         assert!(state.rules_snapshot().is_empty());
     }
 
