@@ -28,6 +28,37 @@ const LOCATOR_PLACEHOLDER: &str = "{locator}";
 /// `value_mode` is [`ValueMode::Arg`].
 const VALUE_PLACEHOLDER: &str = "{value}";
 
+/// How much of a failing provider's stderr is kept. See [`capture_stderr`].
+const MAX_PROVIDER_STDERR_CHARS: usize = 400;
+
+/// Take a bounded rendering of a failed provider command's stderr.
+///
+/// A provider CLI's stderr is arbitrary output from a program secreq does not
+/// control, and it does not stay in the terminal: it is threaded into the
+/// error that reaches [`crate::resolve::resolve_all`]'s caller, which in the
+/// daemon means `daemon.log`, `daemon.jsonl` and — via the batch path's
+/// fallback `eprintln!` — `daemon.stderr.log`. None of those rotate. A
+/// provider that dumps its config or a stack trace on a bad credential can
+/// write megabytes per resolve into files nothing prunes.
+///
+/// **This is a bound on volume, not on content.** A provider that echoes part
+/// of the value it failed to fetch in its first line still writes that line to
+/// disk, and no cap here can tell it apart from a legitimate diagnostic. What
+/// keeps *that* off disk is the other half of the fix: `resolve.rs` hangs the
+/// provider's detail below the top-level message, and the daemon's resolve log
+/// line prints only the top level, so the detail goes to the user who ran the
+/// command and not to a file.
+fn capture_stderr(raw: &[u8]) -> String {
+    let text = String::from_utf8_lossy(raw);
+    let trimmed = text.trim();
+    let kept: String = trimmed.chars().take(MAX_PROVIDER_STDERR_CHARS).collect();
+    if kept.chars().count() == MAX_PROVIDER_STDERR_CHARS {
+        format!("{kept}… (truncated)")
+    } else {
+        kept
+    }
+}
+
 /// Outcome of attempting to resolve one secret through its provider.
 ///
 /// `Debug` is safe to derive because `SecretValue`'s own `Debug` redacts the
@@ -110,7 +141,7 @@ pub fn retrieve(provider: &Provider, locator: &str) -> Result<RetrieveOutcome> {
     } else {
         Ok(RetrieveOutcome::NotFound {
             status: output.status.to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            stderr: capture_stderr(&output.stderr),
         })
     }
 }
@@ -190,7 +221,7 @@ pub fn retrieve_batch(
     let subprocess = subprocess_started.elapsed();
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        let stderr = capture_stderr(&output.stderr);
         bail!(
             "provider `{}` retrieve_batch failed ({}){}",
             provider.name,
@@ -322,7 +353,7 @@ pub fn store(
 
     let output = child.wait_with_output()?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        let stderr = capture_stderr(&output.stderr);
         bail!(
             "provider `{}` store failed ({}){}",
             provider.name,
@@ -829,6 +860,54 @@ mod tests {
             RetrieveOutcome::NotFound { .. } => {}
             RetrieveOutcome::Found(_) => panic!("expected NotFound"),
         }
+    }
+
+    /// A provider CLI's stderr is unbounded and ends up on disk in the
+    /// daemon's logs. Cap it at capture, so no consumer has to remember to.
+    #[test]
+    fn a_providers_stderr_is_capped_at_capture() {
+        let p = retrieve_only_provider(&[
+            "sh",
+            "-c",
+            "printf 'E%.0s' $(seq 1 20000) >&2; exit 1",
+            "{locator}",
+        ]);
+        let RetrieveOutcome::NotFound { stderr, .. } = retrieve(&p, "x").unwrap() else {
+            panic!("a non-zero exit is NotFound");
+        };
+        assert!(
+            stderr.chars().count() < MAX_PROVIDER_STDERR_CHARS + 40,
+            "{} chars captured",
+            stderr.chars().count()
+        );
+        assert!(stderr.ends_with("… (truncated)"), "{stderr}");
+    }
+
+    /// Same for the batch path, whose stderr goes into an error the resolver
+    /// `eprintln!`s — and the daemon's stderr is a file too.
+    #[test]
+    fn a_batch_providers_stderr_is_capped_at_capture() {
+        let p = Provider {
+            name: "loud".to_owned(),
+            retrieve: vec!["true".into()],
+            store: None,
+            retrieve_batch: Some(BatchRetrieve {
+                command: vec![
+                    "sh".into(),
+                    "-c".into(),
+                    "printf 'E%.0s' $(seq 1 20000) >&2; exit 1".into(),
+                ],
+                env_value_template: "{locator}".to_owned(),
+            }),
+        };
+        let err = retrieve_batch(&p, &[("A".to_owned(), "a".to_owned())]).unwrap_err();
+        let rendered = format!("{err:#}");
+        assert!(
+            rendered.chars().count() < MAX_PROVIDER_STDERR_CHARS + 200,
+            "{} chars in the error",
+            rendered.chars().count()
+        );
+        assert!(rendered.contains("… (truncated)"), "{rendered}");
     }
 
     #[test]

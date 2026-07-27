@@ -2267,6 +2267,14 @@ impl State {
 /// `op://` reference is ~T/N" without attaching a profiler. Both resolver
 /// call sites (`resolve_for_ask`, `resolve_union`) go through here so the
 /// timing line is identical regardless of path.
+///
+/// **The failure line prints `{err}`, not `{err:#}`.** The chain below the top
+/// level is where a provider CLI's own stderr sits, and this line goes to
+/// `daemon.log` and `daemon.jsonl` — files that never rotate and that a
+/// provider echoing part of a value on failure would write it into. The caller
+/// still renders the full chain into the `WaiterReply`, so the user who ran
+/// the command gets the whole diagnostic on their terminal. See
+/// `resolve.rs`'s "could not be resolved" error, which is shaped for this.
 fn resolve_all_logged(
     manifest: &Manifest,
     plan: &ResolutionPlan,
@@ -2303,7 +2311,7 @@ fn resolve_all_logged(
         Err(err) => super::log::log_at(
             "resolve",
             format_args!(
-                "resolve_all: {secret_count} secret(s) across {} provider(s) [{}] in {:.3}s → err: {err:#}",
+                "resolve_all: {secret_count} secret(s) across {} provider(s) [{}] in {:.3}s → err: {err}",
                 providers.len(),
                 providers.join(","),
                 elapsed.as_secs_f64(),

@@ -282,11 +282,20 @@ pub fn resolve_all(
                     } else {
                         format!("{status}: {stderr}")
                     };
-                    bail!(
-                        "secret `{}` could not be resolved from `{}` ({detail}) and has no default",
-                        req.name,
-                        req.provider
-                    );
+                    // The provider's detail is the error's *source*, not part
+                    // of its top-level message, and the split is load-bearing:
+                    // a provider CLI's stderr is output secreq does not control
+                    // and may echo part of the value it failed to fetch. The
+                    // daemon logs only the top level of this error to
+                    // `daemon.log`/`daemon.jsonl`, while the full chain still
+                    // travels back to the user who ran the command — so the
+                    // diagnostic reaches a terminal without reaching a file
+                    // that nothing rotates. Folding `detail` into the top
+                    // message, as this once did, defeats both.
+                    return Err(anyhow::anyhow!("{detail}").context(format!(
+                        "secret `{}` could not be resolved from `{}` and has no default",
+                        req.name, req.provider
+                    )));
                 }
             }
         }
@@ -462,6 +471,42 @@ mod tests {
         .unwrap();
         let plan = build_plan(&m, None, &[], false).unwrap();
         assert!(resolve_all(&m, &plan).is_err());
+    }
+
+    /// A provider CLI's stderr may echo part of the value it failed to fetch,
+    /// and the daemon writes its resolve line to disk. So the provider's
+    /// detail must live in the error's *source*, not its top-level message:
+    /// `{err}` is what goes in `daemon.log`, `{err:#}` is what goes back to
+    /// the user who ran the command.
+    #[test]
+    fn a_providers_stderr_is_below_the_top_level_message_not_inside_it() {
+        let m = Manifest::parse(
+            r#"{
+                g: { MISSING: { ref: "x", provider: "loud", required: true } },
+                providers: { loud: { read: ["sh", "-c", "echo LEAKED-ghp_abc >&2; exit 1"] } },
+            }"#,
+            "t",
+        )
+        .unwrap();
+        let plan = build_plan(&m, None, &[], false).unwrap();
+        // `ResolvedSecret` has no `Debug` (it holds a `SecretValue`), so the
+        // `Ok` arm is matched out rather than `unwrap_err`'d.
+        let Err(err) = resolve_all(&m, &plan) else {
+            panic!("a required secret the provider refused must be an error");
+        };
+
+        let top = format!("{err}");
+        assert!(
+            !top.contains("LEAKED"),
+            "provider stderr reached the top-level message: {top}"
+        );
+        assert!(top.contains("MISSING") && top.contains("loud"), "{top}");
+
+        let full = format!("{err:#}");
+        assert!(
+            full.contains("LEAKED"),
+            "the user's own channel must keep the diagnostic: {full}"
+        );
     }
 
     #[test]
