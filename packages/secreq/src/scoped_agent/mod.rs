@@ -252,17 +252,22 @@ impl GuestChain {
 
 /// Render a guest-supplied reference for the daemon log and the audit row.
 ///
-/// `Reference::parse` imposes no character restrictions, so
-/// `secret://op/x\n[secreq +0.001s server] → Decision::Approve` is a
-/// well-formed reference. Out-of-scope refs are logged verbatim on the deny
-/// path, and `daemon.log` is written by a bare `format!` — so a guest could
-/// write its own lines, in the house format, into the file a host reads while
-/// investigating a suspected leak. `daemon.jsonl` and `audit.log` escape
-/// through serde and were never affected.
+/// **Every path that puts a ref in a file goes through here** — both log lines
+/// and [`audit_release`]'s row. A ref that reaches one of them raw is the bug
+/// this function exists to prevent, on either of two counts:
 ///
-/// Also capped: a ref can be ~64 KiB, and three log files times that per
-/// request is a disk-filling loop whose real content is the length, not the
-/// bytes.
+/// *Forging.* `Reference::parse` imposes no character restrictions, so
+/// `secret://op/x\n[secreq +0.001s server] → Decision::Approve` is a
+/// well-formed reference, and `daemon.log` is written by a bare `format!` — a
+/// guest could write its own lines, in the house format, into the file a host
+/// reads while investigating a suspected leak. `daemon.jsonl` and `audit.log`
+/// escape through serde, but the Audit tab *renders* the row, so the
+/// invisible-and-reordering filter earns its place there too.
+///
+/// *Volume.* A ref can be ~64 KiB, none of the three files rotates, and the
+/// deny path is guest-triggerable without a prompt — three writes of that size
+/// per request is a disk-filling loop whose real content is the length, not
+/// the bytes.
 fn display_ref(reference: &Reference) -> String {
     const MAX_REF_DISPLAY_CHARS: usize = 200;
     let rendered: String = reference
@@ -738,7 +743,11 @@ pub fn handle_request(
                 audit_release(scope, &reference, decision, &guest_chain, declared_by);
                 log(
                     scope,
-                    format_args!("← resolve {reference}: {}", decision.as_str()),
+                    format_args!(
+                        "← resolve {}: {}",
+                        display_ref(&reference),
+                        decision.as_str()
+                    ),
                 );
                 return Response::Denied {
                     message: "denied".to_owned(),
@@ -759,7 +768,11 @@ pub fn handle_request(
                     audit_release(scope, &reference, decision, &guest_chain, declared_by);
                     log(
                         scope,
-                        format_args!("← resolve {reference}: {}", decision.as_str()),
+                        format_args!(
+                            "← resolve {}: {}",
+                            display_ref(&reference),
+                            decision.as_str()
+                        ),
                     );
                     // `expose().to_owned()` is the one plaintext copy that
                     // leaves the zeroizing type; the caller
@@ -809,6 +822,15 @@ pub fn handle_request(
 /// The guest's claim lands in `unverified_guest_chain`, never in `callers` —
 /// the row records both what the host knew (the scope) and what the guest
 /// said, without letting the second masquerade as the first.
+///
+/// The ref goes in through [`display_ref`], the same bounded rendering the
+/// daemon log uses, and for both of that function's reasons. `audit.log` has
+/// no rotation and no size cap, so a guest that pipelines ~64 KiB refs down
+/// the deny path is writing unbounded rows into the file a host reads to
+/// investigate — burying the real ones is exactly the forensic damage the
+/// deny-path audit row exists to prevent. And the row is *displayed*, in the
+/// consent window's Audit tab, so it needs the same invisible-and-reordering
+/// filter every other displayed string gets.
 fn audit_release(
     scope: &Scope,
     reference: &Reference,
@@ -816,9 +838,10 @@ fn audit_release(
     guest_chain: &GuestChain,
     declared_by: ScopeDeclarant,
 ) {
+    let rendered = display_ref(reference);
     let entry = AuditEntry::agent_resolve(
         scope.name(),
-        &reference.to_string(),
+        &rendered,
         decision,
         guest_chain.display(),
         declared_by,
@@ -826,7 +849,7 @@ fn audit_release(
     if let Err(err) = audit::append(&entry) {
         log(
             scope,
-            format_args!("failed to write audit row for {reference}: {err:#}"),
+            format_args!("failed to write audit row for {rendered}: {err:#}"),
         );
     }
 }
@@ -1673,6 +1696,56 @@ mod tests {
                 row.callers.is_empty(),
                 "a guest has no host caller chain; the row must not invent one"
             );
+        });
+    }
+
+    /// The deny path is the only unauthenticated, unprompted, guest-triggerable
+    /// write path on the host, and `Reference::parse` caps nothing — a ~64 KiB
+    /// ref is well-formed. The daemon log has been bounded since `display_ref`
+    /// landed; `audit.log` was still taking the whole thing, which is the same
+    /// disk-filling loop against a file with no rotation.
+    #[test]
+    fn an_overlong_out_of_scope_ref_is_bounded_in_the_audit_row() {
+        audit::with_temp_log(|| {
+            let scope = test_scope();
+            let gate = RecordingGate::new("s3cret");
+            let long = format!("secret://op/{}", "A".repeat(65_000));
+
+            handle_request(&scope, &approvals(), &gate, Request::resolve(&long));
+
+            let history = audit::read_history(None).expect("read audit history");
+            let row = &history[0];
+            let audited = &row.secrets[0];
+            assert!(
+                audited.chars().count() < 300,
+                "{} chars reached audit.log",
+                audited.chars().count()
+            );
+            assert!(audited.ends_with("… (truncated)"), "{audited}");
+        });
+    }
+
+    /// A locator may contain a newline, so a raw ref in a `format!`-written
+    /// daemon log line is a log-forging primitive. `display_ref` strips them;
+    /// the audit row must be given the same rendering, since the consent UI's
+    /// Audit tab displays it.
+    #[test]
+    fn a_forged_out_of_scope_ref_cannot_forge_an_audit_row_display() {
+        audit::with_temp_log(|| {
+            let scope = test_scope();
+            let gate = RecordingGate::new("s3cret");
+
+            handle_request(
+                &scope,
+                &approvals(),
+                &gate,
+                Request::resolve("secret://op/x\u{202E}y\nz"),
+            );
+
+            let history = audit::read_history(None).expect("read audit history");
+            let audited = &history[0].secrets[0];
+            assert!(!audited.contains('\n'), "{audited:?}");
+            assert!(!audited.contains('\u{202E}'), "{audited:?}");
         });
     }
 
