@@ -128,6 +128,19 @@ pub fn scaffold_new_rule() -> Result<Scaffold> {
 /// Write the rule-project skeleton into `parent/<slug>/`. Split from
 /// [`scaffold_new_rule`] so tests can point it at a tempdir. Refuses to
 /// overwrite an existing directory — a scaffold never clobbers work.
+///
+/// The project directory is owner-only. A bare `create_dir_all` takes
+/// the umask's answer — 0755 under the common 022, 0777 under the 000 of
+/// a container image — and the draft it holds is the source of a rule
+/// that will decide whether commands get a secret without asking. Anyone
+/// who can edit `rule.ts` between the scaffold and the build writes that
+/// policy.
+///
+/// [`crate::paths::ensure_private_dir`] narrows as well as creates, so it
+/// must never be aimed at a path a user named. It is not one here: the
+/// last component is a slug this module minted (`rule-<hex>`) and
+/// validated against separators, and in production `parent` is
+/// [`crate::paths::rule_drafts_dir`] under the secreq root.
 pub fn scaffold_rule(parent: &Path, slug: &str) -> Result<Scaffold> {
     if slug.is_empty() || slug.contains('/') || slug == "." || slug == ".." {
         bail!("invalid rule-project slug {slug:?}");
@@ -136,7 +149,7 @@ pub fn scaffold_rule(parent: &Path, slug: &str) -> Result<Scaffold> {
     if dir.exists() {
         bail!("rule project {} already exists", dir.display());
     }
-    std::fs::create_dir_all(&dir)
+    paths::ensure_private_dir(&dir)
         .with_context(|| format!("create rule project dir {}", dir.display()))?;
 
     let entry = dir.join("rule.ts");
@@ -251,8 +264,14 @@ pub fn save_preferred_editor(id: &str) -> Result<()> {
             path.display()
         );
     }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
+    // The parent is the secreq root (`paths::wraps_path`), never a
+    // user-named path, so narrowing it is safe and is what
+    // `ensure_private_dir` is for. Propagated rather than `.ok()`d: a
+    // root secreq cannot make private is not a detail to swallow while
+    // writing the wrap config into it.
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        paths::ensure_private_dir(parent)
+            .with_context(|| format!("create dir {}", parent.display()))?;
     }
     std::fs::write(&path, updated).with_context(|| format!("write {}", path.display()))
 }
@@ -350,6 +369,49 @@ mod tests {
         scaffold_rule(tmp.path(), "dup").expect("first");
         let err = scaffold_rule(tmp.path(), "dup").expect_err("second must fail");
         assert!(format!("{err:#}").contains("already exists"));
+    }
+
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).expect("stat").permissions().mode() & 0o777
+    }
+
+    /// The draft directory holds the source of a rule that will decide
+    /// whether commands get a secret without asking. `create_dir_all`
+    /// took the umask's answer, so on a `umask 000` box the project was
+    /// 0777 and anyone could rewrite `rule.ts` between the scaffold and
+    /// the build.
+    ///
+    /// Asserted exactly, and the ambient umask is what makes it bite:
+    /// under 022 the old code gave 0755, under 000 it gave 0777, and
+    /// `mode & 0o022 == 0` would have called the first of those clean.
+    #[test]
+    fn a_scaffolded_project_is_owner_only() {
+        let tmp = tempfile::tempdir().expect("tmp");
+
+        let out = scaffold_rule(tmp.path(), "rule-abc123").expect("scaffold");
+
+        assert_eq!(mode_of(&out.dir), 0o700, "{}", out.dir.display());
+    }
+
+    /// A `rule-drafts/` that a previous secreq built at 0755 stays that
+    /// way until something narrows it — the same lazy-narrowing gap the
+    /// root had. `ensure_private_dir` creates missing parents owner-only,
+    /// which is umask-independent and so is this assertion.
+    #[test]
+    fn scaffolding_creates_a_missing_drafts_dir_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().expect("tmp");
+        // A permissive grandparent stands in for a world-writable spot;
+        // the drafts dir below it must not inherit that.
+        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o777))
+            .expect("chmod");
+        let drafts = tmp.path().join("rule-drafts");
+
+        let out = scaffold_rule(&drafts, "rule-abc123").expect("scaffold");
+
+        assert_eq!(mode_of(&drafts), 0o700, "{}", drafts.display());
+        assert_eq!(mode_of(&out.dir), 0o700, "{}", out.dir.display());
     }
 
     #[test]

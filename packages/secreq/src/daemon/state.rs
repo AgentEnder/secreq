@@ -4550,24 +4550,31 @@ mod tests {
 
     #[test]
     fn update_rule_rolls_back_rule_and_module_when_persist_fails() {
-        // Seed a working wasm rule, then make the rules dir read-only
-        // so the update's persist fails. The previous rule AND its
-        // compiled module must survive — otherwise the daemon would
-        // run an update that never reached disk.
-        use std::os::unix::fs::PermissionsExt;
+        // Seed a working wasm rule, then put a *directory* where the
+        // rules file goes: POSIX makes `rename()` of a non-directory
+        // onto a directory fail with EISDIR, so the persist's publishing
+        // rename cannot land. The previous rule AND its compiled module
+        // must survive — otherwise the daemon would run an update that
+        // never reached disk.
+        //
+        // The rules directory itself stays writable, deliberately. This
+        // test used to chmod it 0555, which stopped working once
+        // `save_rules` began narrowing its parent through
+        // `paths::ensure_private_dir` — that hands the owner write back
+        // before the write, which is the point of it. Breaking the
+        // destination instead leaves the module file beside it readable,
+        // which the rollback assertion below needs.
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("auto-rules.json5");
         let rule = wasm_rule_with_module(dir.path(), "wasm01");
         crate::rules::save_rules(&path, std::slice::from_ref(&rule)).expect("seed");
-        let mut state = State::with_rules_path(path);
+        let mut state = State::with_rules_path(path.clone());
         assert!(state.rule_modules.contains_key("wasm01"));
 
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555))
-            .expect("make dir read-only");
+        std::fs::remove_file(&path).expect("remove the seeded rules file");
+        std::fs::create_dir(&path).expect("a directory where the rules file goes");
         let declarative = mk_rule("wasm01", "gh", RuleDecision::Approve, Some("gh api"));
         let result = state.update_rule(declarative);
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755))
-            .expect("restore dir perms");
 
         result.expect_err("persist must fail");
         assert_eq!(

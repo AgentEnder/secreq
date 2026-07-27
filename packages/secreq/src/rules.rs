@@ -1070,7 +1070,21 @@ pub fn load_rules(path: &Path) -> Result<LoadedRules> {
 /// nothing but secreq ever writes or reads them, so there is no user
 /// choice to preserve; `~/.ssh/config` is forced because its *reader*
 /// dictates the mode. Neither is true of this file.
+///
+/// **The directory too.** `atomic::replace` makes the parent with a bare
+/// `create_dir_all`, which takes the umask's answer — an owner-only file
+/// inside a 0777 directory is still a file anyone can replace by
+/// rename. The parent here is the secreq root itself (the daemon passes
+/// [`crate::paths::rules_path`]), never a path a user named on the
+/// command line, so [`crate::paths::ensure_private_dir`] is safe to
+/// point at it: it narrows as well as creates, and narrowing the root is
+/// exactly what it documents.
 pub fn save_rules(path: &Path, rules: &[Rule]) -> Result<()> {
+    // Empty parent means a bare relative filename — `.`, already there.
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        crate::paths::ensure_private_dir(parent)
+            .with_context(|| format!("create dir {}", parent.display()))?;
+    }
     let file = RulesFile {
         rules: rules.to_vec(),
     };
@@ -2258,6 +2272,26 @@ mod tests {
         save_rules(&path, &[]).expect("re-save");
 
         assert_eq!(mode_of(&path), 0o640);
+    }
+
+    /// An owner-only file inside a directory anyone can write is still a
+    /// file anyone can replace by rename, and `atomic::replace` makes the
+    /// parent with a bare `create_dir_all`. This half is umask-independent
+    /// on purpose: an existing root left 0777 by an older secreq (or by a
+    /// container image's `umask 000`) is narrowed rather than merely not
+    /// re-widened, which is what `ensure_private_dir` buys over a
+    /// `DirBuilder::mode`.
+    #[test]
+    fn saving_narrows_a_rules_directory_anyone_could_write() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("root");
+        std::fs::create_dir(&root).expect("mkdir");
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o777)).expect("chmod");
+
+        save_rules(&root.join("auto-rules.json5"), &[]).expect("save");
+
+        assert_eq!(mode_of(&root), 0o700, "{}", root.display());
     }
 
     /// The M5 shape in this file: the staging name was a fixed
