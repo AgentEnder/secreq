@@ -1,7 +1,9 @@
 name: Release
 
-# Cut a GitHub Release from a SemVer tag. Push `vX.Y.Z` (see
-# dev-docs/RELEASING.md) and this workflow cross-compiles secreq for the four
+# Everything downstream of a version tag. Normally reached by merging the
+# release PR that `release-plz.yml` maintains, which tags and then calls this;
+# a hand-pushed `vX.Y.Z` and a `workflow_dispatch` re-run against an existing
+# tag both land here too. This workflow cross-compiles secreq for the four
 # first-class targets on native runners, verifies each artifact self-reports
 # the tagged commit's SECREQ_BUILD_ID, checksums every tarball, keyless-signs
 # the checksum manifest with cosign, and publishes the Release with the notes
@@ -16,6 +18,19 @@ on:
       tag:
         description: 'Existing tag to (re-)release, e.g. v0.1.0'
         required: true
+  # Called by release-plz.yml the moment it lands a version bump on main.
+  #
+  # The tag trigger above cannot serve that path: a tag pushed with
+  # `GITHUB_TOKEN` does not start a workflow, which is GitHub's guard against
+  # a job triggering itself forever. The usual answer is a PAT or a GitHub App
+  # so the push looks like a person; calling the workflow outright skips the
+  # question and leaves one fewer credential in the repository.
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Tag to release, e.g. v0.1.0'
+        required: true
+        type: string
 
 concurrency:
   group: release-${{ github.ref }}
@@ -53,13 +68,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Resolve version from tag
         id: ver
         shell: bash
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="${{ inputs.tag || github.ref_name }}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
@@ -143,13 +158,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Resolve version from tag
         id: ver
         shell: bash
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="${{ inputs.tag || github.ref_name }}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
@@ -353,14 +368,14 @@ jobs:
     # see a step output from its own job, and an output the upstream job never
     # declared evaluates to the empty string — which passes this test and
     # publishes the rehearsal for real.
-    if: ${{ !contains(github.event.inputs.tag || github.ref_name, '-') }}
+    if: ${{ !contains(inputs.tag || github.ref_name, '-') }}
     permissions:
       id-token: write # mint the crates.io token
       contents: read
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable

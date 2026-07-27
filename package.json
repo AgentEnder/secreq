@@ -9,12 +9,12 @@
     "lint": "oxlint"
   },
   "devDependencies": {
-    "@nx/js": "^22.5.0",
-    "nx": "^22.5.0",
+    "@nx/js": "23.1.0",
+    "nx": "23.1.0",
     "nx-github-pages": "^1.2.0",
     "oxfmt": "0.60.0",
     "oxlint": "1.75.0",
-    "typescript": "^5.9.2"
+    "typescript": "6.0.3"
   },
   "packageManager": "pnpm@10.33.2"
 }

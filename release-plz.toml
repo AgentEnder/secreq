@@ -1,0 +1,31 @@
+# release-plz owns *deciding* a release; `.github/workflows/release.yml` owns
+# *performing* one.
+#
+# The split matters. release-plz reads the conventional commits since the last
+# tag, works out the SemVer bump, writes the CHANGELOG section, and opens a PR.
+# Merging that PR is the release decision, and the tag it then creates is the
+# only thing release.yml needs. Everything after the tag — cross-compiling four
+# targets, cosign, the GitHub Release, the Homebrew formula, crates.io — already
+# exists there and is not duplicated here.
+#
+# So the three switches below are all "don't do the second half":
+
+[workspace]
+# crates.io is published by release.yml's `publish-crate` job, which mints a
+# short-lived token from GitHub's OIDC identity. Publishing from here would
+# need a stored registry token — the thing that job exists to avoid.
+publish = false
+
+# The GitHub Release is created by release.yml, which has the binaries, the
+# checksums and the signature to attach to it. A release created here would be
+# an empty one that the real job then has to find and edit.
+git_release_enable = false
+
+# The tag is the handoff, so release-plz does create it. release.yml is invoked
+# directly rather than by the tag push, because a tag pushed with GITHUB_TOKEN
+# does not start a workflow.
+git_tag_enable = true
+
+# Keep a Changelog, which is what CHANGELOG.md already is.
+[changelog]
+protect_breaking_commits = true

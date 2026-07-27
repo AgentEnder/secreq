@@ -1,0 +1,91 @@
+name: Release PLZ
+
+# Turns "merge a PR" into "cut a release".
+#
+# Every push to main, release-plz reads the conventional commits since the last
+# tag and keeps a release PR up to date: the version bump in Cargo.toml and the
+# CHANGELOG section, written from those commits. Merging that PR is the release
+# decision. release-plz then tags, and this workflow calls release.yml, which
+# does everything else — four targets, cosign, the GitHub Release, the Homebrew
+# formula, crates.io.
+#
+# Nothing is cut by hand: no local `cargo release`, no hand-written CHANGELOG
+# entry, no `git push --follow-tags`.
+#
+# release.yml is *called* rather than woken by the tag push on purpose. A tag
+# pushed with `GITHUB_TOKEN` does not start a workflow — GitHub's guard against
+# a job triggering itself in a loop — and the usual workarounds (a PAT, a
+# GitHub App) both add a credential to a repository that has been trying to
+# hold none. `workflow_call` needs nothing.
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: release-plz-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Open or refresh the release PR. Runs on every push to main and is a no-op
+  # when nothing releasable has landed, so a docs-only commit changes nothing.
+  release-pr:
+    name: release PR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Fires on the push that *is* the merged release PR: the version in
+  # Cargo.toml now has no tag, so release-plz creates one.
+  tag:
+    name: tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      released: ${{ steps.rp.outputs.releases_created }}
+      tag: ${{ steps.rp.outputs.releases && fromJSON(steps.rp.outputs.releases)[0].tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: release-plz/action@v0.5
+        id: rp
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Everything downstream of the tag, unchanged and shared with the manual
+  # paths — pushing a tag by hand and re-running `workflow_dispatch` against an
+  # existing one both land in the same workflow.
+  ship:
+    name: ship
+    needs: tag
+    if: needs.tag.outputs.released == 'true'
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.tag.outputs.tag }}
+    permissions:
+      contents: write
+      id-token: write
+    secrets: inherit
