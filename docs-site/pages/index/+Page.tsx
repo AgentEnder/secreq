@@ -266,7 +266,7 @@ const INSTALL_METHODS: readonly InstallMethod[] = [
     label: 'Script',
     platform: 'macOS, Linux',
     requires: 'curl',
-    command: 'curl -fsSL https://secreq.dev/install.sh | sh',
+    command: 'curl -fsSL https://craigory.dev/secreq/install.sh | sh',
   },
   {
     id: 'brew',

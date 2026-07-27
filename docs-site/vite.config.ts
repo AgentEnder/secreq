@@ -53,6 +53,21 @@ function copyRepoAssets(): Plugin {
         }
       }
 
+      // The install script the site's headline command pipes into a shell.
+      // Both the landing page and `docs/install.md` print
+      // `curl -fsSL https://craigory.dev/secreq/install.sh | sh`, and until this
+      // existed nothing published the script — the most prominent command on
+      // the site fetched the 404 page and piped it to `sh`.
+      //
+      // Copied from the repo rather than duplicated into `public/` so there is
+      // one install script: the one `scripts/package-release.sh` ships inside
+      // the release tarball is the one the site serves.
+      try {
+        copyFileSync(join(repoRoot, 'dist', 'install.sh'), join(publicDir, 'install.sh'));
+      } catch {
+        console.warn('[docs-site] Could not copy dist/install.sh — the site will 404 on it');
+      }
+
       const shotSrc = join(repoRoot, 'dev-docs', 'ui-screenshots');
       const shotDest = join(publicDir, 'ui');
       mkdirSync(shotDest, { recursive: true });
@@ -332,7 +347,7 @@ export default defineConfig({
     // rather than a desktop browser pretending to be one.
     //
     // This is the *docs* dev server: it serves prose, screenshots and their
-    // geometry, and holds nothing a reader of secreq.dev could not already
+    // geometry, and holds nothing a reader of the docs site could not already
     // read. It still means anyone on the network can reach it while it runs,
     // so it is a dev-server setting and has no bearing on what ships.
     host: true,

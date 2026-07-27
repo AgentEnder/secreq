@@ -48,6 +48,16 @@ jobs:
         with:
           key: webfonts
       - run: pnpm install --frozen-lockfile
+      # The site is served from a path, not a domain root:
+      # https://craigory.dev/secreq/. GitHub serves a project's Pages under
+      # the owner's site at /<repo>/, so every absolute asset and link has to
+      # carry that prefix or it resolves against craigory.dev itself. Vite
+      # reads this into `base`, and `applyBaseUrl` puts it on the handful of
+      # URLs built outside the bundler (screenshots, schemas, search).
+      #
+      # Same mechanism preview-docs.yml uses for /pr/<n>/, so both deploys
+      # exercise the prefixed build rather than only the previews doing it.
       - run: npx nx deploy docs-site
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_URL: /secreq/

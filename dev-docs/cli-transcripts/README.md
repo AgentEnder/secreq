@@ -64,13 +64,13 @@ window: with no listener, a marker is just a beat.
 recorded id against the directories on disk. Renaming a screenshot
 fixture is an ordinary thing to do, and without that check it would leave
 a marker pointing at nothing: an event fired, no image found, and a blank
-space on secreq.dev where the consent window should have been. Nothing
+space on the docs site where the consent window should have been. Nothing
 else would fail.
 
 ## A caption is published documentation
 
 In `Transcript::new(id, command, caption)`, the third argument is the
-figcaption that ships on secreq.dev wherever the recording appears, not a
+figcaption that ships on the docs site wherever the recording appears, not a
 test comment. Write it for someone *using* secreq; `<code>` and `<b>` are
 the markup honoured. This table is the contributor-facing description of
 the same recording.
@@ -100,7 +100,7 @@ Redaction is a literal string replace, so it only fires when the sandbox
 path survives layout in one piece, which it does not when a line wraps
 mid-path. That is not hypothetical: wrapping `init`'s PATH note to fit 80
 columns split `/tmp/sqdoc/.zshrc` across two lines and published the
-sandbox path to secreq.dev. Both wrappers set `break_words(false)` for
+sandbox path to the docs site. Both wrappers set `break_words(false)` for
 this reason, and `recordings_leak_no_sandbox_paths` fails if
 `RECORDING_HOME` ever survives into a committed `.txt` again.
 

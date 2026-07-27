@@ -11,7 +11,7 @@ rules SDK, architecture, and contributing — see the repository README and the
 docs:
 
 - Repository: <https://github.com/AgentEnder/secreq>
-- Website & docs: <https://secreq.dev>
+- Website & docs: <https://craigory.dev/secreq>
 
 ## Install
 

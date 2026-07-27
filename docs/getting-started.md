@@ -21,7 +21,7 @@ from my store."
 ## 1. Install
 
 ```sh
-curl -fsSL https://secreq.dev/install.sh | sh
+curl -fsSL https://craigory.dev/secreq/install.sh | sh
 ```
 
 Homebrew, `cargo install`, and verified release tarballs all work too.

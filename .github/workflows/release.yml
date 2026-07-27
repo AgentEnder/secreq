@@ -245,12 +245,96 @@ jobs:
           if [ "${{ steps.notes.outputs.no_notes }}" = "true" ]; then
             NOTES_ARGS=(--generate-notes)
           fi
+
+          # Named, not globbed. `dist/` is both where `download-artifact`
+          # unpacks the builds and where the checkout already put the tracked
+          # `dist/homebrew/` directory and `dist/install.sh`, so `dist/*` hands
+          # `gh` a directory and it exits non-zero — on the very first release,
+          # after every build has already succeeded. Listing the assets also
+          # makes the release's contents a thing this file states rather than a
+          # thing that depends on what happens to be lying in a folder.
+          ASSETS=(
+            dist/*.tar.gz
+            dist/SHA256SUMS
+            dist/SHA256SUMS.sig
+            dist/SHA256SUMS.pem
+            dist/secreq.rb
+          )
+          for asset in "${ASSETS[@]}"; do
+            if [ ! -f "$asset" ]; then
+              echo "::error::release asset missing: $asset"
+              exit 1
+            fi
+          done
+
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release edit "$TAG" --title "secreq $TAG" "${NOTES_ARGS[@]}"
-            gh release upload "$TAG" dist/* --clobber
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
           else
             gh release create "$TAG" \
               --title "secreq $TAG" \
               "${NOTES_ARGS[@]}" \
-              dist/*
+              "${ASSETS[@]}"
           fi
+
+      # Hand the tap the formula this job just built and attached. The tap's
+      # own workflow downloads the `secreq.rb` asset verbatim, so there is no
+      # templating or re-hashing on that side and no second source of truth
+      # for the checksums.
+      #
+      # `repository_dispatch` has no OIDC path, so this is the one stored
+      # credential in the release pipeline. `TAP_GITHUB_TOKEN` is a
+      # fine-grained PAT scoped to `homebrew-secreq` with Contents:write and
+      # nothing else — scoped that tightly because it lives in this repo's
+      # secrets, so it is exactly what an attacker gets if these Actions are
+      # compromised. It expires; a silently expired PAT looks like a release
+      # that succeeded while the tap quietly stopped updating.
+      - name: Update the Homebrew tap
+        if: ${{ !contains(steps.ver.outputs.version, '-') }}
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          repository: AgentEnder/homebrew-secreq
+          event-type: release
+          client-payload: >-
+            {"version": "${{ steps.ver.outputs.version }}",
+             "tag": "${{ steps.ver.outputs.tag }}"}
+
+  # Publishing the crate is the one irreversible step in the pipeline: a
+  # version on crates.io can be yanked but never replaced. So it is its own
+  # job, gated on a `crates-io` environment with a required reviewer, and it
+  # runs only after `publish` has put the signed binaries out.
+  #
+  # No stored registry token. `crates-io-auth-action` exchanges this job's
+  # OIDC identity for a short-lived crates.io token and revokes it in its post
+  # step, which is why `packages/secreq/release.toml` sets `publish = false`:
+  # the crate ships from the commit CI verified, not from a working copy.
+  publish-crate:
+    name: publish crate
+    needs: publish
+    runs-on: ubuntu-latest
+    environment: crates-io
+    # A pre-release tag (v0.1.0-rc.1) exercises the binary pipeline without
+    # spending a crates.io version, which is what makes a rehearsal cheap.
+    # Read off the ref rather than a `needs` output: a job-level `if` cannot
+    # see a step output from its own job, and an output the upstream job never
+    # declared evaluates to the empty string — which passes this test and
+    # publishes the rehearsal for real.
+    if: ${{ !contains(github.event.inputs.tag || github.ref_name, '-') }}
+    permissions:
+      id-token: write # mint the crates.io token
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
+      - run: cargo publish --locked -p secreq
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

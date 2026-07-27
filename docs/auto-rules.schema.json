@@ -1,5 +1,5 @@
 {
-  "$id": "https://secreq.dev/schema/auto-rules.schema.json",
+  "$id": "https://craigory.dev/secreq/schemas/auto-rules.schema.json",
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "definitions": {

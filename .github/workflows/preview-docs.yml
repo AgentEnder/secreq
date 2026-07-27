@@ -45,7 +45,7 @@ jobs:
       - name: Build docs preview
         run: npx nx build docs-site
         env:
-          BASE_URL: /pr/${{ github.event.pull_request.number }}/
+          BASE_URL: /secreq/pr/${{ github.event.pull_request.number }}/
 
       - name: Deploy preview to gh-pages
         run: |

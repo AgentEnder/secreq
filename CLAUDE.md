@@ -83,7 +83,7 @@ fingerprints the layout instead.
 `save_png` re-encodes through the `oxipng` crate (lossless, preset 4,
 `strip safe`) before writing — measured ~70% off this corpus, which
 matters because every one of these PNGs lives in git forever and is
-published to secreq.dev. It runs in-process rather than shelling out to
+published to the docs site. It runs in-process rather than shelling out to
 the `oxipng` binary so the committed bytes never depend on what a
 contributor happens to have installed. Don't add a lossy pass: these are
 documentation screenshots of antialiased UI text.
@@ -114,7 +114,7 @@ production APIs.
 ### A fixture's caption is published documentation
 
 `Shot::new("id").caption("…")` on a fixture is not a test comment — it
-is the figcaption that ships on secreq.dev wherever that screenshot
+is the figcaption that ships on the docs site wherever that screenshot
 appears. The harness writes it into that fixture's
 `dev-docs/ui-screenshots/<id>/layout.json`, alongside the window kind
 and the layout snapshot, and the docs site renders it verbatim
@@ -198,7 +198,7 @@ So, for any message that interpolates a path or runs past a sentence:
 Both wrappers set `break_words(false)` deliberately. A path split across
 two lines is unreadable _and_ invisible to the transcript harness's
 redaction, which is a literal string replace — that is exactly how a
-`/tmp/…` sandbox path once got published to secreq.dev.
+`/tmp/…` sandbox path once got published to the docs site.
 
 Two non-`#[ignore]`d tests in `tests/cli_transcripts.rs` enforce this
 against the committed recordings, so CI catches a regression without a
@@ -288,7 +288,7 @@ there when the change lands — the repo has no copy to fall out of sync.
   fields is published verbatim as that property's `description`, so
   **changing what a matcher does means editing the doc comment above it**,
   and forgetting to is a failing `schema_drift`, not a silent lie on
-  secreq.dev. Three descriptions contradicted the parser for a month each
+  the docs site. Three descriptions contradicted the parser for a month each
   under the hand-written `json!` tree this replaced.
 
   `schemars` is optional and behind the `schema` feature, switched on for the
@@ -364,7 +364,7 @@ someone remembering.
 Two consequences worth internalising:
 
 - **A doc comment in `src/cli.rs` is published prose.** It reaches
-  `--help` and secreq.dev from the same string, so a missing `///` on an
+  `--help` and the docs site from the same string, so a missing `///` on an
   arg renders as a `—` in a published table.
 - **Indented examples in a doc comment need
   `#[command(verbatim_doc_comment)]`.** Without it clap rewraps the comment

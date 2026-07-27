@@ -12,12 +12,18 @@
 # Cutting a release only makes sense from the trunk.
 allow-branch = ["main"]
 
-# Publish the crate to crates.io as part of the release so `cargo install
-# secreq` works. cargo-release runs `cargo publish` before it tags, so the
-# maintainer must be `cargo login`'d (or have CARGO_REGISTRY_TOKEN set) — see
-# brain: areas/secreq/releasing.md. The GitHub Release (binaries) is still cut by the
-# tag-triggered workflow; the two channels are independent.
-publish = true
+# CI publishes the crate, not this command. `.github/workflows/release.yml`
+# has a `publish-crate` job that mints a short-lived crates.io token from
+# GitHub's OIDC identity (Trusted Publishing), so there is no stored registry
+# credential and no `cargo login` prerequisite for cutting a release.
+#
+# The reason is not only credential hygiene. `cargo publish` here would run
+# from the maintainer's working copy *before* the tag is pushed, so the crate
+# on crates.io would be built from bytes no CI had ever seen — and a published
+# version can never be replaced, only yanked. Publishing from the job that
+# already verified the tagged commit means the crate and the signed binaries
+# come from the same place.
+publish = false
 
 # Tag locally; the maintainer pushes the tag explicitly with
 # `git push --follow-tags` so a release is never an accidental side effect of

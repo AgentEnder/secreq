@@ -25,7 +25,7 @@ Prefer to drive cargo yourself:
 
 ```sh
 # macOS / Linux. Detects your platform, downloads + verifies the release binary:
-curl -fsSL https://secreq.dev/install.sh | sh
+curl -fsSL https://craigory.dev/secreq/install.sh | sh
 
 # Homebrew (macOS / Linuxbrew):
 brew install AgentEnder/secreq/secreq

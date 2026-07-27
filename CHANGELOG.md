@@ -15,7 +15,7 @@ the GitHub Release using the notes from the matching section below.
 ### Added
 
 - **Public distribution channels.** Install with `curl -fsSL
-https://secreq.dev/install.sh | sh` (detects OS/arch, downloads the release
+https://craigory.dev/secreq/install.sh | sh` (detects OS/arch, downloads the release
   binary, and verifies it against the signed `SHA256SUMS`), `brew install
 AgentEnder/secreq/secreq`, or `cargo install secreq`. The release workflow
   now also generates the Homebrew formula from the real checksums, and

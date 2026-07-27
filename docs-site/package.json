@@ -98,8 +98,7 @@
         "executor": "nx-github-pages:deploy",
         "options": {
           "remote": "https://github.com/AgentEnder/secreq.git",
-          "directory": "{projectRoot}/dist/client",
-          "CNAME": "secreq.dev"
+          "directory": "{projectRoot}/dist/client"
         }
       }
     }

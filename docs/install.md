@@ -4,12 +4,12 @@
 same executable, and none of them create wraps or shims. That is
 [`secreq init`](#after-installing).
 
-| Channel                                 | Best for                     | One-liner                                        |
-| --------------------------------------- | ---------------------------- | ------------------------------------------------ |
-| [curl \| sh](#curl--sh)                 | Quick install on macOS/Linux | `curl -fsSL https://secreq.dev/install.sh \| sh` |
-| [Homebrew](#homebrew)                   | macOS / Linuxbrew users      | `brew install AgentEnder/secreq/secreq`          |
-| [`cargo install`](#cargo-install)       | Rust developers, any target  | `cargo install secreq`                           |
-| [Prebuilt binaries](#prebuilt-binaries) | Air-gapped, manual, CI       | download + verify a release tarball              |
+| Channel                                 | Best for                     | One-liner                                                 |
+| --------------------------------------- | ---------------------------- | --------------------------------------------------------- |
+| [curl \| sh](#curl--sh)                 | Quick install on macOS/Linux | `curl -fsSL https://craigory.dev/secreq/install.sh \| sh` |
+| [Homebrew](#homebrew)                   | macOS / Linuxbrew users      | `brew install AgentEnder/secreq/secreq`                   |
+| [`cargo install`](#cargo-install)       | Rust developers, any target  | `cargo install secreq`                                    |
+| [Prebuilt binaries](#prebuilt-binaries) | Air-gapped, manual, CI       | download + verify a release tarball                       |
 
 Prebuilt binaries ship for `{x86_64,aarch64}-unknown-linux-gnu` and
 `{x86_64,aarch64}-apple-darwin`. On any other platform use
@@ -19,7 +19,7 @@ Prebuilt binaries ship for `{x86_64,aarch64}-unknown-linux-gnu` and
 ## curl | sh
 
 ```sh
-curl -fsSL https://secreq.dev/install.sh | sh
+curl -fsSL https://craigory.dev/secreq/install.sh | sh
 ```
 
 The installer detects your OS and architecture, downloads the matching
@@ -37,7 +37,7 @@ Knobs, all optional:
 | `SECREQ_NO_VERIFY`   | Skip checksum verification (not advised) | off            |
 
 ```sh
-curl -fsSL https://secreq.dev/install.sh | SECREQ_VERSION=v0.1.0 SECREQ_INSTALL_DIR=/usr/local/bin sh
+curl -fsSL https://craigory.dev/secreq/install.sh | SECREQ_VERSION=v0.1.0 SECREQ_INSTALL_DIR=/usr/local/bin sh
 ```
 
 If the install directory isn't on your `PATH`, the installer says so and

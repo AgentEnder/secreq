@@ -55,11 +55,17 @@ use crate::manifest::Provider;
 use crate::rules::RulesFile;
 use crate::wraps::{SshIdentity, Wrap};
 
+// An `$id` is what a user's editor fetches when they put `$schema` at the top
+// of their config, so it has to be the URL the file is actually served from.
+// These were `secreq.dev/schema/…` and were wrong twice over: the domain was
+// never registered, and the path was singular while `docs-site` publishes the
+// files under `/schemas/`. Neither `$id` has ever resolved.
+
 /// `$id` of the auto-rules schema. Read by [`RulesFile`]'s derive.
-pub const AUTO_RULES_ID: &str = "https://secreq.dev/schema/auto-rules.schema.json";
+pub const AUTO_RULES_ID: &str = "https://craigory.dev/secreq/schemas/auto-rules.schema.json";
 
 /// `$id` of the wraps schema.
-pub const WRAPS_ID: &str = "https://secreq.dev/schema/wraps.schema.json";
+pub const WRAPS_ID: &str = "https://craigory.dev/secreq/schemas/wraps.schema.json";
 
 /// The reserved top-level `$schema` key, which both of these files may carry
 /// and neither of them reads.
