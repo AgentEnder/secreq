@@ -106,7 +106,7 @@ wasmtime = { version = "46.0.1", default-features = false, features = [
   "anyhow",
 ] }
 textwrap = "0.16"
-console = "0.15"
+console = "0.16"
 
 # Derives `docs/wraps.schema.json` and `docs/auto-rules.schema.json` from the
 # types that read those files, so a field cannot reach disk without reaching
