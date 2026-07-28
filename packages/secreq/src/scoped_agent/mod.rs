@@ -503,10 +503,7 @@ pub struct DaemonGate {
 impl DaemonGate {
     pub fn new(providers: BTreeMap<String, Provider>) -> DaemonGate {
         DaemonGate {
-            manifest: Manifest {
-                groups: BTreeMap::new(),
-                providers,
-            },
+            manifest: Manifest { providers },
         }
     }
 }

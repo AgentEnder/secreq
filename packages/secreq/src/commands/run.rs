@@ -622,7 +622,6 @@ pub(crate) fn resolve_refs_client_side(
     // resolve::resolve_all (which already handles batching, defaults,
     // grouped invocations).
     let manifest = crate::manifest::Manifest {
-        groups: std::collections::BTreeMap::new(),
         providers: config.providers.clone(),
     };
 

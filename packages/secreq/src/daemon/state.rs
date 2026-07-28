@@ -2746,7 +2746,6 @@ pub(super) fn resolve_single_cached(
     match in_flight.acquire(&key) {
         Acquired::Resolver(g) => {
             let manifest = Manifest {
-                groups: std::collections::BTreeMap::new(),
                 providers: providers.clone(),
             };
             let plan = ResolutionPlan {
@@ -2827,7 +2826,6 @@ fn build_manifest(providers: &HashMap<String, WireProvider>) -> Manifest {
         );
     }
     Manifest {
-        groups: std::collections::BTreeMap::new(),
         providers: out_providers,
     }
 }

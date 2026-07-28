@@ -1,67 +1,31 @@
-//! The `secrets.json5` config model and its loader (§6).
+//! The provider model: schemes that know how to fetch (and sometimes store) a
+//! secret.
 //!
-//! Top-level keys are **groups**; the reserved `providers` key defines schemes.
-//! Within a group, `$`-prefixed keys are inheritable settings and every other
-//! key is a secret declaration (a shorthand string ref or an object form).
+//! This began as the `secrets.json5` loader — groups of declared secrets, each
+//! with inheritable settings. Wraps replaced that model, and what survived is
+//! the half both shapes shared: [`Provider`] and the `providers` block parser
+//! [`crate::wraps`] calls at load time.
 //!
-//! We parse JSON5 into a dynamic [`serde_json::Value`] and then interpret it,
-//! because a group's keys are arbitrary secret names plus one reserved key —
-//! something a fixed deserialize target cannot express.
+//! [`Manifest`] is now just the provider set handed to
+//! [`crate::resolve::resolve_all`]. Every caller builds one in memory; nothing
+//! reads a manifest file.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 
-use crate::reference::Reference;
-
 /// The reserved top-level key that defines provider schemes.
 pub const PROVIDERS_KEY: &str = "providers";
 
-/// A fully-interpreted manifest: named groups plus provider schemes.
+/// The provider schemes available to a resolution.
+///
+/// Every caller builds one in memory from the loaded [`crate::wraps`] config
+/// (or from the wire, in the daemon) and hands it to
+/// [`crate::resolve::resolve_all`] — nothing reads a manifest file.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Manifest {
-    pub groups: BTreeMap<String, Group>,
     pub providers: BTreeMap<String, Provider>,
-}
-
-/// A named, selectable subset of secrets with inheritable settings.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Group {
-    pub name: String,
-    /// `$provider` — group-default provider for secrets that omit one.
-    pub provider: Option<String>,
-    /// `$reason` — rationale shown in the consent prompt.
-    pub reason: Option<String>,
-    /// `$required` — group default for `required` (per-secret default is true).
-    pub required: Option<bool>,
-    /// `$description` — group-level description.
-    pub description: Option<String>,
-    pub secrets: BTreeMap<String, SecretDecl>,
-}
-
-/// One declared secret, with group defaults already folded in.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SecretDecl {
-    /// The env var name this secret is injected as.
-    pub name: String,
-    /// The owning group's name.
-    pub group: String,
-    /// The provider scheme that resolves it. `None` only if neither the entry,
-    /// a full `secret://` ref, nor the group's `$provider` supplied one — that
-    /// is reported as an error when the secret is actually needed.
-    pub provider: Option<String>,
-    /// The locator passed to the provider's read template.
-    pub locator: String,
-    /// `true` ⇒ eager set (collected by `run`, hard error if missing).
-    pub required: bool,
-    /// Fallback value if resolution returns nothing (satisfies `required`).
-    pub default: Option<String>,
-    /// Human description shown in the consent prompt, `list`, and `doctor`.
-    pub description: Option<String>,
-    /// Inherited group `$reason`, shown alongside the secret in the prompt.
-    pub reason: Option<String>,
 }
 
 /// A provider scheme. Required `retrieve`, optional `store`, optional
@@ -190,97 +154,11 @@ pub enum ValueMode {
 }
 
 impl Manifest {
-    /// Parse a manifest from a JSON5 source string. `source_label` is used in
-    /// error messages (e.g. the file path).
-    pub fn parse(text: &str, source_label: &str) -> Result<Manifest> {
-        let root: Value = json5::from_str(text)
-            .with_context(|| format!("failed to parse JSON5 manifest: {source_label}"))?;
-        let obj = root
-            .as_object()
-            .with_context(|| format!("{source_label}: top level must be an object"))?;
-
-        let mut manifest = Manifest::default();
-
-        for (key, value) in obj {
-            if key == PROVIDERS_KEY {
-                manifest.providers = parse_providers(value, source_label)?;
-            } else if key.starts_with('$') {
-                // Top-level `$`-prefixed keys are reserved for metadata
-                // (e.g. `$schema` for editor JSON-schema hints). Ignore them
-                // here so `secrets.json5` files can include such pointers.
-                continue;
-            } else {
-                let group = parse_group(key, value, source_label)?;
-                manifest.groups.insert(key.clone(), group);
-            }
-        }
-        Ok(manifest)
-    }
-
-    /// Load and parse a manifest file from disk.
-    pub fn load(path: &Path) -> Result<Manifest> {
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("failed to read manifest: {}", path.display()))?;
-        Manifest::parse(&text, &path.display().to_string())
-    }
-
-    /// A manifest seeded with the built-in Tier-1 providers (no groups). Loading
-    /// starts from this and merges user/project manifests on top, so a manifest
-    /// `providers` entry of the same name overrides the built-in (§6, §13.1).
+    /// A manifest seeded with the built-in Tier-1 providers. A user
+    /// `providers` entry of the same name overlays the built-in (§6, §13.1).
     pub fn with_builtin_providers() -> Manifest {
         Manifest {
-            groups: BTreeMap::new(),
             providers: builtin_providers(),
-        }
-    }
-
-    /// Merge another manifest on top of this one. Secrets and groups union;
-    /// `other` (the project scope) wins on key conflict. Providers merge, with
-    /// `other` overriding a scheme of the same name (§6 scope & merge).
-    pub fn merge(&mut self, other: Manifest) {
-        for (name, group) in other.groups {
-            match self.groups.get_mut(&name) {
-                Some(existing) => existing.merge(group),
-                None => {
-                    self.groups.insert(name, group);
-                }
-            }
-        }
-        for (name, provider) in other.providers {
-            self.providers.insert(name, provider);
-        }
-    }
-
-    /// Every secret declaration across all groups.
-    pub fn all_secrets(&self) -> impl Iterator<Item = &SecretDecl> {
-        self.groups.values().flat_map(|g| g.secrets.values())
-    }
-
-    /// Find a declaration by env-var name (used to overlay metadata onto an
-    /// ambient ref). The first match across groups wins.
-    pub fn find_secret(&self, name: &str) -> Option<&SecretDecl> {
-        self.all_secrets().find(|s| s.name == name)
-    }
-}
-
-impl Group {
-    /// Merge `other` into this group: settings from `other` override; secrets
-    /// union with `other` winning on name conflict.
-    fn merge(&mut self, other: Group) {
-        if other.provider.is_some() {
-            self.provider = other.provider;
-        }
-        if other.reason.is_some() {
-            self.reason = other.reason;
-        }
-        if other.required.is_some() {
-            self.required = other.required;
-        }
-        if other.description.is_some() {
-            self.description = other.description;
-        }
-        for (name, secret) in other.secrets {
-            self.secrets.insert(name, secret);
         }
     }
 }
@@ -486,115 +364,6 @@ fn parse_string_array(value: &Value) -> Result<Vec<String>> {
         .collect()
 }
 
-fn parse_group(name: &str, value: &Value, source: &str) -> Result<Group> {
-    let obj = value
-        .as_object()
-        .with_context(|| format!("{source}: group `{name}` must be an object"))?;
-
-    let mut group = Group {
-        name: name.to_owned(),
-        ..Group::default()
-    };
-
-    // First pass: collect group-level `$` settings so secrets can inherit them.
-    for (key, val) in obj {
-        match key.as_str() {
-            "$provider" => group.provider = Some(as_str(val, source, key)?.to_owned()),
-            "$reason" => group.reason = Some(as_str(val, source, key)?.to_owned()),
-            "$description" => group.description = Some(as_str(val, source, key)?.to_owned()),
-            "$required" => group.required = Some(as_bool(val, source, key)?),
-            other if other.starts_with('$') => {
-                bail!("{source}: group `{name}` has unknown setting `{other}`")
-            }
-            _ => {}
-        }
-    }
-
-    // Second pass: secret declarations, folding in the group defaults.
-    for (key, val) in obj {
-        if key.starts_with('$') {
-            continue;
-        }
-        let decl = parse_secret(name, key, val, &group, source)?;
-        group.secrets.insert(key.clone(), decl);
-    }
-
-    Ok(group)
-}
-
-fn parse_secret(
-    group_name: &str,
-    secret_name: &str,
-    value: &Value,
-    group: &Group,
-    source: &str,
-) -> Result<SecretDecl> {
-    // Defaults inherited from the group; per-secret values override below.
-    let mut provider = group.provider.clone();
-    let mut locator: Option<String> = None;
-    let mut required = group.required.unwrap_or(true);
-    let mut default: Option<String> = None;
-    let mut description: Option<String> = None;
-
-    match value {
-        // Shorthand string: a full `secret://provider/locator` ref, or a bare
-        // locator that uses the group's `$provider`.
-        Value::String(s) => {
-            apply_ref_string(s, &mut provider, &mut locator);
-        }
-        // Object form: explicit fields.
-        Value::Object(map) => {
-            if let Some(p) = map.get("provider") {
-                provider = Some(as_str(p, source, "provider")?.to_owned());
-            }
-            if let Some(r) = map.get("ref") {
-                apply_ref_string(as_str(r, source, "ref")?, &mut provider, &mut locator);
-            }
-            if let Some(req) = map.get("required") {
-                required = as_bool(req, source, "required")?;
-            }
-            if let Some(d) = map.get("default") {
-                default = match d {
-                    Value::Null => None,
-                    other => Some(as_str(other, source, "default")?.to_owned()),
-                };
-            }
-            if let Some(desc) = map.get("description") {
-                description = Some(as_str(desc, source, "description")?.to_owned());
-            }
-        }
-        _ => {
-            bail!("{source}: secret `{group_name}.{secret_name}` must be a string ref or an object")
-        }
-    }
-
-    let locator = locator.with_context(|| {
-        format!("{source}: secret `{group_name}.{secret_name}` has no `ref`/locator")
-    })?;
-
-    Ok(SecretDecl {
-        name: secret_name.to_owned(),
-        group: group_name.to_owned(),
-        provider,
-        locator,
-        required,
-        default,
-        description,
-        reason: group.reason.clone(),
-    })
-}
-
-/// Interpret a ref string: a full `secret://provider/locator` overrides the
-/// provider and sets the locator; otherwise the whole string is a bare locator.
-fn apply_ref_string(s: &str, provider: &mut Option<String>, locator: &mut Option<String>) {
-    if let Some(reference) = Reference::parse(s) {
-        *provider = Some(reference.provider);
-        *locator = Some(reference.locator);
-    } else {
-        *locator = Some(s.to_owned());
-    }
-}
-
 fn as_str<'a>(value: &'a Value, source: &str, field: &str) -> Result<&'a str> {
     value
         .as_str()
@@ -724,104 +493,25 @@ fn required_field() -> FieldSpec {
 mod tests {
     use super::*;
 
-    const SAMPLE: &str = r#"{
-        database: {
-            $provider: "op",
-            $reason: "Database access",
-            DATABASE_URL: "secret://keychain/myapp/db_url",
-            DB_PASSWORD: {
-                description: "Prod read-replica password",
-                required: true,
-                ref: "Work/Postgres/password",
-            },
-        },
-        stripe: {
-            STRIPE_KEY: "secret://op/Work/Stripe/api_key",
-        },
-        providers: {
-            op: { read: ["op", "read", "op://{locator}"] },
-            keychain: { read: ["security", "find-generic-password", "-w", "-s", "{locator}"] },
-        },
-    }"#;
-
-    #[test]
-    fn parses_groups_providers_and_secret_forms() {
-        let m = Manifest::parse(SAMPLE, "sample").unwrap();
-        assert_eq!(m.groups.len(), 2);
-        assert_eq!(m.providers.len(), 2);
-
-        // Full-ref shorthand overrides the group provider.
-        let url = &m.groups["database"].secrets["DATABASE_URL"];
-        assert_eq!(url.provider.as_deref(), Some("keychain"));
-        assert_eq!(url.locator, "myapp/db_url");
-        assert_eq!(url.reason.as_deref(), Some("Database access"));
-
-        // Object form with a bare locator inherits the group `$provider`.
-        let pw = &m.groups["database"].secrets["DB_PASSWORD"];
-        assert_eq!(pw.provider.as_deref(), Some("op"));
-        assert_eq!(pw.locator, "Work/Postgres/password");
-        assert_eq!(
-            pw.description.as_deref(),
-            Some("Prod read-replica password")
-        );
-        assert!(pw.required);
-    }
-
-    #[test]
-    fn required_defaults_to_true_then_group_then_secret() {
-        let m = Manifest::parse(
-            r#"{
-                g: {
-                    $required: false,
-                    A: "secret://p/a",
-                    B: { ref: "b", provider: "p", required: true },
-                },
-                providers: { p: { read: ["echo", "{locator}"] } },
-            }"#,
-            "t",
-        )
-        .unwrap();
-        assert!(!m.groups["g"].secrets["A"].required); // inherits $required:false
-        assert!(m.groups["g"].secrets["B"].required); // per-secret override
-    }
-
-    #[test]
-    fn project_wins_on_merge() {
-        let mut user = Manifest::parse(
-            r#"{ db: { $provider: "op", PG: "secret://op/user/pg" },
-                 providers: { op: { read: ["op","read","{locator}"] } } }"#,
-            "user",
-        )
-        .unwrap();
-        let project = Manifest::parse(
-            r#"{ db: { PG: "secret://keychain/proj/pg" },
-                 providers: { op: { read: ["op2","{locator}"] } } }"#,
-            "project",
-        )
-        .unwrap();
-        user.merge(project);
-        // Project's secret wins.
-        assert_eq!(
-            user.groups["db"].secrets["PG"].provider.as_deref(),
-            Some("keychain")
-        );
-        // Group `$provider` from user is preserved (project didn't set it).
-        assert_eq!(user.groups["db"].provider.as_deref(), Some("op"));
-        // Project overrode the provider scheme.
-        assert_eq!(user.providers["op"].retrieve[0], "op2");
+    /// Build a [`Manifest`] from a fixture's `providers` block — exactly what
+    /// `wraps.rs` does at load time, and all these tests ever needed. The
+    /// group-shaped half of the old `secrets.json5` loader is gone; only the
+    /// provider parser it shared with the wraps config survives.
+    fn parse_manifest(text: &str, source: &str) -> Result<Manifest> {
+        let root: Value =
+            json5::from_str(text).with_context(|| format!("{source}: invalid JSON5 fixture"))?;
+        let providers = match root.get(PROVIDERS_KEY) {
+            Some(block) => parse_providers_value(block, source)?,
+            None => BTreeMap::new(),
+        };
+        Ok(Manifest { providers })
     }
 
     #[test]
     fn rejects_wasm_provider_in_mvp() {
-        let err = Manifest::parse(r#"{ providers: { vault: { wasm: "./vault.wasm" } } }"#, "t")
+        let err = parse_manifest(r#"{ providers: { vault: { wasm: "./vault.wasm" } } }"#, "t")
             .unwrap_err();
         assert!(err.to_string().contains("Wasm"));
-    }
-
-    #[test]
-    fn rejects_unknown_group_setting() {
-        let err = Manifest::parse(r#"{ g: { $bogus: 1, A: "secret://p/a" } }"#, "t").unwrap_err();
-        assert!(err.to_string().contains("$bogus"));
     }
 
     #[test]
@@ -855,21 +545,8 @@ mod tests {
     }
 
     #[test]
-    fn manifest_providers_override_builtins_on_merge() {
-        let mut base = Manifest::with_builtin_providers();
-        let user = Manifest::parse(
-            r#"{ providers: { op: { retrieve: ["my-op", "{locator}"] } } }"#,
-            "user",
-        )
-        .unwrap();
-        base.merge(user);
-        // The manifest's `op` wins over the built-in.
-        assert_eq!(base.providers["op"].retrieve[0], "my-op");
-    }
-
-    #[test]
     fn parses_a_store_capability_block() {
-        let m = Manifest::parse(
+        let m = parse_manifest(
             r#"{
                 providers: {
                     custom: {
@@ -903,7 +580,7 @@ mod tests {
 
     #[test]
     fn store_block_value_stdin_selects_stdin_mode() {
-        let m = Manifest::parse(
+        let m = parse_manifest(
             r#"{
                 providers: {
                     p: {
@@ -931,7 +608,7 @@ mod tests {
         // `Option<StoreCapability>` is what the published schema derives from,
         // and it says "absent or a store" — so `store: null` has to load as
         // "no store", not as "a store that isn't an object".
-        let m = Manifest::parse(
+        let m = parse_manifest(
             r#"{
                 providers: {
                     p: { retrieve: ["true"], store: null, retrieve_batch: null },
@@ -948,7 +625,7 @@ mod tests {
     fn historical_read_and_write_names_still_parse() {
         // The design doc uses `read`/`write`; manifests written against the
         // doc must keep loading after the rename.
-        let m = Manifest::parse(
+        let m = parse_manifest(
             r#"{
                 providers: {
                     legacy: {

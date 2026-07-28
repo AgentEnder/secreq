@@ -219,7 +219,6 @@ pub fn resolve_all(
 mod tests {
     use super::*;
     use crate::manifest::{BatchRetrieve, Provider};
-    use std::collections::BTreeMap;
 
     /// A retrieve-only provider.
     fn provider(name: &str, retrieve: &[&str]) -> Provider {
@@ -244,7 +243,6 @@ mod tests {
 
     fn manifest(providers: &[Provider]) -> Manifest {
         Manifest {
-            groups: BTreeMap::new(),
             providers: providers
                 .iter()
                 .map(|p| (p.name.clone(), p.clone()))
