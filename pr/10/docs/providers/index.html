@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <link rel="stylesheet" type="text/css" href="/secreq/pr/10/assets/static/pages_tailwind-65fb2459.BZ-Y1DrL.css">
+        <meta charset="UTF-8" />
+        
+        
+    <title>secreq</title><meta property="og:title" content="secreq" />
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <link rel="icon" type="image/svg+xml" href="/secreq/pr/10/favicon.svg"/><meta name="color-scheme" content="dark light"/><link rel="preconnect" href="https://fonts.googleapis.com"/><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin=""/><link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&amp;family=JetBrains+Mono:wght@400;500;600&amp;family=Martian+Mono:wght@400..700&amp;display=swap" rel="stylesheet"/><script>
+(function () {
+  var root = document.documentElement;
+  try {
+    var stored = localStorage.getItem('sq-theme');
+    root.dataset.theme = stored || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  } catch (e) {
+    root.dataset.theme = 'dark';
+  }
+  try {
+    var storedOs = localStorage.getItem('sq-os');
+    if (storedOs) { root.dataset.os = storedOs; return; }
+    var hint = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+    var ua = navigator.userAgent || '';
+    var probe = (hint + ' ' + ua).toLowerCase();
+    // Order matters: an iPhone UA contains "mac", and an Android UA contains
+    // "linux", so the mobile cases have to be settled first. Neither runs
+    // secreq, so they get the desktop chrome their vendor is closest to.
+    root.dataset.os =
+      /android/.test(probe) ? 'gnome'
+      : /iphone|ipad|ipod|mac/.test(probe) ? 'macos'
+      : /win/.test(probe) ? 'windows'
+      : /linux|x11|cros|bsd/.test(probe) ? 'gnome'
+      : 'macos';
+  } catch (e) {
+    root.dataset.os = 'macos';
+  }
+})();
+</script>
+    
+    <meta name="description" content="1Password Shell Plugins, but generic — wrap the CLIs you use every day so each invocation gets its credentials from your secret store, with provenance-aware consent and output masking." /><meta property="og:description" content="1Password Shell Plugins, but generic — wrap the CLIs you use every day so each invocation gets its credentials from your secret store, with provenance-aware consent and output masking." />
+    
+  
+        
+      </head>
+      <body>
+        
+        <div id="root"><div class="shell min-h-screen text-text-2 relative"><div class="ambient" aria-hidden="true"><div class="ambient-wash"></div><div class="ambient-grain"></div></div><header class="shell-header" data-pagefind-ignore="true"><div class="flex items-center h-full gap-2 px-4 sm:px-6"><a href="/secreq/pr/10/" class="brand"><svg class="brand-mark" viewBox="6 6 52 52" aria-hidden="true"><circle class="brand-ping" cx="32" cy="32" r="7"></circle><g class="brand-gate" fill="none" stroke-width="7" stroke-linejoin="miter"><path d="M23 10 H13 V54 H23"></path><path d="M41 10 H51 V54 H41"></path></g><circle class="brand-secret" cx="32" cy="32" r="7"></circle></svg>secreq</a><nav class="hidden md:flex items-stretch h-full ml-6"><a href="/secreq/pr/10/docs" class="nav-link no-underline" data-active="true">Docs</a><a href="/secreq/pr/10/api" class="nav-link no-underline" data-active="false">API</a><a href="/secreq/pr/10/schemas" class="nav-link no-underline" data-active="false">Schemas</a></nav><div class="ml-auto flex items-center gap-1.5"><div class="hidden sm:block w-44 lg:w-56"><div class="relative"><div class="relative"><svg class="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none w-3.5 h-3.5 text-text-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg><input type="search" placeholder="Search the docs" aria-label="Search the docs" class="search-input" value=""/><kbd class="key absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none hidden lg:block">⌘K</kbd></div></div></div><a href="https://github.com/AgentEnder/secreq" target="_blank" rel="noopener noreferrer" class="icon-btn" aria-label="secreq on GitHub"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0a8 8 0 0 0-2.5 15.6c.4.07.55-.17.55-.38v-1.35C3.84 14.3 3.4 13 3.4 13c-.36-.9-.87-1.15-.87-1.15-.71-.48.05-.47.05-.47.79.05 1.2.81 1.2.81.7 1.2 1.83.85 2.28.65.07-.5.27-.85.5-1.05-1.74-.2-3.56-.87-3.56-3.87 0-.85.3-1.55.8-2.1-.08-.2-.35-1 .08-2.07 0 0 .65-.21 2.14.8a7.4 7.4 0 0 1 3.9 0c1.49-1.01 2.14-.8 2.14-.8.43 1.07.16 1.87.08 2.07.5.55.8 1.25.8 2.1 0 3.01-1.83 3.67-3.57 3.86.28.24.53.72.53 1.45v2.15c0 .21.14.46.55.38A8 8 0 0 0 8 0z"></path></svg></a><span class="w-8 h-8 shrink-0" aria-hidden="true"></span><span class="w-8 h-8 shrink-0" aria-hidden="true"></span><button type="button" class="icon-btn md:hidden" aria-expanded="false" aria-label="Open the menu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"></path></svg></button></div></div></header><div class="doc-layout"><div class="rail-wrap hidden md:block border-r border-hairline overflow-y-auto" data-pagefind-ignore="true"><nav class="rail"><div class="rail-group"><span class="rail-group-label">Getting started</span><a href="/secreq/pr/10/docs/install" class="rail-link no-underline" data-active="false">Install</a><a href="/secreq/pr/10/docs/getting-started" class="rail-link no-underline" data-active="false">Getting started</a><a href="/secreq/pr/10/docs/overview" class="rail-link no-underline" data-active="false">Overview</a></div><div class="rail-group"><span class="rail-group-label">Reference</span><a href="/secreq/pr/10/docs/cli" class="rail-link no-underline" data-active="false">CLI guide</a><a href="/secreq/pr/10/docs/cli-reference" class="rail-link no-underline" data-active="false">All commands</a><a href="/secreq/pr/10/docs/wraps" class="rail-link no-underline" data-active="false">Authoring wraps</a><a href="/secreq/pr/10/docs/providers" class="rail-link no-underline" data-active="true">Providers</a></div><div class="rail-group"><span class="rail-group-label">Agents</span><a href="/secreq/pr/10/docs/ssh-agent" class="rail-link no-underline" data-active="false">SSH agent</a><a href="/secreq/pr/10/docs/secret-agent" class="rail-link no-underline" data-active="false">Secret agent</a><a href="/secreq/pr/10/docs/consent-window" class="rail-link no-underline" data-active="false">Consent window</a></div><div class="rail-group"><span class="rail-group-label">Advanced</span><a href="/secreq/pr/10/docs/wasm-rules" class="rail-link no-underline" data-active="false">Programmable rules</a><a href="/secreq/pr/10/api" class="rail-link no-underline" data-active="false">SDK API reference</a><a href="/secreq/pr/10/docs/platform-support" class="rail-link no-underline" data-active="false">Platform support</a><a href="/secreq/pr/10/docs/troubleshooting" class="rail-link no-underline" data-active="false">Troubleshooting</a></div><div class="rail-group"><a href="/secreq/pr/10/schemas" class="rail-link no-underline" data-active="false">Schemas</a></div></nav></div><main class="min-w-0 px-5 py-9 md:px-10 md:py-12"><div class="flex gap-12"><article class="flex-1 min-w-0" style="view-transition-name:doc-article"><nav aria-label="Breadcrumb" class="crumbs mb-7" data-pagefind-ignore="true"><ol><li><a href="/secreq/pr/10/docs">Docs</a></li><li><span class="crumb-sep" aria-hidden="true">/</span><a href="/secreq/pr/10/docs#reference">Reference</a></li><li><span class="crumb-sep" aria-hidden="true">/</span><span aria-current="page">Providers</span></li></ol></nav><h1 class="t-title mb-8">Providers</h1><div class="prose-content" data-pagefind-body="true"><p>A <strong>provider</strong> is a scheme that knows how to <em>retrieve</em> a secret value
+(required) and <em>store</em> one (optional). Each is a declarative description of
+CLI commands; there's no per-provider Rust code, only templates.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 3"><thead><tr><th>Capability</th><th>Required</th><th>Used by</th></tr></thead><tbody><tr><td><code>retrieve</code></td><td>Yes</td><td>Every resolution: each <code>env</code> entry of a wrap, every ambient ref a <code>run</code> finds.</td></tr><tr><td><code>retrieve_batch</code></td><td>No</td><td>Automatically, when ≥2 entries in one wrap share a provider. N secrets, one biometric.</td></tr><tr><td><code>store</code></td><td>No</td><td><code>secreq run --prompt-unresolved</code>, which writes a value to where the locator points.</td></tr></tbody></table>
+<p>A provider with no <code>store</code> is retrieve-only, which is fine for read-only
+stores like <code>op read</code>. A <code>--prompt-unresolved</code> run against a read-only provider fails
+with a clear error rather than silently skipping.</p>
+<h2 id="built-ins">Built-ins</h2>
+<p>Baked into the binary; a provider you declare with the same name overrides
+it wholesale.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 5"><thead><tr><th>Scheme</th><th>Retrieve</th><th>Store</th><th>Batch</th><th>Available</th></tr></thead><tbody><tr><td><code>op</code></td><td><code>op read op://{locator}</code></td><td>— (1Password items vary too much for one template; declare your own)</td><td><code>op run --no-masking -- printenv</code> (single biometric for N refs)</td><td>all</td></tr><tr><td><code>keychain</code></td><td><code>security find-generic-password -w -s {locator}</code></td><td><code>security add-generic-password -U -s {service} -a {account}</code> (value on stdin)</td><td>—</td><td>macOS</td></tr><tr><td><code>lastpass</code></td><td><code>lpass show --password {locator}</code></td><td>—</td><td>—</td><td>Unix</td></tr><tr><td><code>pass</code></td><td><code>pass show {locator}</code></td><td><code>pass insert -f -e {name}</code> (value on stdin)</td><td>—</td><td>Unix</td></tr></tbody></table>
+<p><code>secreq doctor</code> reports which of these have their CLIs installed.</p>
+<h2 id="defining-your-own">Defining your own</h2>
+<pre class="shiki shiki-themes github-light github-dark" style="--shiki-light:#24292e;--shiki-dark:#e1e4e8;--shiki-light-bg:#fff;--shiki-dark-bg:#24292e" tabindex="0"><code><span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">providers: {</span></span>
+<span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">  myvault</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">: {</span></span>
+<span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">    retrieve</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">: [</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"myvault"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"get"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"{locator}"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">],</span></span>
+<span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">    store</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">: {</span></span>
+<span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">      command</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">: [</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"myvault"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"put"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"{item}"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">],</span></span>
+<span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">      fields</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">: {</span></span>
+<span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">        item</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">: { </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">required</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">: </span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">true</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> },</span></span>
+<span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">        tag</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">:  { </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">default</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">: </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"v1"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> },</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">      },</span></span>
+<span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">      value</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">: </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"stdin"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">,        </span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">// keeps the value out of argv</span></span>
+<span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">      locator</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">: </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"{item}"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">,     </span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">// how to build the retrieve-side locator</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    },</span></span>
+<span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">    retrieve_batch</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">: {</span></span>
+<span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">      command</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">: [</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"myvault"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"exec"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"--"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"printenv"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">],</span></span>
+<span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">      env_value</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">: </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"myvault://{locator}"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">,</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    },</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">  },</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">}</span></span></code></pre>
+<h3 id="retrieve"><code>retrieve</code></h3>
+<p>An argv array. <code>{locator}</code> is substituted before the command runs, and the
+command's <strong>stdout</strong> is the value (one trailing newline stripped, matching
+<code>op read</code> and <code>security find-generic-password</code>). A non-zero exit means "not
+found": the resolver applies a <code>default</code> if one exists, else errors.</p>
+<h3 id="store"><code>store</code></h3>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Key</th><th>Meaning</th></tr></thead><tbody><tr><td><code>command</code></td><td>Argv template. <code>{field}</code> placeholders come from the declared fields; <code>{value}</code> is the secret, in argv mode.</td></tr><tr><td><code>fields</code></td><td>Schema for those inputs. Each is <code>{ required: true }</code>, <code>{ optional: true }</code>, or <code>{ default: "…" }</code>.</td></tr><tr><td><code>value</code></td><td><code>"stdin"</code> (preferred) or a template, typically <code>"{value}"</code>.</td></tr><tr><td><code>locator</code></td><td>Template building the <strong>retrieve-locator</strong> from the same fields, so a later <code>retrieve</code> finds what was just written.</td></tr></tbody></table>
+<p>Fields the caller supplies that aren't in the schema are substituted
+verbatim, so a custom template can reference its own placeholders.</p>
+<p><strong>Prefer <code>value: "stdin"</code>.</strong> It pipes the value on the child's stdin, keeping
+it out of argv where <code>ps eww</code> could read it. Both built-ins that support
+storing use it. Argv mode is documented but should be avoided unless the
+underlying CLI has no stdin option. Combining <code>value: "stdin"</code> with a
+<code>{value}</code> placeholder in argv is meaningless: the placeholder stays as the
+literal string, which is the signal you've configured the wrong mode.</p>
+<p>The <code>locator</code> template has to round-trip. keychain's built-in stores with
+<code>-s {service} -a {account}</code> and sets <code>locator: "{service}"</code>, because its
+retrieve template is <code>find-generic-password -w -s {locator}</code>, so storing
+<code>service=myapp</code> writes something the retrieve side can find again.</p>
+<h3 id="retrieve_batch-many-secrets-one-unlock"><code>retrieve_batch</code>: many secrets, one unlock</h3>
+<p>Each <code>op read</code> call triggers a fresh biometric prompt. For a wrap with four
+secrets that's four prompts. <code>op run -- printenv</code> resolves any number of
+refs in one session and emits them as env vars; this generalizes that
+pattern.</p>
+<pre class="shiki shiki-themes github-light github-dark" style="--shiki-light:#24292e;--shiki-dark:#e1e4e8;--shiki-light-bg:#fff;--shiki-dark-bg:#24292e" tabindex="0"><code><span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">retrieve_batch: {</span></span>
+<span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">  command</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">: [</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"op"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"run"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"--no-masking"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"--"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"printenv"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">],</span></span>
+<span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">  env_value</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">: </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"op://{locator}"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">,</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">}</span></span></code></pre>
+<p><strong>How it works.</strong> For each <code>(name, locator)</code> wanted, the resolver sets the
+env var <code>name</code> to <code>env_value</code> with <code>{locator}</code> substituted, spawns
+<code>command</code>, and parses stdout as <code>KEY=VALUE</code> lines. Keys matching a requested
+name yield the value. There's no substitution on the argv itself; the
+synthetic environment is what the command sees.</p>
+<p><strong>When it fires.</strong> Automatically, when ≥2 entries in one wrap share a
+provider that declares it. A single secret through batch buys nothing and
+adds a process, so solo requests fall through to per-secret <code>retrieve</code>.</p>
+<p><strong>It falls back.</strong> If batching errors or returns <em>fewer</em> values than
+requested, the resolver retries the missing ones per-secret and prints one
+<code>batch retrieve … failed; falling back</code> line to stderr.</p>
+<p><strong>Multi-line values are the main reason it returns fewer.</strong> A PEM
+certificate puts literal newlines in the output, so its second line looks
+like a new <code>KEY=VALUE</code> entry that matches nothing. The fallback catches
+these, at the cost of one extra read each.</p>
+<p>To opt out of the built-in <code>op</code> batch, redeclare <code>op</code> without it. A
+declaration replaces the whole built-in entry by name:</p>
+<pre class="shiki shiki-themes github-light github-dark" style="--shiki-light:#24292e;--shiki-dark:#e1e4e8;--shiki-light-bg:#fff;--shiki-dark-bg:#24292e" tabindex="0"><code><span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">providers: {</span></span>
+<span class="line"><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">  op</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">: { </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">retrieve</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">: [</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"op"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"read"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"op://{locator}"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">] },</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">}</span></span></code></pre>
+<h2 id="sub-prompts">Sub-prompts</h2>
+<p>Touch ID, the <code>op</code> biometric and GPG passphrases happen in the <em>invoking</em>
+process; secreq doesn't broker them. For nested runs that means each
+layer's provider invocations sub-prompt in that layer's process, on your
+real terminal.</p>
+<h2 id="compatibility">Compatibility</h2>
+<p>Early drafts used <code>read</code> and <code>write</code> for the retrieve/store fields; the
+parser still accepts both spellings. Prefer <code>retrieve</code>/<code>store</code> in new files.</p>
+<h2 id="contributing-a-built-in">Contributing a built-in</h2>
+<p>To land a new built-in in secreq itself, see
+<a href="https://github.com/AgentEnder/secreq/blob/main/CONTRIBUTING.md"><code>../CONTRIBUTING.md</code></a> and edit
+<code>manifest.rs::builtin_providers()</code>. If you just need a custom provider for
+yourself, declare it in your <code>wraps.json5</code>. No Rust changes needed.</p></div><div data-pagefind-ignore="true" class="mt-16 pt-7 border-t border-hairline flex items-center justify-between gap-4"><a href="/secreq/pr/10/docs" class="text-sm text-text-3 no-underline hover:text-text">← All documentation</a><a href="https://github.com/AgentEnder/secreq/edit/main/docs/providers.md" target="_blank" rel="noopener noreferrer" class="text-sm text-text-3 no-underline hover:text-text">Edit this page</a></div></article><aside data-pagefind-ignore="true" class="hidden xl:block w-52 shrink-0"><div class="sticky top-24"><p class="t-eyebrow mb-3">On this page</p><nav><a href="#built-ins" class="toc-link" data-level="2" data-active="false">Built-ins</a><a href="#defining-your-own" class="toc-link" data-level="2" data-active="false">Defining your own</a><a href="#retrieve" class="toc-link" data-level="3" data-active="false">retrieve</a><a href="#store" class="toc-link" data-level="3" data-active="false">store</a><a href="#retrieve_batch-many-secrets-one-unlock" class="toc-link" data-level="3" data-active="false">retrieve_batch: many secrets, one unlock</a><a href="#sub-prompts" class="toc-link" data-level="2" data-active="false">Sub-prompts</a><a href="#compatibility" class="toc-link" data-level="2" data-active="false">Compatibility</a><a href="#contributing-a-built-in" class="toc-link" data-level="2" data-active="false">Contributing a built-in</a></nav></div></aside></div></main></div></div></div>
+        
+        <script id="vike_pageContext" type="application/json">{"pageId":"\/pages\/docs\/@slug","routeParams":{"slug":"providers"},"data":{"doc":{"slug":"providers","title":"Providers","label":"Providers","section":"Reference","order":6,"renderedHtml":"\u003cp>A \u003cstrong>provider\u003c\/strong> is a scheme that knows how to \u003cem>retrieve\u003c\/em> a secret value\n(required) and \u003cem>store\u003c\/em> one (optional). Each is a declarative description of\nCLI commands; there's no per-provider Rust code, only templates.\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 3\">\u003cthead>\u003ctr>\u003cth>Capability\u003c\/th>\u003cth>Required\u003c\/th>\u003cth>Used by\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>retrieve\u003c\/code>\u003c\/td>\u003ctd>Yes\u003c\/td>\u003ctd>Every resolution: each \u003ccode>env\u003c\/code> entry of a wrap, every ambient ref a \u003ccode>run\u003c\/code> finds.\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>retrieve_batch\u003c\/code>\u003c\/td>\u003ctd>No\u003c\/td>\u003ctd>Automatically, when ≥2 entries in one wrap share a provider. N secrets, one biometric.\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>store\u003c\/code>\u003c\/td>\u003ctd>No\u003c\/td>\u003ctd>\u003ccode>secreq run --prompt-unresolved\u003c\/code>, which writes a value to where the locator points.\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003cp>A provider with no \u003ccode>store\u003c\/code> is retrieve-only, which is fine for read-only\nstores like \u003ccode>op read\u003c\/code>. A \u003ccode>--prompt-unresolved\u003c\/code> run against a read-only provider fails\nwith a clear error rather than silently skipping.\u003c\/p>\n\u003ch2 id=\"built-ins\">Built-ins\u003c\/h2>\n\u003cp>Baked into the binary; a provider you declare with the same name overrides\nit wholesale.\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 5\">\u003cthead>\u003ctr>\u003cth>Scheme\u003c\/th>\u003cth>Retrieve\u003c\/th>\u003cth>Store\u003c\/th>\u003cth>Batch\u003c\/th>\u003cth>Available\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>op\u003c\/code>\u003c\/td>\u003ctd>\u003ccode>op read op:\/\/{locator}\u003c\/code>\u003c\/td>\u003ctd>— (1Password items vary too much for one template; declare your own)\u003c\/td>\u003ctd>\u003ccode>op run --no-masking -- printenv\u003c\/code> (single biometric for N refs)\u003c\/td>\u003ctd>all\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>keychain\u003c\/code>\u003c\/td>\u003ctd>\u003ccode>security find-generic-password -w -s {locator}\u003c\/code>\u003c\/td>\u003ctd>\u003ccode>security add-generic-password -U -s {service} -a {account}\u003c\/code> (value on stdin)\u003c\/td>\u003ctd>—\u003c\/td>\u003ctd>macOS\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>lastpass\u003c\/code>\u003c\/td>\u003ctd>\u003ccode>lpass show --password {locator}\u003c\/code>\u003c\/td>\u003ctd>—\u003c\/td>\u003ctd>—\u003c\/td>\u003ctd>Unix\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>pass\u003c\/code>\u003c\/td>\u003ctd>\u003ccode>pass show {locator}\u003c\/code>\u003c\/td>\u003ctd>\u003ccode>pass insert -f -e {name}\u003c\/code> (value on stdin)\u003c\/td>\u003ctd>—\u003c\/td>\u003ctd>Unix\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003cp>\u003ccode>secreq doctor\u003c\/code> reports which of these have their CLIs installed.\u003c\/p>\n\u003ch2 id=\"defining-your-own\">Defining your own\u003c\/h2>\n\u003cpre class=\"shiki shiki-themes github-light github-dark\" style=\"--shiki-light:#24292e;--shiki-dark:#e1e4e8;--shiki-light-bg:#fff;--shiki-dark-bg:#24292e\" tabindex=\"0\">\u003ccode>\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">providers: {\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">  myvault\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">: {\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">    retrieve\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">: [\u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"myvault\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">, \u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"get\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">, \u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"{locator}\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">],\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">    store\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">: {\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">      command\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">: [\u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"myvault\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">, \u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"put\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">, \u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"{item}\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">],\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">      fields\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">: {\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">        item\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">: { \u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">required\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">: \u003c\/span>\u003cspan style=\"--shiki-light:#005CC5;--shiki-dark:#79B8FF\">true\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\"> },\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">        tag\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">:  { \u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">default\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">: \u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"v1\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\"> },\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">      },\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">      value\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">: \u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"stdin\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">,        \u003c\/span>\u003cspan style=\"--shiki-light:#6A737D;--shiki-dark:#6A737D\">\/\/ keeps the value out of argv\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">      locator\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">: \u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"{item}\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">,     \u003c\/span>\u003cspan style=\"--shiki-light:#6A737D;--shiki-dark:#6A737D\">\/\/ how to build the retrieve-side locator\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">    },\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">    retrieve_batch\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">: {\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">      command\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">: [\u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"myvault\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">, \u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"exec\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">, \u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"--\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">, \u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"printenv\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">],\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">      env_value\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">: \u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"myvault:\/\/{locator}\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">,\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">    },\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">  },\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">}\u003c\/span>\u003c\/span>\u003c\/code>\u003c\/pre>\n\u003ch3 id=\"retrieve\">\u003ccode>retrieve\u003c\/code>\u003c\/h3>\n\u003cp>An argv array. \u003ccode>{locator}\u003c\/code> is substituted before the command runs, and the\ncommand's \u003cstrong>stdout\u003c\/strong> is the value (one trailing newline stripped, matching\n\u003ccode>op read\u003c\/code> and \u003ccode>security find-generic-password\u003c\/code>). A non-zero exit means \"not\nfound\": the resolver applies a \u003ccode>default\u003c\/code> if one exists, else errors.\u003c\/p>\n\u003ch3 id=\"store\">\u003ccode>store\u003c\/code>\u003c\/h3>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Key\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>command\u003c\/code>\u003c\/td>\u003ctd>Argv template. \u003ccode>{field}\u003c\/code> placeholders come from the declared fields; \u003ccode>{value}\u003c\/code> is the secret, in argv mode.\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>fields\u003c\/code>\u003c\/td>\u003ctd>Schema for those inputs. Each is \u003ccode>{ required: true }\u003c\/code>, \u003ccode>{ optional: true }\u003c\/code>, or \u003ccode>{ default: \"…\" }\u003c\/code>.\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>value\u003c\/code>\u003c\/td>\u003ctd>\u003ccode>\"stdin\"\u003c\/code> (preferred) or a template, typically \u003ccode>\"{value}\"\u003c\/code>.\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>locator\u003c\/code>\u003c\/td>\u003ctd>Template building the \u003cstrong>retrieve-locator\u003c\/strong> from the same fields, so a later \u003ccode>retrieve\u003c\/code> finds what was just written.\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003cp>Fields the caller supplies that aren't in the schema are substituted\nverbatim, so a custom template can reference its own placeholders.\u003c\/p>\n\u003cp>\u003cstrong>Prefer \u003ccode>value: \"stdin\"\u003c\/code>.\u003c\/strong> It pipes the value on the child's stdin, keeping\nit out of argv where \u003ccode>ps eww\u003c\/code> could read it. Both built-ins that support\nstoring use it. Argv mode is documented but should be avoided unless the\nunderlying CLI has no stdin option. Combining \u003ccode>value: \"stdin\"\u003c\/code> with a\n\u003ccode>{value}\u003c\/code> placeholder in argv is meaningless: the placeholder stays as the\nliteral string, which is the signal you've configured the wrong mode.\u003c\/p>\n\u003cp>The \u003ccode>locator\u003c\/code> template has to round-trip. keychain's built-in stores with\n\u003ccode>-s {service} -a {account}\u003c\/code> and sets \u003ccode>locator: \"{service}\"\u003c\/code>, because its\nretrieve template is \u003ccode>find-generic-password -w -s {locator}\u003c\/code>, so storing\n\u003ccode>service=myapp\u003c\/code> writes something the retrieve side can find again.\u003c\/p>\n\u003ch3 id=\"retrieve_batch-many-secrets-one-unlock\">\u003ccode>retrieve_batch\u003c\/code>: many secrets, one unlock\u003c\/h3>\n\u003cp>Each \u003ccode>op read\u003c\/code> call triggers a fresh biometric prompt. For a wrap with four\nsecrets that's four prompts. \u003ccode>op run -- printenv\u003c\/code> resolves any number of\nrefs in one session and emits them as env vars; this generalizes that\npattern.\u003c\/p>\n\u003cpre class=\"shiki shiki-themes github-light github-dark\" style=\"--shiki-light:#24292e;--shiki-dark:#e1e4e8;--shiki-light-bg:#fff;--shiki-dark-bg:#24292e\" tabindex=\"0\">\u003ccode>\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">retrieve_batch: {\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">  command\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">: [\u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"op\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">, \u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"run\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">, \u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"--no-masking\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">, \u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"--\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">, \u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"printenv\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">],\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">  env_value\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">: \u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"op:\/\/{locator}\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">,\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">}\u003c\/span>\u003c\/span>\u003c\/code>\u003c\/pre>\n\u003cp>\u003cstrong>How it works.\u003c\/strong> For each \u003ccode>(name, locator)\u003c\/code> wanted, the resolver sets the\nenv var \u003ccode>name\u003c\/code> to \u003ccode>env_value\u003c\/code> with \u003ccode>{locator}\u003c\/code> substituted, spawns\n\u003ccode>command\u003c\/code>, and parses stdout as \u003ccode>KEY=VALUE\u003c\/code> lines. Keys matching a requested\nname yield the value. There's no substitution on the argv itself; the\nsynthetic environment is what the command sees.\u003c\/p>\n\u003cp>\u003cstrong>When it fires.\u003c\/strong> Automatically, when ≥2 entries in one wrap share a\nprovider that declares it. A single secret through batch buys nothing and\nadds a process, so solo requests fall through to per-secret \u003ccode>retrieve\u003c\/code>.\u003c\/p>\n\u003cp>\u003cstrong>It falls back.\u003c\/strong> If batching errors or returns \u003cem>fewer\u003c\/em> values than\nrequested, the resolver retries the missing ones per-secret and prints one\n\u003ccode>batch retrieve … failed; falling back\u003c\/code> line to stderr.\u003c\/p>\n\u003cp>\u003cstrong>Multi-line values are the main reason it returns fewer.\u003c\/strong> A PEM\ncertificate puts literal newlines in the output, so its second line looks\nlike a new \u003ccode>KEY=VALUE\u003c\/code> entry that matches nothing. The fallback catches\nthese, at the cost of one extra read each.\u003c\/p>\n\u003cp>To opt out of the built-in \u003ccode>op\u003c\/code> batch, redeclare \u003ccode>op\u003c\/code> without it. A\ndeclaration replaces the whole built-in entry by name:\u003c\/p>\n\u003cpre class=\"shiki shiki-themes github-light github-dark\" style=\"--shiki-light:#24292e;--shiki-dark:#e1e4e8;--shiki-light-bg:#fff;--shiki-dark-bg:#24292e\" tabindex=\"0\">\u003ccode>\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">providers: {\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">  op\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">: { \u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">retrieve\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">: [\u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"op\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">, \u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"read\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">, \u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"op:\/\/{locator}\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">] },\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">}\u003c\/span>\u003c\/span>\u003c\/code>\u003c\/pre>\n\u003ch2 id=\"sub-prompts\">Sub-prompts\u003c\/h2>\n\u003cp>Touch ID, the \u003ccode>op\u003c\/code> biometric and GPG passphrases happen in the \u003cem>invoking\u003c\/em>\nprocess; secreq doesn't broker them. For nested runs that means each\nlayer's provider invocations sub-prompt in that layer's process, on your\nreal terminal.\u003c\/p>\n\u003ch2 id=\"compatibility\">Compatibility\u003c\/h2>\n\u003cp>Early drafts used \u003ccode>read\u003c\/code> and \u003ccode>write\u003c\/code> for the retrieve\/store fields; the\nparser still accepts both spellings. Prefer \u003ccode>retrieve\u003c\/code>\/\u003ccode>store\u003c\/code> in new files.\u003c\/p>\n\u003ch2 id=\"contributing-a-built-in\">Contributing a built-in\u003c\/h2>\n\u003cp>To land a new built-in in secreq itself, see\n\u003ca href=\"https:\/\/github.com\/AgentEnder\/secreq\/blob\/main\/CONTRIBUTING.md\">\u003ccode>..\/CONTRIBUTING.md\u003c\/code>\u003c\/a> and edit\n\u003ccode>manifest.rs::builtin_providers()\u003c\/code>. If you just need a custom provider for\nyourself, declare it in your \u003ccode>wraps.json5\u003c\/code>. No Rust changes needed.\u003c\/p>","headings":[{"id":"built-ins","text":"Built-ins","level":2},{"id":"defining-your-own","text":"Defining your own","level":2},{"id":"retrieve","text":"retrieve","level":3},{"id":"store","text":"store","level":3},{"id":"retrieve_batch-many-secrets-one-unlock","text":"retrieve_batch: many secrets, one unlock","level":3},{"id":"sub-prompts","text":"Sub-prompts","level":2},{"id":"compatibility","text":"Compatibility","level":2},{"id":"contributing-a-built-in","text":"Contributing a built-in","level":2}]}}}</script>
+        <script id="vike_globalContext" type="application/json">{"navigation":[{"title":"Getting started","children":[{"title":"Install","path":"\/docs\/install"},{"title":"Getting started","path":"\/docs\/getting-started"},{"title":"Overview","path":"\/docs\/overview"}]},{"title":"Reference","children":[{"title":"CLI guide","path":"\/docs\/cli"},{"title":"All commands","path":"\/docs\/cli-reference"},{"title":"Authoring wraps","path":"\/docs\/wraps"},{"title":"Providers","path":"\/docs\/providers"}]},{"title":"Agents","children":[{"title":"SSH agent","path":"\/docs\/ssh-agent"},{"title":"Secret agent","path":"\/docs\/secret-agent"},{"title":"Consent window","path":"\/docs\/consent-window"}]},{"title":"Advanced","children":[{"title":"Programmable rules","path":"\/docs\/wasm-rules"},{"title":"SDK API reference","path":"\/api"},{"title":"Platform support","path":"\/docs\/platform-support"},{"title":"Troubleshooting","path":"\/docs\/troubleshooting"}]},{"title":"Schemas","path":"\/schemas"}]}</script>
+        <script src="/secreq/pr/10/assets/entries/entry-client-routing.CPG5s9f6.js" type="module" async></script>
+        <link rel="modulepreload" href="/secreq/pr/10/assets/entries/pages_docs_-slug.BF8u2MRl.js" as="script" type="text/javascript">
+        <link rel="modulepreload" href="/secreq/pr/10/assets/chunks/chunk-BC6QLtP_.js" as="script" type="text/javascript">
+        <link rel="modulepreload" href="/secreq/pr/10/assets/chunks/chunk-Ba_0J0TA.js" as="script" type="text/javascript">
+        <link rel="modulepreload" href="/secreq/pr/10/assets/chunks/chunk-B8tIolwn.js" as="script" type="text/javascript">
+        <link rel="modulepreload" href="/secreq/pr/10/assets/chunks/chunk-cTVG-Wkl.js" as="script" type="text/javascript">
+        <link rel="modulepreload" href="/secreq/pr/10/assets/chunks/chunk-050flkl4.js" as="script" type="text/javascript">
+      </body>
+    </html>

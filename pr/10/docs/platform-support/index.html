@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <link rel="stylesheet" type="text/css" href="/secreq/pr/10/assets/static/pages_tailwind-65fb2459.BZ-Y1DrL.css">
+        <meta charset="UTF-8" />
+        
+        
+    <title>secreq</title><meta property="og:title" content="secreq" />
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <link rel="icon" type="image/svg+xml" href="/secreq/pr/10/favicon.svg"/><meta name="color-scheme" content="dark light"/><link rel="preconnect" href="https://fonts.googleapis.com"/><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin=""/><link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&amp;family=JetBrains+Mono:wght@400;500;600&amp;family=Martian+Mono:wght@400..700&amp;display=swap" rel="stylesheet"/><script>
+(function () {
+  var root = document.documentElement;
+  try {
+    var stored = localStorage.getItem('sq-theme');
+    root.dataset.theme = stored || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  } catch (e) {
+    root.dataset.theme = 'dark';
+  }
+  try {
+    var storedOs = localStorage.getItem('sq-os');
+    if (storedOs) { root.dataset.os = storedOs; return; }
+    var hint = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+    var ua = navigator.userAgent || '';
+    var probe = (hint + ' ' + ua).toLowerCase();
+    // Order matters: an iPhone UA contains "mac", and an Android UA contains
+    // "linux", so the mobile cases have to be settled first. Neither runs
+    // secreq, so they get the desktop chrome their vendor is closest to.
+    root.dataset.os =
+      /android/.test(probe) ? 'gnome'
+      : /iphone|ipad|ipod|mac/.test(probe) ? 'macos'
+      : /win/.test(probe) ? 'windows'
+      : /linux|x11|cros|bsd/.test(probe) ? 'gnome'
+      : 'macos';
+  } catch (e) {
+    root.dataset.os = 'macos';
+  }
+})();
+</script>
+    
+    <meta name="description" content="1Password Shell Plugins, but generic — wrap the CLIs you use every day so each invocation gets its credentials from your secret store, with provenance-aware consent and output masking." /><meta property="og:description" content="1Password Shell Plugins, but generic — wrap the CLIs you use every day so each invocation gets its credentials from your secret store, with provenance-aware consent and output masking." />
+    
+  
+        
+      </head>
+      <body>
+        
+        <div id="root"><div class="shell min-h-screen text-text-2 relative"><div class="ambient" aria-hidden="true"><div class="ambient-wash"></div><div class="ambient-grain"></div></div><header class="shell-header" data-pagefind-ignore="true"><div class="flex items-center h-full gap-2 px-4 sm:px-6"><a href="/secreq/pr/10/" class="brand"><svg class="brand-mark" viewBox="6 6 52 52" aria-hidden="true"><circle class="brand-ping" cx="32" cy="32" r="7"></circle><g class="brand-gate" fill="none" stroke-width="7" stroke-linejoin="miter"><path d="M23 10 H13 V54 H23"></path><path d="M41 10 H51 V54 H41"></path></g><circle class="brand-secret" cx="32" cy="32" r="7"></circle></svg>secreq</a><nav class="hidden md:flex items-stretch h-full ml-6"><a href="/secreq/pr/10/docs" class="nav-link no-underline" data-active="true">Docs</a><a href="/secreq/pr/10/api" class="nav-link no-underline" data-active="false">API</a><a href="/secreq/pr/10/schemas" class="nav-link no-underline" data-active="false">Schemas</a></nav><div class="ml-auto flex items-center gap-1.5"><div class="hidden sm:block w-44 lg:w-56"><div class="relative"><div class="relative"><svg class="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none w-3.5 h-3.5 text-text-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg><input type="search" placeholder="Search the docs" aria-label="Search the docs" class="search-input" value=""/><kbd class="key absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none hidden lg:block">⌘K</kbd></div></div></div><a href="https://github.com/AgentEnder/secreq" target="_blank" rel="noopener noreferrer" class="icon-btn" aria-label="secreq on GitHub"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0a8 8 0 0 0-2.5 15.6c.4.07.55-.17.55-.38v-1.35C3.84 14.3 3.4 13 3.4 13c-.36-.9-.87-1.15-.87-1.15-.71-.48.05-.47.05-.47.79.05 1.2.81 1.2.81.7 1.2 1.83.85 2.28.65.07-.5.27-.85.5-1.05-1.74-.2-3.56-.87-3.56-3.87 0-.85.3-1.55.8-2.1-.08-.2-.35-1 .08-2.07 0 0 .65-.21 2.14.8a7.4 7.4 0 0 1 3.9 0c1.49-1.01 2.14-.8 2.14-.8.43 1.07.16 1.87.08 2.07.5.55.8 1.25.8 2.1 0 3.01-1.83 3.67-3.57 3.86.28.24.53.72.53 1.45v2.15c0 .21.14.46.55.38A8 8 0 0 0 8 0z"></path></svg></a><span class="w-8 h-8 shrink-0" aria-hidden="true"></span><span class="w-8 h-8 shrink-0" aria-hidden="true"></span><button type="button" class="icon-btn md:hidden" aria-expanded="false" aria-label="Open the menu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"></path></svg></button></div></div></header><div class="doc-layout"><div class="rail-wrap hidden md:block border-r border-hairline overflow-y-auto" data-pagefind-ignore="true"><nav class="rail"><div class="rail-group"><span class="rail-group-label">Getting started</span><a href="/secreq/pr/10/docs/install" class="rail-link no-underline" data-active="false">Install</a><a href="/secreq/pr/10/docs/getting-started" class="rail-link no-underline" data-active="false">Getting started</a><a href="/secreq/pr/10/docs/overview" class="rail-link no-underline" data-active="false">Overview</a></div><div class="rail-group"><span class="rail-group-label">Reference</span><a href="/secreq/pr/10/docs/cli" class="rail-link no-underline" data-active="false">CLI guide</a><a href="/secreq/pr/10/docs/cli-reference" class="rail-link no-underline" data-active="false">All commands</a><a href="/secreq/pr/10/docs/wraps" class="rail-link no-underline" data-active="false">Authoring wraps</a><a href="/secreq/pr/10/docs/providers" class="rail-link no-underline" data-active="false">Providers</a></div><div class="rail-group"><span class="rail-group-label">Agents</span><a href="/secreq/pr/10/docs/ssh-agent" class="rail-link no-underline" data-active="false">SSH agent</a><a href="/secreq/pr/10/docs/secret-agent" class="rail-link no-underline" data-active="false">Secret agent</a><a href="/secreq/pr/10/docs/consent-window" class="rail-link no-underline" data-active="false">Consent window</a></div><div class="rail-group"><span class="rail-group-label">Advanced</span><a href="/secreq/pr/10/docs/wasm-rules" class="rail-link no-underline" data-active="false">Programmable rules</a><a href="/secreq/pr/10/api" class="rail-link no-underline" data-active="false">SDK API reference</a><a href="/secreq/pr/10/docs/platform-support" class="rail-link no-underline" data-active="true">Platform support</a><a href="/secreq/pr/10/docs/troubleshooting" class="rail-link no-underline" data-active="false">Troubleshooting</a></div><div class="rail-group"><a href="/secreq/pr/10/schemas" class="rail-link no-underline" data-active="false">Schemas</a></div></nav></div><main class="min-w-0 px-5 py-9 md:px-10 md:py-12"><div class="flex gap-12"><article class="flex-1 min-w-0" style="view-transition-name:doc-article"><nav aria-label="Breadcrumb" class="crumbs mb-7" data-pagefind-ignore="true"><ol><li><a href="/secreq/pr/10/docs">Docs</a></li><li><span class="crumb-sep" aria-hidden="true">/</span><a href="/secreq/pr/10/docs#advanced">Advanced</a></li><li><span class="crumb-sep" aria-hidden="true">/</span><span aria-current="page">Platform support</span></li></ol></nav><h1 class="t-title mb-8">Platform support</h1><div class="prose-content" data-pagefind-body="true"><p><code>secreq</code> runs on macOS and Linux today. Everything it does is written against
+Unix interfaces, so a Windows port is a real piece of work rather than a
+recompile, but it is wanted and nothing about the design rules it out.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Platform</th><th>Status</th></tr></thead><tbody><tr><td>macOS</td><td>Supported</td></tr><tr><td>Linux</td><td>Supported</td></tr><tr><td>*BSD (FreeBSD, OpenBSD, NetBSD)</td><td>Not supported</td></tr><tr><td>Windows</td><td>Not supported</td></tr></tbody></table>
+<p>The gating is the OS, not the CPU: x86_64 and aarch64 both work wherever the
+OS does. Prebuilt binaries ship for all four supported combinations
+(<code>{x86_64,aarch64}-{unknown-linux-gnu,apple-darwin}</code>); anywhere else,
+<a href="/secreq/pr/10/docs/install#cargo-install"><code>cargo install</code></a> builds from source.</p>
+<h2 id="macos">macOS</h2>
+<p>Everything works out of the box. <code>secreq daemon install</code> writes a launchd
+LaunchAgent, which keeps the daemon running across logins. A backgrounded
+consent window still repaints when the daemon has something to ask, so a
+prompt never arrives frozen.</p>
+<h2 id="linux">Linux</h2>
+<p><code>secreq daemon install</code> writes a systemd <code>--user</code> unit. It inherits your
+user-session environment, so <code>op</code> and the other provider CLIs are on <code>PATH</code>,
+and it journals to <code>journalctl --user -u secreq</code>.</p>
+<p>The consent window needs a graphical session; both X11 and Wayland work.
+Without one, see <a href="#headless-use">headless use</a> below.</p>
+<p>Sockets live under <code>$XDG_RUNTIME_DIR</code> when it is set, which is the
+tmpfs-backed per-user directory that gets cleaned up when you log out. If it
+is unset, secreq falls back to its own root at <code>~/.secreq/run</code>.</p>
+<h2 id="bsd">*BSD</h2>
+<p>Unix sockets, PATH shims, <code>execvp</code> and the provider CLIs all port to the
+BSDs. Two things are missing:</p>
+<ol>
+<li>It does not compile yet. The SSH agent reads the peer process id through
+code written for Linux and macOS only, so a BSD build fails at compile
+time. The missing piece is a <code>getpeereid</code> / <code>LOCAL_PEERCRED</code> branch in
+<code>daemon/peercred.rs</code>.</li>
+<li>There is no login service. Autostart knows launchd and systemd, so
+<code>secreq daemon install</code> produces nothing usable. Run <code>secreq daemon --fg</code>
+under your own supervisor instead.</li>
+</ol>
+<p>Patches welcome. BSD is not supported today.</p>
+<h2 id="windows">Windows</h2>
+<p>Not yet. There is no Windows build, and nobody is running one.</p>
+<p>It is not blocked on anything conceptual: each interface secreq relies on has
+a Windows counterpart, and porting means writing against them rather than
+finding a substitute for something missing.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>What secreq uses on Unix</th><th>The Windows counterpart</th></tr></thead><tbody><tr><td><code>SO_PEERCRED</code> / <code>LOCAL_PEERPID</code> on a unix socket</td><td>A named pipe, whose client pid comes from <code>GetNamedPipeClientProcessId</code></td></tr><tr><td>Walking <code>/proc</code> or <code>sysctl</code> for the caller chain</td><td><code>CreateToolhelp32Snapshot</code>, which reports each process's parent</td></tr><tr><td>Process start time, to defeat pid recycling</td><td><code>GetProcessTimes</code></td></tr><tr><td>A PATH shim that <code>execvp</code>s the real binary</td><td>A shim executable on <code>PATH</code>, the mechanism scoop and chocolatey already use</td></tr><tr><td>launchd and systemd <code>--user</code></td><td>Task Scheduler, or a Run key</td></tr></tbody></table>
+<p>Two of those are more than renaming a call. Windows has <code>AF_UNIX</code> but carries
+no peer credentials over it, so the daemon's socket layer would become named
+pipes rather than gaining a <code>#[cfg]</code> arm. And nothing on Windows replaces a
+process in place the way <code>execvp</code> does: the shim either exits and leaves the
+binary running under a new pid, or stays alive as its parent and forwards the
+exit code. Either way the caller chain the consent prompt shows you gains a
+frame that isn't there on Unix.</p>
+<p>The screenshots in these docs are rendered in a Windows theme as well as
+macOS and GNOME, so you may see one that looks native. That is the docs
+showing you chrome you recognise, not a working port.</p>
+<h2 id="headless-use">Headless use</h2>
+<p>The consent window is the only piece that needs a display. Where there's no
+graphical session (CI, an SSH session without forwarding, a container),
+approve per-invocation instead:</p>
+<ul>
+<li><code>secreq x &#x3C;bin></code> and the wrap shims: <strong><code>--sq-yes</code></strong>.</li>
+<li><code>secreq run … -- &#x3C;cmd></code>: <strong><code>--yes</code></strong>.</li>
+</ul>
+<p>Everything else works headless: the daemon, provider resolution, masking,
+and the audit log.</p></div><div data-pagefind-ignore="true" class="mt-16 pt-7 border-t border-hairline flex items-center justify-between gap-4"><a href="/secreq/pr/10/docs" class="text-sm text-text-3 no-underline hover:text-text">← All documentation</a><a href="https://github.com/AgentEnder/secreq/edit/main/docs/platform-support.md" target="_blank" rel="noopener noreferrer" class="text-sm text-text-3 no-underline hover:text-text">Edit this page</a></div></article><aside data-pagefind-ignore="true" class="hidden xl:block w-52 shrink-0"><div class="sticky top-24"><p class="t-eyebrow mb-3">On this page</p><nav><a href="#macos" class="toc-link" data-level="2" data-active="false">macOS</a><a href="#linux" class="toc-link" data-level="2" data-active="false">Linux</a><a href="#bsd" class="toc-link" data-level="2" data-active="false">*BSD</a><a href="#windows" class="toc-link" data-level="2" data-active="false">Windows</a><a href="#headless-use" class="toc-link" data-level="2" data-active="false">Headless use</a></nav></div></aside></div></main></div></div></div>
+        
+        <script id="vike_pageContext" type="application/json">{"pageId":"\/pages\/docs\/@slug","routeParams":{"slug":"platform-support"},"data":{"doc":{"slug":"platform-support","title":"Platform support","label":"Platform support","section":"Advanced","order":11,"renderedHtml":"\u003cp>\u003ccode>secreq\u003c\/code> runs on macOS and Linux today. Everything it does is written against\nUnix interfaces, so a Windows port is a real piece of work rather than a\nrecompile, but it is wanted and nothing about the design rules it out.\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Platform\u003c\/th>\u003cth>Status\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>macOS\u003c\/td>\u003ctd>Supported\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>Linux\u003c\/td>\u003ctd>Supported\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>*BSD (FreeBSD, OpenBSD, NetBSD)\u003c\/td>\u003ctd>Not supported\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>Windows\u003c\/td>\u003ctd>Not supported\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003cp>The gating is the OS, not the CPU: x86_64 and aarch64 both work wherever the\nOS does. Prebuilt binaries ship for all four supported combinations\n(\u003ccode>{x86_64,aarch64}-{unknown-linux-gnu,apple-darwin}\u003c\/code>); anywhere else,\n\u003ca href=\"\/secreq\/pr\/10\/docs\/install#cargo-install\">\u003ccode>cargo install\u003c\/code>\u003c\/a> builds from source.\u003c\/p>\n\u003ch2 id=\"macos\">macOS\u003c\/h2>\n\u003cp>Everything works out of the box. \u003ccode>secreq daemon install\u003c\/code> writes a launchd\nLaunchAgent, which keeps the daemon running across logins. A backgrounded\nconsent window still repaints when the daemon has something to ask, so a\nprompt never arrives frozen.\u003c\/p>\n\u003ch2 id=\"linux\">Linux\u003c\/h2>\n\u003cp>\u003ccode>secreq daemon install\u003c\/code> writes a systemd \u003ccode>--user\u003c\/code> unit. It inherits your\nuser-session environment, so \u003ccode>op\u003c\/code> and the other provider CLIs are on \u003ccode>PATH\u003c\/code>,\nand it journals to \u003ccode>journalctl --user -u secreq\u003c\/code>.\u003c\/p>\n\u003cp>The consent window needs a graphical session; both X11 and Wayland work.\nWithout one, see \u003ca href=\"#headless-use\">headless use\u003c\/a> below.\u003c\/p>\n\u003cp>Sockets live under \u003ccode>$XDG_RUNTIME_DIR\u003c\/code> when it is set, which is the\ntmpfs-backed per-user directory that gets cleaned up when you log out. If it\nis unset, secreq falls back to its own root at \u003ccode>~\/.secreq\/run\u003c\/code>.\u003c\/p>\n\u003ch2 id=\"bsd\">*BSD\u003c\/h2>\n\u003cp>Unix sockets, PATH shims, \u003ccode>execvp\u003c\/code> and the provider CLIs all port to the\nBSDs. Two things are missing:\u003c\/p>\n\u003col>\n\u003cli>It does not compile yet. The SSH agent reads the peer process id through\ncode written for Linux and macOS only, so a BSD build fails at compile\ntime. The missing piece is a \u003ccode>getpeereid\u003c\/code> \/ \u003ccode>LOCAL_PEERCRED\u003c\/code> branch in\n\u003ccode>daemon\/peercred.rs\u003c\/code>.\u003c\/li>\n\u003cli>There is no login service. Autostart knows launchd and systemd, so\n\u003ccode>secreq daemon install\u003c\/code> produces nothing usable. Run \u003ccode>secreq daemon --fg\u003c\/code>\nunder your own supervisor instead.\u003c\/li>\n\u003c\/ol>\n\u003cp>Patches welcome. BSD is not supported today.\u003c\/p>\n\u003ch2 id=\"windows\">Windows\u003c\/h2>\n\u003cp>Not yet. There is no Windows build, and nobody is running one.\u003c\/p>\n\u003cp>It is not blocked on anything conceptual: each interface secreq relies on has\na Windows counterpart, and porting means writing against them rather than\nfinding a substitute for something missing.\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>What secreq uses on Unix\u003c\/th>\u003cth>The Windows counterpart\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>SO_PEERCRED\u003c\/code> \/ \u003ccode>LOCAL_PEERPID\u003c\/code> on a unix socket\u003c\/td>\u003ctd>A named pipe, whose client pid comes from \u003ccode>GetNamedPipeClientProcessId\u003c\/code>\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>Walking \u003ccode>\/proc\u003c\/code> or \u003ccode>sysctl\u003c\/code> for the caller chain\u003c\/td>\u003ctd>\u003ccode>CreateToolhelp32Snapshot\u003c\/code>, which reports each process's parent\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>Process start time, to defeat pid recycling\u003c\/td>\u003ctd>\u003ccode>GetProcessTimes\u003c\/code>\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>A PATH shim that \u003ccode>execvp\u003c\/code>s the real binary\u003c\/td>\u003ctd>A shim executable on \u003ccode>PATH\u003c\/code>, the mechanism scoop and chocolatey already use\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>launchd and systemd \u003ccode>--user\u003c\/code>\u003c\/td>\u003ctd>Task Scheduler, or a Run key\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003cp>Two of those are more than renaming a call. Windows has \u003ccode>AF_UNIX\u003c\/code> but carries\nno peer credentials over it, so the daemon's socket layer would become named\npipes rather than gaining a \u003ccode>#[cfg]\u003c\/code> arm. And nothing on Windows replaces a\nprocess in place the way \u003ccode>execvp\u003c\/code> does: the shim either exits and leaves the\nbinary running under a new pid, or stays alive as its parent and forwards the\nexit code. Either way the caller chain the consent prompt shows you gains a\nframe that isn't there on Unix.\u003c\/p>\n\u003cp>The screenshots in these docs are rendered in a Windows theme as well as\nmacOS and GNOME, so you may see one that looks native. That is the docs\nshowing you chrome you recognise, not a working port.\u003c\/p>\n\u003ch2 id=\"headless-use\">Headless use\u003c\/h2>\n\u003cp>The consent window is the only piece that needs a display. Where there's no\ngraphical session (CI, an SSH session without forwarding, a container),\napprove per-invocation instead:\u003c\/p>\n\u003cul>\n\u003cli>\u003ccode>secreq x &#x3C;bin>\u003c\/code> and the wrap shims: \u003cstrong>\u003ccode>--sq-yes\u003c\/code>\u003c\/strong>.\u003c\/li>\n\u003cli>\u003ccode>secreq run … -- &#x3C;cmd>\u003c\/code>: \u003cstrong>\u003ccode>--yes\u003c\/code>\u003c\/strong>.\u003c\/li>\n\u003c\/ul>\n\u003cp>Everything else works headless: the daemon, provider resolution, masking,\nand the audit log.\u003c\/p>","headings":[{"id":"macos","text":"macOS","level":2},{"id":"linux","text":"Linux","level":2},{"id":"bsd","text":"*BSD","level":2},{"id":"windows","text":"Windows","level":2},{"id":"headless-use","text":"Headless use","level":2}]}}}</script>
+        <script id="vike_globalContext" type="application/json">{"navigation":[{"title":"Getting started","children":[{"title":"Install","path":"\/docs\/install"},{"title":"Getting started","path":"\/docs\/getting-started"},{"title":"Overview","path":"\/docs\/overview"}]},{"title":"Reference","children":[{"title":"CLI guide","path":"\/docs\/cli"},{"title":"All commands","path":"\/docs\/cli-reference"},{"title":"Authoring wraps","path":"\/docs\/wraps"},{"title":"Providers","path":"\/docs\/providers"}]},{"title":"Agents","children":[{"title":"SSH agent","path":"\/docs\/ssh-agent"},{"title":"Secret agent","path":"\/docs\/secret-agent"},{"title":"Consent window","path":"\/docs\/consent-window"}]},{"title":"Advanced","children":[{"title":"Programmable rules","path":"\/docs\/wasm-rules"},{"title":"SDK API reference","path":"\/api"},{"title":"Platform support","path":"\/docs\/platform-support"},{"title":"Troubleshooting","path":"\/docs\/troubleshooting"}]},{"title":"Schemas","path":"\/schemas"}]}</script>
+        <script src="/secreq/pr/10/assets/entries/entry-client-routing.CPG5s9f6.js" type="module" async></script>
+        <link rel="modulepreload" href="/secreq/pr/10/assets/entries/pages_docs_-slug.BF8u2MRl.js" as="script" type="text/javascript">
+        <link rel="modulepreload" href="/secreq/pr/10/assets/chunks/chunk-BC6QLtP_.js" as="script" type="text/javascript">
+        <link rel="modulepreload" href="/secreq/pr/10/assets/chunks/chunk-Ba_0J0TA.js" as="script" type="text/javascript">
+        <link rel="modulepreload" href="/secreq/pr/10/assets/chunks/chunk-B8tIolwn.js" as="script" type="text/javascript">
+        <link rel="modulepreload" href="/secreq/pr/10/assets/chunks/chunk-cTVG-Wkl.js" as="script" type="text/javascript">
+        <link rel="modulepreload" href="/secreq/pr/10/assets/chunks/chunk-050flkl4.js" as="script" type="text/javascript">
+      </body>
+    </html>
