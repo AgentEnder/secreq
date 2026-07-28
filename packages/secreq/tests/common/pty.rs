@@ -108,7 +108,16 @@ impl PtyRun {
                 if libc::setsid() < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
-                if libc::ioctl(0, libc::TIOCSCTTY.into(), 0) < 0 {
+                // `.into()` is load-bearing on macOS, where `TIOCSCTTY` is
+                // narrower than the request argument, and a no-op on Linux
+                // where both are `c_ulong` — so clippy calls it useless on
+                // exactly one of the two platforms this test target builds
+                // for. Allowed rather than cfg-split: two spellings of one
+                // ioctl is more to read, and more to get wrong, than a line
+                // saying why the conversion looks redundant here.
+                #[allow(clippy::useless_conversion)]
+                let request = libc::TIOCSCTTY.into();
+                if libc::ioctl(0, request, 0) < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 Ok(())
