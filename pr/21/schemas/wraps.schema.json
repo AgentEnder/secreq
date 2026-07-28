@@ -1,0 +1,239 @@
+{
+  "$id": "https://craigory.dev/secreq/schemas/wraps.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "BatchRetrieve": {
+      "additionalProperties": false,
+      "description": "Batched-retrieve: one command invocation resolves many secrets at once (e.g. `op run -- printenv`). Used automatically when a wrap's `env` references the same provider for two or more entries, cutting biometric prompts from N to 1. Protocol: per requested (name, locator), set env var `name` to `env_value` with `{locator}` substituted; spawn `command`; parse stdout as `KEY=VALUE` lines.",
+      "properties": {
+        "command": {
+          "description": "argv to execute. The synthetic env entries are added to the child's environment; no placeholder substitution happens on `command` itself.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "env_value": {
+          "description": "Template for each synthetic env entry's value. `{locator}` is substituted per secret; the env-var name is the secret's name. For 1Password: `\"op://{locator}\"`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "env_value"
+      ],
+      "type": "object"
+    },
+    "FieldSpec": {
+      "additionalProperties": false,
+      "description": "Schema for one field in a provider's `store.fields`.",
+      "properties": {
+        "default": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "optional": {
+          "description": "Sugar for `required: false`.",
+          "type": "boolean"
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Provider": {
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "retrieve"
+          ]
+        },
+        {
+          "required": [
+            "read"
+          ]
+        }
+      ],
+      "description": "A provider scheme. Required `retrieve`, optional `store`, optional `retrieve_batch`.",
+      "properties": {
+        "read": {
+          "description": "Legacy name for `retrieve` (the design doc §6 uses this name). Both are accepted; prefer `retrieve`.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "retrieve": {
+          "default": [],
+          "description": "Argv template for fetching a secret. `{locator}` is substituted with the secret's locator; stdout is the value (one trailing newline stripped).",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "retrieveBatch": {
+          "$ref": "#/definitions/BatchRetrieve",
+          "description": "camelCase alias for `retrieve_batch`."
+        },
+        "retrieve_batch": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BatchRetrieve"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Batched retrieve: one command invocation resolves many secrets at once (e.g. `op run -- printenv`). Used automatically when a wrap's `env` references the same provider for two or more entries, cutting biometric prompts from N to 1."
+        },
+        "store": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StoreCapability"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How this provider persists a new value. Optional — a provider without it is retrieve-only."
+        },
+        "write": {
+          "$ref": "#/definitions/StoreCapability",
+          "description": "Legacy name for `store`. Both are accepted; prefer `store`."
+        }
+      },
+      "type": "object"
+    },
+    "SshIdentity": {
+      "additionalProperties": false,
+      "description": "One SSH identity served by the agent. `public_key` is the inline OpenSSH public key (not secret); `private_key` is a `secret://provider/locator` reference resolved only at SIGN time.",
+      "properties": {
+        "private_key": {
+          "description": "A `secret://provider/locator` reference to the private key, resolved only at SIGN time.",
+          "pattern": "^secret://[^/]+/.+$",
+          "type": "string"
+        },
+        "public_key": {
+          "description": "Inline OpenSSH public key (`ssh-ed25519 AAAA… comment`). Answered to REQUEST_IDENTITIES without a resolve.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Rationale shown in the consent prompt when this identity is used to sign.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "public_key",
+        "private_key"
+      ],
+      "type": "object"
+    },
+    "StoreCapability": {
+      "additionalProperties": false,
+      "description": "How this provider persists a new value (currently exposed via custom CLIs the user may write that drive `secreq` programmatically — the public `secreq` CLI no longer exposes a `store` verb).",
+      "properties": {
+        "command": {
+          "description": "Argv template. `{field}` placeholders are filled from caller-supplied inputs; `{value}` (argv mode) is the secret. Prefer stdin mode.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "fields": {
+          "additionalProperties": {
+            "$ref": "#/definitions/FieldSpec"
+          },
+          "type": "object"
+        },
+        "locator": {
+          "description": "Template that builds the retrieve-side locator from the same field inputs.",
+          "type": "string"
+        },
+        "value": {
+          "default": "stdin",
+          "description": "How the secret reaches `command`. Omitted or `\"stdin\"` pipes it in on stdin, which is the default. Any other string (typically `\"{value}\"`) opts into argv-substitution mode, where the secret appears in the process's command line and is readable by other users on Linux at the default `hidepid=0`. Prefer stdin.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "locator"
+      ],
+      "type": "object"
+    },
+    "Wrap": {
+      "additionalProperties": false,
+      "description": "One per-binary wrap. `env` is optional: a wrap with no env entries is *gate-only* — consent is required before the binary runs, but nothing is injected (used to gate tools like `op` that have no secret to pass). Everything else is metadata.",
+      "properties": {
+        "env": {
+          "additionalProperties": {
+            "description": "A `secret://provider/locator` reference.",
+            "pattern": "^secret://[^/]+/.+$",
+            "type": "string"
+          },
+          "description": "Environment variables to inject. Each value is a `secret://provider/locator` reference; resolution happens at invocation time. Omit (or leave empty) for a gate-only wrap.",
+          "type": "object"
+        },
+        "reason": {
+          "description": "Rationale shown in the consent prompt when this wrap is invoked.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "description": "Configuration for `secreq` (`~/.secreq/config.toml`, or `$SECREQ_HOME/config.toml`). Wraps live under `wraps`, keyed by binary name. See docs/wraps.md.",
+  "properties": {
+    "editor": {
+      "description": "Editor the rule editor's 'Open in editor' split-button opens by default (an editor id such as `code`, `cursor`, `zed`, or `nvim`). Machine-local, like `shim_dir`; written when you pick an editor in the Rules view of `secreq view`.",
+      "type": "string"
+    },
+    "providers": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Provider"
+      },
+      "description": "Provider scheme definitions. Built-in providers (`op`, `keychain` on macOS, `lastpass` / `pass` on Unix) are available without an explicit entry; entries here override or add new schemes.",
+      "type": "object"
+    },
+    "shim_dir": {
+      "description": "Directory where `secreq wrap` drops PATH shims. Set by `secreq init`. Supports a leading `~/`.",
+      "type": "string"
+    },
+    "ssh": {
+      "additionalProperties": {
+        "$ref": "#/definitions/SshIdentity"
+      },
+      "description": "SSH identities served by the consent-gated SSH agent, keyed by identity name. Each identity stores its public key inline (not secret) so the agent can answer REQUEST_IDENTITIES without a resolve; the private key is a `secret://` reference resolved only at SIGN time.",
+      "type": "object"
+    },
+    "wait_indicator": {
+      "description": "Whether a wrap prints a 'waiting for approval' indicator to stderr while blocked on the consent prompt (spinner on a TTY, a timestamped line on a pipe). Defaults to true; set false to silence. The SECREQ_NO_WAIT_INDICATOR env var overrides this per-invocation.",
+      "type": "boolean"
+    },
+    "wraps": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Wrap"
+      },
+      "description": "Per-binary wrap configuration, keyed by the binary name the shim is installed under. A wrap with no `env` is *gate-only*: consent is required before the binary runs, but nothing is injected.",
+      "type": "object"
+    }
+  },
+  "title": "secreq config",
+  "type": "object"
+}
