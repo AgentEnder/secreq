@@ -69,7 +69,7 @@ secreq wrap gh \
   --reason "GitHub API access"
 ```
 
-Either way you get an entry in `~/.secreq/wraps.json5` and a five-line shim
+Either way you get an entry in `~/.secreq/config.toml` and a five-line shim
 at `<shim_dir>/gh`. Confirm:
 
 ```sh

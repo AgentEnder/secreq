@@ -6,7 +6,7 @@
 //! `rename` publishes a **new inode**, so the destination ends up carrying
 //! the staging file's `0666 & !umask` rather than the mode of whatever it
 //! replaced. Migration 0001 shipped exactly that, republishing every
-//! upgrader's `wraps.json5` at 0644 after they had deliberately chmod'd it
+//! upgrader's `config.toml` at 0644 after they had deliberately chmod'd it
 //! 0600. Every caller here therefore has to say what mode it means.
 //!
 //! Migrations may use this, unlike [`crate::paths`]: this module resolves no

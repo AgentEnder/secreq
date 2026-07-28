@@ -28,5 +28,5 @@ $ secreq init
 ◇  Also set up secreq as your SSH agent?
 │  No
 │
-└  Wrote ~/.secreq/wraps.json5. Next: `secreq wrap <binary>`, e.g. `secreq
+└  Wrote ~/.secreq/config.toml. Next: `secreq wrap <binary>`, e.g. `secreq
 wrap gh`.

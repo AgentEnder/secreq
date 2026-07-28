@@ -38,7 +38,7 @@ before or after the wrap name:
 
 | Flag                 | Effect                                                                    |
 | -------------------- | ------------------------------------------------------------------------- |
-| `--sq-config <PATH>` | Use this config instead of `~/.secreq/wraps.json5`.                       |
+| `--sq-config <PATH>` | Use this config instead of `~/.secreq/config.toml`.                       |
 | `--sq-raw`           | Disable output masking. Secrets are still injected.                       |
 | `--sq-yes`           | Auto-approve without prompting; resolves client-side, no daemon.          |
 | `--sq-no-remember`   | Don't read or write the remembered-approval cache.                        |
@@ -166,7 +166,7 @@ and why it has no TTL, is in [wraps](./wraps.md#how-approval-is-scoped).
 | `SECREQ_HOME`                 | Root for everything secreq owns: config, `audit.log`, `daemon.log`, registered rule modules. Falls back to `~/.secreq`.                        |
 | `SECREQ_SOCK`                 | Read by `secreq resolve`: the scoped agent socket to ask, mirroring `SSH_AUTH_SOCK`. See [secret-agent](./secret-agent.md).                    |
 | `SECREQ_NO_DAEMON`            | Any non-empty value disables the daemon entirely; consent fails closed unless `--sq-yes` / `--yes` is used. For tests and headless automation. |
-| `SECREQ_NO_WAIT_INDICATOR`    | Silences the "waiting for approval" indicator for one invocation, regardless of the `$wait_indicator` config setting.                          |
+| `SECREQ_NO_WAIT_INDICATOR`    | Silences the "waiting for approval" indicator for one invocation, regardless of the `wait_indicator` config setting.                          |
 | `XDG_RUNTIME_DIR`             | Preferred home for the daemon's sockets and pidfile; it is mode-0700 tmpfs. Falls back to `<root>/run`.                                        |
 | `XDG_CONFIG_HOME`             | Legacy config location the first-run migration copies into the root. No longer used for discovery.                                             |
 | `SHELL`                       | `init` reads this to choose which shell config to edit.                                                                                        |
@@ -176,5 +176,5 @@ and why it has no TTL, is in [wraps](./wraps.md#how-approval-is-scoped).
 ## Next
 
 - [All commands](./cli-reference.md): every subcommand and flag.
-- [wraps](./wraps.md): authoring `wraps.json5`, and how approval is scoped.
+- [wraps](./wraps.md): authoring `config.toml`, and how approval is scoped.
 - [consent-window](./consent-window.md): the windows these verbs put up.

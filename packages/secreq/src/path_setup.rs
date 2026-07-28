@@ -598,7 +598,7 @@ mod tests {
 
     /// An rc file the user already had keeps the mode they chose — the
     /// stage-and-rename must not republish it at the staging file's mode, the
-    /// way migration 0001 once did to `wraps.json5`.
+    /// way migration 0001 once did to `config.toml`.
     #[test]
     fn apply_keeps_the_mode_of_an_rc_file_the_user_already_had() {
         let home = tempfile::tempdir().unwrap();

@@ -30,25 +30,17 @@ it wholesale.
 
 ## Defining your own
 
-```json5
-providers: {
-  myvault: {
-    retrieve: ["myvault", "get", "{locator}"],
-    store: {
-      command: ["myvault", "put", "{item}"],
-      fields: {
-        item: { required: true },
-        tag:  { default: "v1" },
-      },
-      value: "stdin",        // keeps the value out of argv
-      locator: "{item}",     // how to build the retrieve-side locator
-    },
-    retrieve_batch: {
-      command: ["myvault", "exec", "--", "printenv"],
-      env_value: "myvault://{locator}",
-    },
-  },
-}
+```toml
+[providers.myvault]
+retrieve = ["myvault", "get", "{locator}"]
+retrieve_batch = { command = ["myvault", "exec", "--", "printenv"], env_value = "myvault://{locator}" }
+
+[providers.myvault.store]
+command = ["myvault", "put", "{item}"]
+value = "stdin"       # keeps the value out of argv
+locator = "{item}"    # how to build the retrieve-side locator
+fields.item = { required = true }
+fields.tag = { default = "v1" }
 ```
 
 ### `retrieve`
@@ -89,11 +81,10 @@ secrets that's four prompts. `op run -- printenv` resolves any number of
 refs in one session and emits them as env vars; this generalizes that
 pattern.
 
-```json5
-retrieve_batch: {
-  command: ["op", "run", "--no-masking", "--", "printenv"],
-  env_value: "op://{locator}",
-}
+```toml
+retrieve_batch = { command = [
+  "op", "run", "--no-masking", "--", "printenv",
+], env_value = "op://{locator}" }
 ```
 
 **How it works.** For each `(name, locator)` wanted, the resolver sets the
@@ -118,10 +109,9 @@ these, at the cost of one extra read each.
 To opt out of the built-in `op` batch, redeclare `op` without it. A
 declaration replaces the whole built-in entry by name:
 
-```json5
-providers: {
-  op: { retrieve: ["op", "read", "op://{locator}"] },
-}
+```toml
+[providers.op]
+retrieve = ["op", "read", "op://{locator}"]
 ```
 
 ## Sub-prompts
@@ -141,4 +131,4 @@ parser still accepts both spellings. Prefer `retrieve`/`store` in new files.
 To land a new built-in in secreq itself, see
 [`../CONTRIBUTING.md`](../CONTRIBUTING.md) and edit
 `manifest.rs::builtin_providers()`. If you just need a custom provider for
-yourself, declare it in your `wraps.json5`. No Rust changes needed.
+yourself, declare it in your `config.toml`. No Rust changes needed.

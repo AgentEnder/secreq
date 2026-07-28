@@ -4,7 +4,7 @@
 //! same four things in the same order — work out what has to be resolved,
 //! ask the daemon for consent, audit the answer, then exec the child with
 //! the resolved values injected and its output masked — and differ only in
-//! where the references come from: a wrap entry in `wraps.json5` for
+//! where the references come from: a wrap entry in `config.toml` for
 //! [`wrap_run`], the ambient environment (plus `--env-file`) for [`run`].
 
 use std::collections::{BTreeMap, HashMap};

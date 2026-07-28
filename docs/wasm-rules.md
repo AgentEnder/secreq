@@ -133,7 +133,7 @@ programmatic rule"** card at the top scaffolds a starter project on disk
 
 The primary action opens the scaffold in your preferred editor; the caret
 picks from the editors detected on your machine, and your choice is
-remembered as `$editor` in `wraps.json5` so the button defaults to it next
+remembered as `editor` in `config.toml` so the button defaults to it next
 time.
 
 ::shot{id=38-rules-scaffold-editor-picker}
@@ -321,7 +321,7 @@ secreq rules rm "npm publish guard"       # then retire the old rule
 
 (Registering first means the policy is never gone in between.)
 Alternatively, stop the daemon (`secreq daemon stop`), hand-edit
-`~/.secreq/auto-rules.json5` (replace the module file and update the
+`~/.secreq/auto-rules.toml` (replace the module file and update the
 rule's `sha256` to `shasum -a 256 <new.wasm>`), and let the next ask
 respawn the daemon. The daemon owns rule writes while it runs;
 hand-edits belong to a stopped daemon.

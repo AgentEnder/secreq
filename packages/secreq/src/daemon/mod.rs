@@ -141,7 +141,7 @@ pub fn run() -> Result<i32> {
         server::start(socket_path.clone(), state.clone()).context("start daemon socket server")?;
 
     // SSH agent listener. A second socket (`agent.sock`) speaking the SSH
-    // agent protocol, started only when `wraps.json5` declares any `ssh`
+    // agent protocol, started only when `config.toml` declares any `ssh`
     // identities. Held alive for the daemon's lifetime alongside the
     // control listener; its accept thread exits when this drops. A missing
     // or unparseable config simply yields no agent (best-effort) — the

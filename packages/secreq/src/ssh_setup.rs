@@ -892,7 +892,7 @@ mod tests {
     /// A guard, not a repro: `fs::write` preserves an existing inode's mode,
     /// so this passed before the move to stage-and-rename and has to keep
     /// passing after it. Staging publishes a **new** inode, which is how
-    /// migration 0001 republished everyone's `wraps.json5` at 0644 — and the
+    /// migration 0001 republished everyone's `config.toml` at 0644 — and the
     /// naive reading of "secreq's files are owner-only" would narrow a
     /// `.zshrc` the user deliberately left group-readable. `Mode::Like` is
     /// what gets both halves; nobody should simplify it to `Exactly(0o600)`.

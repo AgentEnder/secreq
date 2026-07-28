@@ -1,4 +1,4 @@
-//! Authoring and inspecting `wraps.json5`: `secreq wrap` / `unwrap` /
+//! Authoring and inspecting `config.toml`: `secreq wrap` / `unwrap` /
 //! `wraps` / `edit` / `check` / `doctor`, plus the serializer every one of
 //! those (and `ssh add`, and `init`) writes the file through.
 //!
@@ -430,7 +430,7 @@ fn parse_env_assignments(envs: &[String]) -> Result<BTreeMap<String, String>> {
 /// the umask's `0666 & !umask` to a file it created.
 ///
 /// Forcing 0600 was the tempting answer here in a way it was not for
-/// `auto-rules.json5`, because this file's `providers` entries are shell
+/// `auto-rules.toml`, because this file's `providers` entries are shell
 /// commands secreq executes: a world-writable one is arbitrary code execution
 /// as the user on the next resolve, not a disclosure of which secrets exist.
 /// It is still the wrong answer, for two reasons that do not apply next door:
@@ -439,7 +439,7 @@ fn parse_env_assignments(envs: &[String]) -> Result<BTreeMap<String, String>> {
 ///   function at any file the user names. Clamping would mean `secreq wrap`
 ///   chmods a file secreq does not own, every time.
 /// - **Migration 0001 already promises to carry this exact filename's mode**
-///   across an upgrade (`wraps.json5` is in its `CONFIG_FILES`, copied with
+///   across an upgrade (`config.toml` is in its `CONFIG_FILES`, copied with
 ///   `Mode::Like`). Clamping here would make that promise expire on the
 ///   user's next `wrap add` — worse than either policy alone, because the
 ///   upgrade would still have said it preserved the mode.
@@ -572,7 +572,7 @@ mod tests {
     #[test]
     fn write_config_preserves_ssh_block() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("wraps.json5");
+        let path = dir.path().join("config.toml");
 
         let mut config = WrapsConfig::default();
         config.wraps.insert(
@@ -613,10 +613,10 @@ mod tests {
     fn write_config_preserves_editor_and_wait_indicator() {
         // A later `wrap add` / `ssh add` rewrites the whole file via
         // `write_config`; the reserved machine-local toggles must survive
-        // so a GUI-set `$editor` (and a hand-set `$wait_indicator`) aren't
+        // so a GUI-set `editor` (and a hand-set `wait_indicator`) aren't
         // silently dropped.
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("wraps.json5");
+        let path = dir.path().join("config.toml");
 
         let config = WrapsConfig {
             editor: Some("zed".to_owned()),
@@ -639,7 +639,7 @@ mod tests {
 
     /// `fs::write` preserves an existing file's mode, so the umask only ever
     /// reached this file on **creation** — which is why it went unnoticed.
-    /// A created `wraps.json5` came out at `0666 & !umask`: 0644 under the
+    /// A created `config.toml` came out at `0666 & !umask`: 0644 under the
     /// common 022, 0666 under the `umask 000` container and CI images set.
     /// The `providers` block in there is a set of shell commands secreq
     /// executes, so a writable one is code execution, not disclosure.
@@ -650,7 +650,7 @@ mod tests {
     #[test]
     fn a_config_secreq_creates_is_owner_only() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("wraps.json5");
+        let path = dir.path().join("config.toml");
 
         write_config(&path, &WrapsConfig::default()).unwrap();
 
@@ -661,14 +661,14 @@ mod tests {
     /// `Mode::Exactly(0o600)`. This file is hand-editable with a published
     /// schema, migration 0001 already promises to carry its mode across an
     /// upgrade (`moved_config_keeps_the_mode_the_user_chose` moves a
-    /// `wraps.json5`), and `--config` points `write_config` at files secreq
+    /// `config.toml`), and `--config` points `write_config` at files secreq
     /// does not own at all. Clamping here would make the migration's promise
     /// last until the user's next `wrap add`.
     #[test]
     fn a_config_write_keeps_a_mode_the_user_chose() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("wraps.json5");
+        let path = dir.path().join("config.toml");
         write_config(&path, &WrapsConfig::default()).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
 
@@ -678,14 +678,14 @@ mod tests {
     }
 
     /// The side effect worth having: `fs::write` truncates in place, so a
-    /// process killed mid-write left the user with a *half* `wraps.json5` —
+    /// process killed mid-write left the user with a *half* `config.toml` —
     /// on a file they hand-edit and whose comments they care about. Staging
     /// and renaming means a reader sees the old contents or the new ones.
     #[test]
     fn a_config_write_replaces_the_inode_rather_than_truncating_it() {
         use std::os::unix::fs::MetadataExt;
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("wraps.json5");
+        let path = dir.path().join("config.toml");
         write_config(&path, &WrapsConfig::default()).unwrap();
         let before = std::fs::metadata(&path).unwrap().ino();
 
@@ -697,6 +697,6 @@ mod tests {
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(names, vec!["wraps.json5".to_string()]);
+        assert_eq!(names, vec!["config.toml".to_string()]);
     }
 }

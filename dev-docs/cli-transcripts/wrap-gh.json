@@ -1674,7 +1674,7 @@
         ],
         [
           {
-            "t": "  config: ~/.secreq/wraps.json5"
+            "t": "  config: ~/.secreq/config.toml"
           }
         ],
         [

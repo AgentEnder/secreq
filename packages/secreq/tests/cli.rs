@@ -1090,7 +1090,7 @@ fn init_narrows_a_root_that_already_exists_too_permissively() {
     assert_eq!(mode, 0o700, "{} is {mode:o}", root.display());
 }
 
-/// Finding A8 covered `audit.log` **and** `auto-rules.json5`; only the first
+/// Finding A8 covered `audit.log` **and** `auto-rules.toml`; only the first
 /// was actually fixed. `rules::save_rules` still staged through `fs::write`,
 /// so the rename published the staging file's `0666 & !umask` — and under the
 /// `umask 000` that container and CI images routinely set, that is a
@@ -1138,7 +1138,7 @@ fn a_rules_file_the_daemon_writes_under_a_lax_umask_is_owner_only() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let rules_file = sb.root().join("auto-rules.json5");
+    let rules_file = sb.root().join("auto-rules.toml");
     assert!(
         rules_file.is_file(),
         "the daemon should have written {}",
@@ -1252,7 +1252,7 @@ fn the_config_secreq_edit_seeds_under_a_lax_umask_is_owner_only() {
 /// **0777** under `umask 000` and the `.wasm` inside it at 0666.
 ///
 /// A world-writable store does not get a stranger's module *executed* — the
-/// sha256 in `auto-rules.json5` pins the bytes, so a swap surfaces as a
+/// sha256 in `auto-rules.toml` pins the bytes, so a swap surfaces as a
 /// visible REFUSED rule. It gets the rule silenced, which for a `deny` rule
 /// is the whole of what that rule was for.
 ///

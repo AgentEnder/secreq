@@ -13,7 +13,7 @@
 //! 2. [`detect_editors`] probes the machine for installed editors so the
 //!    split-button only offers ones that are actually present.
 //! 3. [`preferred_editor`] / [`save_preferred_editor`] persist the user's
-//!    pick as the reserved `$editor` key in `wraps.json5`, so the
+//!    pick as the reserved `editor` key in `config.toml`, so the
 //!    split-button defaults to it next time.
 //!
 //! Everything here is pure/local — no daemon round-trip. The rule editor
@@ -34,7 +34,7 @@ use crate::paths;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Editor {
     /// Stable identifier, also the executable's basename — e.g. `"code"`,
-    /// `"nvim"`. This is what lands in `$editor`.
+    /// `"nvim"`. This is what lands in `editor`.
     pub id: String,
     /// Human-facing name for the button — e.g. `"VS Code"`, `"Neovim"`.
     pub display: String,
@@ -230,17 +230,17 @@ pub fn launch_editor(editor: &Editor, path: &Path) -> Result<()> {
     Ok(())
 }
 
-// ── Editor preference: the reserved `$editor` key in wraps.json5 ───────────
+// ── Editor preference: the reserved `editor` key in config.toml ───────────
 
-/// The user's persisted editor pick (the `$editor` id), if any. Read from
-/// `wraps.json5`; a missing/unreadable config just yields `None`.
+/// The user's persisted editor pick (the `editor` id), if any. Read from
+/// `config.toml`; a missing/unreadable config just yields `None`.
 pub fn preferred_editor() -> Option<String> {
     let path = paths::wraps_path().ok()?;
     let config = crate::wraps::WrapsConfig::load(&path).ok()?;
     config.editor
 }
 
-/// Persist `id` as the reserved top-level `$editor` key in `wraps.json5`,
+/// Persist `id` as the reserved top-level `editor` key in `config.toml`,
 /// preserving everything else in the file (comments, provider defs, and
 /// the store/retrieve details the full serializer would drop). A missing
 /// config file is created as `{ $editor: "id" }`.
@@ -407,7 +407,7 @@ mod tests {
         assert!(scaffold_rule(tmp.path(), "").is_err());
     }
 
-    /// The editor pick is written into `wraps.json5`, so this writer creates
+    /// The editor pick is written into `config.toml`, so this writer creates
     /// the same file `write_config` does — and created it at the umask for the
     /// same reason (`fs::write` only takes the umask's answer on creation).
     /// The `providers` block in that file is a set of shell commands secreq
@@ -415,7 +415,7 @@ mod tests {
     #[test]
     fn saving_an_editor_pick_creates_an_owner_only_config() {
         let tmp = tempfile::tempdir().expect("tmp");
-        let path = tmp.path().join("wraps.json5");
+        let path = tmp.path().join("config.toml");
 
         save_preferred_editor_at(&path, "zed").expect("save");
 
@@ -430,7 +430,7 @@ mod tests {
     fn saving_an_editor_pick_keeps_a_mode_the_user_chose() {
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().expect("tmp");
-        let path = tmp.path().join("wraps.json5");
+        let path = tmp.path().join("config.toml");
         save_preferred_editor_at(&path, "vim").expect("first save");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).expect("chmod");
 

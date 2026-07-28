@@ -201,7 +201,7 @@ fn ssh_setup_wiring_step(
     match load_config_or_default(config_path) {
         Ok(config) if config.ssh.is_empty() => {
             cliclack::log::warning(crate::term::wrap_log_text(
-                "No SSH identities configured yet — setup will still wire the agent, but add an `ssh` block to wraps.json5 for it to serve keys.",
+                "No SSH identities configured yet — setup will still wire the agent, but add an `ssh` block to config.toml for it to serve keys.",
             ))?;
         }
         Ok(_) => {}
@@ -318,7 +318,7 @@ pub struct SshAddArgs {
     pub force: bool,
 }
 
-/// `secreq ssh add <name>` — declare an SSH identity in `wraps.json5` so the
+/// `secreq ssh add <name>` — declare an SSH identity in `config.toml` so the
 /// agent serves it. Mirrors [`wrap`]: load → build → insert → `write_config`.
 ///
 /// The public key is stored inline (it isn't secret); the private key is a

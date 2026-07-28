@@ -31,22 +31,18 @@ exists for the length of that one signing call.
 > section describes the config it writes, for when you'd rather write it
 > yourself or want to know what a field means.
 
-Add an `ssh` block to your `wraps.json5`. Each entry is one identity: the
+Add an `[ssh.*]` table to your `config.toml`. Each entry is one identity: the
 public key inline (it isn't secret), the private key as a `secret://`
-reference resolved only at sign time, and an optional `$reason` shown in
+reference resolved only at sign time, and an optional `reason` shown in
 the consent prompt.
 
-```json5
-{
-  // ... your providers and wraps ...
-  ssh: {
-    'github-personal': {
-      $reason: 'git pushes to github',
-      public_key: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... me@mac',
-      private_key: 'secret://op/Private/gh-key/private key',
-    },
-  },
-}
+```toml
+# ... your providers and wraps ...
+
+[ssh.github-personal]
+reason = "git pushes to github"
+public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... me@mac"
+private_key = "secret://op/Private/gh-key/private key"
 ```
 
 - `public_key`: the full OpenSSH public-key line. Answers identity
@@ -55,7 +51,7 @@ the consent prompt.
   the first signature, then held in the daemon's encrypted secret cache
   for the daemon's lifetime, like any other secret. See
   [Behavior](#behavior).
-- `$reason`: optional human label, shown in the consent prompt.
+- `reason`: optional human label, shown in the consent prompt.
 
 ## The `op`-export requirement
 
@@ -93,7 +89,7 @@ secreq ssh add github \
   --private-key "secret://op/Private/GitHub/private key"
 ```
 
-The public key is stored inline in `wraps.json5`; the private key stays a
+The public key is stored inline in `config.toml`; the private key stays a
 `secret://` reference, resolved only at sign time. Omit either flag and
 secreq asks, offering to pick the item out of `op` when it is on `PATH`.
 

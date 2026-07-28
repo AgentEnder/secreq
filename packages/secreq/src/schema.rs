@@ -28,7 +28,7 @@
 //!
 //! Two things a Rust type cannot say, both of them here rather than scattered:
 //!
-//! - **The file envelope.** `wraps.json5` is keyed by names the user chooses —
+//! - **The file envelope.** `config.toml` is keyed by names the user chooses —
 //!   binary names — which is `patternProperties`, not a struct. `$schema` is
 //!   in the same category: secreq ignores the key, so no type has a field for
 //!   it, but an editor writes it and must not be told it is invalid.
@@ -37,7 +37,7 @@
 //!   enforces it), and a provider's `retrieve`/`read` pair is an `anyOf`
 //!   ([`provider_any_of`]).
 //!
-//! ## The `wraps.json5` parser is hand-written, so its key names are too
+//! ## The `config.toml` parser is hand-written, so its key names are too
 //!
 //! `manifest.rs` and `wraps.rs` walk a [`serde_json::Value`] rather than
 //! deriving `Deserialize`, because a wraps file's top level is arbitrary binary
@@ -206,7 +206,7 @@ fn flatten_descriptions(schema: &mut Value) {
     }
 }
 
-/// The complete JSON Schema for `auto-rules.json5`.
+/// The complete JSON Schema for `auto-rules.toml`.
 ///
 /// The root is [`RulesFile`] — `{ rules: [...] }` really is a struct — so
 /// there is nothing to assemble beyond letting the derive run and declaring
@@ -218,7 +218,7 @@ pub fn auto_rules_schema() -> Value {
     schema
 }
 
-/// The complete JSON Schema for `wraps.json5`.
+/// The complete JSON Schema for `config.toml`.
 ///
 /// Assembled rather than derived from [`crate::wraps::WrapsConfig`], because
 /// the top level is *dynamic*: every key that isn't `providers`, `ssh`, or

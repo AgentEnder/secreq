@@ -157,7 +157,7 @@ End-user docs live in [`docs/`](./docs/):
 | [`docs/getting-started.md`](./docs/getting-started.md)   | First-time walkthrough: install → init → first wrap → first run                                             |
 | [`docs/overview.md`](./docs/overview.md)                 | What `secreq` is + mental model                                                                             |
 | [`docs/cli.md`](./docs/cli.md)                           | Every subcommand, every flag, the wrap-and-run flow                                                         |
-| [`docs/wraps.md`](./docs/wraps.md)                       | Authoring `wraps.json5`                                                                                     |
+| [`docs/wraps.md`](./docs/wraps.md)                       | Authoring `config.toml`                                                                                     |
 | [`docs/providers.md`](./docs/providers.md)               | Provider model + built-ins                                                                                  |
 | [`docs/ssh-agent.md`](./docs/ssh-agent.md)               | The provenance-aware SSH agent: config, setup, the key-custody tradeoff                                     |
 | [`docs/consent-window.md`](./docs/consent-window.md)     | The daemon UI: pending tree, audit log, audit JSONL format                                                  |

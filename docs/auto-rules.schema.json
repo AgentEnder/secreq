@@ -174,7 +174,7 @@
       "description": "Reference to a compiled wasm rule module, evaluated in the secreq sandbox (no WASI, fuel-metered, memory-capped). The module exports `decide(ctx)` returning approve, pass (rule does not match), or deny with a reason. A runtime error makes the rule not match — the ask falls through to the interactive prompt, never to an auto-approve.",
       "properties": {
         "path": {
-          "description": "Path to the compiled `.wasm` module. Relative paths resolve against the directory containing `auto-rules.json5`; the canonical home is `rules/<id>.wasm` under the secreq root.",
+          "description": "Path to the compiled `.wasm` module. Relative paths resolve against the directory containing `auto-rules.toml`; the canonical home is `rules/<id>.wasm` under the secreq root.",
           "type": "string"
         },
         "sha256": {
@@ -190,7 +190,7 @@
       "type": "object"
     }
   },
-  "description": "Persisted auto-approve / auto-deny rules for `secreq` (`~/.secreq/auto-rules.json5`, or `$SECREQ_HOME/auto-rules.json5`). Owned by the consent daemon; clients normally don't edit the file directly.",
+  "description": "Persisted auto-approve / auto-deny rules for `secreq` (`~/.secreq/auto-rules.toml`, or `$SECREQ_HOME/auto-rules.toml`). Owned by the consent daemon; clients normally don't edit the file directly.",
   "properties": {
     "$schema": {
       "description": "URL or path of this JSON Schema. Ignored by `secreq`.",

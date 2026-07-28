@@ -1,7 +1,7 @@
 //! `secreq init` — the first-time setup wizard.
 //!
 //! One command, five steps: lock down `~/.secreq`, pick a shim dir, get it
-//! onto `PATH` via the shell's canonical config file, write `wraps.json5`,
+//! onto `PATH` via the shell's canonical config file, write `config.toml`,
 //! and offer the SSH-agent wiring. Every step after the config write is
 //! optional and non-fatal — declining SSH setup must not fail `init`.
 
@@ -19,7 +19,7 @@ use super::{prompt, resolve_config_path};
 
 /// `secreq init` — interactive first-time setup. Picks the shim dir,
 /// optionally adds it to the shell's PATH config, and writes a minimal
-/// `wraps.json5`.
+/// `config.toml`.
 pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Result<i32> {
     let config_path = resolve_config_path(config_path)?;
 
@@ -29,7 +29,7 @@ pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Re
     // log and the socket bind — so every install predating that lands here
     // with whatever mode its creator left, and a fresh `umask 000` install had
     // a world-writable `~/.secreq` from the end of `init` until the daemon
-    // first started. `audit.log`, `auto-rules.json5` and `wraps.json5` all
+    // first started. `audit.log`, `auto-rules.toml` and `config.toml` all
     // live in there; a rule someone else can write is a rule that approves
     // their own command.
     //

@@ -36,7 +36,7 @@ const LONG_VERSION: &str = concat!(
     long_about = None,
 )]
 struct Cli {
-    /// Use a specific config file instead of `~/.secreq/wraps.json5`.
+    /// Use a specific config file instead of `~/.secreq/config.toml`.
     /// For `x` use `--sq-config`.
     #[arg(long, global = true, value_name = "PATH")]
     config: Option<PathBuf>,
@@ -365,7 +365,7 @@ enum SshAction {
         undo: bool,
     },
 
-    /// Add (or overwrite) an SSH identity in `wraps.json5`. The agent serves
+    /// Add (or overwrite) an SSH identity in `config.toml`. The agent serves
     /// this identity once the daemon is running. The public key is stored
     /// inline; the private key is a `secret://provider/locator` reference
     /// resolved only at sign time. Omit `--public-key`/`--private-key` to
@@ -539,7 +539,7 @@ options secreq keeps for itself use the reserved `--sq-` prefix and are
 recognized before or after the wrap name:
 
       --sq-config <PATH>  Use a specific config file instead of
-                          `~/.secreq/wraps.json5`
+                          `~/.secreq/config.toml`
       --sq-raw            Skip output masking. The binary still runs with
                           secrets in its env; only redaction is disabled
       --sq-yes            Auto-approve without prompting

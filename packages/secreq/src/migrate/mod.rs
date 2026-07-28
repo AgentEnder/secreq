@@ -133,7 +133,7 @@ const STATE_FILE: &str = ".migration-state";
 const LOCK_FILE: &str = ".migration.lock";
 const SNAPSHOT_DIR: &str = "migration-snapshots";
 
-/// Machine-local. Deliberately **not** stored in `wraps.json5`: that file is
+/// Machine-local. Deliberately **not** stored in `config.toml`: that file is
 /// dotfile-synced (chezmoi/stow/git), and a synced `migration_level` would
 /// tell a fresh machine it was already migrated when it wasn't, so it would
 /// skip the migration it actually needs.
@@ -208,8 +208,8 @@ pub fn run_pending_in(ctx: &Ctx) -> Result<()> {
     // it lands here is the mode `~/.secreq` has while `init` is still asking
     // questions. `create_dir_all` takes the umask's answer, which is 0755
     // under the common 022 and **0777** under the `umask 000` CI and container
-    // images set, and the root goes on to hold `audit.log`, `auto-rules.json5`
-    // and `wraps.json5`. Inlined at [`OWNER_ONLY_DIR`] rather than routed
+    // images set, and the root goes on to hold `audit.log`, `auto-rules.toml`
+    // and `config.toml`. Inlined at [`OWNER_ONLY_DIR`] rather than routed
     // through `paths::ensure_private_dir` for the same reason as the snapshot
     // dir below: migrations resolve nothing through `paths`, and the mode is a
     // constant rather than a location, so no frozen history is at stake.
@@ -733,7 +733,7 @@ struct FileEntry {
     snapshot: String,
     /// Absolute restore target. Safe to store absolute because snapshots are
     /// machine-local — same reasoning that keeps `.migration-state` out of
-    /// `wraps.json5`.
+    /// `config.toml`.
     restore_to: PathBuf,
 }
 
@@ -1053,7 +1053,7 @@ mod tests {
         run_pending_in(&ctx).unwrap();
         // Simulate a re-run from level 0 with the config already moved.
         write_state(&ctx.root, 0).unwrap();
-        std::fs::write(ctx.root.join("wraps.json5"), "{ changed_after: {} }").unwrap();
+        std::fs::write(ctx.root.join("config.toml"), "{ changed_after: {} }").unwrap();
         run_pending_in(&ctx).unwrap();
 
         assert_eq!(
@@ -1181,18 +1181,18 @@ mod tests {
     fn restore_takes_the_migration_lock() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().join("secreq");
-        let target = tmp.path().join("config/secreq/wraps.json5");
+        let target = tmp.path().join("config/secreq/config.toml");
         write(&target, "live");
 
         // A hand-built level-0 snapshot, so nothing has taken the lock on this
         // root before `restore_in` does.
         let snap = snapshot_dir(&root, 0);
         std::fs::create_dir_all(&snap).unwrap();
-        std::fs::write(snap.join("wraps.json5"), "snapshot").unwrap();
+        std::fs::write(snap.join("config.toml"), "snapshot").unwrap();
         let map = FileMap {
             created_by: "test".into(),
             files: vec![FileEntry {
-                snapshot: "wraps.json5".into(),
+                snapshot: "config.toml".into(),
                 restore_to: target.clone(),
             }],
         };
