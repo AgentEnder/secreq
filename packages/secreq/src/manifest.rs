@@ -13,6 +13,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// The reserved top-level key that defines provider schemes.
@@ -37,13 +38,15 @@ pub struct Manifest {
 // rather than deserializing, so the JSON key names are the `schemars(rename)`
 // beside each field; `schema_covers_every_key_the_parser_accepts` in
 // `tests/schema_drift.rs` is what holds the two together.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 #[cfg_attr(feature = "schema", schemars(extend("anyOf" = crate::schema::provider_any_of())))]
 pub struct Provider {
     /// The provider's name is the key it is filed under, not a property of the
-    /// object, so it is absent from the schema.
+    /// object, so it is absent from the schema and from the serialized form.
+    #[serde(skip)]
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub name: String,
     /// Argv template for fetching a secret. `{locator}` is substituted with the
@@ -51,15 +54,22 @@ pub struct Provider {
     //
     // Required, but declared through the `anyOf` above rather than
     // `required: ["retrieve"]`, because `read` satisfies it too.
+    #[serde(alias = "read")]
     #[cfg_attr(feature = "schema", schemars(default, length(min = 1)))]
     pub retrieve: Vec<String>,
     /// How this provider persists a new value. Optional — a provider without
     /// it is retrieve-only.
+    #[serde(default, alias = "write", skip_serializing_if = "Option::is_none")]
     pub store: Option<StoreCapability>,
     /// Batched retrieve: one command invocation resolves many secrets at once
     /// (e.g. `op run -- printenv`). Used automatically when a wrap's `env`
     /// references the same provider for two or more entries, cutting biometric
     /// prompts from N to 1.
+    #[serde(
+        default,
+        alias = "retrieveBatch",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[cfg_attr(feature = "schema", schemars(rename = "retrieve_batch"))]
     pub retrieve_batch: Option<BatchRetrieve>,
 }
@@ -74,7 +84,8 @@ pub struct Provider {
 // Limitation: line-based output can't carry multi-line values intact. If any
 // value contains a newline, the resolver falls back to per-secret retrieve
 // (this is detected when the parsed output is missing names we asked for).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct BatchRetrieve {
@@ -85,6 +96,7 @@ pub struct BatchRetrieve {
     /// Template for each synthetic env entry's value. `{locator}` is
     /// substituted per secret; the env-var name is the secret's name. For
     /// 1Password: `"op://{locator}"`.
+    #[serde(rename = "env_value", alias = "envValue")]
     #[cfg_attr(feature = "schema", schemars(rename = "env_value"))]
     pub env_value_template: String,
 }
@@ -92,7 +104,8 @@ pub struct BatchRetrieve {
 /// How this provider persists a new value (currently exposed via custom CLIs
 /// the user may write that drive `secreq` programmatically — the public
 /// `secreq` CLI no longer exposes a `store` verb).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct StoreCapability {
@@ -100,6 +113,7 @@ pub struct StoreCapability {
     /// inputs; `{value}` (argv mode) is the secret. Prefer stdin mode.
     #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
     pub command: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[cfg_attr(feature = "schema", schemars(default))]
     pub fields: BTreeMap<String, FieldSpec>,
     /// How the secret reaches `command`. Omitted or `"stdin"` pipes it in on
@@ -112,6 +126,7 @@ pub struct StoreCapability {
     // `parse_store_capability` reads anything that isn't `"stdin"` as argv
     // mode. `default: "stdin"` below is that inversion; it was published as
     // `"{value}"` for a month after the parser changed.
+    #[serde(rename = "value", default, with = "value_mode_as_str")]
     #[cfg_attr(
         feature = "schema",
         schemars(
@@ -124,18 +139,79 @@ pub struct StoreCapability {
     pub value_mode: ValueMode,
     /// Template that builds the retrieve-side locator from the same field
     /// inputs.
+    #[serde(rename = "locator")]
     #[cfg_attr(feature = "schema", schemars(rename = "locator"))]
     pub locator_template: String,
 }
 
+/// `value` is a free string on disk and an enum in Rust: `"stdin"` (or an
+/// absent key) selects stdin delivery, and **any other string** opts into
+/// argv substitution. That inversion is deliberate — argv delivery exposes the
+/// secret in `/proc/<pid>/cmdline`, so it has to be the thing you ask for.
+mod value_mode_as_str {
+    use super::ValueMode;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(mode: &ValueMode, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(match mode {
+            ValueMode::Stdin => "stdin",
+            ValueMode::Arg => "{value}",
+        })
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<ValueMode, D::Error> {
+        // A non-string is an error now. The hand-written parser reached for
+        // `as_str()` and silently fell back to stdin on, say, `value: 3`.
+        let raw = String::deserialize(d)?;
+        Ok(if raw == "stdin" {
+            ValueMode::Stdin
+        } else {
+            ValueMode::Arg
+        })
+    }
+}
+
 /// Schema for one field in a provider's `store.fields`.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct FieldSpec {
+    #[serde(default)]
     #[cfg_attr(feature = "schema", schemars(default))]
     pub required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
+}
+
+/// The on-disk form of a [`FieldSpec`], which accepts `optional: true` as
+/// sugar for `required: false` (the spelling the design example used). Kept as
+/// a separate wire type so `FieldSpec` itself stays a plain two-field struct —
+/// `optional` is an input spelling, never a stored one.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FieldSpecWire {
+    #[serde(default)]
+    required: bool,
+    #[serde(default)]
+    optional: Option<bool>,
+    #[serde(default)]
+    default: Option<String>,
+}
+
+// Hand-written rather than `#[serde(from = "FieldSpecWire")]`, because
+// `schemars` reads serde's container attributes: `from` would make the
+// published schema describe the wire type, and `optional` is an accepted input
+// spelling rather than part of the documented shape.
+impl<'de> Deserialize<'de> for FieldSpec {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<FieldSpec, D::Error> {
+        let wire = FieldSpecWire::deserialize(d)?;
+        Ok(FieldSpec {
+            // `optional` wins when both are present, matching the parser this
+            // replaces.
+            required: wire.optional.map_or(wire.required, |opt| !opt),
+            default: wire.default,
+        })
+    }
 }
 
 /// How the secret value is delivered to the store command.

@@ -45,9 +45,15 @@ path = "examples/gen_cli_reference.rs"
 anyhow = "1"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
+# `json5` is retained only for the m0003 config-format migration, which reads
+# the pre-TOML files once. Nothing else may deserialize through it.
 json5 = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = "0.8"
+# Format-preserving edits, so `wrap add` / `ssh add` / an editor pick no longer
+# rebuild the file and drop the user's comments.
+toml_edit = "0.22"
 zeroize = { version = "1", features = ["derive"] }
 portable-pty = "0.8"
 sysinfo = "0.33"
