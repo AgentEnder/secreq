@@ -228,6 +228,12 @@ pub fn run_pending_in(ctx: &Ctx) -> Result<()> {
     }
 
     for m in MIGRATIONS.iter().skip(level) {
+        // Declared but not yet on disk: the only paths this migration could
+        // possibly be said to have created.
+        let absent_before: Vec<PathBuf> = (m.snapshot)(ctx)
+            .into_iter()
+            .filter(|p| !p.exists())
+            .collect();
         snapshot_if_absent(ctx, m)?;
         let outcome =
             (m.run)(ctx).with_context(|| format!("migration {:04} ({}) failed", m.id, m.name))?;
@@ -237,10 +243,46 @@ pub fn run_pending_in(ctx: &Ctx) -> Result<()> {
         if let Outcome::Incomplete(detail) = outcome {
             bail!(incomplete_message(m, &detail));
         }
+        record_created(ctx, m, &absent_before);
         // Stamp after each, not at the end, so a failure at 3 keeps 1 and 2.
         write_state(&ctx.root, m.id)?;
     }
     Ok(())
+}
+
+/// Amend the migration's snapshot filemap with what it actually created:
+/// declared paths that were absent before it ran and exist now.
+///
+/// Written after the run rather than declared up front, so it is a record of
+/// what happened rather than a statement of intent — which is the point. A
+/// migration that only *edits* a file (0002, rewriting a managed block in the
+/// user's `~/.ssh/config`) records nothing here no matter what it declares,
+/// and so can never contribute a candidate to the restore cleanup.
+///
+/// Best-effort: a missing snapshot dir means there was nothing to roll back to
+/// in the first place, and a filemap we cannot rewrite leaves `created` empty,
+/// which is the conservative reading — the cleanup then removes less, never
+/// more.
+fn record_created(ctx: &Ctx, m: &Migration, absent_before: &[PathBuf]) {
+    let created: Vec<PathBuf> = absent_before
+        .iter()
+        .filter(|p| p.is_file())
+        .cloned()
+        .collect();
+    if created.is_empty() {
+        return;
+    }
+    let path = snapshot_dir(&ctx.root, m.id - 1).join("filemap.json");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(mut map) = serde_json::from_str::<FileMap>(&text) else {
+        return;
+    };
+    map.created = created;
+    if let Ok(encoded) = serde_json::to_string_pretty(&map) {
+        let _ = atomic::replace(&path, encoded.as_bytes(), atomic::Mode::Exactly(OWNER_ONLY));
+    }
 }
 
 /// A migration that stopped short is neither a crash nor a success, and the
@@ -569,56 +611,49 @@ fn restore_in(root: &Path, level: u32, assume_yes: bool) -> Result<i32> {
     Ok(0)
 }
 
-/// Files inside the secreq root that a **later** migration is responsible for,
-/// and that the target level has no snapshot for — so restoring cannot put them
-/// back, and leaving them strands two real configs the next forward run has to
-/// choose between.
+/// Files a **later** migration created, that the target level therefore has no
+/// snapshot for — so a restore cannot put them back, and leaving them strands
+/// two real configs the next forward run has to choose between.
 ///
-/// # Bounds, because this feeds a delete
+/// # This feeds a delete, so both bounds matter
 ///
-/// The candidates come from each migration's `snapshot_files`, which is a
-/// *declaration* rather than a record. It has to be: a file the migration
-/// **creates** (`config.toml`, for 0003) cannot appear in a captured filemap,
-/// because at capture time it does not exist yet.
+/// 1. **Recorded, not predicted.** Candidates come from the `created` list each
+///    filemap carries: paths a migration declared, that were absent when its
+///    snapshot was taken, and existed once it finished. A migration that only
+///    *edits* a file records nothing, so 0002's `~/.ssh/config` and shell rc
+///    cannot appear here however they are declared.
+/// 2. **Inside the root.** Belt to that braces. A recorded creation outside
+///    `root` still would not be ours to delete.
 ///
-/// That makes the two bounds below the whole safety story, and the second one
-/// is not optional:
-///
-/// 1. **A `Ctx` that resolves nothing outside the tree.** No home, no legacy
-///    dirs, so a migration keyed on the user's dotfiles declares nothing here.
-/// 2. **`starts_with(root)` on every candidate.** Migration 0002 legitimately
-///    manages `~/.ssh/config` and a shell rc — it *edits* a block inside files
-///    the user owns. A restore puts those back from their snapshot; it must
-///    never remove them.
-///
-/// An earlier version of this had neither bound: it built its `Ctx` from the
-/// real `dirs::home_dir()`, so 0002 handed back those two dotfiles and the
-/// cleanup deleted them out of a live home. Both bounds are pinned by
-/// `stale_root_artifacts_never_escapes_the_secreq_root`.
+/// The first bound is what makes this correct; the second is what makes a
+/// future mistake in the first survivable. An earlier version had neither — it
+/// re-ran `snapshot_files` against a `Ctx` built from the real
+/// `dirs::home_dir()` — and deleted a user's SSH config and `.zshrc`.
 fn stale_root_artifacts(
     root: &Path,
     level: u32,
     plan: &[(&FileEntry, PathBuf, String, String)],
 ) -> Vec<PathBuf> {
     let restored: Vec<&PathBuf> = plan.iter().map(|(e, _, _, _)| &e.restore_to).collect();
-    let ctx = Ctx {
-        root: root.to_path_buf(),
-        home: None,
-        legacy_config_dir: None,
-        legacy_state_dir: None,
-        legacy_runtime_dir: None,
-    };
     let mut out: Vec<PathBuf> = Vec::new();
-    for migration in MIGRATIONS.iter().filter(|m| m.id > level) {
-        for path in (migration.snapshot)(&ctx) {
-            if !path.starts_with(root) {
-                continue; // the user's own file; never ours to delete
-            }
-            if restored.iter().any(|kept| **kept == path) || out.contains(&path) {
+
+    for higher in level..MIGRATIONS.len() as u32 {
+        let path = snapshot_dir(root, higher).join("filemap.json");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(map) = serde_json::from_str::<FileMap>(&text) else {
+            continue;
+        };
+        for created in map.created {
+            if !created.starts_with(root) {
                 continue;
             }
-            if path.exists() {
-                out.push(path);
+            if restored.iter().any(|kept| **kept == created) || out.contains(&created) {
+                continue;
+            }
+            if created.exists() {
+                out.push(created);
             }
         }
     }
@@ -728,6 +763,22 @@ fn acquire_lock(root: &Path) -> Result<LockGuard> {
 struct FileMap {
     created_by: String,
     files: Vec<FileEntry>,
+    /// Paths this migration **brought into existence** — declared in its
+    /// `snapshot_files`, absent when the snapshot was taken, present once it
+    /// finished. Recorded by [`record_created`] after the migration returns.
+    ///
+    /// This is the distinction `snapshot_files` alone cannot make. That list
+    /// mixes files a migration *creates* (0003's `config.toml`) with files it
+    /// *edits* (0002's `~/.ssh/config`, where it rewrites a managed block).
+    /// A rollback must remove the first kind and must never remove the second,
+    /// and deriving that from the declaration is how the restore cleanup once
+    /// deleted a user's SSH config and shell rc.
+    ///
+    /// `#[serde(default)]` so a filemap written before this field existed
+    /// deserializes as "recorded nothing" — the safe answer, since an older
+    /// migration's creations are not knowable after the fact.
+    #[serde(default)]
+    created: Vec<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -820,6 +871,9 @@ fn snapshot_if_absent(ctx: &Ctx, m: &Migration) -> Result<()> {
     let map = FileMap {
         created_by: build_stamp(),
         files,
+        // Filled in by `record_created` once the migration has actually run —
+        // nothing has been created yet at snapshot time.
+        created: Vec::new(),
     };
     atomic::replace(
         &staging.join("filemap.json"),
@@ -1020,39 +1074,66 @@ mod tests {
         );
     }
 
-    /// `stale_root_artifacts` feeds a delete, and its candidates come from
-    /// each migration's declared `snapshot_files` — which for 0002 includes the
-    /// user's `~/.ssh/config` and shell rc, files it *edits* rather than owns.
+    /// `stale_root_artifacts` feeds a delete. It reads the `created` list a
+    /// filemap records — paths a migration brought into existence — never the
+    /// `snapshot_files` declaration, which mixes those with files a migration
+    /// merely *edits*.
     ///
-    /// An earlier version built its `Ctx` from the real `dirs::home_dir()`, so
-    /// 0002 declared those two dotfiles and the cleanup deleted them out of a
-    /// live home. This pins both bounds that make that impossible: the `Ctx`
-    /// resolves no home, and nothing outside the root survives the filter.
+    /// That distinction is the whole fix. Migration 0002 manages a block inside
+    /// the user's `~/.ssh/config` and shell rc, so it declares them and creates
+    /// neither. An earlier version derived candidates from the declaration,
+    /// against a `Ctx` holding the real `dirs::home_dir()`, and deleted both out
+    /// of a live home.
+    ///
+    /// Pins both bounds: an edited file recorded in `files` is never a
+    /// candidate, and nothing outside the root is either.
     #[test]
-    fn stale_root_artifacts_never_escapes_the_secreq_root() {
+    fn stale_root_artifacts_only_removes_recorded_creations_inside_the_root() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().join("secreq");
         std::fs::create_dir_all(&root).unwrap();
 
-        // A real dotfile beside the root, of exactly the kind 0002 manages.
-        let dotfile = tmp.path().join("home/.ssh/config");
-        std::fs::create_dir_all(dotfile.parent().unwrap()).unwrap();
-        std::fs::write(&dotfile, "Host example\n").unwrap();
+        // A file a migration *edited* — captured in `files`, not `created`.
+        // This is the `~/.ssh/config` shape.
+        let edited = tmp.path().join("home/.ssh/config");
+        std::fs::create_dir_all(edited.parent().unwrap()).unwrap();
+        std::fs::write(&edited, "Host example\n").unwrap();
 
-        // The artifact 0003 creates, inside the root.
+        // A creation outside the root. Recorded as created, still not ours.
+        let outside_creation = tmp.path().join("home/somewhere.toml");
+        std::fs::write(&outside_creation, "x = 1\n").unwrap();
+
+        // The real artifact: created, inside the root.
         let artifact = root.join("config.toml");
         std::fs::write(&artifact, "[wraps.gh]\n").unwrap();
 
+        let snap = snapshot_dir(&root, 1);
+        std::fs::create_dir_all(&snap).unwrap();
+        let map = FileMap {
+            created_by: "test".to_owned(),
+            files: vec![FileEntry {
+                snapshot: "config".to_owned(),
+                restore_to: edited.clone(),
+            }],
+            created: vec![artifact.clone(), outside_creation.clone()],
+        };
+        std::fs::write(
+            snap.join("filemap.json"),
+            serde_json::to_string(&map).unwrap(),
+        )
+        .unwrap();
+
         let found = stale_root_artifacts(&root, 0, &[]);
 
-        assert!(
-            found.iter().all(|p| p.starts_with(&root)),
-            "returned a path outside the root: {found:?}"
+        assert_eq!(
+            found,
+            vec![artifact],
+            "only the in-root creation is a candidate"
         );
-        assert!(dotfile.exists(), "a user dotfile is never even a candidate");
+        assert!(edited.exists(), "an edited file is never a candidate");
         assert!(
-            found.contains(&artifact),
-            "the in-root artifact should still be found: {found:?}"
+            outside_creation.exists(),
+            "even a recorded creation outside the root is out of bounds"
         );
     }
 
@@ -1230,6 +1311,7 @@ mod tests {
         std::fs::write(snap.join("config.toml"), "snapshot").unwrap();
         let map = FileMap {
             created_by: "test".into(),
+            created: Vec::new(),
             files: vec![FileEntry {
                 snapshot: "config.toml".into(),
                 restore_to: target.clone(),
