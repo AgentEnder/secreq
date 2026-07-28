@@ -36,14 +36,14 @@ an error rather than a wrap for a binary of that name.
 
 ## Settings
 
-| Key               | Meaning                                                                                                                                                                                                        |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Key              | Meaning                                                                                                                                                                                                        |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `shim_dir`       | Where `secreq wrap` drops PATH shims. `~/` is expanded. Set by `secreq init`.                                                                                                                                  |
 | `wait_indicator` | Default `true`. Whether a blocked wrap prints a "waiting for approval" indicator to stderr: a spinner on a TTY, a timestamped line every 30s on a pipe. `SECREQ_NO_WAIT_INDICATOR` silences it per-invocation. |
 | `editor`         | Editor id (`code`, `cursor`, `zed`, `nvim`) the rule editor's "Open in editor" button defaults to. Written when you pick one in the manager's Rules view.                                                      |
-| `providers`       | Provider definitions. Optional; see [providers](./providers.md).                                                                                                                                               |
-| `ssh`             | SSH identities for the agent. Optional; see [ssh-agent](./ssh-agent.md).                                                                                                                                       |
-| `wraps`           | The wraps themselves, keyed by binary name.                                                                                                                                                                    |
+| `providers`      | Provider definitions. Optional; see [providers](./providers.md).                                                                                                                                               |
+| `ssh`            | SSH identities for the agent. Optional; see [ssh-agent](./ssh-agent.md).                                                                                                                                       |
+| `wraps`          | The wraps themselves, keyed by binary name.                                                                                                                                                                    |
 
 The schema pointer is the `#:schema` comment at the top of the file, not a
 key. TOML has no `$schema` convention, and a comment cannot collide with a
@@ -51,10 +51,10 @@ setting.
 
 ## Wraps
 
-| Setting   | Type              | Meaning                                                                                                                                                     |
-| --------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Setting  | Type              | Meaning                                                                                                                                                     |
+| -------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `reason` | string            | Rationale shown in the consent prompt.                                                                                                                      |
-| `env`     | object (optional) | Environment variables to inject. Each value is a full `secret://provider/locator` reference. Bare locators aren't accepted here. Omit for a gate-only wrap. |
+| `env`    | object (optional) | Environment variables to inject. Each value is a full `secret://provider/locator` reference. Bare locators aren't accepted here. Omit for a gate-only wrap. |
 
 A reference is `secret://<provider>/<locator>`: the provider is a scheme
 name (built-in or declared in `providers`), and the locator is everything
