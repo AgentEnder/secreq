@@ -1,9 +1,7 @@
 {
   "$id": "https://craigory.dev/secreq/schemas/wraps.schema.json",
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "additionalProperties": {
-    "$ref": "#/definitions/Wrap"
-  },
+  "additionalProperties": false,
   "definitions": {
     "BatchRetrieve": {
       "additionalProperties": false,
@@ -119,13 +117,6 @@
       "additionalProperties": false,
       "description": "One SSH identity served by the agent. `public_key` is the inline OpenSSH public key (not secret); `private_key` is a `secret://provider/locator` reference resolved only at SIGN time.",
       "properties": {
-        "$reason": {
-          "description": "Rationale shown in the consent prompt when this identity is used to sign.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "private_key": {
           "description": "A `secret://provider/locator` reference to the private key, resolved only at SIGN time.",
           "pattern": "^secret://[^/]+/.+$",
@@ -134,6 +125,13 @@
         "public_key": {
           "description": "Inline OpenSSH public key (`ssh-ed25519 AAAA… comment`). Answered to REQUEST_IDENTITIES without a resolve.",
           "type": "string"
+        },
+        "reason": {
+          "description": "Rationale shown in the consent prompt when this identity is used to sign.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -180,51 +178,31 @@
       "additionalProperties": false,
       "description": "One per-binary wrap. `env` is optional: a wrap with no env entries is *gate-only* — consent is required before the binary runs, but nothing is injected (used to gate tools like `op` that have no secret to pass). Everything else is metadata.",
       "properties": {
-        "$description": {
-          "description": "Optional free-form description (currently unused at runtime; kept for parity with future tooling).",
-          "type": "string"
-        },
-        "$reason": {
-          "description": "Rationale shown in the consent prompt when this wrap is invoked.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "env": {
           "additionalProperties": {
             "description": "A `secret://provider/locator` reference.",
             "pattern": "^secret://[^/]+/.+$",
             "type": "string"
           },
-          "default": {},
           "description": "Environment variables to inject. Each value is a `secret://provider/locator` reference; resolution happens at invocation time. Omit (or leave empty) for a gate-only wrap.",
           "type": "object"
+        },
+        "reason": {
+          "description": "Rationale shown in the consent prompt when this wrap is invoked.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"
     }
   },
-  "description": "Per-binary wrap configuration for `secreq` (`~/.secreq/wraps.json5`, or `$SECREQ_HOME/wraps.json5`). Top-level keys are binary names; reserved keys are `providers` and any `$`-prefixed metadata. See docs/wraps.md.",
-  "patternProperties": {
-    "^\\$": true
-  },
+  "description": "Configuration for `secreq` (`~/.secreq/config.toml`, or `$SECREQ_HOME/config.toml`). Wraps live under `wraps`, keyed by binary name. See docs/wraps.md.",
   "properties": {
-    "$editor": {
-      "description": "Editor the rule editor's 'Open in editor' split-button opens by default (an editor id such as `code`, `cursor`, `zed`, or `nvim`). Machine-local, like `$shim_dir`; written when you pick an editor in the Rules view of `secreq view`.",
+    "editor": {
+      "description": "Editor the rule editor's 'Open in editor' split-button opens by default (an editor id such as `code`, `cursor`, `zed`, or `nvim`). Machine-local, like `shim_dir`; written when you pick an editor in the Rules view of `secreq view`.",
       "type": "string"
-    },
-    "$schema": {
-      "description": "URL or path of this JSON Schema. Ignored by `secreq`.",
-      "type": "string"
-    },
-    "$shim_dir": {
-      "description": "Directory where `secreq wrap` drops PATH shims. Set by `secreq init`. Supports a leading `~/`.",
-      "type": "string"
-    },
-    "$wait_indicator": {
-      "description": "Whether a wrap prints a 'waiting for approval' indicator to stderr while blocked on the consent prompt (spinner on a TTY, a timestamped line on a pipe). Defaults to true; set false to silence. The SECREQ_NO_WAIT_INDICATOR env var overrides this per-invocation.",
-      "type": "boolean"
     },
     "providers": {
       "additionalProperties": {
@@ -233,14 +211,29 @@
       "description": "Provider scheme definitions. Built-in providers (`op`, `keychain` on macOS, `lastpass` / `pass` on Unix) are available without an explicit entry; entries here override or add new schemes.",
       "type": "object"
     },
+    "shim_dir": {
+      "description": "Directory where `secreq wrap` drops PATH shims. Set by `secreq init`. Supports a leading `~/`.",
+      "type": "string"
+    },
     "ssh": {
       "additionalProperties": {
         "$ref": "#/definitions/SshIdentity"
       },
       "description": "SSH identities served by the consent-gated SSH agent, keyed by identity name. Each identity stores its public key inline (not secret) so the agent can answer REQUEST_IDENTITIES without a resolve; the private key is a `secret://` reference resolved only at SIGN time.",
       "type": "object"
+    },
+    "wait_indicator": {
+      "description": "Whether a wrap prints a 'waiting for approval' indicator to stderr while blocked on the consent prompt (spinner on a TTY, a timestamped line on a pipe). Defaults to true; set false to silence. The SECREQ_NO_WAIT_INDICATOR env var overrides this per-invocation.",
+      "type": "boolean"
+    },
+    "wraps": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Wrap"
+      },
+      "description": "Per-binary wrap configuration, keyed by the binary name the shim is installed under. A wrap with no `env` is *gate-only*: consent is required before the binary runs, but nothing is injected.",
+      "type": "object"
     }
   },
-  "title": "secreq wraps config",
+  "title": "secreq config",
   "type": "object"
 }

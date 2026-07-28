@@ -239,6 +239,29 @@ impl Manifest {
     }
 }
 
+impl Provider {
+    /// The invariants no field type can express: an argv template is useless
+    /// empty, and a provider whose `retrieve` is `[]` would fail at resolve
+    /// time with nothing pointing back at the config. Called once per provider
+    /// after the file deserializes.
+    pub fn validate(&self, name: &str, source: &str) -> Result<()> {
+        if self.retrieve.is_empty() {
+            bail!("{source}: provider `{name}`.retrieve must not be empty");
+        }
+        if let Some(store) = &self.store {
+            if store.command.is_empty() {
+                bail!("{source}: provider `{name}`.store.command must not be empty");
+            }
+        }
+        if let Some(batch) = &self.retrieve_batch {
+            if batch.command.is_empty() {
+                bail!("{source}: provider `{name}`.retrieve_batch.command must not be empty");
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Public re-export so the new [`crate::wraps`] config module can reuse the
 /// providers-block parser unchanged. (The provider model is shared across
 /// both config shapes; only the top-level wrapper differs.)

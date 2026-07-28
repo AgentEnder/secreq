@@ -101,9 +101,9 @@ impl Sandbox {
         self.dir.path().join("secreq")
     }
 
-    /// The post-migration config location, `<root>/wraps.json5`.
+    /// The post-migration config location, `<root>/config.toml`.
     pub fn config_path(&self) -> PathBuf {
-        self.root().join("wraps.json5")
+        self.root().join("config.toml")
     }
 
     /// The pinned `$XDG_RUNTIME_DIR` (socket dir parent).

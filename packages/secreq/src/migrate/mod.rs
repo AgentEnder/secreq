@@ -30,6 +30,7 @@
 
 mod m0001_secreq_root;
 mod m0002_ssh_agent_socket;
+mod m0003_config_format;
 
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
@@ -119,6 +120,12 @@ const MIGRATIONS: &[Migration] = &[
         name: "ssh-agent-socket",
         snapshot: m0002_ssh_agent_socket::snapshot_files,
         run: m0002_ssh_agent_socket::run,
+    },
+    Migration {
+        id: 3,
+        name: "config-format",
+        snapshot: m0003_config_format::snapshot_files,
+        run: m0003_config_format::run,
     },
 ];
 
@@ -416,6 +423,21 @@ fn restore_in(root: &Path, level: u32, assume_yes: bool) -> Result<i32> {
         plan.push((entry, live, live_body, snapshot_body));
     }
 
+    // Files a *later* migration introduced are also about to be deleted (see
+    // `clear_artifacts_above`), and they carry the user's edits since the
+    // upgrade — `config.toml` after 0003, for instance. Their snapshot side is
+    // empty because at the target level they did not exist, so they diff as a
+    // whole-file removal. Listing them is not cosmetic: deleting a file the
+    // DISCARD block never named is exactly the silent loss this warning is
+    // here to prevent.
+    let artifacts: Vec<(PathBuf, String)> = artifacts_above(&root, level, &plan)
+        .into_iter()
+        .filter_map(|path| {
+            let body = std::fs::read_to_string(&path).ok()?;
+            Some((path, body))
+        })
+        .collect();
+
     // Only *diverged* content needs a warning — but an unchanged config still
     // needs the restore. Restoring is about the recorded **level** and the
     // on-disk **layout**, not just the bytes: a user whose config never
@@ -423,8 +445,9 @@ fn restore_in(root: &Path, level: u32, assume_yes: bool) -> Result<i32> {
     // returning early here would leave them as stuck as before with a message
     // claiming success.
     let changed: Vec<_> = plan.iter().filter(|(_, _, a, b)| a != b).collect();
+    let nothing_to_warn_about = changed.is_empty() && artifacts.is_empty();
 
-    if changed.is_empty() {
+    if nothing_to_warn_about {
         println!("Config already matches the level-{level} snapshot; rolling back the level.");
     } else {
         println!("Restoring the level-{level} snapshot will DISCARD these changes:\n");
@@ -434,6 +457,14 @@ fn restore_in(root: &Path, level: u32, assume_yes: bool) -> Result<i32> {
                 "{}",
                 diff.unified_diff()
                     .header(&format!("current {}", live.display()), &entry.snapshot)
+            );
+        }
+        for (path, body) in &artifacts {
+            let diff = similar::TextDiff::from_lines(body.as_str(), "");
+            println!(
+                "{}",
+                diff.unified_diff()
+                    .header(&format!("current {}", path.display()), "(removed)")
             );
         }
 
@@ -483,6 +514,17 @@ fn restore_in(root: &Path, level: u32, assume_yes: bool) -> Result<i32> {
             .with_context(|| format!("save current {}", live.display()))?;
         }
     }
+    // The artifacts are deleted outright, so they need rescuing too — a
+    // recoverable restore that dropped `config.toml` on the floor would be
+    // recoverable only for the files that already survived.
+    for (path, body) in &artifacts {
+        let name = path.file_name().map_or_else(
+            || "artifact".to_owned(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        atomic::replace(&saved.join(name), body.as_bytes(), atomic::Mode::Like(path))
+            .with_context(|| format!("save current {}", path.display()))?;
+    }
 
     for (entry, live, _, snapshot_body) in &plan {
         // Drop whatever is at the destination first: after migration 0001 it's
@@ -524,10 +566,60 @@ fn restore_in(root: &Path, level: u32, assume_yes: bool) -> Result<i32> {
         }
     }
 
+    clear_artifacts_above(&root, level, &plan);
+
     write_state(&root, level)?;
     println!("\nRestored level {level}.");
     println!("Your previous config was saved to {}", saved.display());
     Ok(0)
+}
+
+/// Remove files that only exist because a migration **above** `level` created
+/// them, and that the restore itself did not just write.
+///
+/// The per-entry cleanup above only removes a file when the migration was
+/// shaped like "this file moved" — it compares the live path to the restore
+/// target. Migration 0003 both renames *and* rewrites (`wraps.json5` →
+/// `config.toml`), so restoring to level 0 put the JSON5 original back and
+/// left the TOML beside it. Two real configs, and the next forward migration
+/// would find them and refuse to guess.
+///
+/// So every path a later migration declares in its `snapshot_files` is a
+/// candidate: if it survived the restore and is not something the restore
+/// wrote, it belongs to a level the user just rolled back past.
+fn clear_artifacts_above(root: &Path, level: u32, plan: &[(&FileEntry, PathBuf, String, String)]) {
+    for path in artifacts_above(root, level, plan) {
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+/// The paths [`clear_artifacts_above`] will delete. Split out so the DISCARD
+/// report and the deletion cannot disagree about what is being lost.
+fn artifacts_above(
+    root: &Path,
+    level: u32,
+    plan: &[(&FileEntry, PathBuf, String, String)],
+) -> Vec<PathBuf> {
+    let restored: Vec<&PathBuf> = plan.iter().map(|(e, _, _, _)| &e.restore_to).collect();
+    let ctx = Ctx {
+        root: root.to_path_buf(),
+        home: dirs::home_dir(),
+        legacy_config_dir: legacy_config_dir(),
+        legacy_state_dir: legacy_state_dir(),
+        legacy_runtime_dir: m0002_ssh_agent_socket::legacy_runtime_dir(),
+    };
+    let mut out = Vec::new();
+    for migration in MIGRATIONS.iter().filter(|m| m.id > level) {
+        for path in (migration.snapshot)(&ctx) {
+            if restored.iter().any(|kept| **kept == path) || out.contains(&path) {
+                continue;
+            }
+            if path.exists() {
+                out.push(path);
+            }
+        }
+    }
+    out
 }
 
 /// What mode a restored file must land with.
@@ -840,19 +932,25 @@ mod tests {
 
         run_pending_in(&ctx).unwrap();
 
-        assert_eq!(
-            std::fs::read_to_string(ctx.root.join("wraps.json5")).unwrap(),
-            "{ gh: {} }"
+        // 0001 moved the file and left a symlink; 0003 then converted it to
+        // TOML and cleared that symlink, because an older secreq could not
+        // read the new format wherever the link pointed.
+        let config = ctx.root.join("config.toml");
+        assert!(config.is_file(), "config landed in the root as TOML");
+        assert!(
+            !ctx.root.join("wraps.json5").exists(),
+            "the JSON5 original is gone"
         );
-        let link = legacy.join("wraps.json5");
-        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
-        assert_eq!(
-            std::fs::read_link(&link).unwrap(),
-            ctx.root.join("wraps.json5")
+        assert!(
+            legacy.join("wraps.json5").symlink_metadata().is_err(),
+            "the stale compat symlink is removed rather than left dangling"
         );
-        // Old path still resolves — this is what lets an older secreq keep
-        // working after the migration.
-        assert_eq!(std::fs::read_to_string(&link).unwrap(), "{ gh: {} }");
+        let c = crate::wraps::WrapsConfig::parse(
+            &std::fs::read_to_string(&config).unwrap(),
+            "migrated",
+        )
+        .expect("the migrated config parses");
+        assert!(c.wraps.contains_key("gh"), "the wrap survived both levels");
     }
 
     #[test]
@@ -868,10 +966,12 @@ mod tests {
         run_pending_in(&ctx).unwrap();
         run_pending_in(&ctx).unwrap();
 
-        assert_eq!(
-            std::fs::read_to_string(ctx.root.join("wraps.json5")).unwrap(),
-            "{ gh: {} }"
-        );
+        let c = crate::wraps::WrapsConfig::parse(
+            &std::fs::read_to_string(ctx.root.join("config.toml")).unwrap(),
+            "migrated",
+        )
+        .expect("the migrated config parses after repeated runs");
+        assert!(c.wraps.contains_key("gh"));
     }
 
     #[test]
@@ -886,12 +986,13 @@ mod tests {
 
         run_pending_in(&ctx).unwrap();
 
-        assert!(legacy
-            .join("wraps.json5")
-            .symlink_metadata()
-            .unwrap()
-            .file_type()
-            .is_symlink());
+        // 0001 leaves a symlink here; 0003 then clears it, because the
+        // format it points at is one an older secreq cannot read anyway.
+        assert!(
+            legacy.join("wraps.json5").symlink_metadata().is_err(),
+            "the compat symlink is cleared once the format changes under it"
+        );
+        assert!(ctx.root.join("config.toml").is_file());
     }
 
     #[test]
@@ -946,18 +1047,18 @@ mod tests {
         let ctx = ctx_in(&tmp);
         write(
             &ctx.legacy_config_dir.clone().unwrap().join("wraps.json5"),
-            "original",
+            "{ original: {} }",
         );
 
         run_pending_in(&ctx).unwrap();
         // Simulate a re-run from level 0 with the config already moved.
         write_state(&ctx.root, 0).unwrap();
-        std::fs::write(ctx.root.join("wraps.json5"), "changed-after-migration").unwrap();
+        std::fs::write(ctx.root.join("wraps.json5"), "{ changed_after: {} }").unwrap();
         run_pending_in(&ctx).unwrap();
 
         assert_eq!(
             std::fs::read_to_string(snapshot_dir(&ctx.root, 0).join("wraps.json5")).unwrap(),
-            "original"
+            "{ original: {} }"
         );
     }
 

@@ -30,12 +30,12 @@ use common::Sandbox;
 fn wrap_select_arrows_survive_application_cursor_mode() {
     let sb = Sandbox::new();
     sb.write_config(&format!(
-        r#"{{
-            $shim_dir: "{shim}",
-            providers: {{
-                fake: {{ retrieve: ["printf", "%s", "{{locator}}"] }},
-            }},
-        }}"#,
+        r#"
+            shim_dir = "{shim}"
+
+            [providers.fake]
+            retrieve = ["printf", "%s", "{{locator}}"]
+        "#,
         shim = sb.path().join("shims").display(),
     ));
 

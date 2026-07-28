@@ -17,7 +17,7 @@ use crate::path_setup;
 use crate::provider;
 use crate::reference::Reference;
 use crate::shim;
-use crate::wraps::{self, Wrap, WrapsConfig};
+use crate::wraps::{Wrap, WrapsConfig};
 
 use super::binaries::first_on_path;
 use super::{prompt, resolve_config_path, which_on_path};
@@ -449,122 +449,120 @@ fn parse_env_assignments(envs: &[String]) -> Result<BTreeMap<String, String>> {
 /// `cli::run` before any command sees control, and `init` narrows an existing
 /// one. So no [`crate::paths::ensure_private_dir`] call belongs here — it
 /// would be redundant on the default path and actively dangerous on the
-/// `--config` one, where `--config /tmp/x.json5` would `chmod 0700 /tmp`.
+/// `--config` one, where `--config /tmp/x.toml` would `chmod 0700 /tmp`.
+///
+/// ## The write is a merge, not a rebuild
+///
+/// This used to reconstruct the whole file from [`WrapsConfig`] and hand it to
+/// a serializer, which meant every `wrap add`, `ssh add` or editor pick
+/// silently deleted the user's comments and layout. Now the existing document
+/// is parsed with `toml_edit`, the changed values are set *into* it, and
+/// everything the parser doesn't model — comments, blank lines, key order —
+/// survives untouched.
 pub(super) fn write_config(path: &Path, config: &WrapsConfig) -> Result<()> {
-    let value = config_to_json_value(config)?;
-    let text = serde_json::to_string_pretty(&value)?;
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let mut doc: toml_edit::DocumentMut = existing
+        .parse()
+        .with_context(|| format!("{} is not valid TOML", path.display()))?;
+
+    sync_document(&mut doc, config);
+
+    let text = doc.to_string();
     // Validate by round-tripping before writing.
     WrapsConfig::parse(&text, &path.display().to_string())
         .context("internal: serialized config doesn't re-parse")?;
-    crate::atomic::replace(
-        path,
-        format!("{text}\n").as_bytes(),
-        crate::atomic::Mode::Like(path),
-    )
-    .with_context(|| format!("failed to write {}", path.display()))
+    crate::atomic::replace(path, text.as_bytes(), crate::atomic::Mode::Like(path))
+        .with_context(|| format!("failed to write {}", path.display()))
 }
 
-fn config_to_json_value(config: &WrapsConfig) -> Result<serde_json::Value> {
-    let mut root = serde_json::Map::new();
-    if let Some(shim) = &config.shim_dir {
-        root.insert(
-            "$shim_dir".to_owned(),
-            serde_json::Value::String(shim.display().to_string()),
-        );
-    }
-    // Preserve the reserved machine-local toggles across a rewrite — a
-    // wrap-add / ssh-add must not silently drop a user's `$wait_indicator`
-    // or `$editor` (which the rule editor writes on an editor pick).
-    if let Some(on) = config.wait_indicator {
-        root.insert(
-            wraps::WAIT_INDICATOR_KEY.to_owned(),
-            serde_json::Value::Bool(on),
-        );
-    }
-    if let Some(editor) = &config.editor {
-        root.insert(
-            wraps::EDITOR_KEY.to_owned(),
-            serde_json::Value::String(editor.clone()),
-        );
-    }
-    for (name, wrap) in &config.wraps {
-        let mut obj = serde_json::Map::new();
-        if let Some(reason) = &wrap.reason {
-            obj.insert(
-                "$reason".to_owned(),
-                serde_json::Value::String(reason.clone()),
-            );
+/// Set every value `config` carries into `doc`, and drop the entries it no
+/// longer has. Anything else in the document is left exactly as written.
+fn sync_document(doc: &mut toml_edit::DocumentMut, config: &WrapsConfig) {
+    use toml_edit::Item;
+
+    fn set_or_remove(doc: &mut toml_edit::DocumentMut, key: &str, v: Option<toml_edit::Value>) {
+        match v {
+            Some(v) => {
+                crate::rule_scaffold::set_preserving_decor(doc.as_table_mut(), key, Item::Value(v));
+            }
+            None => {
+                doc.remove(key);
+            }
         }
-        let mut env_obj = serde_json::Map::new();
-        for (k, v) in &wrap.env {
-            env_obj.insert(k.clone(), serde_json::Value::String(v.clone()));
-        }
-        obj.insert("env".to_owned(), serde_json::Value::Object(env_obj));
-        root.insert(name.clone(), serde_json::Value::Object(obj));
     }
-    // Providers: only include user-declared schemes, not built-ins (avoid
-    // baking them into the file; built-ins overlay at load time).
-    let builtin_map = crate::manifest::builtin_providers();
-    let builtin_names: std::collections::BTreeSet<&str> =
-        builtin_map.keys().map(String::as_str).collect();
-    let user_providers: std::collections::BTreeMap<&String, &crate::manifest::Provider> = config
+
+    set_or_remove(
+        doc,
+        "shim_dir",
+        config
+            .shim_dir
+            .as_ref()
+            .map(|p| crate::daemon::ui::abbreviate_home(&p.display().to_string()).into()),
+    );
+    set_or_remove(doc, "wait_indicator", config.wait_indicator.map(Into::into));
+    set_or_remove(
+        doc,
+        "editor",
+        config.editor.as_ref().map(|e| e.as_str().into()),
+    );
+
+    // Built-ins overlay at load time, so they are never written back — baking
+    // them into the file would freeze today's defaults into the user's config.
+    let builtin = crate::manifest::builtin_providers();
+    let user_providers: BTreeMap<&String, &crate::manifest::Provider> = config
         .providers
         .iter()
-        .filter(|(name, _)| !builtin_names.contains(name.as_str()))
+        .filter(|(name, _)| !builtin.contains_key(name.as_str()))
         .collect();
-    if !user_providers.is_empty() {
-        let mut providers_obj = serde_json::Map::new();
-        for (name, p) in user_providers {
-            providers_obj.insert(name.clone(), provider_to_json_value(p));
+
+    sync_table(doc, "wraps", &config.wraps);
+    sync_table(doc, "providers", &user_providers);
+    sync_table(doc, "ssh", &config.ssh);
+
+    // An emptied-out section is removed rather than left as a bare header.
+    for key in ["wraps", "providers", "ssh"] {
+        if doc
+            .get(key)
+            .and_then(Item::as_table)
+            .is_some_and(toml_edit::Table::is_empty)
+        {
+            doc.remove(key);
         }
-        root.insert(
-            "providers".to_owned(),
-            serde_json::Value::Object(providers_obj),
-        );
     }
-    if !config.ssh.is_empty() {
-        let mut ssh_obj = serde_json::Map::new();
-        for (name, identity) in &config.ssh {
-            let mut obj = serde_json::Map::new();
-            if let Some(reason) = &identity.reason {
-                obj.insert(
-                    "$reason".to_owned(),
-                    serde_json::Value::String(reason.clone()),
-                );
-            }
-            obj.insert(
-                "public_key".to_owned(),
-                serde_json::Value::String(identity.public_key.clone()),
-            );
-            obj.insert(
-                "private_key".to_owned(),
-                serde_json::Value::String(identity.private_key.to_string()),
-            );
-            ssh_obj.insert(name.clone(), serde_json::Value::Object(obj));
-        }
-        root.insert(
-            wraps::SSH_KEY.to_owned(),
-            serde_json::Value::Object(ssh_obj),
-        );
-    }
-    Ok(serde_json::Value::Object(root))
 }
 
-fn provider_to_json_value(p: &crate::manifest::Provider) -> serde_json::Value {
-    let mut obj = serde_json::Map::new();
-    obj.insert(
-        "retrieve".to_owned(),
-        serde_json::Value::Array(
-            p.retrieve
-                .iter()
-                .map(|s| serde_json::Value::String(s.clone()))
-                .collect(),
-        ),
-    );
-    // We don't currently round-trip store/retrieve_batch from user-defined
-    // providers when we re-emit the config; users who declare those should
-    // edit the file by hand. `secreq edit` is the supported path.
-    serde_json::Value::Object(obj)
+/// Merge one `[section.<name>]` map into the document, serializing each entry
+/// through its `Serialize` impl and removing names that are gone.
+fn sync_table<K, V>(doc: &mut toml_edit::DocumentMut, section: &str, entries: &BTreeMap<K, V>)
+where
+    K: std::borrow::Borrow<String> + Ord,
+    V: serde::Serialize,
+{
+    use toml_edit::{Item, Table};
+
+    if entries.is_empty() && doc.get(section).is_none() {
+        return;
+    }
+    let table = doc
+        .entry(section)
+        .or_insert_with(|| {
+            let mut t = Table::new();
+            t.set_implicit(true);
+            Item::Table(t)
+        })
+        .as_table_mut()
+        .expect("config section must be a table");
+
+    let names: Vec<String> = entries.keys().map(|k| k.borrow().clone()).collect();
+    table.retain(|existing, _| names.iter().any(|n| n == existing));
+
+    for (name, entry) in entries {
+        let serialized = toml_edit::ser::to_document(entry)
+            .expect("config entries serialize infallibly")
+            .as_table()
+            .clone();
+        crate::rule_scaffold::set_preserving_decor(table, name.borrow(), Item::Table(serialized));
+    }
 }
 
 #[cfg(test)]
@@ -591,7 +589,7 @@ mod tests {
         );
         config.ssh.insert(
             "github".to_owned(),
-            wraps::SshIdentity {
+            crate::wraps::SshIdentity {
                 reason: Some("git pushes".to_owned()),
                 public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1 me@mac".to_owned(),
                 private_key: Reference::parse("secret://op/Private/GitHub/private key").unwrap(),

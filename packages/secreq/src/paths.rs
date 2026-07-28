@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! ~/.secreq/
-//!   wraps.json5            config
+//!   config.toml            config
 //!   auto-rules.json5       config
 //!   rules/                 compiled wasm rule modules (<rule-id>.wasm)
 //!   rule-drafts/           scaffolded programmatic-rule source projects
@@ -194,7 +194,7 @@ fn root_from(override_env: Option<OsString>, home: Option<PathBuf>) -> Result<Pa
 }
 
 pub fn wraps_path() -> Result<PathBuf> {
-    Ok(secreq_root()?.join("wraps.json5"))
+    Ok(secreq_root()?.join("config.toml"))
 }
 
 pub fn rules_path() -> Result<PathBuf> {
@@ -252,7 +252,7 @@ pub fn daemon_jsonl_path() -> Result<PathBuf> {
 }
 
 /// Default `$shim_dir` offered by `init`. Users may point `$shim_dir`
-/// elsewhere in `wraps.json5`; this is only the suggestion.
+/// elsewhere in `config.toml`; this is only the suggestion.
 pub fn default_shims_dir() -> Result<PathBuf> {
     Ok(secreq_root()?.join("shims"))
 }

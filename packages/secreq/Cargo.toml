@@ -164,6 +164,8 @@ harness = []
 schema = ["dep:schemars"]
 
 [dev-dependencies]
+# Integration tests validate a TOML fixture against the published JSON Schema.
+toml = "0.8"
 # Depending on ourselves is how a feature is turned on for the test build only.
 # Integration tests under `tests/` are separate crates that link this lib as an
 # ordinary dependency, so `#[cfg(test)]` would hide `harness` from exactly the

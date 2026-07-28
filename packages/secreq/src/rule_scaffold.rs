@@ -263,6 +263,22 @@ pub fn save_preferred_editor(id: &str) -> Result<()> {
     save_preferred_editor_at(&path, id)
 }
 
+/// Set `key` to `item`, keeping the existing key's decoration.
+///
+/// `Table::insert` mints a fresh key, and a comment written above an
+/// assignment is stored as that key's prefix — so inserting over an existing
+/// entry deletes the user's comment, which is the exact failure moving to
+/// `toml_edit` was meant to end. Replacing the *item* leaves the key, and its
+/// decoration, in place.
+pub(crate) fn set_preserving_decor(table: &mut toml_edit::Table, key: &str, item: toml_edit::Item) {
+    match table.get_mut(key) {
+        Some(existing) => *existing = item,
+        None => {
+            table.insert(key, item);
+        }
+    }
+}
+
 /// The body of [`save_preferred_editor`] against an explicit path, so the
 /// mode it leaves is testable without `$SECREQ_HOME` — which is process-global
 /// and races across threads in the same test binary.
@@ -274,80 +290,32 @@ pub fn save_preferred_editor(id: &str) -> Result<()> {
 fn save_preferred_editor_at(path: &Path, id: &str) -> Result<()> {
     let existing = match std::fs::read_to_string(path) {
         Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{\n}\n".to_owned(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
     };
-    let updated = upsert_editor_key(&existing, id);
-    // Round-trip through the parser so a malformed edit never lands — and
-    // confirm the key actually resolves to `id` (guards the pathological
-    // case of a pre-existing inline `$editor` the line-based upsert can't
-    // see, where a stale duplicate would otherwise silently win).
+    // `toml_edit` edits the parsed document, so everything else in the file —
+    // comments, provider definitions, key order — is carried through
+    // untouched. This replaced a line-oriented upsert that could not see an
+    // existing inline assignment and had to guard against one silently
+    // winning; a document edit has no such blind spot.
+    let mut doc: toml_edit::DocumentMut = existing
+        .parse()
+        .with_context(|| format!("{} is not valid TOML", path.display()))?;
+    set_preserving_decor(doc.as_table_mut(), "editor", toml_edit::value(id));
+    let updated = doc.to_string();
+
+    // Round-trip through the parser so a malformed edit never lands.
     let parsed = crate::wraps::WrapsConfig::parse(&updated, &path.display().to_string())
-        .context("internal: config with updated $editor doesn't re-parse")?;
+        .context("internal: config with updated `editor` doesn't re-parse")?;
     if parsed.editor.as_deref() != Some(id) {
         bail!(
-            "could not set `$editor` in {} — edit it by hand to `$editor: {id:?}`",
+            "could not set `editor` in {} — edit it by hand to `editor = {id:?}`",
             path.display()
         );
     }
     crate::atomic::replace(path, updated.as_bytes(), crate::atomic::Mode::Like(path))
         .with_context(|| format!("write {}", path.display()))
 }
-
-/// Insert-or-replace the top-level `$editor: "<id>"` assignment in a
-/// wraps.json5 text, leaving all other content untouched.
-///
-/// `$editor` is a reserved *top-level* key — [`crate::wraps`] rejects it
-/// anywhere else — so a line-oriented match is unambiguous: we replace the
-/// first line that assigns `$editor` (bare or quoted), or, if none exists,
-/// insert a fresh assignment right after the opening `{`.
-fn upsert_editor_key(text: &str, id: &str) -> String {
-    let value = serde_json::to_string(id).unwrap_or_else(|_| format!("{id:?}"));
-    let new_line = format!("  \"$editor\": {value},");
-
-    // Try to replace an existing assignment first.
-    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
-    for line in &mut lines {
-        if line_assigns_editor(line) {
-            *line = new_line.clone();
-            let mut out = lines.join("\n");
-            if text.ends_with('\n') {
-                out.push('\n');
-            }
-            return out;
-        }
-    }
-
-    // No existing key — insert after the first `{`.
-    if let Some(pos) = text.find('{') {
-        let (head, tail) = text.split_at(pos + 1);
-        return format!("{head}\n{new_line}{tail}");
-    }
-
-    // Not an object at all (empty/garbage) — write a fresh minimal config.
-    format!("{{\n{new_line}\n}}\n")
-}
-
-/// Does this line assign the top-level `$editor` key? Matches `$editor:`,
-/// `"$editor":`, or `'$editor':` after leading whitespace.
-fn line_assigns_editor(line: &str) -> bool {
-    let t = line.trim_start();
-    for stripped in [
-        t.strip_prefix("$editor"),
-        t.strip_prefix("\"$editor\""),
-        t.strip_prefix("'$editor'"),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if stripped.trim_start().starts_with(':') {
-            return true;
-        }
-    }
-    false
-}
-
-// ── Tests ─────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -472,43 +440,37 @@ mod tests {
     }
 
     #[test]
-    fn upsert_inserts_into_empty_object() {
-        let out = upsert_editor_key("{\n}\n", "code");
-        assert!(out.contains("\"$editor\": \"code\""));
-        // Still parses as a config with the editor set.
-        let c = crate::wraps::WrapsConfig::parse(&out, "t").expect("parse");
+    fn saving_an_editor_pick_creates_the_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        save_preferred_editor_at(&path, "code").expect("save");
+        let c = crate::wraps::WrapsConfig::load(&path).expect("parse");
         assert_eq!(c.editor.as_deref(), Some("code"));
     }
 
     #[test]
-    fn upsert_replaces_existing_editor_preserving_other_keys() {
-        let text = "{\n  \"$editor\": \"vim\",\n  gh: { env: {} },\n}\n";
-        let out = upsert_editor_key(text, "zed");
-        assert!(out.contains("\"$editor\": \"zed\""));
-        assert!(!out.contains("\"vim\""));
-        // The unrelated wrap survives the edit.
-        assert!(out.contains("gh: { env: {} }"));
-        let c = crate::wraps::WrapsConfig::parse(&out, "t").expect("parse");
+    fn saving_an_editor_pick_replaces_it_and_keeps_everything_else() {
+        // The whole point of editing the document rather than rewriting it:
+        // the comment and the unrelated wrap have to survive.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "# keep me\neditor = \"vim\"\n\n[wraps.gh]\nreason = \"gh access\"\n",
+        )
+        .unwrap();
+
+        save_preferred_editor_at(&path, "zed").expect("save");
+
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(out.contains("# keep me"), "comment must survive: {out}");
+        assert!(!out.contains("vim"));
+        let c = crate::wraps::WrapsConfig::load(&path).expect("parse");
         assert_eq!(c.editor.as_deref(), Some("zed"));
-        assert!(c.wraps.contains_key("gh"));
-    }
-
-    #[test]
-    fn upsert_preserves_comments_when_inserting() {
-        let text = "{\n  // keep me\n  gh: { env: {} },\n}\n";
-        let out = upsert_editor_key(text, "cursor");
-        assert!(out.contains("// keep me"), "comment must survive: {out}");
-        assert!(out.contains("\"$editor\": \"cursor\""));
-    }
-
-    #[test]
-    fn line_match_is_top_level_only() {
-        assert!(line_assigns_editor("  $editor: \"code\","));
-        assert!(line_assigns_editor("\"$editor\": \"code\""));
-        assert!(line_assigns_editor("  '$editor' : 'x'"));
-        // A wrap literally named something with $editor inside isn't a
-        // top-level assignment line.
-        assert!(!line_assigns_editor("  gh: { $editor_note: 1 },"));
-        assert!(!line_assigns_editor("  // $editor is the key"));
+        assert_eq!(
+            c.wraps["gh"].reason.as_deref(),
+            Some("gh access"),
+            "an unrelated wrap must survive the edit"
+        );
     }
 }

@@ -1,101 +1,93 @@
-//! The `wraps.json5` config model: per-binary wraps.
+//! The `config.toml` model: per-binary wraps, providers, SSH identities.
 //!
-//! `secreq` resolves secrets *for specific binaries you've wrapped*. The
-//! config lives at `~/.secreq/wraps.json5` (`$SECREQ_HOME/wraps.json5`;
-//! user-scope only — there's no project scope; that's varlock's
-//! territory). Each top-level
-//! key (other than reserved `providers` and `$`-prefixed metadata) names a
-//! binary; its value is the wrap config for that binary.
+//! `secreq` resolves secrets *for specific binaries you've wrapped*. The config
+//! lives at `~/.secreq/config.toml` (`$SECREQ_HOME/config.toml`; user-scope
+//! only — there's no project scope, that's varlock's territory).
 //!
-//! ```json5
-//! {
-//!   $shim_dir: "~/.secreq/shims",    // set by `secreq init`
+//! ```toml
+//! shim_dir = "~/.secreq/shims"       # set by `secreq init`
 //!
-//!   gh: {
-//!     $reason: "GitHub API access",
-//!     env: {
-//!       GITHUB_TOKEN: "secret://op/Personal/GitHub Token/credential",
-//!     },
-//!   },
+//! [wraps.gh]
+//! reason = "GitHub API access"
+//! env.GITHUB_TOKEN = "secret://op/Personal/GitHub Token/credential"
 //!
-//!   aws: {
-//!     $reason: "AWS deployments",
-//!     env: {
-//!       AWS_ACCESS_KEY_ID:     "secret://op/Work/AWS/access_key_id",
-//!       AWS_SECRET_ACCESS_KEY: "secret://op/Work/AWS/secret_access_key",
-//!     },
-//!   },
+//! [wraps.aws]
+//! reason = "AWS deployments"
+//! env.AWS_ACCESS_KEY_ID = "secret://op/Work/AWS/access_key_id"
+//! env.AWS_SECRET_ACCESS_KEY = "secret://op/Work/AWS/secret_access_key"
 //!
-//!   providers: { /* … same shape as the old manifest's providers block … */ },
-//! }
+//! [providers.op]
+//! retrieve = ["op", "read", "op://{locator}"]
 //! ```
 //!
-//! Provider definitions (`Provider`, `StoreCapability`, `BatchRetrieve`,
-//! `FieldSpec`, `ValueMode`) are unchanged from the previous model — that
-//! engine carries over wholesale. What changes is the *top-level shape*:
-//! groups + secrets + eager-set/ambient-ref union → wraps + env maps.
+//! **The top level is closed.** Wraps sit under `[wraps.<binary>]` rather than
+//! at the root, so every root key is one this struct declares and an
+//! unrecognised one is an error — where the root used to be an open namespace
+//! in which a mistyped `providers` silently became a wrap.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
-use serde_json::Value;
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 
-// We reuse the provider model and the json-helpers from the existing
-// `manifest` module. They aren't config-shape-specific.
-use crate::manifest::{builtin_providers, parse_providers_value, present, Provider};
+use crate::manifest::{builtin_providers, Provider};
 use crate::reference::Reference;
 
-/// The reserved top-level key holding provider scheme definitions.
-pub const PROVIDERS_KEY: &str = "providers";
-
-/// `$shim_dir` — where `secreq wrap` drops PATH shims. Set by `secreq init`.
-pub const SHIM_DIR_KEY: &str = "$shim_dir";
-
-/// The reserved top-level key holding SSH identity definitions for the agent.
-pub const SSH_KEY: &str = "ssh";
-
-/// `$wait_indicator` — global toggle for the wrap's stderr "waiting for
-/// approval" indicator. Absent / `true` = shown; `false` = silenced.
-pub const WAIT_INDICATOR_KEY: &str = "$wait_indicator";
-
-/// `$editor` — the editor the rule-editor's "Open in editor" split-button
-/// defaults to (an id from [`crate::rule_scaffold`]'s catalog, e.g.
-/// `"code"`). Machine-local like `$shim_dir`; written by the rule editor
-/// when the user picks an editor.
-pub const EDITOR_KEY: &str = "$editor";
-
-/// Top-level configuration loaded from `wraps.json5`.
-#[derive(Debug, Clone, Default, PartialEq)]
+/// Top-level configuration loaded from `config.toml`.
+///
+/// **Every top-level key is known.** Wraps live under `[wraps.<binary>]`
+/// rather than at the root, which is what lets this be an ordinary
+/// `deny_unknown_fields` struct: a mistyped `provdiers` is an error instead of
+/// silently becoming a wrap for a binary of that name.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct WrapsConfig {
     /// Where the PATH shims live. `None` until `secreq init` runs.
+    #[serde(
+        default,
+        deserialize_with = "de_tilde_path",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub shim_dir: Option<PathBuf>,
-    /// Configured per-binary wraps.
+    /// Configured per-binary wraps, keyed by binary name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub wraps: BTreeMap<String, Wrap>,
     /// Provider scheme definitions (built-ins overlay these).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub providers: BTreeMap<String, Provider>,
     /// SSH identities served by the agent, keyed by identity name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub ssh: BTreeMap<String, SshIdentity>,
-    /// `$wait_indicator` — whether a blocked wrap prints the stderr "waiting
-    /// for approval" indicator. `None` means unset (defaults to enabled); see
+    /// Whether a blocked wrap prints the stderr "waiting for approval"
+    /// indicator. `None` means unset (defaults to enabled); see
     /// [`WrapsConfig::wait_indicator_enabled`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wait_indicator: Option<bool>,
-    /// `$editor` — the rule editor's preferred "Open in editor" target
-    /// (an editor id). `None` means the split-button falls back to the
-    /// first detected editor.
+    /// The rule editor's preferred "Open in editor" target (an editor id).
+    /// `None` means the split-button falls back to the first detected editor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub editor: Option<String>,
+}
+
+/// `shim_dir` is written with a leading `~/` by `secreq init` and read back as
+/// an absolute path.
+fn de_tilde_path<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<PathBuf>, D::Error> {
+    let raw = Option::<String>::deserialize(d)?;
+    Ok(raw.as_deref().map(expand_tilde))
 }
 
 /// One SSH identity served by the agent. `public_key` is the inline OpenSSH
 /// public key (not secret); `private_key` is a `secret://provider/locator`
 /// reference resolved only at SIGN time.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct SshIdentity {
     /// Rationale shown in the consent prompt when this identity is used to
     /// sign.
-    #[cfg_attr(feature = "schema", schemars(rename = "$reason"))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// Inline OpenSSH public key (`ssh-ed25519 AAAA… comment`). Answered to
     /// REQUEST_IDENTITIES without a resolve.
@@ -109,16 +101,18 @@ pub struct SshIdentity {
 /// *gate-only* — consent is required before the binary runs, but nothing is
 /// injected (used to gate tools like `op` that have no secret to pass).
 /// Everything else is metadata.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct Wrap {
     /// The binary name is the key this wrap is filed under, not a property of
-    /// the object, so it is absent from the schema.
+    /// the object, so it is absent from the schema and the serialized form.
+    #[serde(skip)]
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub name: String,
     /// Rationale shown in the consent prompt when this wrap is invoked.
-    #[cfg_attr(feature = "schema", schemars(rename = "$reason"))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// Environment variables to inject. Each value is a
     /// `secret://provider/locator` reference; resolution happens at invocation
@@ -126,6 +120,7 @@ pub struct Wrap {
     //
     // Resolution is deferred to run-time so an unreachable provider doesn't
     // break config loading.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[cfg_attr(
         feature = "schema",
         schemars(default, with = "crate::schema::SecretRefMap")
@@ -134,51 +129,22 @@ pub struct Wrap {
 }
 
 impl WrapsConfig {
-    /// Parse from a JSON5 string. `source_label` is used in error messages.
+    /// Parse from a TOML string. `source_label` names the file in errors.
+    ///
+    /// The `toml` crate reports a line, a column and a caret at the offending
+    /// value, so its message is the diagnostic — this only prefixes the file.
     pub fn parse(text: &str, source_label: &str) -> Result<WrapsConfig> {
-        let root: Value = json5::from_str(text)
-            .with_context(|| format!("failed to parse JSON5 config: {source_label}"))?;
-        let obj = root
-            .as_object()
-            .with_context(|| format!("{source_label}: top level must be an object"))?;
+        let mut config: WrapsConfig = toml::from_str(text)
+            .with_context(|| format!("failed to parse config: {source_label}"))?;
 
-        let mut config = WrapsConfig::default();
-
-        for (key, value) in obj {
-            match key.as_str() {
-                PROVIDERS_KEY => {
-                    config.providers = parse_providers_value(value, source_label)?;
-                }
-                SSH_KEY => {
-                    config.ssh = parse_ssh_identities(value, source_label)?;
-                }
-                SHIM_DIR_KEY => {
-                    let raw = value.as_str().with_context(|| {
-                        format!("{source_label}: `{SHIM_DIR_KEY}` must be a string")
-                    })?;
-                    config.shim_dir = Some(expand_tilde(raw));
-                }
-                WAIT_INDICATOR_KEY => {
-                    let on = value.as_bool().with_context(|| {
-                        format!("{source_label}: `{WAIT_INDICATOR_KEY}` must be a boolean")
-                    })?;
-                    config.wait_indicator = Some(on);
-                }
-                EDITOR_KEY => {
-                    let raw = value.as_str().with_context(|| {
-                        format!("{source_label}: `{EDITOR_KEY}` must be a string")
-                    })?;
-                    config.editor = Some(raw.to_owned());
-                }
-                other if other.starts_with('$') => {
-                    // `$schema`, `$version`, future metadata — silently ignored.
-                    continue;
-                }
-                other => {
-                    let wrap = parse_wrap(other, value, source_label)?;
-                    config.wraps.insert(other.to_owned(), wrap);
-                }
-            }
+        // `name` is the map key on both of these, skipped by serde and filled
+        // in here so callers can keep reading `wrap.name` / `provider.name`.
+        for (name, wrap) in &mut config.wraps {
+            wrap.name = name.clone();
+        }
+        for (name, provider) in &mut config.providers {
+            provider.name = name.clone();
+            provider.validate(name, source_label)?;
         }
         Ok(config)
     }
@@ -249,137 +215,6 @@ impl WrapsConfig {
     }
 }
 
-fn parse_wrap(name: &str, value: &Value, source: &str) -> Result<Wrap> {
-    let obj = value
-        .as_object()
-        .with_context(|| format!("{source}: wrap `{name}` must be an object (got {value})"))?;
-
-    let mut wrap = Wrap {
-        name: name.to_owned(),
-        reason: None,
-        env: BTreeMap::new(),
-    };
-
-    for (key, val) in obj {
-        match key.as_str() {
-            "$reason" => {
-                wrap.reason = match present(Some(val)) {
-                    None => None,
-                    Some(val) => Some(
-                        val.as_str()
-                            .with_context(|| {
-                                format!("{source}: `{name}.$reason` must be a string")
-                            })?
-                            .to_owned(),
-                    ),
-                };
-            }
-            "$description" => {
-                // Future-proof: accept and ignore alongside $reason.
-                continue;
-            }
-            "env" => {
-                let env_obj = val
-                    .as_object()
-                    .with_context(|| format!("{source}: `{name}.env` must be an object"))?;
-                for (env_name, env_val) in env_obj {
-                    let s = env_val.as_str().with_context(|| {
-                        format!("{source}: `{name}.env.{env_name}` must be a string")
-                    })?;
-                    wrap.env.insert(env_name.clone(), s.to_owned());
-                }
-            }
-            other if other.starts_with('$') => {
-                bail!("{source}: wrap `{name}` has unknown setting `{other}`");
-            }
-            other => {
-                bail!("{source}: wrap `{name}` has unknown key `{other}` (env vars belong inside `env: {{ … }}`)");
-            }
-        }
-    }
-
-    // An empty `env` is legal: a wrap with no secrets is a *gate-only*
-    // wrap — consent is still required before the binary runs, but
-    // nothing is injected. This is how you gate a tool like `op` that has
-    // no secret to pass through.
-    Ok(wrap)
-}
-
-/// Parse the reserved `ssh` block: a map of identity name → identity.
-fn parse_ssh_identities(value: &Value, source: &str) -> Result<BTreeMap<String, SshIdentity>> {
-    let obj = value
-        .as_object()
-        .with_context(|| format!("{source}: `{SSH_KEY}` must be an object"))?;
-
-    let mut identities = BTreeMap::new();
-    for (name, val) in obj {
-        identities.insert(name.clone(), parse_ssh_identity(name, val, source)?);
-    }
-    Ok(identities)
-}
-
-/// Parse one SSH identity. Requires `public_key` and `private_key`; accepts
-/// an optional `$reason`; rejects any other key (mirrors `parse_wrap`).
-fn parse_ssh_identity(name: &str, value: &Value, source: &str) -> Result<SshIdentity> {
-    let obj = value.as_object().with_context(|| {
-        format!("{source}: ssh identity `{name}` must be an object (got {value})")
-    })?;
-
-    let mut reason = None;
-    let mut public_key = None;
-    let mut private_key = None;
-
-    for (key, val) in obj {
-        match key.as_str() {
-            "$reason" => {
-                reason = match present(Some(val)) {
-                    None => None,
-                    Some(val) => Some(
-                        val.as_str()
-                            .with_context(|| {
-                                format!("{source}: `ssh.{name}.$reason` must be a string")
-                            })?
-                            .to_owned(),
-                    ),
-                };
-            }
-            "public_key" => {
-                public_key = Some(
-                    val.as_str()
-                        .with_context(|| {
-                            format!("{source}: `ssh.{name}.public_key` must be a string")
-                        })?
-                        .to_owned(),
-                );
-            }
-            "private_key" => {
-                let raw = val.as_str().with_context(|| {
-                    format!("{source}: `ssh.{name}.private_key` must be a string")
-                })?;
-                private_key = Some(Reference::parse(raw).with_context(|| {
-                    format!(
-                        "{source}: `ssh.{name}.private_key` is not a valid `secret://` reference"
-                    )
-                })?);
-            }
-            other => {
-                bail!("{source}: ssh identity `{name}` has unknown key `{other}`");
-            }
-        }
-    }
-
-    let public_key = public_key
-        .with_context(|| format!("{source}: ssh identity `{name}` is missing `public_key`"))?;
-    let private_key = private_key
-        .with_context(|| format!("{source}: ssh identity `{name}` is missing `private_key`"))?;
-
-    Ok(SshIdentity {
-        reason,
-        public_key,
-        private_key,
-    })
-}
-
 /// Expand a leading `~/` in a path string.
 fn expand_tilde(raw: &str) -> PathBuf {
     if let Some(rest) = raw.strip_prefix("~/") {
@@ -402,12 +237,11 @@ mod tests {
     #[test]
     fn parses_a_minimal_wrap() {
         let c = WrapsConfig::parse(
-            r#"{
-                gh: {
-                    $reason: "GitHub API access",
-                    env: { GITHUB_TOKEN: "secret://op/Personal/GitHub Token/credential" },
-                },
-            }"#,
+            r#"
+            [wraps.gh]
+            reason = "GitHub API access"
+            env.GITHUB_TOKEN = "secret://op/Personal/GitHub Token/credential"
+            "#,
             "t",
         )
         .unwrap();
@@ -423,16 +257,17 @@ mod tests {
     #[test]
     fn known_secret_refs_dedupes_and_sorts_across_wraps() {
         let c = WrapsConfig::parse(
-            r#"{
-                gh: { env: { GITHUB_TOKEN: "secret://op/Personal/GitHub/token" } },
-                gh_alt: { env: { GH_TOKEN: "secret://op/Personal/GitHub/token" } },
-                aws: {
-                    env: {
-                        AWS_ACCESS_KEY_ID:     "secret://op/Work/AWS/access_key_id",
-                        AWS_SECRET_ACCESS_KEY: "secret://op/Work/AWS/secret_access_key",
-                    },
-                },
-            }"#,
+            r#"
+            [wraps.gh]
+            env.GITHUB_TOKEN = "secret://op/Personal/GitHub/token"
+
+            [wraps.gh_alt]
+            env.GH_TOKEN = "secret://op/Personal/GitHub/token"
+
+            [wraps.aws]
+            env.AWS_ACCESS_KEY_ID = "secret://op/Work/AWS/access_key_id"
+            env.AWS_SECRET_ACCESS_KEY = "secret://op/Work/AWS/secret_access_key"
+            "#,
             "t",
         )
         .unwrap();
@@ -449,14 +284,18 @@ mod tests {
 
     #[test]
     fn known_secret_refs_is_empty_for_gate_only_wraps() {
-        let c = WrapsConfig::parse(r#"{ op: { env: {} } }"#, "t").unwrap();
+        let c = WrapsConfig::parse("[wraps.op]\n", "t").unwrap();
         assert!(c.known_secret_refs().is_empty());
     }
 
     #[test]
     fn parses_shim_dir_with_tilde_expansion() {
         let c = WrapsConfig::parse(
-            r#"{ $shim_dir: "~/.local/bin", gh: { env: { TOK: "secret://op/x" } } }"#,
+            r#"
+            shim_dir = "~/.local/bin"
+            [wraps.gh]
+            env.TOK = "secret://op/x"
+            "#,
             "t",
         )
         .unwrap();
@@ -470,47 +309,47 @@ mod tests {
     #[test]
     fn wait_indicator_defaults_on_and_parses_explicit_toggle() {
         // Absent → enabled (None).
-        let c = WrapsConfig::parse(r#"{ gh: { env: { T: "secret://op/x" } } }"#, "t").unwrap();
+        let c = WrapsConfig::parse("[wraps.gh]\nenv.T = \"secret://op/x\"\n", "t").unwrap();
         assert_eq!(c.wait_indicator, None);
         assert!(c.wait_indicator_enabled());
 
         // Explicit false → silenced.
-        let off = WrapsConfig::parse(r#"{ $wait_indicator: false }"#, "t").unwrap();
+        let off = WrapsConfig::parse("wait_indicator = false\n", "t").unwrap();
         assert_eq!(off.wait_indicator, Some(false));
         assert!(!off.wait_indicator_enabled());
 
         // Explicit true → enabled.
-        let on = WrapsConfig::parse(r#"{ $wait_indicator: true }"#, "t").unwrap();
+        let on = WrapsConfig::parse("wait_indicator = true\n", "t").unwrap();
         assert_eq!(on.wait_indicator, Some(true));
         assert!(on.wait_indicator_enabled());
     }
 
     #[test]
     fn wait_indicator_rejects_non_boolean() {
-        let err = WrapsConfig::parse(r#"{ $wait_indicator: "yes" }"#, "t").unwrap_err();
+        let err = WrapsConfig::parse("wait_indicator = \"yes\"\n", "t").unwrap_err();
         assert!(
-            format!("{err:#}").contains("$wait_indicator"),
+            format!("{err:#}").contains("wait_indicator"),
             "error should name the offending key: {err:#}"
         );
     }
 
     #[test]
     fn editor_preference_parses_and_defaults_none() {
-        let none = WrapsConfig::parse(r#"{ gh: { env: {} } }"#, "t").unwrap();
+        let none = WrapsConfig::parse("[wraps.gh]\n", "t").unwrap();
         assert_eq!(none.editor, None);
 
-        let set = WrapsConfig::parse(r#"{ $editor: "code", gh: { env: {} } }"#, "t").unwrap();
+        let set = WrapsConfig::parse("editor = \"code\"\n[wraps.gh]\n", "t").unwrap();
         assert_eq!(set.editor.as_deref(), Some("code"));
         // The reserved key doesn't leak into the wrap map.
         assert!(set.wraps.contains_key("gh"));
-        assert!(!set.wraps.contains_key("$editor"));
+        assert!(!set.wraps.contains_key("editor"));
     }
 
     #[test]
     fn editor_preference_rejects_non_string() {
-        let err = WrapsConfig::parse(r#"{ $editor: 42 }"#, "t").unwrap_err();
+        let err = WrapsConfig::parse("editor = 42\n", "t").unwrap_err();
         assert!(
-            format!("{err:#}").contains("$editor"),
+            format!("{err:#}").contains("editor"),
             "error should name the offending key: {err:#}"
         );
     }
@@ -518,13 +357,17 @@ mod tests {
     #[test]
     fn parses_multiple_wraps_and_a_providers_block() {
         let c = WrapsConfig::parse(
-            r#"{
-                gh:  { env: { GITHUB_TOKEN: "secret://op/x" } },
-                aws: { env: { AWS_KEY: "secret://op/y", AWS_SECRET: "secret://op/z" } },
-                providers: {
-                    custom: { retrieve: ["printf", "%s", "{locator}"] },
-                },
-            }"#,
+            r#"
+            [wraps.gh]
+            env.GITHUB_TOKEN = "secret://op/x"
+
+            [wraps.aws]
+            env.AWS_KEY = "secret://op/y"
+            env.AWS_SECRET = "secret://op/z"
+
+            [providers.custom]
+            retrieve = ["printf", "%s", "{locator}"]
+            "#,
             "t",
         )
         .unwrap();
@@ -534,32 +377,48 @@ mod tests {
 
     #[test]
     fn remember_setting_is_rejected_now_that_caching_is_authorization_gated() {
-        // Pre-pivot we had a `$remember` field for per-wrap TTLs. The
-        // daemon now drops TTLs entirely: the *approvals* cache lives
-        // for the daemon process, and the *secret value* cache keys on
-        // `(wrap, provider, locator)` with no expiry. `$remember` no
-        // longer maps onto anything we can configure per-wrap.
+        // Pre-pivot we had a `remember` field for per-wrap TTLs. The daemon
+        // now drops TTLs entirely: the *approvals* cache lives for the daemon
+        // process, and the *secret value* cache has no expiry. `remember` no
+        // longer maps onto anything configurable per-wrap, so it is an unknown
+        // key like any other.
         let err = WrapsConfig::parse(
-            r#"{ gh: { $remember: "8h", env: { X: "secret://op/x" } } }"#,
+            "[wraps.gh]\nremember = \"8h\"\nenv.X = \"secret://op/x\"\n",
             "t",
         )
         .unwrap_err();
-        assert!(err.to_string().contains("$remember"));
+        assert!(format!("{err:#}").contains("remember"));
     }
 
     #[test]
-    fn rejects_unknown_dollar_keys_inside_a_wrap() {
-        let err = WrapsConfig::parse(r#"{ gh: { $bogus: 1, env: { X: "secret://op/x" } } }"#, "t")
+    fn rejects_an_unknown_key_inside_a_wrap() {
+        let err = WrapsConfig::parse("[wraps.gh]\nbogus = 1\nenv.X = \"secret://op/x\"\n", "t")
             .unwrap_err();
-        assert!(err.to_string().contains("$bogus"));
+        assert!(format!("{err:#}").contains("bogus"));
     }
 
     #[test]
-    fn rejects_top_level_env_vars_outside_env_block() {
-        // Common mistake: putting GITHUB_TOKEN as a sibling of `env` rather than inside it.
+    fn rejects_env_vars_declared_outside_the_env_table() {
+        // Common mistake: putting GITHUB_TOKEN as a sibling of `env` rather
+        // than inside it. `deny_unknown_fields` catches it and the message
+        // lists the keys a wrap does accept.
         let err =
-            WrapsConfig::parse(r#"{ gh: { GITHUB_TOKEN: "secret://op/x" } }"#, "t").unwrap_err();
-        assert!(err.to_string().contains("env vars belong inside `env"));
+            WrapsConfig::parse("[wraps.gh]\nGITHUB_TOKEN = \"secret://op/x\"\n", "t").unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("GITHUB_TOKEN"), "{msg}");
+        assert!(
+            msg.contains("env"),
+            "the message should point at `env`: {msg}"
+        );
+    }
+
+    /// A mistyped reserved key used to become a wrap for a binary of that
+    /// name, silently. With wraps under `[wraps.*]` the top level is closed,
+    /// so it is an error that names the key.
+    #[test]
+    fn rejects_a_mistyped_top_level_key() {
+        let err = WrapsConfig::parse("[provdiers.op]\nretrieve = [\"true\"]\n", "t").unwrap_err();
+        assert!(format!("{err:#}").contains("provdiers"));
     }
 
     #[test]
@@ -568,7 +427,7 @@ mod tests {
         // required but nothing is injected. This is how you gate a tool
         // like `op` that has no secret to pass.
         let c =
-            WrapsConfig::parse(r#"{ op: { $reason: "1Password vault access" } }"#, "t").unwrap();
+            WrapsConfig::parse("[wraps.op]\nreason = \"1Password vault access\"\n", "t").unwrap();
         let w = c.wrap("op").unwrap();
         assert_eq!(w.name, "op");
         assert_eq!(w.reason.as_deref(), Some("1Password vault access"));
@@ -576,9 +435,9 @@ mod tests {
     }
 
     #[test]
-    fn parses_a_gate_only_wrap_with_empty_env() {
-        // An explicit `env: {}` means the same thing as omitting `env`.
-        let c = WrapsConfig::parse(r#"{ op: { env: {} } }"#, "t").unwrap();
+    fn parses_a_gate_only_wrap_with_an_empty_env_table() {
+        // An explicit empty `env` means the same thing as omitting it.
+        let c = WrapsConfig::parse("[wraps.op]\nenv = {}\n", "t").unwrap();
         let w = c.wrap("op").unwrap();
         assert!(w.env.is_empty());
         assert_eq!(w.reason, None);
@@ -587,15 +446,12 @@ mod tests {
     #[test]
     fn parses_ssh_identities() {
         let cfg = WrapsConfig::parse(
-            r#"{
-                ssh: {
-                    "github": {
-                        $reason: "git pushes",
-                        public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1 me@mac",
-                        private_key: "secret://op/Private/gh/private key",
-                    }
-                }
-            }"#,
+            r#"
+            [ssh.github]
+            reason = "git pushes"
+            public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1 me@mac"
+            private_key = "secret://op/Private/gh/private key"
+            "#,
             "t",
         )
         .unwrap();
@@ -609,46 +465,21 @@ mod tests {
 
     #[test]
     fn ssh_identity_requires_public_and_private_key() {
+        let err =
+            WrapsConfig::parse("[ssh.x]\npublic_key = \"ssh-ed25519 AAAA x\"\n", "t").unwrap_err();
+        assert!(format!("{err:#}").contains("private_key"));
+    }
+
+    /// A `private_key` that is not a `secret://` reference is caught at load,
+    /// naming the value — not at sign time, when the user is waiting on a
+    /// git push.
+    #[test]
+    fn ssh_identity_rejects_a_malformed_private_key_ref() {
         let err = WrapsConfig::parse(
-            r#"{
-                ssh: { "x": { public_key: "ssh-ed25519 AAAA x" } }
-            }"#,
+            "[ssh.x]\npublic_key = \"ssh-ed25519 AAAA x\"\nprivate_key = \"op/no-scheme\"\n",
             "t",
         )
         .unwrap_err();
-        assert!(err.to_string().contains("private_key"));
-    }
-
-    #[test]
-    fn an_explicit_null_reason_means_no_reason() {
-        // Same contract as the provider capabilities: the published schema
-        // derives `$reason` from an `Option<String>`, which reads as "absent
-        // or a string", so a null has to load rather than error.
-        let c = WrapsConfig::parse(
-            r#"{
-                gh: { $reason: null, env: { X: "secret://op/x" } },
-                ssh: {
-                    k: {
-                        $reason: null,
-                        public_key: "ssh-ed25519 AAAA k",
-                        private_key: "secret://op/k",
-                    },
-                },
-            }"#,
-            "t",
-        )
-        .expect("a null $reason loads as an absent one");
-        assert_eq!(c.wrap("gh").expect("gh wrap").reason, None);
-        assert_eq!(c.ssh["k"].reason, None);
-    }
-
-    #[test]
-    fn ignores_top_level_dollar_metadata_keys() {
-        let c = WrapsConfig::parse(
-            r#"{ $schema: "x", $version: 2, gh: { env: { X: "secret://op/x" } } }"#,
-            "t",
-        )
-        .unwrap();
-        assert!(c.wrap("gh").is_some());
+        assert!(format!("{err:#}").contains("op/no-scheme"));
     }
 }
