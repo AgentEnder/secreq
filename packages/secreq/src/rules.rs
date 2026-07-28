@@ -1236,10 +1236,11 @@ pub fn save_rules(path: &Path, rules: &[Rule]) -> Result<()> {
     crate::atomic::replace(path, json.as_bytes(), crate::atomic::Mode::Like(path))
 }
 
-/// `mtime` of the rules file, or `None` if it doesn't exist. The
-/// daemon's freshness check stats this before each ask; an mtime that
-/// has advanced past the daemon's startup-time value triggers a
-/// clean shutdown.
+/// `mtime` of the rules file, or `None` if it doesn't exist. The daemon
+/// stats this at the top of every message; an mtime that has advanced past
+/// the one it last loaded triggers a **reload in place** —
+/// `daemon::state::State::reload_rules_if_changed`, which documents why the
+/// original shutdown-on-change design was dropped.
 pub fn file_mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
 }
