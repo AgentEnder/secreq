@@ -16,6 +16,24 @@ hand — put the prose in the commit message.
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/AgentEnder/secreq/compare/v0.1.0...v0.2.0) - 2026-07-28
+
+### Added
+
+- *(manifest)* derive serde on the provider model
+
+### Fixed
+
+- *(ci)* allow the one conversion that is only useless on Linux
+- satisfy clippy on Linux, restore the publish guard, and correct the crate URLs
+
+### Other
+
+- *(manifest)* delete the secrets.json5 loader
+- *(resolve)* delete the manifest-era plan builder
+- *(rules)* describe the reload the daemon actually does
+- *(cli)* give the daemon-death test the display it depends on
+
 ## [0.1.0] - 2026-07-27
 
 Initial release.
