@@ -119,6 +119,12 @@
      UA stylesheet the reader arrived with. */
   user-select: text;
   -webkit-user-select: text;
+  /* And say so under the pointer. `zoom-in` is right for the rest of the
+     figure, but over a run it advertises the one thing a click there will
+     not do — `secreq-shot-element` drops a click that ended a selection
+     drag. A glyph's own geometry is the hit area, so the cursor changes
+     exactly where the text is and nowhere else. */
+  cursor: text;
 }
 
 /* ── Typesetting the way epaint does ──
