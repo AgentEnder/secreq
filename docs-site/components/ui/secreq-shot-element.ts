@@ -16,24 +16,55 @@
 
 import { SHOT_OPEN_EVENT, type ShotOpenDetail } from './shot-events';
 
+/**
+ * How far the pointer may travel between press and release and still be a
+ * click. A drag across a line of the window's text covers far more than
+ * this; a deliberate click covers a pixel or two of hand jitter.
+ */
+const DRAG_SLOP_PX = 4;
+
 export class SecreqShot extends HTMLElement {
+  /** Where the pointer went down, when it went down on this figure. */
+  #pressedAt: { x: number; y: number } | null = null;
+
   connectedCallback() {
+    this.addEventListener('pointerdown', this.#onPointerDown);
     this.addEventListener('click', this.#onClick);
   }
 
   disconnectedCallback() {
+    this.removeEventListener('pointerdown', this.#onPointerDown);
     this.removeEventListener('click', this.#onClick);
   }
 
-  #onClick = (event: Event) => {
+  #onPointerDown = (event: PointerEvent) => {
+    this.#pressedAt = (event.target as HTMLElement | null)?.closest('.shot-zoom')
+      ? { x: event.clientX, y: event.clientY }
+      : null;
+  };
+
+  #onClick = (event: MouseEvent) => {
     const button = (event.target as HTMLElement | null)?.closest('.shot-zoom');
     if (!button) return;
+
+    const pressedAt = this.#pressedAt;
+    this.#pressedAt = null;
 
     // A `<secreq-window>` standing in this figure is real text, and text
     // gets selected by dragging across it — which ends in a click on this
     // button. Opening the viewer on top of the words someone just
     // highlighted is not what they asked for.
-    if (!document.getSelection()?.isCollapsed) return;
+    //
+    // What separates that drag from a click is how far the pointer
+    // travelled, not whether a selection exists. Asking the document the
+    // latter answered for the whole page: a paragraph highlighted anywhere,
+    // or the reader's own last drag still standing, left the figure refusing
+    // to open at all and giving no reason. A press that never moved is a
+    // click, and a press that never happened — the keyboard — is one too.
+    if (pressedAt) {
+      const travelled = Math.hypot(event.clientX - pressedAt.x, event.clientY - pressedAt.y);
+      if (travelled > DRAG_SLOP_PX) return;
+    }
 
     const image = this.#enlargeable();
     if (!image) return;
