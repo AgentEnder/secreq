@@ -1,6 +1,7 @@
 import type { LinkedApiExport } from 'vike-plugin-typedoc';
 import { Breadcrumb } from '../Breadcrumb';
 import { Link } from '../Link';
+import { SectionHeader } from '../ui/SectionHeader';
 
 export interface ApiExportPageProps {
   apiExport: LinkedApiExport;
@@ -17,10 +18,7 @@ function TypeText({ html, text }: { html?: string; text: string }) {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="mb-9">
-      <div className="flex items-center gap-4 mb-4">
-        <h2 className="t-eyebrow shrink-0">{title}</h2>
-        <span className="flex-1 h-px bg-hairline" />
-      </div>
+      <SectionHeader title={title} tight />
       {children}
     </section>
   );

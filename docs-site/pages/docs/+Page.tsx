@@ -1,5 +1,6 @@
 import { useData } from 'vike-react/useData';
 import { Link } from '../../components/Link';
+import { SectionHeader } from '../../components/ui/SectionHeader';
 import { sectionAnchor } from '../../docs.nav';
 import type { DocsData } from './+data';
 
@@ -25,10 +26,7 @@ export default function DocsPage() {
             id={sectionAnchor(section.section)}
             className="scroll-mt-24"
           >
-            <div className="flex items-center gap-4 mb-4">
-              <h2 className="t-eyebrow shrink-0">{section.section}</h2>
-              <span className="flex-1 h-px bg-hairline" />
-            </div>
+            <SectionHeader title={section.section} tight />
 
             <ul className="grid gap-px bg-hairline border border-hairline rounded-lg overflow-hidden sm:grid-cols-2">
               {section.docs.map((doc) => (
@@ -47,10 +45,7 @@ export default function DocsPage() {
         ))}
 
         <section>
-          <div className="flex items-center gap-4 mb-4">
-            <h2 className="t-eyebrow shrink-0">Machine-readable</h2>
-            <span className="flex-1 h-px bg-hairline" />
-          </div>
+          <SectionHeader title="Machine-readable" tight />
           <ul className="grid gap-px bg-hairline border border-hairline rounded-lg overflow-hidden sm:grid-cols-2">
             <li className="bg-panel">
               <Link href="/schemas" className="doc-card block no-underline p-5 h-full">

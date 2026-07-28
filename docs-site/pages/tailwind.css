@@ -22,6 +22,12 @@
 :root {
   color-scheme: dark;
 
+  /* The shell header's height. Three things have to agree on it — the bar
+     itself, the gap the page leaves for it, and the rail's sticky offset —
+     and they used to agree by each spelling 56px separately, two of them
+     from an inline style in +Layout.tsx. */
+  --sq-header-h: 56px;
+
   /* Surfaces — graphite, near-neutral. Matches the prompt window body. */
   --sq-bg: #0e0f11;
   --sq-panel: #17191c;
@@ -257,6 +263,23 @@ pre,
   text-transform: uppercase;
   color: var(--sq-text-3);
   line-height: 1;
+}
+
+/* The rule that runs out from an eyebrow to the end of its row.
+
+   `--sq-hairline-strong`, not `--sq-hairline`, entirely because of what
+   is behind it. This is the site's one hairline drawn straight onto the
+   page instead of against a panel, so the ambient process graph passes
+   under it — and in light mode `--sq-graph` composites over `--sq-bg` to
+   rgb(220 221 223), a shade *darker* than `--sq-hairline`'s #dfe1e5. At
+   that weight the decoration outranks the structure, both are 1px, and
+   the graph's edges read as section rules someone forgot to delete. The
+   strong token clears the graph in both themes. A hairline bordering a
+   panel has no ambient behind it and is right to stay on the quiet one. */
+.section-rule {
+  flex: 1;
+  height: 1px;
+  background: var(--sq-hairline-strong);
 }
 
 .t-lede {
@@ -922,14 +945,40 @@ dialog.shot-lightbox figcaption {
    APP SHELL
    ════════════════════════════════════════════════════════════════════ */
 
+/* Fixed rather than sticky, and the difference only shows at scroll top.
+
+   A `sticky; top: 0` bar spends scroll offset 0 at its *static* position —
+   in flow, not yet pinned — so a macOS rubber-band past the top carries it
+   down the page along with the content and opens a bare strip above it.
+   Fixed positions it against the viewport at every offset instead, which
+   is the whole reason to prefer it here; under ordinary scrolling the two
+   are indistinguishable. `.shell` below leaves the gap it used to occupy. */
 .shell-header {
-  position: sticky;
+  position: fixed;
   top: 0;
+  left: 0;
+  right: 0;
   z-index: 40;
-  height: 56px;
+  height: var(--sq-header-h);
   background: color-mix(in srgb, var(--sq-bg) 82%, transparent);
   backdrop-filter: saturate(160%) blur(14px);
   border-bottom: 1px solid var(--sq-hairline);
+}
+
+/* The page under a now-out-of-flow header. Padding rather than a margin or
+   a spacer element: `.ambient` is `absolute; inset: 0` against this box and
+   resolves to its padding box, so the graph and the hero wash still start
+   at the true top of the document and only the content is pushed clear. */
+.shell {
+  padding-top: var(--sq-header-h);
+}
+
+/* Sticky under the bar, filling what is left of the viewport. Was an inline
+   style in +Layout.tsx spelling 56px twice. */
+.rail-wrap {
+  position: sticky;
+  top: var(--sq-header-h);
+  height: calc(100vh - var(--sq-header-h));
 }
 
 .brand {

@@ -34,8 +34,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   return (
     // No background here on purpose: `html` already paints the page colour,
     // and a background on this wrapper would cover the `z-index: -1` ambient
-    // layer, which sits between the two.
-    <div className="min-h-screen text-text-2 relative">
+    // layer, which sits between the two. `shell` leaves the gap the fixed
+    // header no longer occupies in flow.
+    <div className="shell min-h-screen text-text-2 relative">
       <Ambient />
 
       <header className="shell-header" data-pagefind-ignore>
@@ -161,8 +162,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       {showRail ? (
         <div className="doc-layout">
           <div
-            className="rail-wrap hidden md:block border-r border-hairline overflow-y-auto sticky"
-            style={{ top: '56px', height: 'calc(100vh - 56px)' }}
+            className="rail-wrap hidden md:block border-r border-hairline overflow-y-auto"
             data-pagefind-ignore
           >
             <Rail navigation={navigation} pathname={pathname} />

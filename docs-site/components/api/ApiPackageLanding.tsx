@@ -1,5 +1,6 @@
 import type { ApiExportKind, ApiPackage } from 'vike-plugin-typedoc';
 import { Link } from '../Link';
+import { SectionHeader } from '../ui/SectionHeader';
 
 export interface ApiPackageLandingProps {
   apiPackage: ApiPackage;
@@ -45,10 +46,7 @@ export function ApiPackageLanding({ apiPackage }: ApiPackageLandingProps) {
           .sort((a, b) => a.name.localeCompare(b.name));
         return (
           <section key={kind}>
-            <div className="flex items-center gap-4 mb-4">
-              <h2 className="t-eyebrow shrink-0">{KIND_LABELS[kind]}</h2>
-              <span className="flex-1 h-px bg-hairline" />
-            </div>
+            <SectionHeader title={KIND_LABELS[kind]} tight />
             <ul className="grid gap-px bg-hairline border border-hairline rounded-lg overflow-hidden md:grid-cols-2">
               {exports.map((exp) => (
                 <li key={exp.slug} className="bg-panel">

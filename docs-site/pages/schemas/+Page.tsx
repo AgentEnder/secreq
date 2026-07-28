@@ -103,7 +103,7 @@ function Group({
         ) : (
           <h3 className="schema-def shrink-0">{group.name}</h3>
         )}
-        <span className="flex-1 h-px bg-hairline" />
+        <span className="section-rule" />
       </div>
 
       {group.descriptionHtml && (
