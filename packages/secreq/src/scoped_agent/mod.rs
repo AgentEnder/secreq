@@ -100,7 +100,7 @@ use crate::consent::{AgentAnchor, AgentGrant, Decision};
 use crate::daemon::proto::{AgentAskInfo, Ask, AskAnchor, AskSubject, DedupeKey};
 use crate::manifest::{Manifest, Provider};
 use crate::reference::Reference;
-use crate::resolve::{resolve_all, ResolutionPlan, SecretRequest, Source};
+use crate::resolve::{resolve_all, ResolutionPlan, SecretRequest};
 use crate::secret::SecretValue;
 
 use self::proto::{Request, Response};
@@ -557,7 +557,6 @@ fn resolve_fresh(manifest: &Manifest, reference: &Reference) -> Result<SecretVal
             name: reference.to_string(),
             provider: reference.provider.clone(),
             locator: reference.locator.clone(),
-            group: None,
             reason: None,
             description: None,
             // No fallback: a guest asking for a ref that doesn't resolve
@@ -565,7 +564,6 @@ fn resolve_fresh(manifest: &Manifest, reference: &Reference) -> Result<SecretVal
             default: None,
             // The ref came from outside our own manifest, like an ambient
             // `secret://` env value would have.
-            source: Source::Ambient,
         }],
     };
     let (mut resolved, _stats) = resolve_all(manifest, &plan)

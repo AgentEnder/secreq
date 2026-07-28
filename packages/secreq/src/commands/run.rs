@@ -19,7 +19,7 @@ use crate::daemon::proto;
 use crate::provenance;
 use crate::provider;
 use crate::reference::Reference;
-use crate::resolve::{self, SecretRequest, Source};
+use crate::resolve::{self, SecretRequest};
 use crate::secret::SecretValue;
 use crate::wraps::{Wrap, WrapsConfig};
 
@@ -632,11 +632,9 @@ pub(crate) fn resolve_refs_client_side(
             name: name.clone(),
             provider: reference.provider.clone(),
             locator: reference.locator.clone(),
-            group: None,
             reason: reason.map(std::borrow::ToOwned::to_owned),
             description: None,
             default: None,
-            source: Source::Eager,
         })
         .collect();
     let plan = resolve::ResolutionPlan { requests };

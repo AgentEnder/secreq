@@ -26,7 +26,7 @@ use crate::audit::{self, AbandonedAsk, AuditCaller, AuditEntry, AuditSignAnchor,
 use crate::consent::{ApprovalEntry, Decision, SshGrant};
 use crate::manifest::{BatchRetrieve, Manifest, Provider};
 use crate::provenance::ProcessIdentity;
-use crate::resolve::{self, ResolutionPlan, SecretRequest, Source};
+use crate::resolve::{self, ResolutionPlan, SecretRequest};
 use crate::rules::{self, EvalCtx, Rule, RuleHit};
 
 use super::cache::{CacheKey, SecretCache};
@@ -2479,11 +2479,9 @@ pub(super) fn resolve_for_ask(
                 name: s.name.clone(),
                 provider: s.provider.clone(),
                 locator: s.locator.clone(),
-                group: None,
                 reason: s.reason.clone(),
                 description: s.description.clone(),
                 default: s.default.clone(),
-                source: Source::Eager,
             })
             .collect(),
     };
@@ -2653,11 +2651,9 @@ fn resolve_union(
                     name: req_name.clone(),
                     provider: provider.clone(),
                     locator: locator.clone(),
-                    group: None,
                     reason: ask.reason.clone(),
                     description: ask.description.clone(),
                     default: ask.default.clone(),
-                    source: Source::Eager,
                 }
             })
             .collect(),
@@ -2758,11 +2754,9 @@ pub(super) fn resolve_single_cached(
                     name: name.to_owned(),
                     provider: key.provider.clone(),
                     locator: key.locator.clone(),
-                    group: None,
                     reason: reason.map(str::to_owned),
                     description: None,
                     default: None,
-                    source: Source::Eager,
                 }],
             };
             let resolved = resolve::resolve_all(&manifest, &plan).and_then(|(rows, _stats)| {
