@@ -423,21 +423,6 @@ fn restore_in(root: &Path, level: u32, assume_yes: bool) -> Result<i32> {
         plan.push((entry, live, live_body, snapshot_body));
     }
 
-    // Files a *later* migration introduced are also about to be deleted (see
-    // `clear_artifacts_above`), and they carry the user's edits since the
-    // upgrade — `config.toml` after 0003, for instance. Their snapshot side is
-    // empty because at the target level they did not exist, so they diff as a
-    // whole-file removal. Listing them is not cosmetic: deleting a file the
-    // DISCARD block never named is exactly the silent loss this warning is
-    // here to prevent.
-    let artifacts: Vec<(PathBuf, String)> = artifacts_above(&root, level, &plan)
-        .into_iter()
-        .filter_map(|path| {
-            let body = std::fs::read_to_string(&path).ok()?;
-            Some((path, body))
-        })
-        .collect();
-
     // Only *diverged* content needs a warning — but an unchanged config still
     // needs the restore. Restoring is about the recorded **level** and the
     // on-disk **layout**, not just the bytes: a user whose config never
@@ -445,9 +430,19 @@ fn restore_in(root: &Path, level: u32, assume_yes: bool) -> Result<i32> {
     // returning early here would leave them as stuck as before with a message
     // claiming success.
     let changed: Vec<_> = plan.iter().filter(|(_, _, a, b)| a != b).collect();
-    let nothing_to_warn_about = changed.is_empty() && artifacts.is_empty();
+    // Files a later migration created inside the root. The target level has no
+    // snapshot for them, so the restore removes them — and therefore has to
+    // name them here and rescue them below. Deleting a file the DISCARD block
+    // never mentioned is the silent loss this warning exists to prevent.
+    let stale: Vec<(PathBuf, String)> = stale_root_artifacts(&root, level, &plan)
+        .into_iter()
+        .filter_map(|path| {
+            let body = std::fs::read_to_string(&path).ok()?;
+            Some((path, body))
+        })
+        .collect();
 
-    if nothing_to_warn_about {
+    if changed.is_empty() && stale.is_empty() {
         println!("Config already matches the level-{level} snapshot; rolling back the level.");
     } else {
         println!("Restoring the level-{level} snapshot will DISCARD these changes:\n");
@@ -459,7 +454,8 @@ fn restore_in(root: &Path, level: u32, assume_yes: bool) -> Result<i32> {
                     .header(&format!("current {}", live.display()), &entry.snapshot)
             );
         }
-        for (path, body) in &artifacts {
+
+        for (path, body) in &stale {
             let diff = similar::TextDiff::from_lines(body.as_str(), "");
             println!(
                 "{}",
@@ -514,10 +510,7 @@ fn restore_in(root: &Path, level: u32, assume_yes: bool) -> Result<i32> {
             .with_context(|| format!("save current {}", live.display()))?;
         }
     }
-    // The artifacts are deleted outright, so they need rescuing too — a
-    // recoverable restore that dropped `config.toml` on the floor would be
-    // recoverable only for the files that already survived.
-    for (path, body) in &artifacts {
+    for (path, body) in &stale {
         let name = path.file_name().map_or_else(
             || "artifact".to_owned(),
             |n| n.to_string_lossy().into_owned(),
@@ -566,7 +559,9 @@ fn restore_in(root: &Path, level: u32, assume_yes: bool) -> Result<i32> {
         }
     }
 
-    clear_artifacts_above(&root, level, &plan);
+    for (path, _) in &stale {
+        std::fs::remove_file(path).with_context(|| format!("remove {}", path.display()))?;
+    }
 
     write_state(&root, level)?;
     println!("\nRestored level {level}.");
@@ -574,28 +569,33 @@ fn restore_in(root: &Path, level: u32, assume_yes: bool) -> Result<i32> {
     Ok(0)
 }
 
-/// Remove files that only exist because a migration **above** `level` created
-/// them, and that the restore itself did not just write.
+/// Files inside the secreq root that a **later** migration is responsible for,
+/// and that the target level has no snapshot for — so restoring cannot put them
+/// back, and leaving them strands two real configs the next forward run has to
+/// choose between.
 ///
-/// The per-entry cleanup above only removes a file when the migration was
-/// shaped like "this file moved" — it compares the live path to the restore
-/// target. Migration 0003 both renames *and* rewrites (`wraps.json5` →
-/// `config.toml`), so restoring to level 0 put the JSON5 original back and
-/// left the TOML beside it. Two real configs, and the next forward migration
-/// would find them and refuse to guess.
+/// # Bounds, because this feeds a delete
 ///
-/// So every path a later migration declares in its `snapshot_files` is a
-/// candidate: if it survived the restore and is not something the restore
-/// wrote, it belongs to a level the user just rolled back past.
-fn clear_artifacts_above(root: &Path, level: u32, plan: &[(&FileEntry, PathBuf, String, String)]) {
-    for path in artifacts_above(root, level, plan) {
-        let _ = std::fs::remove_file(&path);
-    }
-}
-
-/// The paths [`clear_artifacts_above`] will delete. Split out so the DISCARD
-/// report and the deletion cannot disagree about what is being lost.
-fn artifacts_above(
+/// The candidates come from each migration's `snapshot_files`, which is a
+/// *declaration* rather than a record. It has to be: a file the migration
+/// **creates** (`config.toml`, for 0003) cannot appear in a captured filemap,
+/// because at capture time it does not exist yet.
+///
+/// That makes the two bounds below the whole safety story, and the second one
+/// is not optional:
+///
+/// 1. **A `Ctx` that resolves nothing outside the tree.** No home, no legacy
+///    dirs, so a migration keyed on the user's dotfiles declares nothing here.
+/// 2. **`starts_with(root)` on every candidate.** Migration 0002 legitimately
+///    manages `~/.ssh/config` and a shell rc — it *edits* a block inside files
+///    the user owns. A restore puts those back from their snapshot; it must
+///    never remove them.
+///
+/// An earlier version of this had neither bound: it built its `Ctx` from the
+/// real `dirs::home_dir()`, so 0002 handed back those two dotfiles and the
+/// cleanup deleted them out of a live home. Both bounds are pinned by
+/// `stale_root_artifacts_never_escapes_the_secreq_root`.
+fn stale_root_artifacts(
     root: &Path,
     level: u32,
     plan: &[(&FileEntry, PathBuf, String, String)],
@@ -603,14 +603,17 @@ fn artifacts_above(
     let restored: Vec<&PathBuf> = plan.iter().map(|(e, _, _, _)| &e.restore_to).collect();
     let ctx = Ctx {
         root: root.to_path_buf(),
-        home: dirs::home_dir(),
-        legacy_config_dir: legacy_config_dir(),
-        legacy_state_dir: legacy_state_dir(),
-        legacy_runtime_dir: m0002_ssh_agent_socket::legacy_runtime_dir(),
+        home: None,
+        legacy_config_dir: None,
+        legacy_state_dir: None,
+        legacy_runtime_dir: None,
     };
-    let mut out = Vec::new();
+    let mut out: Vec<PathBuf> = Vec::new();
     for migration in MIGRATIONS.iter().filter(|m| m.id > level) {
         for path in (migration.snapshot)(&ctx) {
+            if !path.starts_with(root) {
+                continue; // the user's own file; never ours to delete
+            }
             if restored.iter().any(|kept| **kept == path) || out.contains(&path) {
                 continue;
             }
@@ -1014,6 +1017,42 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(ctx.root.join("wraps.json5")).unwrap(),
             "{ aws: {} }"
+        );
+    }
+
+    /// `stale_root_artifacts` feeds a delete, and its candidates come from
+    /// each migration's declared `snapshot_files` — which for 0002 includes the
+    /// user's `~/.ssh/config` and shell rc, files it *edits* rather than owns.
+    ///
+    /// An earlier version built its `Ctx` from the real `dirs::home_dir()`, so
+    /// 0002 declared those two dotfiles and the cleanup deleted them out of a
+    /// live home. This pins both bounds that make that impossible: the `Ctx`
+    /// resolves no home, and nothing outside the root survives the filter.
+    #[test]
+    fn stale_root_artifacts_never_escapes_the_secreq_root() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("secreq");
+        std::fs::create_dir_all(&root).unwrap();
+
+        // A real dotfile beside the root, of exactly the kind 0002 manages.
+        let dotfile = tmp.path().join("home/.ssh/config");
+        std::fs::create_dir_all(dotfile.parent().unwrap()).unwrap();
+        std::fs::write(&dotfile, "Host example\n").unwrap();
+
+        // The artifact 0003 creates, inside the root.
+        let artifact = root.join("config.toml");
+        std::fs::write(&artifact, "[wraps.gh]\n").unwrap();
+
+        let found = stale_root_artifacts(&root, 0, &[]);
+
+        assert!(
+            found.iter().all(|p| p.starts_with(&root)),
+            "returned a path outside the root: {found:?}"
+        );
+        assert!(dotfile.exists(), "a user dotfile is never even a candidate");
+        assert!(
+            found.contains(&artifact),
+            "the in-root artifact should still be found: {found:?}"
         );
     }
 

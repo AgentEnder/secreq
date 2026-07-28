@@ -92,37 +92,49 @@ fn clear_legacy_symlinks(ctx: &Ctx) -> Result<()> {
 }
 
 /// Read `from`, convert, write `to`, remove `from`. A missing source is the
-/// fresh-install case and a nothing-to-do; an already-present target means a
-/// previous run got there, so the source is simply cleared.
+/// fresh-install case and a nothing-to-do.
 ///
-/// Returns `Some(reason)` when the source will not parse. That is a stop, not
-/// a failure: the level goes unstamped, so the migration retries on the next
-/// run once the user has fixed the file. Hard-erroring would wedge *every*
-/// secreq command behind a config the user can still repair by hand.
+/// Returns `Some(reason)` when the migration will not proceed. That is a stop,
+/// not a failure: the level goes unstamped, so it retries on the next run once
+/// the user has resolved things. Hard-erroring would wedge *every* secreq
+/// command behind a config the user can still repair by hand.
+///
+/// **Both files present is a refusal, not a preference.** It means either a
+/// half-finished run or a `migrate restore` that put the pre-migration file
+/// back beside the converted one. Either way there are two real configs and
+/// nothing here can tell which the user wants — picking one silently is how a
+/// rollback gets undone by the next command. Migration 0001 refuses the same
+/// shape for the same reason.
 fn convert(from: &Path, to: &Path, f: fn(&Value) -> Result<String>) -> Result<Option<String>> {
     let text = match std::fs::read_to_string(from) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e).with_context(|| format!("read {}", from.display())),
     };
-    if !to.exists() {
-        let root: Value = match json5::from_str(&text) {
-            Ok(root) => root,
-            Err(err) => {
-                return Ok(Some(format!(
-                    "{} could not be read as JSON5 ({err}); fix it and re-run, \
-                     or delete it to start fresh",
-                    from.display()
-                )))
-            }
-        };
-        let converted = f(&root).with_context(|| format!("convert {}", from.display()))?;
-        // `Mode::Like(from)` carries the old file's permissions onto the new
-        // one. Migration 0001 already promised to preserve this file's mode
-        // across an upgrade; renaming it must not quietly expire that.
-        crate::atomic::replace(to, converted.as_bytes(), crate::atomic::Mode::Like(from))
-            .with_context(|| format!("write {}", to.display()))?;
+    if to.exists() {
+        return Ok(Some(format!(
+            "both {} and {} exist. secreq will not guess which one you meant — \
+             keep the one you want and delete the other, then re-run",
+            from.display(),
+            to.display()
+        )));
     }
+    let root: Value = match json5::from_str(&text) {
+        Ok(root) => root,
+        Err(err) => {
+            return Ok(Some(format!(
+                "{} could not be read as JSON5 ({err}); fix it and re-run, \
+                 or delete it to start fresh",
+                from.display()
+            )))
+        }
+    };
+    let converted = f(&root).with_context(|| format!("convert {}", from.display()))?;
+    // `Mode::Like(from)` carries the old file's permissions onto the new one.
+    // Migration 0001 already promised to preserve this file's mode across an
+    // upgrade; renaming it must not quietly expire that.
+    crate::atomic::replace(to, converted.as_bytes(), crate::atomic::Mode::Like(from))
+        .with_context(|| format!("write {}", to.display()))?;
     std::fs::remove_file(from).with_context(|| format!("remove {}", from.display()))?;
     Ok(None)
 }
@@ -142,9 +154,15 @@ fn config_json5_to_toml(root: &Value) -> Result<String> {
     let root = doc.as_table_mut();
     for (key, value) in obj {
         match key.as_str() {
-            // Reserved blocks keep their names and their shape.
+            // Reserved blocks keep their names and their shape. Implicit, so
+            // the file gets `[providers.myvault]` and not a bare `[providers]`
+            // header above it carrying nothing.
             "providers" | "ssh" => {
-                root.insert(&key, json_to_item(&strip_sigils(&value)));
+                let mut item = json_to_item(&strip_sigils(&value));
+                if let Some(table) = item.as_table_mut() {
+                    table.set_implicit(true);
+                }
+                root.insert(&key, item);
             }
             // Machine-local settings shed the sigil.
             "$shim_dir" => {
@@ -332,21 +350,25 @@ mod tests {
         assert_eq!(c.wrap("gh").expect("gh").reason, None);
     }
 
+    /// Two real configs is the shape a `migrate restore` leaves behind: the
+    /// JSON5 original put back, the converted TOML still there. Neither may be
+    /// deleted and neither may silently win — choosing would undo the rollback
+    /// on the very next command.
     #[test]
-    fn converting_is_idempotent_when_the_target_already_exists() {
+    fn both_files_present_stops_the_migration_and_touches_neither() {
         let dir = tempfile::tempdir().unwrap();
         let from = dir.path().join(LEGACY_CONFIG);
         let to = dir.path().join(CONFIG);
         std::fs::write(&from, r#"{ gh: { env: {} } }"#).unwrap();
         std::fs::write(&to, "[wraps.terraform]\n").unwrap();
 
-        assert!(convert(&from, &to, config_json5_to_toml)
-            .expect("convert")
-            .is_none());
+        let stop = convert(&from, &to, config_json5_to_toml)
+            .expect("an ambiguous pair is a stop, not an error")
+            .expect("it should report a reason");
 
-        // The pre-existing target wins and the legacy file is cleared, so a
-        // re-run cannot clobber a config written since.
-        assert!(!from.exists(), "legacy file removed");
+        assert!(stop.contains(LEGACY_CONFIG), "names both files: {stop}");
+        assert!(stop.contains(CONFIG), "names both files: {stop}");
+        assert!(from.exists(), "neither file is touched");
         assert_eq!(std::fs::read_to_string(&to).unwrap(), "[wraps.terraform]\n");
     }
 

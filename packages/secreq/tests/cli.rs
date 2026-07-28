@@ -1813,9 +1813,11 @@ fn migrate_restore_reverts_to_the_snapshot_and_reports_what_it_discarded() {
     let legacy = seed_legacy_config(sb.path(), r#"{ gh: { $reason: "original", env: {} } }"#);
     sb.run(&["wraps"]);
 
-    // Diverge from the snapshot, as a user would by adding a wrap.
+    // Diverge from the snapshot, as a user would by adding a wrap. The legacy
+    // path is what level 0 holds, so that is what the diff is about.
     let moved = sb.config_path();
     fs::write(&moved, "[wraps.terraform]\nreason = \"added later\"\n").unwrap();
+    fs::write(&legacy, r#"{ gh: { $reason: "edited since", env: {} } }"#).unwrap();
 
     let out = sb.run(&["--yes", "migrate", "restore", "0"]);
     assert!(
@@ -1828,8 +1830,30 @@ fn migrate_restore_reverts_to_the_snapshot_and_reports_what_it_discarded() {
     // The loss must be itemized, not merely announced.
     assert!(stdout.contains("DISCARD"), "no discard warning: {stdout}");
     assert!(
-        stdout.contains("added later"),
+        stdout.contains("edited since"),
         "diff should name what's lost: {stdout}"
+    );
+
+    // `config.toml` is an artifact of 0003 that level 0 has no snapshot for,
+    // so the restore removes it — and had to say so above, which it did.
+    assert!(
+        stdout.contains("added later"),
+        "a file about to be removed must be itemized too: {stdout}"
+    );
+    assert!(!moved.exists(), "the forward artifact is cleared");
+
+    // Removed, but not lost: the rescue copy makes a mistaken restore
+    // recoverable, which is the whole promise of the pre-restore save.
+    let saved: Vec<_> = fs::read_dir(sb.root().join("migration-snapshots"))
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("current-"))
+        .collect();
+    assert_eq!(saved.len(), 1, "exactly one pre-restore save");
+    assert_eq!(
+        fs::read_to_string(saved[0].path().join("config.toml")).unwrap(),
+        "[wraps.terraform]\nreason = \"added later\"\n",
+        "the removed artifact is recoverable from the rescue copy"
     );
 
     // The level-0 layout is back: a real file at the legacy path.
@@ -1838,9 +1862,6 @@ fn migrate_restore_reverts_to_the_snapshot_and_reports_what_it_discarded() {
         fs::read_to_string(&legacy).unwrap(),
         r#"{ gh: { $reason: "original", env: {} } }"#
     );
-    // And the forward artifact is gone, so a re-migration can't find two real
-    // files that differ and refuse to guess.
-    assert!(!moved.exists(), "forward artifact should be cleaned up");
 }
 
 #[test]
@@ -1863,9 +1884,13 @@ fn migrate_restore_saves_the_current_config_before_overwriting_it() {
         .filter(|e| e.file_name().to_string_lossy().starts_with("current-"))
         .collect();
     assert_eq!(saved.len(), 1, "exactly one pre-restore save");
+    // The rescue copy covers what the restore removes as well as what it
+    // overwrites — a `config.toml` dropped on the floor would be recoverable
+    // only for the files that happened to survive.
     assert_eq!(
         fs::read_to_string(saved[0].path().join("config.toml")).unwrap(),
-        "[wraps.terraform]\nreason = \"precious\"\n"
+        "[wraps.terraform]\nreason = \"precious\"\n",
+        "the rescue copy holds the artifact the restore is about to remove"
     );
 }
 
