@@ -2254,6 +2254,17 @@ fn x_reports_the_daemons_stderr_when_it_dies_before_binding() {
         .env("PATH", &path)
         .env_remove("XDG_RUNTIME_DIR")
         .env_remove("SECREQ_NO_DAEMON")
+        // The client refuses to spawn a daemon it knows cannot render, and on
+        // Linux that means `$DISPLAY` or `$WAYLAND_DISPLAY` — neither of which
+        // a CI runner has. Without one it fails closed before reaching the
+        // spawn, so the death note this test exists for is never written and
+        // the assertion below sees a plain denial instead. macOS always
+        // reports a display, which is why this only ever failed on Linux.
+        //
+        // The value need not name a real server: the daemon binds its socket
+        // before it touches the UI, so it dies at bind either way, which is
+        // the failure being asserted.
+        .env("DISPLAY", ":0")
         .output()
         .unwrap();
     assert!(!out.status.success(), "consent has no daemon; x must fail");
