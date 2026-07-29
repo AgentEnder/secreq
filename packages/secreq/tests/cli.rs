@@ -2379,23 +2379,29 @@ fn agent_open_honours_an_explicit_sock_override() {
 
 // ── rules new-wasm ────────────────────────────────────────────────────────
 
-/// `DirBuilder::mode` is a *request*: the kernel masks it with the process
-/// umask, and a umask can clear owner bits as readily as group and world
-/// ones. Under `umask 0300` the 0700 the scaffold asks for lands as 0400 —
-/// a directory secreq itself cannot then write the project into, so the
-/// first `fs::write` fails with EACCES and leaves an unusable stub behind.
+/// The mode arguments to `mkdir(2)` and `open(2)` are *requests*: the
+/// kernel masks both with the process umask, and a umask clears owner bits
+/// as readily as group and world ones. Under `umask 700` that lands on the
+/// scaffold twice over — the 0700 directory becomes 0000 and cannot be
+/// written into at all, and a file written at the umask's answer becomes
+/// `----rw-rw-`, which its own owner cannot read.
+///
+/// Both failures are silent in the shape a scaffold test naturally takes:
+/// the command still exits 0 for the second one, and `Path::exists` is
+/// satisfied by a file nobody can open. So this reads the project back
+/// the way `npm install` would, and pins both modes.
 ///
 /// The two other places this codebase creates a private directory
-/// (`paths::ensure_private_dir`, `scoped_agent::create_staging_dir`) both
-/// follow the create with an explicit `set_permissions` for exactly this
-/// reason; this is the third.
+/// (`paths::ensure_private_dir`, `scoped_agent::create_staging_dir`) and
+/// the one that writes a private file (`atomic::replace`) all follow the
+/// create with an explicit `set_permissions` for exactly this reason.
 ///
 /// Driven through the real binary because the umask is process-global: a
 /// unit test that set one would hand the same hostile mask to every other
 /// test running beside it in the same binary. `pre_exec` scopes it to the
 /// child, which is also how `init`'s umask test does it.
 #[test]
-fn a_scaffolded_project_is_owner_only_whatever_the_umask() {
+fn a_scaffolded_project_is_readable_whatever_the_umask() {
     let sb = Sandbox::new();
     sb.stamp_migrations();
     let project = sb.path().join("my-rule");
@@ -2406,9 +2412,10 @@ fn a_scaffolded_project_is_owner_only_whatever_the_umask() {
     unsafe {
         use std::os::unix::process::CommandExt;
         cmd.pre_exec(|| {
-            // Clears the owner's write and execute bits — the case a
-            // `& 0o022` style assertion would call clean.
-            libc::umask(0o300);
+            // Clears every owner bit — the case a `& 0o022` style
+            // assertion, or one that only checks a file *exists*, calls
+            // clean.
+            libc::umask(0o700);
             Ok(())
         });
     }
@@ -2419,13 +2426,32 @@ fn a_scaffolded_project_is_owner_only_whatever_the_umask() {
         "scaffold failed under a hostile umask:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(
-        fs::metadata(&project).unwrap().permissions().mode() & 0o777,
-        0o700,
-        "the project dir must be owner-only whatever the umask cleared"
-    );
+    for dir in [project.clone(), project.join("assembly")] {
+        assert_eq!(
+            fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+            0o700,
+            "{} must be owner-only whatever the umask cleared",
+            dir.display()
+        );
+    }
+
+    // Reading it back is the assertion `exists()` was not: a scaffold the
+    // owner cannot open is one `npm install` cannot install.
+    for rel in ["package.json", "assembly/rule.ts"] {
+        let path = project.join(rel);
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{} must be readable by its owner: {e}", path.display()));
+        assert!(!text.is_empty(), "{rel} is empty");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "{rel} must carry the mode secreq chose, not the umask's answer"
+        );
+    }
     assert!(
-        project.join("package.json").exists(),
-        "a directory secreq cannot write into is not a scaffold"
+        fs::read_to_string(project.join("package.json"))
+            .unwrap()
+            .contains("secreq-rule"),
+        "the manifest must name the SDK dependency"
     );
 }

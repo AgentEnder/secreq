@@ -349,13 +349,28 @@ pub fn create_project_dir(dir: &Path) -> Result<()> {
 /// files already written where they are, and the directory is the user's
 /// to delete.
 ///
-/// The `assembly/` subdirectories go through
-/// [`crate::paths::ensure_private_dir`] rather than `create_dir_all` for
-/// the reason [`create_project_dir`] does the same for the project root:
-/// `create_dir_all` takes the umask's answer, and under one that clears an
-/// owner bit that is a directory this function cannot then write into.
-/// Narrowing is safe here — every component is either a constant of this
+/// **Neither the directories nor the files take the umask's answer.** Both
+/// `mkdir` and `open` mask the mode they are given, and a umask clears
+/// owner bits as readily as group and world ones — under `umask 700` a
+/// `create_dir_all` here lands 0000 and a `fs::write` lands `----rw-rw-`,
+/// a file its own owner cannot read. The command would still exit 0 on the
+/// second, having produced a project `npm install` cannot install.
+///
+/// So directories go through [`crate::paths::ensure_private_dir`] and files
+/// through [`crate::atomic::replace`] at [`crate::paths::PRIVATE_FILE_MODE`]
+/// — each of which re-applies the mode unmasked after creating. Narrowing
+/// the directories is safe here: every component is a constant of this
 /// module or a name read out of the seed tree, never a path a user typed.
+///
+/// **Owner-only, not merely owner-readable.** 0600 rather than 0644 because
+/// the enclosing directory is 0700, so a wider file mode grants nobody
+/// anything — and because `rule.ts` is the source of a policy that will
+/// release secrets without prompting, which is the same reason the
+/// directories are owner-only ([`create_project_dir`]). It also puts these
+/// files where every other file secreq writes already is; see
+/// [`crate::atomic`], whose position is that nothing secreq writes is
+/// low-sensitivity enough to want the umask's answer. Git does not record
+/// the read bits, so committing and sharing the project are unaffected.
 pub fn write_project(dir: &Path, opts: &ProjectOpts) -> Result<Scaffold> {
     for (rel, contents) in project_files(opts)? {
         let path = dir.join(rel);
@@ -363,7 +378,12 @@ pub fn write_project(dir: &Path, opts: &ProjectOpts) -> Result<Scaffold> {
             paths::ensure_private_dir(parent)
                 .with_context(|| format!("create dir {}", parent.display()))?;
         }
-        std::fs::write(&path, contents).with_context(|| format!("write {}", path.display()))?;
+        crate::atomic::replace(
+            &path,
+            contents.as_bytes(),
+            crate::atomic::Mode::Exactly(paths::PRIVATE_FILE_MODE),
+        )
+        .with_context(|| format!("write {}", path.display()))?;
     }
     Ok(Scaffold {
         dir: dir.to_path_buf(),
@@ -1027,6 +1047,32 @@ mod tests {
 
         assert!(out.is_err(), "a missing seed must fail");
         assert!(std::fs::read_dir(&dir).expect("read").next().is_none());
+    }
+
+    /// Every generated file carries the mode secreq chose, not the one the
+    /// umask left. Asserted exactly for the reason
+    /// [`a_scaffolded_project_is_owner_only`] is: under the ambient 022 an
+    /// unforced write lands 0644, which a `& 0o022 == 0` check would call
+    /// clean — and under a umask that clears an owner bit it lands on a
+    /// file its own owner cannot read. The second half needs a hostile
+    /// umask, which is process-global and so lives in an integration test
+    /// (`tests/cli.rs`); this half runs in the fast suite.
+    #[test]
+    fn generated_files_carry_the_mode_secreq_chose() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let out = scaffold_rule(tmp.path(), "rule-abc123").expect("scaffold");
+
+        for rel in ["package.json", "assembly/rule.ts"] {
+            let path = out.dir.join(rel);
+            assert_eq!(mode_of(&path), 0o600, "{rel}");
+            assert!(
+                !std::fs::read_to_string(&path)
+                    .expect("read back")
+                    .is_empty(),
+                "{rel} must be readable and non-empty"
+            );
+        }
+        assert_eq!(mode_of(&out.dir.join("assembly")), 0o700);
     }
 
     /// npm refuses a `name` with a capital or a space in it, so an
