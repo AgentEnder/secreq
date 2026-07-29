@@ -580,10 +580,11 @@ where
     table.retain(|existing, _| names.iter().any(|n| n == existing));
 
     for (name, entry) in entries {
-        let serialized = toml_edit::ser::to_document(entry)
+        let mut serialized = toml_edit::ser::to_document(entry)
             .expect("config entries serialize infallibly")
             .as_table()
             .clone();
+        crate::rule_scaffold::shape_config_entry(&mut serialized);
         crate::rule_scaffold::set_preserving_decor(table, name.borrow(), Item::Table(serialized));
     }
 }
@@ -689,6 +690,101 @@ mod tests {
         // `ttl = `, not `ttl` — the `no_ttl` declaration's *name* contains the
         // substring, and counting that would pass no matter what was written.
         assert_eq!(text.matches("ttl = ").count(), 1, "{text}");
+    }
+
+    /// A wrap that only injects env vars needs no header of its own:
+    /// `[wraps.gh.env]` already implies `[wraps.gh]`, and writing both leaves
+    /// an empty stanza above every wrap in the file.
+    ///
+    /// The gate-only wrap in here is the reason this is a condition and not a
+    /// blanket rule. It has no values *and* no sub-tables, so nothing would
+    /// imply it — made implicit it renders as nothing at all and the wrap is
+    /// gone on the next load.
+    #[test]
+    fn a_wrap_whose_only_entry_is_a_table_gets_no_header_of_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        let mut config = WrapsConfig::default();
+        config.wraps.insert(
+            "gh".to_owned(),
+            Wrap {
+                name: "gh".to_owned(),
+                reason: None,
+                env: std::iter::once(("GH_TOKEN".to_owned(), "secret://op/x/y".to_owned()))
+                    .collect(),
+            },
+        );
+        config.wraps.insert(
+            "op".to_owned(),
+            Wrap {
+                name: "op".to_owned(),
+                reason: None,
+                env: BTreeMap::new(),
+            },
+        );
+
+        write_config(&path, &config).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+
+        assert!(!text.contains("[wraps.gh]"), "{text}");
+        assert!(text.contains("[wraps.gh.env]"), "{text}");
+        assert!(
+            text.contains("[wraps.op]"),
+            "gate-only wrap needs a header: {text}"
+        );
+
+        let reloaded = WrapsConfig::load(&path).unwrap();
+        assert!(
+            reloaded.wrap("op").is_some(),
+            "the gate-only wrap must survive the round-trip: {text}"
+        );
+        assert_eq!(
+            reloaded.wrap("gh").unwrap().env["GH_TOKEN"],
+            "secret://op/x/y"
+        );
+    }
+
+    /// The shape the migration writes has to survive the first `wrap add`.
+    ///
+    /// These two author the same file. While they disagreed, a freshly
+    /// migrated config reflowed the first time secreq touched it — the
+    /// `[wraps.gh.env]` stanza collapsing onto one inline `env = { … }` line,
+    /// which is the clobbering this whole format change exists to stop.
+    #[test]
+    fn a_migrated_configs_shape_survives_a_rewrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let migrated = "[wraps.gh.env]\nGH_TOKEN = \"secret://op/x/y\"\n\n[wraps.op]\n";
+        std::fs::write(&path, migrated).unwrap();
+
+        let config = WrapsConfig::load(&path).unwrap();
+        write_config(&path, &config).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), migrated);
+    }
+
+    /// A wrap carrying anything of its own still gets a header to carry it.
+    #[test]
+    fn a_wrap_with_its_own_values_keeps_its_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        let mut config = WrapsConfig::default();
+        config.wraps.insert(
+            "gh".to_owned(),
+            Wrap {
+                name: "gh".to_owned(),
+                reason: Some("GitHub API access".to_owned()),
+                env: std::iter::once(("GH_TOKEN".to_owned(), "secret://op/x/y".to_owned()))
+                    .collect(),
+            },
+        );
+
+        write_config(&path, &config).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("[wraps.gh]"), "{text}");
+        assert!(text.contains("reason = \"GitHub API access\""), "{text}");
     }
 
     #[test]

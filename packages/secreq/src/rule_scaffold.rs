@@ -838,6 +838,66 @@ pub(crate) fn set_preserving_decor(table: &mut toml_edit::Table, key: &str, item
     }
 }
 
+/// Give one config entry its final shape: `{ … }` fields become their own
+/// stanza, and a header left carrying nothing is dropped.
+///
+/// Both writers author the same file, so both call this. Without it they
+/// disagreed about the same wrap — the migration wrote `[wraps.gh.env]` under
+/// an empty `[wraps.gh]`, while `wrap add` re-serialized the entry and
+/// collapsed the whole thing onto one inline `env = { … }` line. A file whose
+/// shape depends on which command touched it last is the defect moving to
+/// `toml_edit` was meant to end.
+pub(crate) fn shape_config_entry(entry: &mut toml_edit::Table) {
+    promote_inline_fields(entry);
+    imply_empty_headers(entry);
+}
+
+/// Promote an entry's own `{ … }` fields to real tables, so a wrap's `env`
+/// renders one variable per line instead of one long inline run.
+///
+/// **Depth one only.** A provider's `fields.service = { required = true }` is a
+/// short spec that reads better inline; a header apiece would bury the file in
+/// stanzas. The entry's own fields are the ones that grow.
+fn promote_inline_fields(entry: &mut toml_edit::Table) {
+    let keys: Vec<String> = entry.iter().map(|(key, _)| key.to_owned()).collect();
+    for key in keys {
+        let Some(toml_edit::Item::Value(toml_edit::Value::InlineTable(_))) = entry.get(&key) else {
+            continue;
+        };
+        let Some(toml_edit::Item::Value(toml_edit::Value::InlineTable(inline))) =
+            entry.remove(&key)
+        else {
+            unreachable!("just matched an inline table at {key}")
+        };
+        entry.insert(&key, toml_edit::Item::Table(inline.into_table()));
+    }
+}
+
+/// Drop the header of any table whose entries are all sub-tables — the child's
+/// own header already implies it.
+///
+/// **A table with nothing at all keeps its header.** A gate-only wrap has no
+/// values *and* no sub-tables, so nothing else would imply it: made implicit it
+/// renders as nothing and the wrap is gone on the next load.
+fn imply_empty_headers(table: &mut toml_edit::Table) {
+    let mut has_own_value = false;
+    let mut has_child_table = false;
+    for (_, item) in table.iter() {
+        match item {
+            toml_edit::Item::Value(_) => has_own_value = true,
+            toml_edit::Item::Table(_) | toml_edit::Item::ArrayOfTables(_) => has_child_table = true,
+            toml_edit::Item::None => {}
+        }
+    }
+    table.set_implicit(!has_own_value && has_child_table);
+
+    for (_, item) in table.iter_mut() {
+        if let toml_edit::Item::Table(child) = item {
+            imply_empty_headers(child);
+        }
+    }
+}
+
 /// The body of [`save_preferred_editor`] against an explicit path, so the
 /// mode it leaves is testable without `$SECREQ_HOME` — which is process-global
 /// and races across threads in the same test binary.

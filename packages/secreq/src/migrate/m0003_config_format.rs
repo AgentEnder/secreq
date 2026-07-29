@@ -159,8 +159,13 @@ fn config_json5_to_toml(root: &Value) -> Result<String> {
             // header above it carrying nothing.
             "providers" | "ssh" => {
                 let mut item = json_to_item(&strip_sigils(&value));
-                if let Some(table) = item.as_table_mut() {
-                    table.set_implicit(true);
+                if let Some(section) = item.as_table_mut() {
+                    section.set_implicit(true);
+                    for (_, entry) in section.iter_mut() {
+                        if let Some(entry) = entry.as_table_mut() {
+                            crate::rule_scaffold::shape_config_entry(entry);
+                        }
+                    }
                 }
                 root.insert(&key, item);
             }
@@ -193,7 +198,11 @@ fn config_json5_to_toml(root: &Value) -> Result<String> {
                         map.remove("env");
                     }
                 }
-                wraps.insert(binary, json_to_item(&body));
+                let mut item = json_to_item(&body);
+                if let Some(entry) = item.as_table_mut() {
+                    crate::rule_scaffold::shape_config_entry(entry);
+                }
+                wraps.insert(binary, item);
             }
         }
     }
@@ -319,6 +328,31 @@ mod tests {
     fn convert_rules(text: &str) -> String {
         let root: Value = json5::from_str(text).expect("fixture is valid JSON5");
         rules_json5_to_toml(&root).expect("convert")
+    }
+
+    /// The migration authors the same headers the writer does, so it gets the
+    /// same rule: a wrap whose only entry is its `env` table needs no header,
+    /// and a gate-only wrap — no values, no sub-tables — keeps the one that is
+    /// the only record it exists.
+    #[test]
+    fn a_migrated_wrap_whose_only_entry_is_a_table_gets_no_header_of_its_own() {
+        let out = convert_config(
+            r#"{
+                gh: { env: { GH_TOKEN: "secret://op/x/y" } },
+                op: { $reason: "1Password vault access" },
+                terraform: {},
+            }"#,
+        );
+        assert!(!out.contains("[wraps.gh]\n"), "{out}");
+        assert!(out.contains("[wraps.gh.env]"), "{out}");
+        // `op` carries a reason of its own, so it keeps a header to carry it.
+        assert!(out.contains("[wraps.op]"), "{out}");
+        // `terraform` is gate-only: the header is the whole record of it.
+        assert!(out.contains("[wraps.terraform]"), "{out}");
+
+        // And the result still parses back to the same three wraps.
+        let reparsed = crate::wraps::WrapsConfig::parse(&out, "t").expect("migrated config parses");
+        assert_eq!(reparsed.wraps.len(), 3, "{out}");
     }
 
     /// A rule that matches on a wrap and nothing else is written with its
