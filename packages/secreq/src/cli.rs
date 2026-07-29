@@ -452,6 +452,32 @@ enum RulesAction {
         /// The rule's id, or its exact name.
         target: String,
     },
+    /// Scaffold a buildable wasm rule project into `<DIR>`: a
+    /// `package.json` wired to the `secreq-rule` SDK, an
+    /// `assembly/rule.ts` stub exporting `decide(ctx)`, an as-pect spec,
+    /// and the test-runner config. `npm install && npm run build`
+    /// produces the module `rules add-wasm` then registers.
+    NewWasm {
+        /// Directory to write the project into. Created if missing; an
+        /// existing one must be empty.
+        dir: std::path::PathBuf,
+        /// npm package name for the project, also the suggested rule
+        /// name. Folded to something npm accepts (lowercase, no spaces).
+        /// Defaults to a slug of `<DIR>`'s last component.
+        #[arg(long)]
+        name: Option<String>,
+        /// Path to the `secreq-rule` package (`packages/secreq-rule` in a
+        /// secreq checkout), written into `package.json` as an absolute
+        /// `file:` dependency. Auto-detected by walking up from this
+        /// binary and the working directory; without one the manifest
+        /// falls back to the registry, which does not carry the SDK yet.
+        #[arg(long, value_name = "PATH")]
+        sdk: Option<std::path::PathBuf>,
+        /// Seed `assembly/` from one of the SDK's worked examples (e.g.
+        /// `npm-publish-guard`) instead of the empty stub.
+        #[arg(long, value_name = "EXAMPLE")]
+        from: Option<String>,
+    },
     /// Register a compiled wasm rule module (built with the
     /// `secreq-rule` SDK). The daemon vets the module in its sandbox,
     /// copies it into the canonical store under the secreq root, pins
@@ -836,6 +862,12 @@ pub fn run() -> i32 {
             Some(RulesAction::Enable { target }) => commands::rules_set_enabled(&target, true),
             Some(RulesAction::Disable { target }) => commands::rules_set_enabled(&target, false),
             Some(RulesAction::Rm { target }) => commands::rules_rm(&target),
+            Some(RulesAction::NewWasm {
+                dir,
+                name,
+                sdk,
+                from,
+            }) => commands::rules_new_wasm(&dir, name.as_deref(), sdk.as_deref(), from.as_deref()),
             Some(RulesAction::AddWasm {
                 file,
                 name,

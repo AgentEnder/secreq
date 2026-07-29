@@ -10,6 +10,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::daemon::client as daemon_client;
+use crate::rule_scaffold;
 
 /// `secreq rules` (with no subcommand or with `list`): one-line table
 /// of every configured rule.
@@ -222,6 +223,122 @@ pub fn rules_add_wasm(
         println!("trained on:     {}", names.join(", "));
     }
     Ok(0)
+}
+
+/// `secreq rules new-wasm <dir>` — scaffold a buildable wasm-rule project.
+///
+/// The counterpart to [`rules_add_wasm`], which only ever *registers* an
+/// already-compiled module: before this command the only way to start a
+/// rule was to know the worked example existed, copy it out, and then fix
+/// the `file:../..` SDK dependency it copied with it.
+///
+/// The scaffolding itself lives in [`crate::rule_scaffold`], shared with
+/// the rule editor's one-click draft. This side resolves what the user
+/// named — the SDK, the `--from` example, the package name — and prints
+/// the next steps.
+pub fn rules_new_wasm(
+    dir: &Path,
+    name: Option<&str>,
+    sdk: Option<&Path>,
+    from: Option<&str>,
+) -> Result<i32> {
+    let sdk_dir = match sdk {
+        Some(path) => Some(rule_scaffold::resolve_sdk_dir(path)?),
+        None => rule_scaffold::locate_sdk(),
+    };
+    let seed = match from {
+        Some(example) => Some(resolve_example(sdk_dir.as_deref(), example)?),
+        None => None,
+    };
+
+    rule_scaffold::create_project_dir(dir)?;
+    let dir = dir
+        .canonicalize()
+        .with_context(|| format!("resolve {}", dir.display()))?;
+    let opts = rule_scaffold::ProjectOpts {
+        name: name.map_or_else(
+            || rule_scaffold::package_name_from_dir(&dir),
+            rule_scaffold::package_name,
+        ),
+        sdk: sdk_dir.map_or(
+            rule_scaffold::SdkDep::Published,
+            rule_scaffold::SdkDep::Local,
+        ),
+        seed,
+    };
+    // The SDK is kept publishable (`tests/sdk_publish.rs`) but is not on
+    // npm yet, so this fallback is a dependency `npm install` cannot
+    // satisfy. Say so at scaffold time rather than letting the install
+    // fail with a 404 the user has to interpret.
+    if opts.sdk == rule_scaffold::SdkDep::Published {
+        eprintln!(
+            "WARNING: no secreq-rule checkout found, so package.json depends on \
+             `secreq-rule@{}` from the registry — which is not published yet, and \
+             `npm install` will fail on it. Re-run with --sdk <checkout>/packages/secreq-rule \
+             to depend on a local copy.",
+            rule_scaffold::SDK_VERSION_RANGE
+        );
+    }
+    let scaffold = rule_scaffold::write_project(&dir, &opts)?;
+
+    println!("scaffolded {} ({})", scaffold.dir.display(), opts.name);
+    println!("  assembly/rule.ts             your decide(ctx)");
+    println!("  assembly/__tests__/          as-pect specs");
+    println!(
+        "  package.json                 secreq-rule = {}",
+        opts.sdk.spec()
+    );
+    println!();
+    println!("next:");
+    println!("  cd {}", scaffold.dir.display());
+    println!("  npm install");
+    println!("  npm run build");
+    println!(
+        "  secreq rules add-wasm rule.wasm --name \"{}\" --secret <NAME>",
+        opts.name
+    );
+    Ok(0)
+}
+
+/// Resolve `--from <example>` to the SDK example directory it seeds from.
+/// Rejects a name with a path in it: the value indexes
+/// `<sdk>/examples/`, and joining an arbitrary path there would let it
+/// seed from anywhere on disk.
+fn resolve_example(sdk_dir: Option<&Path>, example: &str) -> Result<std::path::PathBuf> {
+    let sdk_dir = sdk_dir.context(
+        "--from seeds from the SDK's examples, and no secreq-rule checkout was found; \
+         pass --sdk <checkout>/packages/secreq-rule",
+    )?;
+    if example.is_empty() || example.contains('/') || example.contains('\\') || example == ".." {
+        anyhow::bail!("--from takes an example name, not a path: {example:?}");
+    }
+    let dir = sdk_dir.join("examples").join(example);
+    if !dir.join("assembly").is_dir() {
+        anyhow::bail!(
+            "no example `{example}` under {}{}",
+            sdk_dir.join("examples").display(),
+            match available_examples(sdk_dir) {
+                names if names.is_empty() => String::new(),
+                names => format!(" — available: {}", names.join(", ")),
+            }
+        );
+    }
+    Ok(dir)
+}
+
+/// Example names under `<sdk>/examples/` that a `--from` could take.
+/// Best-effort: an unreadable directory just yields nothing to suggest.
+fn available_examples(sdk_dir: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(sdk_dir.join("examples")) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.path().join("assembly").is_dir())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
 }
 
 /// `secreq rules enable|disable <target>`. Idempotent — flipping a

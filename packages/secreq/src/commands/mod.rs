@@ -45,7 +45,9 @@ mod ssh;
 pub use config::{check, doctor, edit_cmd, unwrap_cmd, wrap, wraps_list, WrapArgs};
 pub use daemon::{daemon_install, daemon_log_path, daemon_status, daemon_stop, daemon_tail};
 pub use init::init;
-pub use rules::{rules_add_wasm, rules_list, rules_rm, rules_set_enabled, rules_show};
+pub use rules::{
+    rules_add_wasm, rules_list, rules_new_wasm, rules_rm, rules_set_enabled, rules_show,
+};
 pub use run::{run, wrap_run, WrapRunOpts};
 pub use secrets::{agent_open, read, resolve};
 pub use ssh::{ssh_add, ssh_setup, ssh_test, SshAddArgs};
