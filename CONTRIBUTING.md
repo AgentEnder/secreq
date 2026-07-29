@@ -20,11 +20,35 @@ ones. If you have [mise](https://mise.jdx.dev):
 
 ```sh
 mise install         # once, and after mise.toml changes
-mise run docs        # lint published prose with Vale
-mise run docs-audit  # sweep the docs for redundancy and stale claims
 ```
 
 Without mise, install those versions yourself; nothing else assumes it.
+
+## Checks
+
+Every check is an Nx target, so you can run one, run the lot, or run only
+what your branch touched:
+
+```sh
+npx nx run-many -t format                    # reformat everything
+npx nx affected -t lint,format:check,test    # only what your branch touched
+npx nx run docs:vale                         # published prose, via Vale
+npx nx run docs:audit                        # redundancy and stale claims
+```
+
+CI is a single job running one command over the whole set, so this is the same
+thing it does:
+
+```sh
+npx nx affected -t lint,format:check,test,typecheck-docs,vale,audit
+```
+
+`lint` is clippy on the Rust crates and oxlint on the JavaScript;
+`format:check` is `cargo fmt` and/or oxfmt. Every project checks its own tree,
+and the root `workspace` project covers what no project owns — repo-root
+markdown and config, `.claude/`, `.github/`. If you add a project directly under
+the repo root, add it to the exclusion list in the root `package.json`, or its
+files will be checked twice.
 
 ## Ways to contribute
 

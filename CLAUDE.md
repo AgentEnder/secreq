@@ -36,11 +36,12 @@ new visual primitive — you MUST:
 Regenerate with:
 
 ```sh
-SECREQ_BLESS_SHOTS=1 cargo test --test ui_screenshots -- --nocapture --test-threads=1
+npx nx run secreq:bless-screenshots
 ```
 
+The target sets `SECREQ_BLESS_SHOTS=1` and passes `--test-threads=1`.
 Rendering is behind that env var because it needs a GPU and rewrites
-published assets. `--test-threads=1` keeps `$SECREQ_HOME` mutation
+published assets; the thread pinning keeps `$SECREQ_HOME` mutation
 serialised across fixtures. If you cannot render — no GPU, a headless
 container, a driver that won't initialise — or your change moves layout
 without changing pixels you mean to republish, re-bless only the
@@ -166,7 +167,7 @@ reordering a select, changing what a flow prints at the end — you MUST:
    `expect()` calls wait on prompt text, so a rename fails the regen
    rather than silently recording something else.
    ```sh
-   cargo test --test cli_transcripts -- --ignored --nocapture --test-threads=1
+   npx nx run secreq:record-transcripts
    ```
 2. **Read the regenerated `.txt`.** Each fixture writes `<id>.txt`
    alongside `<id>.json` for exactly this — it is where a leaked tempdir
@@ -217,7 +218,7 @@ resolves to `packages/secreq-rule/index.ts`. Diagnostics come back
 addressed to the markdown line you would edit. Run it with:
 
 ```sh
-pnpm --filter @secreq/docs-site run typecheck-docs
+npx nx run docs-site:typecheck-docs
 ```
 
 CI runs it in the `web` job, so **renaming a field on `RuleCtx` or
@@ -251,6 +252,93 @@ fence is materialized as a `.d.ts`, and `skipLibCheck` suppresses errors
 in declaration files — turning it on makes the one fence that is purely a
 claim about the SDK the one fence nothing checks.
 
+## Every check is an Nx target, and the graph is load-bearing
+
+Seven projects, and each one owns the targets whose sources it holds:
+
+| Project           | Root                   | Owns (beyond `lint` / `format:check`)                                                       |
+| ----------------- | ---------------------- | ------------------------------------------------------------------------------------------- |
+| `secreq`          | `packages/secreq`      | `build` `check` `test`, `extract-docs-artifacts`, `bless-screenshots`, `record-transcripts` |
+| `secreq-webfonts` | `packages/webfonts`    | `build` — the woff2 cuts — and `check`                                                      |
+| `secreq-rule`     | `packages/secreq-rule` | the published SDK; `nx-release-publish`                                                     |
+| `docs-site`       | `docs-site`            | `build` `dev` `preview` `deploy` `typecheck-docs`                                           |
+| `docs`            | `docs`                 | `vale` `audit`                                                                              |
+| `dev-docs`        | `dev-docs`             | nothing — it exists to be depended on                                                       |
+| `workspace`       | `.`                    | only what no other project owns (see below)                                                 |
+
+The Rust crates are registered by **`@monodon/rust`**, which runs
+`cargo metadata` and creates a node per crate plus the crate-to-crate and
+`cargo:` external edges. It infers **no** targets — those are hand-written in
+each `project.json`. Adding a crate to the Cargo workspace therefore gets you
+an Nx project for free, but not a single target.
+
+**Project names come from Cargo**, so `packages/webfonts` is `secreq-webfonts`.
+A `project.json` there naming itself `webfonts` would produce two projects at
+one root.
+
+### The edges are the point
+
+```
+docs ───────┬──> secreq          dev-docs ───┬──> secreq
+            └──> docs-site                   └──> docs-site
+secreq-rule ───> secreq, docs-site
+secreq-webfonts ───> docs-site
+```
+
+Two of these are easy to get wrong:
+
+- **`secreq` depends on `docs` and `dev-docs`.** Backwards-looking, but true:
+  `schema_drift`, `cli_drift`, `screenshot_freshness` and `ui_screenshots` read
+  those trees as fixtures, so a docs-only change really can turn `cargo test`
+  red. CI affected-gates the Rust job, and this is what makes that sound.
+  `secreq:test` also declares both trees as `{workspaceRoot}` inputs, which
+  carries the same thing independently — **`nx affected` honours
+  `{workspaceRoot}` inputs**, so a file owned by no project still marks every
+  project that declares it. (`dist/install.sh` belongs to nothing and marks
+  `docs-site` affected for exactly that reason.) The edge is the declarative
+  half and the input is needed for the cache key regardless; keep both.
+- **`docs-site` does NOT depend on `secreq`**, deliberately. It consumes only
+  `secreq`'s _committed_ outputs. A direct edge would drag a full release build
+  of an egui/wgpu app into the docs deploy through `^build` — the job that
+  `deploy-docs.yml` keeps to a seconds-long webfonts compile.
+
+### One CI job, and every project lints itself
+
+`.github/workflows/ci.yml` is a single `checks` job over a two-OS matrix that
+runs `nx affected -t lint,format:check,test,typecheck-docs,vale,audit`. There is
+no job per tool: what runs is the graph's decision, so a job split would only be
+a second place to maintain the same list.
+
+Each project lints and formats its own tree — `lint` is clippy on the crates and
+oxlint on the JS, `format:check` is `cargo fmt` and/or oxfmt. The two Rust
+crates run **both** formatters, because they really do carry `.ts` fixtures and
+`project.json` alongside the Rust.
+
+The `workspace` root project covers exactly what no other project owns —
+repo-root markdown and config, `.claude/`, `.github/`, `.vale/` — by excluding
+the project directories rather than listing the leftovers:
+
+```
+oxfmt --check . '!docs-site/**' '!packages/**' '!docs/**'
+```
+
+Written that way so a **new top-level directory is covered automatically**;
+enumerating the leftovers would silently miss it. The partition is exact — the
+per-project counts plus the root's sum to the same total a whole-tree run sees,
+and nothing is checked twice. If you add a project directly under the repo root,
+add it to those exclusions.
+
+Two traps:
+
+- **`oxlint` exits 1 when a path holds no lintable file**, which is why `docs`
+  and the Rust crates have no oxlint target — only oxfmt.
+- **`nx affected` silently ignores `--projects`** (`--exclude` is honoured), so
+  a filter cannot scope a job to a subset. With one job that no longer matters,
+  but do not reintroduce a split expecting `--projects` to work.
+
+There is no Nx Cloud here, so CI gets no remote cache — affected-based skipping
+is the entire saving.
+
 ## The design docs live in brain, not in this repo
 
 Architecture notes, the agent orientation guide, the release runbook,
@@ -277,9 +365,14 @@ there when the change lands — the repo has no copy to fall out of sync.
   alter the trust model, the wire protocol, or the rule semantics
   should be reflected there before the code lands.
 - JSON Schemas (`docs/wraps.schema.json`, `docs/auto-rules.schema.json`)
-  are regenerated via `cargo run --example gen-schema` and
-  `cargo run --example gen-auto-rules-schema`. A test in
-  `tests/schema_drift.rs` fails CI if either is stale.
+  and `docs/cli-reference.md` are all regenerated by one target,
+  `nx run secreq:extract-docs-artifacts`. A test in `tests/schema_drift.rs`
+  fails CI if either schema is stale, and `tests/cli_drift.rs` does the same
+  for the CLI reference.
+
+  Each generator writes to **stdout** and the target supplies the redirect —
+  a bare `cargo run --example gen-schema` prints the schema and updates
+  nothing.
 
   **A field's description is written at the field.** Both schemas are derived
   with `schemars` from the types that read those files — `RuleWire`,
@@ -318,9 +411,12 @@ one toolchain.
 
 ```sh
 mise install         # once, and after any change to mise.toml
-mise run docs        # Vale over the published prose
-mise run docs-audit  # the redundancy / stale-claim sweep
 ```
+
+`mise.toml` pins tools and nothing else. The two tasks it used to carry are
+Nx targets now — `nx run docs:vale` and `nx run docs:audit` — because a task
+in `mise.toml` is invisible to the graph: uncacheable, and unable to say
+which projects it applies to.
 
 Rust is pinned to an exact version rather than `stable`, so a lint added in a
 new stable release can't turn an unrelated PR red. Bumping it is its own
@@ -336,7 +432,7 @@ is not the same as adding a component to it.
 ## Prose is linted
 
 `.vale.ini` + `.vale/styles/Secreq/` lint `docs/`, the READMEs and
-`CONTRIBUTING.md`. The `web` CI job runs `mise run docs`.
+`CONTRIBUTING.md`. The `web` CI job runs it as `nx affected -t vale`.
 
 **Only `error` fails the build**; warnings and suggestions are advisory, so a
 rule can be tightened without turning open PRs red. Errors are reserved for
@@ -357,7 +453,7 @@ regex can catch; the skill covers the rest.
 the clap tree by `examples/gen_cli_reference.rs`:
 
 ```sh
-cargo run --example gen-cli-reference > docs/cli-reference.md
+npx nx run secreq:extract-docs-artifacts   # this file and both schemas
 ```
 
 `tests/cli_drift.rs` fails an ordinary `cargo test` when the committed file

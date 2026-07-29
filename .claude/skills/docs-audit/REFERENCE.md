@@ -26,16 +26,16 @@ These run on an ordinary `cargo test`, so a docs change can fail the build.
 Know which findings are already enforced (don't re-check by hand) and which
 are not (why the audit script exists).
 
-| Guard                                                | Enforces                                                                            |
-| ---------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `tests/cli_drift.rs`                                 | `docs/cli-reference.md` matches the clap tree; every visible command has a heading. |
-| `tests/schema_drift.rs`                              | The committed JSON Schemas match the Rust types.                                    |
-| `tests/ui_screenshots.rs`                            | Every fixture's layout matches its `layout.json` (CPU, no GPU).                     |
-| `tests/screenshot_freshness.rs`                      | No orphaned/undocumented fixture; every captioned one has a README row.             |
-| `tests/cli_transcripts.rs`                           | Recorded lines fit the pty width; no sandbox path leaked.                           |
-| `tests/install_scripts.rs`                           | The checkout install path stays reachable from getting-started.                     |
-| `docs-site` build                                    | Every `::shot` / `::term` / `::flow` id resolves. A bad id fails the build.         |
-| `pnpm --filter @secreq/docs-site run typecheck-docs` | Every `ts` fence in `wasm-rules.md` and the SDK README compiles.                    |
+| Guard                                 | Enforces                                                                            |
+| ------------------------------------- | ----------------------------------------------------------------------------------- |
+| `tests/cli_drift.rs`                  | `docs/cli-reference.md` matches the clap tree; every visible command has a heading. |
+| `tests/schema_drift.rs`               | The committed JSON Schemas match the Rust types.                                    |
+| `tests/ui_screenshots.rs`             | Every fixture's layout matches its `layout.json` (CPU, no GPU).                     |
+| `tests/screenshot_freshness.rs`       | No orphaned/undocumented fixture; every captioned one has a README row.             |
+| `tests/cli_transcripts.rs`            | Recorded lines fit the pty width; no sandbox path leaked.                           |
+| `tests/install_scripts.rs`            | The checkout install path stays reachable from getting-started.                     |
+| `docs-site` build                     | Every `::shot` / `::term` / `::flow` id resolves. A bad id fails the build.         |
+| `npx nx run docs-site:typecheck-docs` | Every `ts` fence in `wasm-rules.md` and the SDK README compiles.                    |
 
 **Nothing guards prose accuracy, cross-page redundancy, or fixture coverage.**
 That gap is this skill.

@@ -17,8 +17,8 @@ reader:
 ## Quick start
 
 ```sh
-mise run docs-audit   # redundancy, stale claims, unused fixtures, voice
-mise run docs         # Vale: the mechanical prose rules
+npx nx run docs:audit   # redundancy, stale claims, unused fixtures, voice
+npx nx run docs:vale         # Vale: the mechanical prose rules
 ```
 
 The audit is advisory and always exits 0; it finds candidates, you verify
@@ -41,10 +41,10 @@ claim.
 4. **Wire up unused fixtures.** For each one the script lists, find the page
    describing that state and put the fixture there. If nothing describes it,
    that is a documentation gap, not a spare image.
-5. **Cut, then check voice.** See "Voice" below, and run `mise run docs`.
+5. **Cut, then check voice.** See "Voice" below, and run `npx nx run docs:vale`.
 6. **Verify.** `cargo test` (the guards in `REFERENCE.md`), then
-   `cd docs-site && pnpm run build`, then
-   `pnpm --filter @secreq/docs-site run typecheck-docs`.
+   `npx nx build docs-site`, then
+   `npx nx run docs-site:typecheck-docs`.
 
 ## Never hand-write what a generator owns
 
@@ -78,7 +78,7 @@ The short list, in the order it shows up here:
   know how many there are.
 - **Bulleted paragraphs.** Every item a bolded sentence plus a paragraph.
   Fix by cutting the item down, never by converting the list to prose —
-  same words, no gain. `mise run docs-audit` flags these; hits in
+  same words, no gain. `npx nx run docs:audit` flags these; hits in
   `README.md` and the contributor pages are usually the conventional
   short-label feature list and can stand.
 - **"Not just X, but Y"** and other parallel contrasts used to sound profound.
