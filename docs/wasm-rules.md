@@ -122,12 +122,37 @@ you want to author modules in another language.
 
 ## Write a rule
 
+### Scaffold from the CLI (one command)
+
+```sh
+secreq rules new-wasm ~/code/my-rule
+```
+
+That writes a package you can build without editing anything else: a
+`package.json` with the `secreq-rule` devDependency resolved, the
+`assembly/rule.ts` stub exporting `decide(ctx)`, an as-pect spec beside it,
+and the test-runner config. The command prints the next three steps —
+`npm install`, `npm run build`, and the `rules add-wasm` line that registers
+the result.
+
+Two options change what you get:
+
+- `--from <example>` seeds `assembly/` from a worked example under
+  `packages/secreq-rule/examples/` instead of the stub, so
+  `--from npm-publish-guard` starts you on the rule the rest of this guide
+  walks through.
+- `--sdk <path>` points the generated dependency at a `packages/secreq-rule`
+  of your choosing. The command finds one by walking up from the `secreq`
+  binary and from your working directory, which covers anyone working out of
+  a checkout; without one it writes the registry package, which does not
+  carry the SDK yet, and says so.
+
 ### Scaffold from the rule editor (one click)
 
-The fastest path is the Rules view in `secreq view`. The **"Write a
-programmatic rule"** card at the top scaffolds a starter project on disk
-(`$SECREQ_HOME/rule-drafts/<slug>/rule.ts` plus a README) and offers an
-**"Open in editor"** split-button:
+The Rules view in `secreq view` writes the same project without a terminal.
+The **"Write a programmatic rule"** card at the top scaffolds it under
+`$SECREQ_HOME/rule-drafts/<slug>/` and offers an **"Open in editor"**
+split-button:
 
 ::shot{id=37-rules-scaffold-open-in-editor}
 
@@ -140,20 +165,15 @@ time.
 
 Land in your editor, edit `decide`, then compile and register (below).
 
-### Scaffold by hand
+### What you are editing
 
 Rules are written in [AssemblyScript](https://www.assemblyscript.org): TypeScript
 syntax, compiled ahead-of-time to a tiny wasm module with no embedded JS
-engine. Scaffold a package:
+engine. A rule package is four things — `assembly/rule.ts`, its as-pect
+spec, the runner config, and a `package.json` pulling `assemblyscript`,
+`@as-pect/cli` and `secreq-rule`. Both scaffolds above write all of it.
 
-```sh
-mkdir my-rule && cd my-rule
-npm init -y
-npm install --save-dev assemblyscript @as-pect/cli secreq-rule
-mkdir -p assembly
-```
-
-Then write `assembly/rule.ts` exporting `decide(ctx)`. The worked
+You write `assembly/rule.ts`, exporting `decide(ctx)`. The worked
 example at
 [`packages/secreq-rule/examples/npm-publish-guard/`](../packages/secreq-rule/examples/npm-publish-guard/)
 is a complete, runnable package for this policy: approve `npm publish`
@@ -226,8 +246,7 @@ describe('npm-publish-guard', () => {
 });
 ```
 
-Run with `npx asp` (the example wires it to `npm test`; `npx asp
---init` scaffolds the config for a fresh package).
+Run with `npm test`, which both scaffolds wire to `asp`.
 
 **secreq never runs your tests.** Testing happens entirely in your
 package, before you compile; the daemon only ever loads the compiled
