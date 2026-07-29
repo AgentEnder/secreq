@@ -1,1 +1,0 @@
-import{j as s}from"./chunk-BFUnA8Al.js";function i({title:r,note:e,tight:a}){return s.jsxs("div",{className:`flex items-center gap-4 ${a?"mb-4":"mb-8"}`,children:[s.jsx("h2",{className:"t-eyebrow shrink-0",children:r}),s.jsx("span",{className:"section-rule"}),e&&s.jsx("span",{className:"t-eyebrow shrink-0 hidden sm:block",children:e})]})}export{i as S};
