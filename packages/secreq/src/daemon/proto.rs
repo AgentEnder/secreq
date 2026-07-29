@@ -951,6 +951,27 @@ pub struct SecretAsk {
     /// it as asks merge. `#[serde(default)]`.
     #[serde(default)]
     pub requested_by: Vec<String>,
+    /// The name this secret is declared under in the host's `secrets`
+    /// block, when the config referenced it as `secret://<name>`. `None`
+    /// for an inline `secret://provider/locator`, which names nothing.
+    ///
+    /// Display metadata only — resolution and the cache key are still
+    /// `provider` + `locator`, so nothing downstream learns a second kind
+    /// of reference. `#[serde(default)]`.
+    #[serde(default)]
+    pub declared_as: Option<String>,
+    /// How long the daemon may serve this secret from its value cache.
+    /// Read from the declaration alongside `declared_as`; defaults to
+    /// [`CacheTtl::DaemonLifetime`], which is what an inline reference and
+    /// an undeclared `ttl` both mean.
+    ///
+    /// Client-supplied, like the `providers` block on the same ask — and
+    /// for the same reason it is not a new trust surface: this ask already
+    /// tells the daemon which *command to execute* to fetch the value, so
+    /// a field that can only make the daemon re-fetch more often adds
+    /// nothing an attacker did not have. `#[serde(default)]`.
+    #[serde(default)]
+    pub ttl: crate::wraps::CacheTtl,
 }
 
 /// Wire-form provider definition. Mirrors [`crate::manifest::Provider`]

@@ -29,7 +29,6 @@ use anyhow::{Context, Result};
 use crate::daemon::client as daemon_client;
 use crate::daemon::proto;
 use crate::provenance;
-use crate::reference::Reference;
 use crate::wraps::WrapsConfig;
 
 mod binaries;
@@ -142,8 +141,10 @@ pub(crate) struct AskSpec<'a> {
     pub dedupe_wrap: String,
     /// Argv shown in the consent prompt (never values).
     pub command: Vec<String>,
-    /// The `(env name, reference)` pairs to inject.
-    pub refs: &'a [(String, Reference)],
+    /// The `(env name, resolved reference)` pairs to inject. Resolved, so a
+    /// `secret://<name>` has already become provider + locator and carries the
+    /// declaration's name and TTL alongside.
+    pub refs: &'a [(String, crate::wraps::ResolvedRef)],
     /// `$reason` carried onto each `SecretAsk`.
     pub reason: Option<String>,
     /// Whether `ApproveRemember` may persist an approval (`true` for `x`).
@@ -169,7 +170,8 @@ pub(crate) fn build_ask(
 ) -> proto::Ask {
     let mut providers = HashMap::new();
     let mut secrets: Vec<proto::SecretAsk> = Vec::new();
-    for (name, reference) in spec.refs {
+    for (name, resolved) in spec.refs {
+        let reference = &resolved.reference;
         // Include the provider definition the daemon will run. Built-ins
         // are overlaid by `load_config_or_default`, so they're in here too.
         if let Some(p) = config.providers.get(&reference.provider) {
@@ -183,6 +185,8 @@ pub(crate) fn build_ask(
             description: None,
             reason: spec.reason.clone(),
             requested_by: vec![],
+            declared_as: resolved.declared_as.clone(),
+            ttl: resolved.ttl,
         });
     }
 
@@ -252,10 +256,10 @@ mod tests {
 
     #[test]
     fn build_ask_sets_identity_command_and_remember() {
-        use crate::reference::Reference;
+        let config = WrapsConfig::default(); // providers map may be empty here
         let refs = vec![(
             "DATABASE_URL".to_owned(),
-            Reference::parse("secret://op/Work/PG/url").unwrap(),
+            config.resolve_ref("secret://op/Work/PG/url").unwrap(),
         )];
         let callers = vec![provenance::Caller {
             pid: 42,
@@ -264,7 +268,6 @@ mod tests {
             exe: None,
             start_time: 7,
         }];
-        let config = WrapsConfig::default(); // providers map may be empty here
         let ask = build_ask(
             AskSpec {
                 dedupe_wrap: "run".to_owned(),

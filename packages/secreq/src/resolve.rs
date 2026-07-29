@@ -25,6 +25,23 @@ pub struct SecretRequest {
     pub reason: Option<String>,
     pub description: Option<String>,
     pub default: Option<String>,
+    /// The name this secret is declared under in the config's `secrets`
+    /// block, when it was referenced as `secret://<name>`. Display metadata:
+    /// resolution reads `provider` and `locator` and nothing else, but a
+    /// failure is far more useful saying `github_token` than saying which
+    /// vault path a user last thought about a year ago.
+    pub declared_as: Option<String>,
+}
+
+impl SecretRequest {
+    /// How to name this secret in a message: its declaration when it has
+    /// one, otherwise the reference it was written as inline.
+    pub fn label(&self) -> String {
+        match &self.declared_as {
+            Some(declared) => declared.clone(),
+            None => format!("{}/{}", self.provider, self.locator),
+        }
+    }
 }
 
 /// The full set of requests for one `run`.
@@ -205,8 +222,10 @@ pub fn resolve_all(
                     // that nothing rotates. Folding `detail` into the top
                     // message, as this once did, defeats both.
                     return Err(anyhow::anyhow!("{detail}").context(format!(
-                        "secret `{}` could not be resolved from `{}` and has no default",
-                        req.name, req.provider
+                        "secret `{}` ({}) could not be resolved from `{}` and has no default",
+                        req.name,
+                        req.label(),
+                        req.provider
                     )));
                 }
             }
@@ -259,6 +278,7 @@ mod tests {
             reason: None,
             description: None,
             default: None,
+            declared_as: None,
         }
     }
 
@@ -416,6 +436,34 @@ mod tests {
             std::fs::read_to_string(&counter).unwrap().lines().count(),
             2
         );
+    }
+
+    #[test]
+    fn a_failure_names_the_declared_secret_rather_than_only_its_locator() {
+        // The point of carrying the declaration's name: a user who wrote
+        // `secrets.github_token` once and referenced it from four wraps
+        // reads a failure in the words they chose, not in a vault path.
+        let m = manifest(&[provider("fail", &["false"])]);
+        let p = plan(vec![SecretRequest {
+            declared_as: Some("github_token".to_owned()),
+            ..req("GITHUB_TOKEN", "fail", "Personal/GitHub/token")
+        }]);
+        let Err(err) = resolve_all(&m, &p) else {
+            panic!("a required secret the provider refused must be an error");
+        };
+        let top = format!("{err}");
+        assert!(top.contains("github_token"), "{top}");
+    }
+
+    #[test]
+    fn an_inline_reference_falls_back_to_provider_and_locator() {
+        let m = manifest(&[provider("fail", &["false"])]);
+        let p = plan(vec![req("TOKEN", "fail", "Personal/GitHub/token")]);
+        let Err(err) = resolve_all(&m, &p) else {
+            panic!("expected an error");
+        };
+        let top = format!("{err}");
+        assert!(top.contains("fail/Personal/GitHub/token"), "{top}");
     }
 
     #[test]

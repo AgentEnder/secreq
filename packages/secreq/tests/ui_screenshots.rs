@@ -234,6 +234,8 @@ fn anchor_of(
 
 fn secret(name: &str, provider: &str, locator: &str) -> SecretAsk {
     SecretAsk {
+        declared_as: None,
+        ttl: secreq::wraps::CacheTtl::default(),
         name: name.to_owned(),
         provider: provider.to_owned(),
         locator: locator.to_owned(),

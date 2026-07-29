@@ -196,10 +196,22 @@ pub fn wraps_list(config_path: Option<&Path>) -> Result<i32> {
         };
         println!("{}{}", wrap.name, reason_suffix);
         for (name, ref_str) in &wrap.env {
-            // Render the provider (and a short locator) but never the value.
-            let summary = match Reference::parse(ref_str) {
-                Some(r) => format!("{} ({})", name, r.provider),
-                None => format!("{} (bare locator)", name),
+            // Render the provider (and the declaration it came from) but
+            // never the value.
+            let summary = match config.resolve_ref(ref_str) {
+                Ok(resolved) => match &resolved.declared_as {
+                    Some(declared) => format!(
+                        "{name} ({declared} → {}, ttl {})",
+                        resolved.reference.provider,
+                        resolved.ttl.label()
+                    ),
+                    None => format!(
+                        "{name} ({}, ttl {})",
+                        resolved.reference.provider,
+                        resolved.ttl.label()
+                    ),
+                },
+                Err(_) => format!("{name} (unresolvable reference)"),
             };
             println!("    {summary}");
         }
@@ -253,13 +265,13 @@ pub fn check(config_path: Option<&Path>) -> Result<i32> {
     // Every env entry must reference a known provider.
     for wrap in config.wraps.values() {
         for (env_name, ref_str) in &wrap.env {
-            let Some(reference) = Reference::parse(ref_str) else {
-                println!(
-                    "  ✗ {}.env.{}: not a valid `secret://provider/locator` reference",
-                    wrap.name, env_name
-                );
-                problems += 1;
-                continue;
+            let reference = match config.resolve_ref(ref_str) {
+                Ok(resolved) => resolved.reference,
+                Err(err) => {
+                    println!("  ✗ {}.env.{}: {err:#}", wrap.name, env_name);
+                    problems += 1;
+                    continue;
+                }
             };
             if !config.providers.contains_key(&reference.provider) {
                 println!(
@@ -372,7 +384,7 @@ pub fn doctor(config_path: Option<&Path>) -> Result<i32> {
         .wraps
         .values()
         .flat_map(|w| w.env.values())
-        .filter_map(|v| Reference::parse(v).map(|r| r.provider))
+        .filter_map(|v| config.resolve_ref(v).ok().map(|r| r.reference.provider))
         .collect();
 
     println!("\nProvider CLIs (used by a wrap):");
@@ -411,8 +423,14 @@ fn parse_env_assignments(envs: &[String]) -> Result<BTreeMap<String, String>> {
         if k.is_empty() {
             bail!("--env `{raw}` has an empty name");
         }
-        if Reference::parse(v).is_none() {
-            bail!("--env `{raw}`: value must be a `secret://provider/locator` reference");
+        // Both written forms are legal here. An undeclared name is caught by
+        // `write_config`'s round-trip through the parser, with the message
+        // that names both readings — better than second-guessing it without
+        // the config in hand.
+        if Reference::parse_form(v).is_none() {
+            bail!(
+                "--env `{raw}`: value must be a `secret://provider/locator` reference                  or a declared secret's name (`secret://<name>`)"
+            );
         }
         out.insert(k.to_owned(), v.to_owned());
     }
@@ -522,6 +540,31 @@ fn config_to_json_value(config: &WrapsConfig) -> Result<serde_json::Value> {
             serde_json::Value::Object(providers_obj),
         );
     }
+    // Declarations survive a rewrite for the same reason the `ssh` block and
+    // the machine-local toggles do: `secreq wrap` re-serializes the whole
+    // model, so a block this writer forgets is a block the next `wrap add`
+    // silently deletes — taking every wrap's `secret://<name>` with it.
+    if !config.secrets.is_empty() {
+        let mut secrets_obj = serde_json::Map::new();
+        for (name, decl) in &config.secrets {
+            let mut obj = serde_json::Map::new();
+            obj.insert(
+                "ref".to_owned(),
+                serde_json::Value::String(decl.reference.to_string()),
+            );
+            if let wraps::CacheTtl::Secs(secs) = decl.ttl {
+                obj.insert(
+                    "ttl".to_owned(),
+                    serde_json::Value::String(format!("{secs}s")),
+                );
+            }
+            secrets_obj.insert(name.clone(), serde_json::Value::Object(obj));
+        }
+        root.insert(
+            wraps::SECRETS_KEY.to_owned(),
+            serde_json::Value::Object(secrets_obj),
+        );
+    }
     if !config.ssh.is_empty() {
         let mut ssh_obj = serde_json::Map::new();
         for (name, identity) in &config.ssh {
@@ -570,6 +613,65 @@ fn provider_to_json_value(p: &crate::manifest::Provider) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn write_config_preserves_declared_secrets_and_the_names_that_reference_them() {
+        // `secreq wrap` re-serializes the whole model, so a block this writer
+        // forgets is a block the next `wrap add` silently deletes — taking
+        // every `secret://<name>` in the file with it. The round-trip through
+        // the parser inside `write_config` would then fail on the dangling
+        // names, so this also proves the two halves agree.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wraps.json5");
+
+        let mut config = WrapsConfig::default();
+        config.secrets.insert(
+            "github_token".to_owned(),
+            wraps::SecretDecl {
+                reference: Reference::parse("secret://op/Personal/GitHub/token").unwrap(),
+                ttl: wraps::CacheTtl::Secs(900),
+            },
+        );
+        config.secrets.insert(
+            "no_ttl".to_owned(),
+            wraps::SecretDecl {
+                reference: Reference::parse("secret://op/Personal/Other/token").unwrap(),
+                ttl: wraps::CacheTtl::DaemonLifetime,
+            },
+        );
+        config.wraps.insert(
+            "gh".to_owned(),
+            Wrap {
+                name: "gh".to_owned(),
+                reason: None,
+                env: std::iter::once((
+                    "GITHUB_TOKEN".to_owned(),
+                    "secret://github_token".to_owned(),
+                ))
+                .collect(),
+            },
+        );
+
+        write_config(&path, &config).unwrap();
+        let reloaded = WrapsConfig::load(&path).unwrap();
+
+        assert_eq!(reloaded.secrets, config.secrets);
+        assert_eq!(
+            reloaded
+                .wrap("gh")
+                .unwrap()
+                .env
+                .get("GITHUB_TOKEN")
+                .unwrap(),
+            "secret://github_token",
+            "the wrap must still reference the declaration by name"
+        );
+        // A default TTL writes no `ttl` key, so a file the user never gave one
+        // does not grow one.
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("\"ttl\": \"900s\""), "{text}");
+        assert_eq!(text.matches("\"ttl\"").count(), 1, "{text}");
+    }
 
     #[test]
     fn write_config_preserves_ssh_block() {

@@ -21,7 +21,7 @@ use crate::provider;
 use crate::reference::Reference;
 use crate::resolve::{self, SecretRequest};
 use crate::secret::SecretValue;
-use crate::wraps::{Wrap, WrapsConfig};
+use crate::wraps::{ResolvedRef, Wrap, WrapsConfig};
 
 use super::binaries::{find_real_binary, passthrough_unwrapped};
 use super::{build_ask, load_config_or_default, AskSpec};
@@ -223,7 +223,7 @@ fn build_overrides(
 /// the daemon's `(provider, locator)` keying is the guarantor there.
 fn filter_to_refs(
     resolved: HashMap<String, String>,
-    refs: &[(String, Reference)],
+    refs: &[(String, ResolvedRef)],
 ) -> Vec<(String, SecretValue)> {
     use std::collections::HashSet;
     let requested: HashSet<&str> = refs.iter().map(|(name, _)| name.as_str()).collect();
@@ -297,9 +297,9 @@ pub fn run(
     // doesn't parse is a hard error here, before any exec.
     let eff_pairs: Vec<(String, String)> =
         eff.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-    let scanned = scan_env_refs(&eff_pairs)?;
-    let refs: Vec<(String, Reference)> =
-        scanned.into_iter().map(|r| (r.name, r.reference)).collect();
+    let scanned = scan_env_refs(&config, &eff_pairs)?;
+    let refs: Vec<(String, ResolvedRef)> =
+        scanned.into_iter().map(|r| (r.name, r.resolved)).collect();
 
     let cwd = std::env::current_dir().context("could not determine current directory")?;
 
@@ -416,11 +416,12 @@ pub fn run(
 /// provider's own auth still applies (1Password will biometric-prompt, etc.).
 fn prompt_and_store_unresolved(
     config: &WrapsConfig,
-    refs: &[(String, Reference)],
+    refs: &[(String, ResolvedRef)],
     command: &[String],
 ) -> Result<()> {
     let chain = provenance::caller_chain();
-    for (env_name, reference) in refs {
+    for (env_name, resolved) in refs {
+        let reference = &resolved.reference;
         // Unknown provider: let the resolution step below produce its own
         // "unknown provider scheme" error rather than storing nowhere.
         let Some(provider) = config.providers.get(&reference.provider) else {
@@ -476,32 +477,34 @@ fn prompt_and_store_unresolved(
     Ok(())
 }
 
-/// A parsed env reference: the variable name and its `secret://` target.
+/// A parsed env reference: the variable name and its resolved `secret://`
+/// target.
 #[derive(Debug)]
 pub(crate) struct EnvRef {
     pub name: String,
-    pub reference: Reference,
+    pub resolved: ResolvedRef,
 }
 
-/// Scan `(name, value)` env pairs for `secret://provider/locator` values.
-/// A value that *looks* like a reference (starts with the scheme) but does
-/// not parse is a hard error, naming the variable — we never silently pass
-/// a literal `secret://…` to the child. Values that don't look like a
-/// reference at all pass through untouched (not returned here).
-pub(crate) fn scan_env_refs(env: &[(String, String)]) -> Result<Vec<EnvRef>> {
+/// Scan `(name, value)` env pairs for `secret://…` values, resolving each
+/// against `config` so an ambient `secret://<name>` reaches the same
+/// declaration a wrap's `env` would.
+///
+/// A value that *looks* like a reference (starts with the scheme) but does not
+/// resolve is a hard error, naming the variable — we never silently pass a
+/// literal `secret://…` to the child. Values that don't look like a reference
+/// at all pass through untouched (not returned here).
+pub(crate) fn scan_env_refs(config: &WrapsConfig, env: &[(String, String)]) -> Result<Vec<EnvRef>> {
     let mut refs = Vec::new();
     for (name, value) in env {
         if !Reference::looks_like_ref(value) {
             continue;
         }
-        let reference = Reference::parse(value).with_context(|| {
-            format!(
-                "env var `{name}`: `{value}` is not a valid `secret://provider/locator` reference"
-            )
-        })?;
+        let resolved = config
+            .resolve_ref(value)
+            .with_context(|| format!("env var `{name}`: `{value}`"))?;
         refs.push(EnvRef {
             name: name.clone(),
-            reference,
+            resolved,
         });
     }
     Ok(refs)
@@ -565,7 +568,7 @@ fn obtain_wrap_consent(
     // malformed ref early instead of sending a junk ask the daemon would
     // reject at resolution time.
     let config = load_config_or_default(None)?;
-    let refs = parse_wrap_refs(wrap)?;
+    let refs = parse_wrap_refs(&config, wrap)?;
 
     let ask = build_ask(
         AskSpec {
@@ -589,25 +592,15 @@ fn obtain_wrap_consent(
 
 /// Parse a wrap's `env` map into `(name, Reference)` pairs, surfacing a
 /// malformed `secret://` ref with the wrap-specific error message.
-fn parse_wrap_refs(wrap: &Wrap) -> Result<Vec<(String, Reference)>> {
-    let mut refs = Vec::with_capacity(wrap.env.len());
-    for (env_name, ref_str) in &wrap.env {
-        let reference = Reference::parse(ref_str).with_context(|| {
-            format!(
-                "wrap `{}`.env.{env_name}: `{ref_str}` is not a valid `secret://provider/locator` reference",
-                wrap.name
-            )
-        })?;
-        refs.push((env_name.clone(), reference));
-    }
-    Ok(refs)
+fn parse_wrap_refs(config: &WrapsConfig, wrap: &Wrap) -> Result<Vec<(String, ResolvedRef)>> {
+    config.wrap_refs(wrap)
 }
 
 /// Resolve every env entry for the wrap through its provider. Reuses the
 /// resolve grouping/batching machinery by building a one-shot manifest with
 /// the wrap's env as eager secrets.
 fn resolve_wrap_env(config: &WrapsConfig, wrap: &Wrap) -> Result<Vec<(String, SecretValue)>> {
-    let refs = parse_wrap_refs(wrap)?;
+    let refs = parse_wrap_refs(config, wrap)?;
     resolve_refs_client_side(config, &refs, wrap.reason.as_deref())
 }
 
@@ -617,7 +610,7 @@ fn resolve_wrap_env(config: &WrapsConfig, wrap: &Wrap) -> Result<Vec<(String, Se
 /// secret.
 pub(crate) fn resolve_refs_client_side(
     config: &WrapsConfig,
-    refs: &[(String, Reference)],
+    refs: &[(String, ResolvedRef)],
     reason: Option<&str>,
 ) -> Result<Vec<(String, SecretValue)>> {
     // Adapt the WrapsConfig.providers into a Manifest so we can reuse
@@ -629,13 +622,14 @@ pub(crate) fn resolve_refs_client_side(
 
     let requests = refs
         .iter()
-        .map(|(name, reference)| SecretRequest {
+        .map(|(name, resolved)| SecretRequest {
             name: name.clone(),
-            provider: reference.provider.clone(),
-            locator: reference.locator.clone(),
+            provider: resolved.reference.provider.clone(),
+            locator: resolved.reference.locator.clone(),
             reason: reason.map(std::borrow::ToOwned::to_owned),
             description: None,
             default: None,
+            declared_as: resolved.declared_as.clone(),
         })
         .collect();
     let plan = resolve::ResolutionPlan { requests };
@@ -650,15 +644,15 @@ mod tests {
 
     #[test]
     fn filter_to_refs_drops_unrequested_keys() {
-        use crate::reference::Reference;
+        let config = WrapsConfig::default();
         let refs = vec![
             (
                 "DATABASE_URL".to_owned(),
-                Reference::parse("secret://op/Work/PG/url").unwrap(),
+                config.resolve_ref("secret://op/Work/PG/url").unwrap(),
             ),
             (
                 "API_KEY".to_owned(),
-                Reference::parse("secret://op/Work/Stripe/key").unwrap(),
+                config.resolve_ref("secret://op/Work/Stripe/key").unwrap(),
             ),
         ];
         let mut outcome: HashMap<String, String> = HashMap::new();
@@ -734,17 +728,17 @@ mod tests {
             ("DB".to_owned(), "secret://op/Work/PG/url".to_owned()),
             ("PG".to_owned(), "postgres://host/db".to_owned()),
         ];
-        let refs = scan_env_refs(&env).unwrap();
+        let refs = scan_env_refs(&WrapsConfig::default(), &env).unwrap();
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].name, "DB");
-        assert_eq!(refs[0].reference.provider, "op");
-        assert_eq!(refs[0].reference.locator, "Work/PG/url");
+        assert_eq!(refs[0].resolved.reference.provider, "op");
+        assert_eq!(refs[0].resolved.reference.locator, "Work/PG/url");
     }
 
     #[test]
     fn scan_env_refs_errors_on_a_malformed_ref_naming_the_var() {
         let env = vec![("BAD".to_owned(), "secret://noslash".to_owned())];
-        let err = scan_env_refs(&env).unwrap_err();
+        let err = scan_env_refs(&WrapsConfig::default(), &env).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("BAD"), "error should name the var: {msg}");
     }

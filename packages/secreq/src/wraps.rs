@@ -37,17 +37,22 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 // We reuse the provider model and the json-helpers from the existing
 // `manifest` module. They aren't config-shape-specific.
 use crate::manifest::{builtin_providers, parse_providers_value, present, Provider};
-use crate::reference::Reference;
+use crate::reference::{undeclared_secret_message, RefForm, Reference};
 
 /// The reserved top-level key holding provider scheme definitions.
 pub const PROVIDERS_KEY: &str = "providers";
+
+/// The reserved top-level key holding named secret declarations.
+pub const SECRETS_KEY: &str = "secrets";
 
 /// `$shim_dir` — where `secreq wrap` drops PATH shims. Set by `secreq init`.
 pub const SHIM_DIR_KEY: &str = "$shim_dir";
@@ -72,6 +77,9 @@ pub struct WrapsConfig {
     pub shim_dir: Option<PathBuf>,
     /// Configured per-binary wraps.
     pub wraps: BTreeMap<String, Wrap>,
+    /// Secrets declared once under a name, referenced from any number of wraps
+    /// as `secret://<name>`. Carries the per-secret cache TTL.
+    pub secrets: BTreeMap<String, SecretDecl>,
     /// Provider scheme definitions (built-ins overlay these).
     pub providers: BTreeMap<String, Provider>,
     /// SSH identities served by the agent, keyed by identity name.
@@ -84,6 +92,141 @@ pub struct WrapsConfig {
     /// (an editor id). `None` means the split-button falls back to the
     /// first detected editor.
     pub editor: Option<String>,
+}
+
+/// How long the daemon may keep serving a resolved secret value from its
+/// in-memory cache before the provider has to run again.
+///
+/// **The daemon's own lifetime is the default value, not a special case.** An
+/// entry with no declared `ttl` is [`CacheTtl::DaemonLifetime`], which is
+/// exactly the behaviour secreq has always had; every other value is a
+/// *shortening* of it. Written this way on purpose — an `Option<Duration>`
+/// would put "no TTL" on one branch and "a TTL" on another, and the expiry
+/// check would have to say which it was at every call site.
+///
+/// A shortening is opt-in and per secret. A *global* cap was tried and is the
+/// bug [`crate::daemon::cache`]'s module docs record: it re-triggered the
+/// provider (and 1Password's biometric prompt) behind an approval the user had
+/// already granted and been told would be remembered. Setting a TTL on one
+/// high-sensitivity secret is the user saying "re-fetch this one, I accept the
+/// re-prompt" — a local, informed choice rather than a default that surprises
+/// everyone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheTtl {
+    /// The default: the entry lives as long as the daemon process does.
+    /// `secreq daemon stop` is the reset.
+    #[default]
+    DaemonLifetime,
+    /// An explicit shortening, in whole seconds. Zero means the value is never
+    /// served from cache — every ask re-runs the provider.
+    Secs(u64),
+}
+
+impl CacheTtl {
+    /// Has an entry stored `age` ago outlived this TTL?
+    ///
+    /// One expression rather than a branch per call site: the daemon-lifetime
+    /// default simply never expires.
+    pub fn expired_after(self, age: Duration) -> bool {
+        match self {
+            CacheTtl::DaemonLifetime => false,
+            CacheTtl::Secs(secs) => age >= Duration::from_secs(secs),
+        }
+    }
+
+    /// Render as the config spells it, for error messages and `secreq wraps`.
+    pub fn label(self) -> String {
+        match self {
+            CacheTtl::DaemonLifetime => "daemon lifetime".to_owned(),
+            CacheTtl::Secs(secs) => format!("{secs}s"),
+        }
+    }
+}
+
+/// Parse a `ttl` value: a positive integer followed by a unit, e.g. `30s`,
+/// `15m`, `2h`, `1d`.
+///
+/// A unit is required. `ttl: 900` would have to mean seconds by convention, and
+/// a convention nobody can see in the file is how a 15-*minute* TTL gets
+/// written as `15` and silently becomes fifteen seconds.
+fn parse_ttl(raw: &str) -> Result<CacheTtl> {
+    let trimmed = raw.trim();
+    let (digits, unit) = trimmed.split_at(
+        trimmed
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(trimmed.len()),
+    );
+    let multiplier = match unit {
+        "s" => 1,
+        "m" => 60,
+        "h" => 60 * 60,
+        "d" => 24 * 60 * 60,
+        "" => bail!("`{raw}` needs a unit: `s`, `m`, `h`, or `d` (e.g. `15m`)"),
+        other => bail!("`{raw}` has unknown unit `{other}`; use `s`, `m`, `h`, or `d`"),
+    };
+    let count: u64 = digits
+        .parse()
+        .with_context(|| format!("`{raw}` is not a duration like `15m`"))?;
+    let secs = count
+        .checked_mul(multiplier)
+        .with_context(|| format!("`{raw}` is longer than any daemon will live"))?;
+    Ok(CacheTtl::Secs(secs))
+}
+
+/// One entry in the reserved `secrets` block: a provider reference declared
+/// **once**, under a name any number of wraps can reference as
+/// `secret://<name>`.
+///
+/// The name is what a TTL hangs on. Before this existed a secret had no
+/// declaration — it was a string repeated in every wrap that needed it — so
+/// there was nowhere for a per-secret setting to live.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
+pub struct SecretDecl {
+    /// The `secret://provider/locator` reference this name stands for. Always
+    /// the direct form: a declaration naming another declaration would make
+    /// resolution a graph walk with cycles to detect, for no reuse a second
+    /// name buys.
+    #[cfg_attr(feature = "schema", schemars(rename = "ref"))]
+    pub reference: Reference,
+    /// How long the daemon may serve this secret from its in-memory cache
+    /// before re-running the provider, as a count and a unit — `30s`, `15m`,
+    /// `2h`, `1d`. Omit for the default, which is the daemon's own lifetime;
+    /// any value here is a shortening, and shortening means the provider (and
+    /// on 1Password, a biometric prompt) runs again once it elapses.
+    #[cfg_attr(feature = "schema", schemars(rename = "ttl", with = "Option<String>"))]
+    pub ttl: CacheTtl,
+}
+
+/// A `secret://…` value from the config, resolved against the `secrets` block.
+///
+/// This is the "expand at load, but keep the name" shape. `reference` is what
+/// resolution and the cache use, so nothing downstream learns a second kind of
+/// reference; `declared_as` carries the friendly name alongside for the places
+/// that show a human which secret is in play.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedRef {
+    /// Provider and locator, exactly as an inline reference would have given.
+    pub reference: Reference,
+    /// The declared name, when the raw value was `secret://<name>`. `None` for
+    /// an inline `secret://provider/locator`, which names nothing.
+    pub declared_as: Option<String>,
+    /// The declaration's TTL, or the daemon-lifetime default for an inline
+    /// reference (there is nowhere for an inline one to carry a TTL).
+    pub ttl: CacheTtl,
+}
+
+impl ResolvedRef {
+    /// How to name this secret to a human: the declared name when there is one,
+    /// otherwise the reference itself.
+    pub fn label(&self) -> String {
+        match &self.declared_as {
+            Some(name) => name.clone(),
+            None => self.reference.to_string(),
+        }
+    }
 }
 
 /// One SSH identity served by the agent. `public_key` is the inline OpenSSH
@@ -120,8 +263,9 @@ pub struct Wrap {
     /// Rationale shown in the consent prompt when this wrap is invoked.
     #[cfg_attr(feature = "schema", schemars(rename = "$reason"))]
     pub reason: Option<String>,
-    /// Environment variables to inject. Each value is a
-    /// `secret://provider/locator` reference; resolution happens at invocation
+    /// Environment variables to inject. Each value is either an inline
+    /// `secret://provider/locator` reference or `secret://<name>` naming an
+    /// entry in the top-level `secrets` block; resolution happens at invocation
     /// time. Omit (or leave empty) for a gate-only wrap.
     //
     // Resolution is deferred to run-time so an unreachable provider doesn't
@@ -148,6 +292,9 @@ impl WrapsConfig {
             match key.as_str() {
                 PROVIDERS_KEY => {
                     config.providers = parse_providers_value(value, source_label)?;
+                }
+                SECRETS_KEY => {
+                    config.secrets = parse_secret_decls(value, source_label)?;
                 }
                 SSH_KEY => {
                     config.ssh = parse_ssh_identities(value, source_label)?;
@@ -180,7 +327,124 @@ impl WrapsConfig {
                 }
             }
         }
+        config.check_declarations(source_label)?;
         Ok(config)
+    }
+
+    /// Expand every named reference in the file, so a name that resolves to
+    /// nothing fails **here** rather than at resolve time with a user waiting
+    /// on a `git push`. Same principle `ssh.<id>.private_key` already applies
+    /// to a malformed reference.
+    ///
+    /// Also refuses two declarations that point at the same
+    /// `(provider, locator)` with different TTLs. The cache slot is keyed on
+    /// the reference, so that config asks for one slot to have two lifetimes;
+    /// silently picking the shorter is how a `ttl` stops meaning what the file
+    /// says, which is the failure this whole feature exists to avoid.
+    fn check_declarations(&self, source: &str) -> Result<()> {
+        let mut claimed: BTreeMap<(&str, &str), (&String, CacheTtl)> = BTreeMap::new();
+        for (name, decl) in &self.secrets {
+            let target = (
+                decl.reference.provider.as_str(),
+                decl.reference.locator.as_str(),
+            );
+            if let Some((other, other_ttl)) = claimed.insert(target, (name, decl.ttl)) {
+                if other_ttl != decl.ttl {
+                    bail!(
+                        "{source}: `{SECRETS_KEY}.{other}` and `{SECRETS_KEY}.{name}` both point at \
+                         `{}` but claim different TTLs ({} vs {}); the cache holds one value per \
+                         reference, so it can only have one lifetime",
+                        decl.reference,
+                        other_ttl.label(),
+                        decl.ttl.label(),
+                    );
+                }
+            }
+        }
+
+        for wrap in self.wraps.values() {
+            for (env_name, raw) in &wrap.env {
+                self.resolve_ref(raw)
+                    .with_context(|| format!("{source}: `{}.env.{env_name}`", wrap.name))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The declared cache TTL for a reference, or the daemon-lifetime default
+    /// when nothing declares it.
+    ///
+    /// Keyed on the **reference**, not on how it was written, because that is
+    /// what a TTL is a property of: one `(provider, locator)` is one value and
+    /// one cache slot, so it has exactly one lifetime whether a wrap reached it
+    /// by name, wrote it inline, or an SSH identity used it as a private key.
+    /// [`WrapsConfig::check_declarations`] refuses a file where two
+    /// declarations claim different TTLs for one reference, which is what makes
+    /// this lookup unambiguous rather than first-wins.
+    pub fn ttl_for(&self, reference: &Reference) -> CacheTtl {
+        self.secrets
+            .values()
+            .find(|decl| &decl.reference == reference)
+            .map_or_else(CacheTtl::default, |decl| decl.ttl)
+    }
+
+    /// Expand one `secret://…` config value into the reference resolution uses,
+    /// keeping the declared name and TTL alongside.
+    ///
+    /// This is the only door from the two written forms to the one resolved
+    /// form. An inline `secret://provider/locator` passes straight through
+    /// naming nothing; a `secret://<name>` is looked up in
+    /// [`WrapsConfig::secrets`], and an undeclared name is an error stating both
+    /// readings (see [`undeclared_secret_message`]). Both come back carrying the
+    /// TTL, which [`WrapsConfig::ttl_for`] reads off the reference either way.
+    pub fn resolve_ref(&self, raw: &str) -> Result<ResolvedRef> {
+        let form = Reference::parse_form(raw)
+            .with_context(|| format!("`{raw}` is not a valid `secret://` reference"))?;
+        self.resolve_form(form)
+    }
+
+    /// [`WrapsConfig::resolve_ref`] for an argument position, where the
+    /// `secret://` scheme is optional — `secreq read op/Work/x` and
+    /// `secreq read github_token` both land here.
+    pub fn resolve_arg(&self, raw: &str) -> Result<ResolvedRef> {
+        let form = Reference::parse_arg_form(raw).with_context(|| {
+            format!(
+                "`{raw}` is not a valid reference (expected `secret://provider/locator`, \
+                 `provider/locator`, or a declared secret's name)"
+            )
+        })?;
+        self.resolve_form(form)
+    }
+
+    fn resolve_form(&self, form: RefForm) -> Result<ResolvedRef> {
+        let (reference, declared_as) = match form {
+            RefForm::Direct(reference) => (reference, None),
+            RefForm::Named(name) => {
+                let decl = self
+                    .secrets
+                    .get(&name)
+                    .with_context(|| undeclared_secret_message(&name))?;
+                (decl.reference.clone(), Some(name))
+            }
+        };
+        let ttl = self.ttl_for(&reference);
+        Ok(ResolvedRef {
+            reference,
+            declared_as,
+            ttl,
+        })
+    }
+
+    /// Every `(env name, resolved reference)` pair for one wrap, in `env` order.
+    pub fn wrap_refs(&self, wrap: &Wrap) -> Result<Vec<(String, ResolvedRef)>> {
+        let mut refs = Vec::with_capacity(wrap.env.len());
+        for (env_name, raw) in &wrap.env {
+            let resolved = self
+                .resolve_ref(raw)
+                .with_context(|| format!("wrap `{}`.env.{env_name}: `{raw}`", wrap.name))?;
+            refs.push((env_name.clone(), resolved));
+        }
+        Ok(refs)
     }
 
     /// Load from `path`.
@@ -197,6 +461,7 @@ impl WrapsConfig {
         WrapsConfig {
             shim_dir: None,
             wraps: BTreeMap::new(),
+            secrets: BTreeMap::new(),
             providers: builtin_providers(),
             ssh: BTreeMap::new(),
             wait_indicator: None,
@@ -225,6 +490,11 @@ impl WrapsConfig {
     /// Only values that actually look like a `secret://` reference are
     /// collected; a stray non-reference `env` value (there shouldn't be one,
     /// but the type doesn't forbid it) is skipped rather than suggested.
+    ///
+    /// The test is the bare scheme prefix, so a `secret://<name>` is offered
+    /// as written rather than expanded. That is the wanted behaviour: the name
+    /// is the value a second wrap should be reusing, and expanding it in the
+    /// picker would teach the user to paste the locator back in.
     pub fn known_secret_refs(&self) -> Vec<String> {
         let mut refs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         for wrap in self.wraps.values() {
@@ -303,6 +573,72 @@ fn parse_wrap(name: &str, value: &Value, source: &str) -> Result<Wrap> {
     // nothing is injected. This is how you gate a tool like `op` that has
     // no secret to pass through.
     Ok(wrap)
+}
+
+/// Parse the reserved `secrets` block: a map of secret name → declaration.
+fn parse_secret_decls(value: &Value, source: &str) -> Result<BTreeMap<String, SecretDecl>> {
+    let obj = value
+        .as_object()
+        .with_context(|| format!("{source}: `{SECRETS_KEY}` must be an object"))?;
+
+    let mut decls = BTreeMap::new();
+    for (name, val) in obj {
+        if name.contains('/') {
+            bail!(
+                "{source}: secret name `{name}` contains a `/`, which is what tells a name from a \
+                 provider reference — `secret://{name}` could never reach it"
+            );
+        }
+        decls.insert(name.clone(), parse_secret_decl(name, val, source)?);
+    }
+    Ok(decls)
+}
+
+/// Parse one declaration. Requires `ref`; accepts an optional `ttl`; rejects
+/// any other key (mirrors `parse_wrap` / `parse_ssh_identity`).
+fn parse_secret_decl(name: &str, value: &Value, source: &str) -> Result<SecretDecl> {
+    let obj = value
+        .as_object()
+        .with_context(|| format!("{source}: secret `{name}` must be an object (got {value})"))?;
+
+    let mut reference = None;
+    let mut ttl = CacheTtl::default();
+
+    for (key, val) in obj {
+        match key.as_str() {
+            "ref" => {
+                let raw = val.as_str().with_context(|| {
+                    format!("{source}: `{SECRETS_KEY}.{name}.ref` must be a string")
+                })?;
+                reference = Some(Reference::parse(raw).with_context(|| {
+                    format!(
+                        "{source}: `{SECRETS_KEY}.{name}.ref` is not a \
+                         `secret://provider/locator` reference"
+                    )
+                })?);
+            }
+            "ttl" => {
+                let Some(val) = present(Some(val)) else {
+                    continue;
+                };
+                let raw = val.as_str().with_context(|| {
+                    format!(
+                        "{source}: `{SECRETS_KEY}.{name}.ttl` must be a string like `15m` \
+                         (omit it for the daemon-lifetime default)"
+                    )
+                })?;
+                ttl = parse_ttl(raw)
+                    .with_context(|| format!("{source}: `{SECRETS_KEY}.{name}.ttl`"))?;
+            }
+            other => {
+                bail!("{source}: secret `{name}` has unknown key `{other}`");
+            }
+        }
+    }
+
+    let reference =
+        reference.with_context(|| format!("{source}: secret `{name}` is missing `ref`"))?;
+    Ok(SecretDecl { reference, ttl })
 }
 
 /// Parse the reserved `ssh` block: a map of identity name → identity.
@@ -640,6 +976,261 @@ mod tests {
         .expect("a null $reason loads as an absent one");
         assert_eq!(c.wrap("gh").expect("gh wrap").reason, None);
         assert_eq!(c.ssh["k"].reason, None);
+    }
+
+    // ── Declared secrets, named references, and the TTL ──────────────
+
+    #[test]
+    fn a_declared_secret_expands_at_load_and_keeps_its_name() {
+        let c = WrapsConfig::parse(
+            r#"{
+                secrets: {
+                    github_token: { ref: "secret://op/Personal/GitHub/token", ttl: "15m" },
+                },
+                gh: { env: { GITHUB_TOKEN: "secret://github_token" } },
+            }"#,
+            "t",
+        )
+        .expect("a `secrets` block and a `secret://<name>` reference must load");
+
+        // The raw value is untouched, so a rewrite can't turn the user's
+        // declaration back into an inline reference.
+        assert_eq!(
+            c.wrap("gh").unwrap().env.get("GITHUB_TOKEN").unwrap(),
+            "secret://github_token"
+        );
+
+        let resolved = c.resolve_ref("secret://github_token").unwrap();
+        assert_eq!(resolved.reference.provider, "op");
+        assert_eq!(resolved.reference.locator, "Personal/GitHub/token");
+        assert_eq!(resolved.declared_as.as_deref(), Some("github_token"));
+        assert_eq!(resolved.ttl, CacheTtl::Secs(900));
+        assert_eq!(resolved.label(), "github_token");
+    }
+
+    #[test]
+    fn one_declaration_serves_many_wraps() {
+        // The reuse half of the feature: declare once, reference from
+        // several wraps, and every one of them gets the same reference and
+        // the same TTL.
+        let c = WrapsConfig::parse(
+            r#"{
+                secrets: { tok: { ref: "secret://op/Personal/GitHub/token", ttl: "5m" } },
+                gh:  { env: { GITHUB_TOKEN: "secret://tok" } },
+                hub: { env: { GH_TOKEN: "secret://tok" } },
+            }"#,
+            "t",
+        )
+        .unwrap();
+        let a = c.wrap_refs(c.wrap("gh").unwrap()).unwrap();
+        let b = c.wrap_refs(c.wrap("hub").unwrap()).unwrap();
+        assert_eq!(a[0].1.reference, b[0].1.reference);
+        assert_eq!(a[0].1.ttl, CacheTtl::Secs(300));
+        assert_eq!(b[0].1.ttl, CacheTtl::Secs(300));
+    }
+
+    #[test]
+    fn an_unset_ttl_is_the_daemon_lifetime() {
+        let c = WrapsConfig::parse(
+            r#"{
+                secrets: { tok: { ref: "secret://op/x/y" } },
+                gh: { env: { T: "secret://tok", U: "secret://op/a/b" } },
+            }"#,
+            "t",
+        )
+        .unwrap();
+        assert_eq!(c.secrets["tok"].ttl, CacheTtl::DaemonLifetime);
+        assert_eq!(
+            c.resolve_ref("secret://tok").unwrap().ttl,
+            CacheTtl::DaemonLifetime
+        );
+        // And so is an inline reference nothing declares.
+        assert_eq!(
+            c.resolve_ref("secret://op/a/b").unwrap().ttl,
+            CacheTtl::DaemonLifetime
+        );
+    }
+
+    #[test]
+    fn the_ttl_follows_the_reference_however_it_was_written() {
+        // A TTL is a property of the secret, and the cache holds one value
+        // per reference — so an inline reference to a declared secret has to
+        // get the declared lifetime, not the default. Otherwise one slot
+        // would have two claimed lifetimes and last-writer would win.
+        let c = WrapsConfig::parse(
+            r#"{
+                secrets: { tok: { ref: "secret://op/x/y", ttl: "30s" } },
+                gh: { env: { INLINE: "secret://op/x/y", NAMED: "secret://tok" } },
+            }"#,
+            "t",
+        )
+        .unwrap();
+        let inline = c.resolve_ref("secret://op/x/y").unwrap();
+        assert_eq!(inline.ttl, CacheTtl::Secs(30));
+        assert_eq!(inline.declared_as, None, "an inline ref names nothing");
+        assert_eq!(
+            c.resolve_ref("secret://tok").unwrap().ttl,
+            CacheTtl::Secs(30)
+        );
+    }
+
+    #[test]
+    fn an_undeclared_name_fails_at_load_stating_both_readings() {
+        // The typo case: someone who forgot the locator wrote `secret://op`,
+        // which the slash rule now reads as a name. The message has to offer
+        // that reading too, or it sends them off to write a declaration they
+        // never wanted.
+        let err = WrapsConfig::parse(r#"{ gh: { env: { T: "secret://op" } } }"#, "t").unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("not a declared secret"), "{text}");
+        assert!(text.contains("secret://op/<locator>"), "{text}");
+        // And it names where in the file the offending value is.
+        assert!(text.contains("gh.env.T"), "{text}");
+    }
+
+    #[test]
+    fn two_declarations_of_one_reference_with_different_ttls_are_a_load_error() {
+        // One reference is one cache slot, so it has one lifetime. Silently
+        // picking the shorter is how a `ttl` stops meaning what the file says.
+        let err = WrapsConfig::parse(
+            r#"{
+                secrets: {
+                    a: { ref: "secret://op/x/y", ttl: "5m" },
+                    b: { ref: "secret://op/x/y", ttl: "1h" },
+                },
+            }"#,
+            "t",
+        )
+        .unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("different TTLs"), "{text}");
+        assert!(
+            text.contains("secrets.a") && text.contains("secrets.b"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn two_declarations_of_one_reference_agreeing_on_the_ttl_are_fine() {
+        // Aliasing is only a problem when the two claims disagree.
+        WrapsConfig::parse(
+            r#"{
+                secrets: {
+                    a: { ref: "secret://op/x/y", ttl: "5m" },
+                    b: { ref: "secret://op/x/y", ttl: "5m" },
+                },
+            }"#,
+            "t",
+        )
+        .expect("two names for one reference agreeing on its lifetime is not a conflict");
+    }
+
+    #[test]
+    fn ttl_units_parse_and_a_bare_number_is_refused() {
+        let cases = [("30s", 30), ("15m", 900), ("2h", 7200), ("1d", 86_400)];
+        for (spelling, secs) in cases {
+            let c = WrapsConfig::parse(
+                &format!(
+                    r#"{{ secrets: {{ t: {{ ref: "secret://op/x/y", ttl: "{spelling}" }} }} }}"#
+                ),
+                "t",
+            )
+            .unwrap_or_else(|err| panic!("`{spelling}` should parse: {err:#}"));
+            assert_eq!(c.secrets["t"].ttl, CacheTtl::Secs(secs), "{spelling}");
+        }
+
+        // A unit is required: `15` would have to mean seconds by a convention
+        // nobody can see in the file.
+        let err = WrapsConfig::parse(
+            r#"{ secrets: { t: { ref: "secret://op/x/y", ttl: "15" } } }"#,
+            "t",
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("needs a unit"), "{err:#}");
+
+        let err = WrapsConfig::parse(
+            r#"{ secrets: { t: { ref: "secret://op/x/y", ttl: "15w" } } }"#,
+            "t",
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("unknown unit"), "{err:#}");
+    }
+
+    #[test]
+    fn a_declaration_requires_a_ref_and_refuses_unknown_keys() {
+        let err = WrapsConfig::parse(r#"{ secrets: { t: { ttl: "5m" } } }"#, "t").unwrap_err();
+        assert!(format!("{err:#}").contains("missing `ref`"), "{err:#}");
+
+        let err = WrapsConfig::parse(
+            r#"{ secrets: { t: { ref: "secret://op/x/y", nope: 1 } } }"#,
+            "t",
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("unknown key `nope`"), "{err:#}");
+    }
+
+    #[test]
+    fn a_declarations_ref_must_be_the_direct_form() {
+        // No alias chains: a declaration naming another declaration would
+        // make resolution a graph walk with cycles to detect.
+        let err = WrapsConfig::parse(
+            r#"{ secrets: { a: { ref: "secret://op/x/y" }, b: { ref: "secret://a" } } }"#,
+            "t",
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("secrets.b.ref"), "{err:#}");
+    }
+
+    #[test]
+    fn a_secret_name_may_not_contain_a_slash() {
+        // The slash is what tells a name from a provider reference, so a name
+        // holding one is a declaration nothing could ever reference.
+        let err = WrapsConfig::parse(r#"{ secrets: { "a/b": { ref: "secret://op/x/y" } } }"#, "t")
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("contains a `/`"), "{err:#}");
+    }
+
+    #[test]
+    fn known_secret_refs_offers_named_references_too() {
+        // The interactive wrap picker suggests values already in use, and a
+        // name is the value the user should be reusing.
+        let c = WrapsConfig::parse(
+            r#"{
+                secrets: { tok: { ref: "secret://op/x/y" } },
+                gh:  { env: { A: "secret://tok" } },
+                aws: { env: { B: "secret://op/other/thing" } },
+            }"#,
+            "t",
+        )
+        .unwrap();
+        assert_eq!(
+            c.known_secret_refs(),
+            vec![
+                "secret://op/other/thing".to_owned(),
+                "secret://tok".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_ssh_identitys_private_key_picks_up_a_declared_ttl() {
+        // The highest-value use of the feature: bounding how long a private
+        // key stays decryptable in the daemon. The identity still writes the
+        // direct reference — the TTL is looked up by reference, not by name.
+        let c = WrapsConfig::parse(
+            r#"{
+                secrets: { deploy_key: { ref: "secret://op/Private/gh/key", ttl: "10m" } },
+                ssh: {
+                    github: {
+                        public_key: "ssh-ed25519 AAAA me@mac",
+                        private_key: "secret://op/Private/gh/key",
+                    },
+                },
+            }"#,
+            "t",
+        )
+        .unwrap();
+        assert_eq!(c.ttl_for(&c.ssh["github"].private_key), CacheTtl::Secs(600));
     }
 
     #[test]
