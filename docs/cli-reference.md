@@ -339,6 +339,24 @@ Delete a rule by id or exact name. A wasm rule's stored module file goes with it
 | --- | --- |
 | `<TARGET>` | The rule's id, or its exact name |
 
+### `secreq rules new-wasm`
+
+```
+secreq rules new-wasm [OPTIONS] <DIR>
+```
+
+Scaffold a buildable wasm rule project into `<DIR>`: a `package.json` wired to the `secreq-rule` SDK, an `assembly/rule.ts` stub exporting `decide(ctx)`, an as-pect spec, and the test-runner config. `npm install && npm run build` produces the module `rules add-wasm` then registers
+
+| Argument | Meaning |
+| --- | --- |
+| `<DIR>` | Directory to write the project into. Created if missing; an existing one must be empty |
+
+| Flag | Meaning |
+| --- | --- |
+| `--name <NAME>` | npm package name for the project, also the suggested rule name. Folded to something npm accepts (lowercase, no spaces). Defaults to a slug of `<DIR>`'s last component |
+| `--sdk <PATH>` | Path to the `secreq-rule` package (`packages/secreq-rule` in a secreq checkout), written into `package.json` as an absolute `file:` dependency. Auto-detected by walking up from this binary and the working directory; without one the manifest falls back to the registry, which does not carry the SDK yet |
+| `--from <EXAMPLE>` | Seed `assembly/` from one of the SDK's worked examples (e.g. `npm-publish-guard`) instead of the empty stub |
+
 ### `secreq rules add-wasm`
 
 ```

@@ -5,11 +5,14 @@
 //! rules; the *primary* way to write an auto-approval, though, is a
 //! programmatic rule — a single AssemblyScript `decide(ctx)` function
 //! compiled to a sandboxed wasm module (see [`crate::wasm_rules`] and
-//! `docs/wasm-rules.md`). This module makes that a one-click path from the
-//! editor:
+//! `docs/wasm-rules.md`). This module writes the whole project:
 //!
-//! 1. [`scaffold_new_rule`] writes a ready-to-edit rule project to disk
-//!    (under `$SECREQ_HOME/rule-drafts/<slug>/`).
+//! 1. [`write_project`] lays down a buildable npm package — `package.json`
+//!    wired to the `secreq-rule` SDK, the `assembly/rule.ts` stub, an
+//!    as-pect spec, and the test-runner config. Two commands reach it:
+//!    `secreq rules new-wasm <dir>` for a directory the user names, and
+//!    [`scaffold_new_rule`] for the rule editor's one-click draft under
+//!    `$SECREQ_HOME/rule-drafts/<slug>/`.
 //! 2. [`detect_editors`] probes the machine for installed editors so the
 //!    split-button only offers ones that are actually present.
 //! 3. [`preferred_editor`] / [`save_preferred_editor`] persist the user's
@@ -104,7 +107,7 @@ fn program_on_path(program: &str) -> bool {
 }
 
 /// The outcome of scaffolding: the project directory and the entry file
-/// (`rule.ts`) the editor should open.
+/// (`assembly/rule.ts`) the editor should open.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scaffold {
     /// The generated project directory.
@@ -112,6 +115,136 @@ pub struct Scaffold {
     /// The AssemblyScript source the user edits — what "Open in editor"
     /// targets.
     pub entry: PathBuf,
+}
+
+/// Version range written for the registry SDK when no checkout is in
+/// reach. Held to `packages/secreq-rule/package.json` by a unit test
+/// below, so bumping the SDK's version does not silently leave scaffolds
+/// asking for the previous one.
+pub const SDK_VERSION_RANGE: &str = "^0.1.0";
+
+/// Everything else a generated project installs. Same versions the worked
+/// example pins, so a scaffold and the example resolve the same toolchain.
+const AS_PECT_RANGE: &str = "^9.0.0";
+const ASSEMBLYSCRIPT_RANGE: &str = "^0.28.2";
+
+/// How a generated `package.json` reaches the `secreq-rule` SDK.
+///
+/// The worked example under `packages/secreq-rule/examples/` depends on
+/// `file:../..`, which only means anything from inside the SDK tree — copy
+/// it out and `npm install` fails. A scaffold lands wherever the user
+/// pointed it, so it needs a specifier that does not depend on where that
+/// is: an absolute path, or the registry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SdkDep {
+    /// An absolute path to a `secreq-rule` package on this machine,
+    /// written as npm's `file:` specifier. Preferred, and the only one
+    /// that resolves today.
+    Local(PathBuf),
+    /// The registry package at [`SDK_VERSION_RANGE`]. What a scaffold
+    /// falls back to when no checkout is in reach — and, until the SDK is
+    /// published, a dependency `npm install` cannot satisfy. Callers say
+    /// so rather than handing over a project that fails on install.
+    Published,
+}
+
+impl SdkDep {
+    /// Prefer a checkout on this machine; fall back to the registry.
+    pub fn detect() -> SdkDep {
+        locate_sdk().map_or(SdkDep::Published, SdkDep::Local)
+    }
+
+    /// The value of the manifest's `secreq-rule` entry.
+    pub fn spec(&self) -> String {
+        match self {
+            SdkDep::Local(path) => format!("file:{}", path.display()),
+            SdkDep::Published => SDK_VERSION_RANGE.to_owned(),
+        }
+    }
+}
+
+/// The `secreq-rule` package directory on this machine, if one is in
+/// reach: walks up from this executable and from the working directory
+/// looking for `packages/secreq-rule`.
+///
+/// That finds the SDK for anyone running from — or standing in — a secreq
+/// checkout, which is everyone who can use it at all: an installed
+/// `secreq` has no SDK beside it and the package is not on npm yet.
+pub fn locate_sdk() -> Option<PathBuf> {
+    let starts = [std::env::current_exe().ok(), std::env::current_dir().ok()];
+    starts.into_iter().flatten().find_map(|start| {
+        start
+            .ancestors()
+            .map(|dir| dir.join("packages").join("secreq-rule"))
+            .find(|candidate| is_sdk_dir(candidate))
+    })
+}
+
+/// The npm package name the SDK publishes under, and the one a generated
+/// project's `import … from 'secreq-rule'` resolves through.
+const SDK_PACKAGE_NAME: &str = "secreq-rule";
+
+/// Does `dir` hold the `secreq-rule` package? Checks the two files a
+/// generated project actually consumes — the manifest npm resolves and the
+/// build wrapper `npm run build` shells out to — **and** that the manifest
+/// names the SDK.
+///
+/// Shape alone is not enough for the ancestor walk. `packages/<x>` with a
+/// `package.json` and a `bin/build.js` describes plenty of packages, and
+/// the first match wins silently; since a local path is the only SDK
+/// specifier that resolves today, a plausible-but-wrong match would be
+/// found out at `npm run build`, several steps from the cause.
+fn is_sdk_dir(dir: &Path) -> bool {
+    if !dir.join("bin").join("build.js").is_file() {
+        return false;
+    }
+    let Ok(text) = std::fs::read_to_string(dir.join("package.json")) else {
+        return false;
+    };
+    let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    pkg.get("name").and_then(serde_json::Value::as_str) == Some(SDK_PACKAGE_NAME)
+}
+
+/// Resolve a user-supplied `--sdk` path to the absolute one that goes in
+/// the manifest. A relative `file:` specifier would resolve against the
+/// generated project, not against the cwd the user typed it from.
+pub fn resolve_sdk_dir(dir: &Path) -> Result<PathBuf> {
+    let abs = dir
+        .canonicalize()
+        .with_context(|| format!("--sdk path not readable: {}", dir.display()))?;
+    if !is_sdk_dir(&abs) {
+        bail!(
+            "{} is not the {SDK_PACKAGE_NAME} package (wanted a package.json naming it, \
+             plus bin/build.js); point --sdk at `packages/secreq-rule` in a secreq checkout",
+            abs.display()
+        );
+    }
+    Ok(abs)
+}
+
+/// What a generated project is made of.
+pub struct ProjectOpts {
+    /// npm package name written into `package.json`.
+    pub name: String,
+    /// How that manifest reaches the SDK.
+    pub sdk: SdkDep,
+    /// Seed `assembly/` from this project's own `assembly/` tree — an SDK
+    /// example, via `--from` — instead of writing the stub rule and spec.
+    pub seed: Option<PathBuf>,
+}
+
+impl ProjectOpts {
+    /// A stub project named `name`, against whichever SDK this machine
+    /// offers.
+    pub fn new(name: &str) -> ProjectOpts {
+        ProjectOpts {
+            name: name.to_owned(),
+            sdk: SdkDep::detect(),
+            seed: None,
+        }
+    }
 }
 
 /// Scaffold a fresh programmatic-rule project under the standard
@@ -140,7 +273,8 @@ pub fn scaffold_new_rule() -> Result<Scaffold> {
 /// must never be aimed at a path a user named. It is not one here: the
 /// last component is a slug this module minted (`rule-<hex>`) and
 /// validated against separators, and in production `parent` is
-/// [`crate::paths::rule_drafts_dir`] under the secreq root.
+/// [`crate::paths::rule_drafts_dir`] under the secreq root. The path a
+/// user *does* name goes through [`create_project_dir`] instead.
 pub fn scaffold_rule(parent: &Path, slug: &str) -> Result<Scaffold> {
     if slug.is_empty() || slug.contains('/') || slug == "." || slug == ".." {
         bail!("invalid rule-project slug {slug:?}");
@@ -151,72 +285,497 @@ pub fn scaffold_rule(parent: &Path, slug: &str) -> Result<Scaffold> {
     }
     paths::ensure_private_dir(&dir)
         .with_context(|| format!("create rule project dir {}", dir.display()))?;
-
-    let entry = dir.join("rule.ts");
-    std::fs::write(&entry, RULE_TS_TEMPLATE)
-        .with_context(|| format!("write {}", entry.display()))?;
-    let readme = dir.join("README.md");
-    std::fs::write(&readme, README_TEMPLATE)
-        .with_context(|| format!("write {}", readme.display()))?;
-
-    Ok(Scaffold { dir, entry })
+    write_project(&dir, &ProjectOpts::new(slug))
 }
 
-/// Starter `rule.ts` — a compiling, passing rule the user edits in place.
-/// Mirrors the shape documented in `packages/secreq-rule` and `docs/wasm-rules.md`.
-const RULE_TS_TEMPLATE: &str = r#"// A programmatic secreq auto-rule.
-//
-// You write one function — `decide(ctx)` — that returns `approve()`,
-// `deny(reason)`, or `pass()` (no opinion → fall through to the prompt).
-// It runs in a sandbox before the consent prompt: no filesystem, network,
-// clock, or env access; the only thing it can read is `ctx`.
-//
-// Edit the policy below, then compile and register:
-//
-//     npm install                                  # once, pulls assemblyscript
-//     npx secreq-rule-build rule.ts -o rule.wasm
-//     secreq rules add-wasm rule.wasm --name "my rule" --secret GITHUB_TOKEN
-//
-// See docs/wasm-rules.md for the full authoring guide.
+/// Create the target directory for a project the user named, owner-only
+/// when secreq is the one creating it.
+///
+/// Same reasoning as [`scaffold_rule`]'s — a scaffold holds the source of
+/// a policy that releases secrets without asking — with one thing left
+/// out. [`crate::paths::ensure_private_dir`] also *narrows* a directory
+/// that already exists, which is right under the secreq root and wrong for
+/// a path off a command line: `secreq rules new-wasm .` would chmod the
+/// user's working directory to 0700.
+///
+/// An existing directory is accepted only when empty. A scaffold writes
+/// several files; landing them into a directory that already holds work is
+/// how you lose a `package.json`.
+pub fn create_project_dir(dir: &Path) -> Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 
-import { RuleCtx, Decision, approve, pass, deny } from "secreq-rule";
+    if dir.exists() {
+        if !dir.is_dir() {
+            bail!("{} exists and is not a directory", dir.display());
+        }
+        let mut entries =
+            std::fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))?;
+        if entries.next().is_some() {
+            bail!(
+                "{} is not empty — scaffold into a new directory",
+                dir.display()
+            );
+        }
+        return Ok(());
+    }
+    // Missing parents are the user's own tree, so they get the umask's
+    // answer; only the project directory is narrowed.
+    if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create dir {}", parent.display()))?;
+    }
+    std::fs::DirBuilder::new()
+        .mode(paths::PRIVATE_DIR_MODE)
+        .create(dir)
+        .with_context(|| format!("create rule project dir {}", dir.display()))?;
+    // `DirBuilder::mode` is masked by the umask, which can only clear bits —
+    // but an owner bit cleared there leaves a directory secreq cannot write
+    // the project into, so say it unmasked. Same follow-up as
+    // `paths::ensure_private_dir` and `scoped_agent::create_staging_dir`.
+    std::fs::set_permissions(
+        dir,
+        std::fs::Permissions::from_mode(paths::PRIVATE_DIR_MODE),
+    )
+    .with_context(|| format!("set mode 0700 on {}", dir.display()))
+}
+
+/// Write a buildable rule project into the (existing, empty) directory
+/// `dir`.
+///
+/// Resolving the whole file set first is what makes an unreadable `--from`
+/// seed cheap: it fails before the first `write`, so a mistyped example
+/// name leaves nothing behind. It is **not** a rollback — a write that
+/// fails partway through (a full disk, a revoked permission) leaves the
+/// files already written where they are, and the directory is the user's
+/// to delete.
+///
+/// **Neither the directories nor the files take the umask's answer.** Both
+/// `mkdir` and `open` mask the mode they are given, and a umask clears
+/// owner bits as readily as group and world ones — under `umask 700` a
+/// `create_dir_all` here lands 0000 and a `fs::write` lands `----rw-rw-`,
+/// a file its own owner cannot read. The command would still exit 0 on the
+/// second, having produced a project `npm install` cannot install.
+///
+/// So directories go through [`crate::paths::ensure_private_dir`] and files
+/// through [`crate::atomic::replace`] at [`crate::paths::PRIVATE_FILE_MODE`]
+/// — each of which re-applies the mode unmasked after creating. Narrowing
+/// the directories is safe here: every component is a constant of this
+/// module or a name read out of the seed tree, never a path a user typed.
+///
+/// **Owner-only, not merely owner-readable.** 0600 rather than 0644 because
+/// the enclosing directory is 0700, so a wider file mode grants nobody
+/// anything — and because `rule.ts` is the source of a policy that will
+/// release secrets without prompting, which is the same reason the
+/// directories are owner-only ([`create_project_dir`]). It also puts these
+/// files where every other file secreq writes already is; see
+/// [`crate::atomic`], whose position is that nothing secreq writes is
+/// low-sensitivity enough to want the umask's answer. Git does not record
+/// the read bits, so committing and sharing the project are unaffected.
+pub fn write_project(dir: &Path, opts: &ProjectOpts) -> Result<Scaffold> {
+    for (rel, contents) in project_files(opts)? {
+        let path = dir.join(rel);
+        if let Some(parent) = path.parent().filter(|p| *p != dir) {
+            paths::ensure_private_dir(parent)
+                .with_context(|| format!("create dir {}", parent.display()))?;
+        }
+        crate::atomic::replace(
+            &path,
+            contents.as_bytes(),
+            crate::atomic::Mode::Exactly(paths::PRIVATE_FILE_MODE),
+        )
+        .with_context(|| format!("write {}", path.display()))?;
+    }
+    Ok(Scaffold {
+        dir: dir.to_path_buf(),
+        entry: dir.join("assembly").join("rule.ts"),
+    })
+}
+
+/// Every file a generated project gets, as (project-relative path,
+/// contents). The `assembly/` half is what `--from` swaps out; everything
+/// else is scaffolding this module owns either way.
+fn project_files(opts: &ProjectOpts) -> Result<Vec<(PathBuf, String)>> {
+    let mut files = vec![
+        (PathBuf::from("package.json"), package_json(opts)),
+        (PathBuf::from("README.md"), readme(opts)),
+        (PathBuf::from(".gitignore"), GITIGNORE.to_owned()),
+        (
+            PathBuf::from("as-pect.config.js"),
+            AS_PECT_CONFIG.to_owned(),
+        ),
+        (
+            PathBuf::from("as-pect.asconfig.json"),
+            AS_PECT_ASCONFIG.to_owned(),
+        ),
+    ];
+    match &opts.seed {
+        Some(seed) => files.extend(read_assembly_tree(seed)?),
+        None => files.extend([
+            (PathBuf::from("assembly/rule.ts"), RULE_TS.to_owned()),
+            (
+                PathBuf::from("assembly/tsconfig.json"),
+                ASSEMBLY_TSCONFIG.to_owned(),
+            ),
+            (
+                PathBuf::from("assembly/__tests__/rule.spec.ts"),
+                RULE_SPEC_TS.to_owned(),
+            ),
+            (
+                PathBuf::from("assembly/__tests__/as-pect.d.ts"),
+                AS_PECT_DTS.to_owned(),
+            ),
+        ]),
+    }
+    Ok(files)
+}
+
+/// Read `<seed>/assembly/**` into the file set, rooted back at
+/// `assembly/`. The seed is one of the SDK's examples, so it carries its
+/// own `tsconfig.json` and `as-pect.d.ts` alongside the rule — take the
+/// tree as it stands rather than merging two ideas of it.
+fn read_assembly_tree(seed: &Path) -> Result<Vec<(PathBuf, String)>> {
+    let root = seed.join("assembly");
+    let mut out = Vec::new();
+    collect_files(&root, &PathBuf::from("assembly"), &mut out)?;
+    if out.is_empty() {
+        bail!("{} has no sources to seed from", root.display());
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(out)
+}
+
+/// Recursive half of [`read_assembly_tree`]: every regular file under
+/// `dir`, keyed by `prefix`-relative path.
+fn collect_files(dir: &Path, prefix: &Path, out: &mut Vec<(PathBuf, String)>) -> Result<()> {
+    for entry in std::fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))? {
+        let entry = entry.with_context(|| format!("read {}", dir.display()))?;
+        let path = entry.path();
+        let rel = prefix.join(entry.file_name());
+        if path.is_dir() {
+            collect_files(&path, &rel, out)?;
+        } else {
+            let text = std::fs::read_to_string(&path)
+                .with_context(|| format!("read {}", path.display()))?;
+            out.push((rel, text));
+        }
+    }
+    Ok(())
+}
+
+/// npm package name derived from a directory name. See
+/// [`package_name`] for the folding.
+pub fn package_name_from_dir(dir: &Path) -> String {
+    package_name(&dir.file_name().unwrap_or_default().to_string_lossy())
+}
+
+/// npm's hard cap on a package name, in characters.
+const NPM_NAME_MAX: usize = 214;
+
+/// Name for a project whose directory name folds away to nothing. Not
+/// [`SDK_PACKAGE_NAME`]: npm refuses to install a dependency under a
+/// package of the same name (`ENOSELF`), and every generated project
+/// depends on the SDK.
+const FALLBACK_PACKAGE_NAME: &str = "my-secreq-rule";
+
+/// Fold `raw` into a name npm accepts: lowercased, capped at
+/// [`NPM_NAME_MAX`], with anything npm would refuse turned into `-`.
+/// Applied to `--name` as well as to the directory name, because npm
+/// rejects a manifest whose `name` has a space or a capital in it — and a
+/// scaffold that cannot `npm install` is the thing this command exists to
+/// stop shipping. A string with nothing usable in it falls back to
+/// [`FALLBACK_PACKAGE_NAME`].
+pub fn package_name(raw: &str) -> String {
+    let folded: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    // npm refuses a name starting with `.` or `_`, and a trailing dash is
+    // just noise. Trimmed again after the cap, which can leave one.
+    let trimmed = folded.trim_matches(['-', '.', '_'].as_slice());
+    // Every char is ASCII by construction, so a byte truncation is a char
+    // truncation and cannot split a code point.
+    let capped = trimmed
+        .get(..NPM_NAME_MAX)
+        .unwrap_or(trimmed)
+        .trim_matches(['-', '.', '_'].as_slice());
+    if capped.is_empty() {
+        FALLBACK_PACKAGE_NAME.to_owned()
+    } else {
+        capped.to_owned()
+    }
+}
+
+/// Escape a string for a JSON string literal.
+///
+/// `opts.name` is folded to `[a-z0-9._-]` and needs none of this, but the
+/// SDK path does: a Unix filename may legally hold a quote, a backslash, a
+/// newline or a tab, and an unescaped one of the last two is a manifest
+/// that parses nowhere. Reached only through `--sdk`, and cheap to close.
+fn json_escape(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for c in raw.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            // The rest of C0, which JSON forbids raw and has no short form
+            // for.
+            c if c < ' ' => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// The generated `package.json`. Mirrors the worked example's, with the
+/// `secreq-rule` dependency resolved for a project that lives anywhere.
+fn package_json(opts: &ProjectOpts) -> String {
+    format!(
+        r#"{{
+  "name": "{name}",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A programmable secreq auto-rule.",
+  "type": "module",
+  "scripts": {{
+    "test": "asp --verbose",
+    "build": "secreq-rule-build assembly/rule.ts -o rule.wasm"
+  }},
+  "devDependencies": {{
+    "@as-pect/cli": "{as_pect}",
+    "assemblyscript": "{assemblyscript}",
+    "secreq-rule": "{sdk}"
+  }}
+}}
+"#,
+        name = json_escape(&opts.name),
+        as_pect = AS_PECT_RANGE,
+        assemblyscript = ASSEMBLYSCRIPT_RANGE,
+        sdk = json_escape(&opts.sdk.spec()),
+    )
+}
+
+/// The generated `README.md`. The SDK line differs by [`SdkDep`]: a
+/// `file:` dependency is pinned to one machine and has to be re-pointed
+/// before the project is shared, and the registry one does not resolve
+/// yet.
+fn readme(opts: &ProjectOpts) -> String {
+    let sdk_note = match &opts.sdk {
+        SdkDep::Local(path) => format!(
+            "`package.json` depends on the SDK by absolute path\n\
+             (`file:{path}`), which is this machine's checkout. Re-point it before\n\
+             sharing the project.",
+            path = path.display(),
+        ),
+        SdkDep::Published => format!(
+            "`package.json` depends on `secreq-rule@{SDK_VERSION_RANGE}` from the registry.\n\
+             The SDK is not published yet, so `npm install` fails until it is —\n\
+             re-scaffold with `--sdk <checkout>/packages/secreq-rule` to depend on\n\
+             a local copy instead."
+        ),
+    };
+    format!(
+        r#"# {name}
+
+A **programmable secreq auto-rule**: one `decide(ctx)` function, compiled to
+a sandboxed wasm module the consent daemon consults before it prompts.
+
+```sh
+npm install        # assemblyscript + as-pect + the secreq-rule SDK
+npm test           # as-pect, against assembly/__tests__/
+npm run build      # secreq-rule-build → rule.wasm
+```
+
+Then register the module — the daemon vets it, copies it under the secreq
+root, and pins it by sha256:
+
+```sh
+secreq rules add-wasm rule.wasm --name "{name}" --secret SOME_TOKEN
+```
+
+`--secret` is the trained-secrets guard: the rule is never consulted for an
+ask requesting a name outside that set. Pass one per env var the rule may
+decide.
+
+## Layout
+
+- `assembly/rule.ts` — the rule: one exported `decide(ctx)`.
+- `assembly/__tests__/rule.spec.ts` — as-pect specs. **secreq never runs
+  these**; you test locally, secreq only loads the compiled module.
+- `as-pect.config.js` / `as-pect.asconfig.json` — test-runner wiring.
+
+## The SDK dependency
+
+{sdk_note}
+
+The full authoring guide is `docs/wasm-rules.md` in the secreq repo.
+"#,
+        name = opts.name,
+        sdk_note = sdk_note,
+    )
+}
+
+/// Starter `assembly/rule.ts` — a compiling rule that passes on
+/// everything, with the decision constructors and every `ctx` field
+/// written out where the author is about to need them.
+const RULE_TS: &str = r#"// A programmable secreq auto-rule.
+//
+// You write one function — `decide(ctx)` — and secreq runs it in a wasm
+// sandbox before the consent prompt. It gets no filesystem, network, clock
+// or env access; `ctx` is everything it can see.
+//
+//     npm install        # once
+//     npm test           # as-pect, against assembly/__tests__/
+//     npm run build      # → rule.wasm
+//     secreq rules add-wasm rule.wasm --secret SOME_TOKEN
+//
+// AssemblyScript is a *subset* of TypeScript: strings, arrays and plain
+// loops behave as you expect; regexes, closures and most of the JavaScript
+// standard library are not available.
+
+import { RuleCtx, Decision, pass } from 'secreq-rule';
+
+// Add the decisions you use to the import above:
+//
+//   approve()        release the secret without prompting
+//   deny(reason)     refuse the ask; `reason` is shown to the user
+//   prompt(reason)   force the prompt — no other rule may auto-approve
+//   pass()           no opinion; fall through to the other rules
+//
+// A deny beats a prompt beats an approve, and a pass never outranks
+// anything.
 
 export function decide(ctx: RuleCtx): Decision {
-  // Example: auto-approve read-only `gh api --get` calls, and never
-  // auto-approve repo deletes. Replace with your own policy.
-  if (ctx.wrap == "gh") {
-    if (ctx.joinedArgv.startsWith("gh repo delete")) {
-      return deny("repo deletes are never auto-approved");
-    }
-    if (ctx.joinedArgv.startsWith("gh api --get ")) {
-      return approve();
-    }
-  }
+  // Everything the rule can see:
+  //
+  //   ctx.wrap        the wrap being asked for, e.g. 'gh'
+  //   ctx.joinedArgv  the wrapped command line, e.g. 'gh api /user'
+  //   ctx.cwd         working directory of the requesting process
+  //   ctx.secrets     names of what the ask would release, e.g. 'GITHUB_TOKEN'
+  //                   (for an SSH sign, the single identity 'ssh:<key_id>')
+  //   ctx.callers     caller chain, nearest first; each entry has .name,
+  //                   .command and .exe — only .exe is not self-reported,
+  //                   so gate on it when it matters who is really calling
+  //
+  // A policy reads like this:
+  //
+  //   if (ctx.wrap != 'gh') return pass();
+  //   if (ctx.joinedArgv.startsWith('gh api --get ')) return approve();
+  //   if (ctx.joinedArgv.startsWith('gh repo delete')) {
+  //     return deny('repo deletes are never auto-approved');
+  //   }
 
-  // No opinion — let declarative rules and the interactive prompt decide.
   return pass();
 }
 "#;
 
-/// Starter `README.md` dropped beside the rule so the project is
-/// self-documenting when opened.
-const README_TEMPLATE: &str = r#"# secreq programmatic rule
+/// Starter as-pect spec. Exercises the stub's one behaviour, so `npm test`
+/// is green on a fresh scaffold and there is a shape to copy.
+const RULE_SPEC_TS: &str = r#"// as-pect specs for this rule. Run them with `npm test`.
+//
+// The spec is compiled to wasm and calls `decide` directly — the same
+// compiler and language semantics as the deployed module, minus the ABI
+// glue `secreq-rule-build` generates. secreq never runs this file: you test
+// here, secreq only ever loads the compiled `rule.wasm`.
 
-This is a scaffolded **programmable secreq auto-rule**. Edit `rule.ts`,
-then build and register it:
+import { RuleCtx, Caller, DecisionKind } from 'secreq-rule';
+import { decide } from '../rule';
 
-```sh
-npm install                                  # once, pulls assemblyscript
-npx secreq-rule-build rule.ts -o rule.wasm
-secreq rules add-wasm rule.wasm --name "my rule" --secret GITHUB_TOKEN
-```
+function caller(name: string, command: string): Caller {
+  const c = new Caller();
+  c.name = name;
+  c.command = command;
+  return c;
+}
 
-`rule.ts` exports a single `decide(ctx)` function returning `approve()`,
-`deny(reason)`, or `pass()`. It runs sandboxed before the consent prompt —
-no filesystem, network, clock, or env access; it only sees `ctx`.
+function ctx(wrap: string, joinedArgv: string, cwd: string): RuleCtx {
+  const c = new RuleCtx();
+  c.wrap = wrap;
+  c.joinedArgv = joinedArgv;
+  c.cwd = cwd;
+  c.callers = [caller('zsh', '-zsh')];
+  c.secrets = ['SOME_TOKEN'];
+  return c;
+}
 
-See `docs/wasm-rules.md` in the secreq repo for the full guide.
+describe('rule', () => {
+  it('has no opinion until the policy says otherwise', () => {
+    const d = decide(ctx('gh', 'gh api /user', '/home/me/code/app'));
+    expect(d.kind).toBe(DecisionKind.Pass);
+  });
+});
 "#;
+
+/// `assembly/tsconfig.json` — the AssemblyScript standard-library config
+/// every rule package needs.
+const ASSEMBLY_TSCONFIG: &str = r#"{
+  "extends": "assemblyscript/std/assembly.json",
+  "include": ["./**/*.ts"],
+  "compilerOptions": {
+    "ignoreDeprecations": "6.0"
+  }
+}
+"#;
+
+/// as-pect's ambient types, so `describe` / `it` / `expect` resolve in the
+/// spec.
+const AS_PECT_DTS: &str = "/// <reference types=\"@as-pect/assembly/types/as-pect\" />\n";
+
+/// as-pect runner config. Matches the worked example's.
+const AS_PECT_CONFIG: &str = r#"// as-pect configuration. `npm test` compiles every matching spec (plus the
+// rule it imports) to wasm and runs it — see assembly/__tests__/.
+// Compiler options live in as-pect.asconfig.json.
+export default {
+  entries: ['assembly/__tests__/**/*.spec.ts'],
+  include: ['assembly/__tests__/**/*.include.ts'],
+  disclude: [/node_modules/],
+  async instantiate(memory, createImports, instantiate, binary) {
+    return instantiate(binary, createImports({ env: { memory } }));
+  },
+  outputBinary: false,
+};
+"#;
+
+/// as-pect's compiler options. Matches the worked example's.
+const AS_PECT_ASCONFIG: &str = r#"{
+  "targets": {
+    "coverage": {
+      "lib": ["./node_modules/@as-covers/assembly/index.ts"],
+      "transform": ["@as-covers/transform", "@as-pect/transform"]
+    },
+    "noCoverage": {
+      "transform": ["@as-pect/transform"]
+    }
+  },
+  "options": {
+    "exportMemory": true,
+    "outFile": "output.wasm",
+    "textFile": "output.wat",
+    "bindings": "raw",
+    "exportStart": "_start",
+    "exportRuntime": true,
+    "use": ["RTRACE=1"],
+    "debug": true,
+    "exportTable": true
+  },
+  "entries": ["./node_modules/@as-pect/assembly/assembly/index.ts"]
+}
+"#;
+
+/// The build wrapper writes `.secreq-entry.<rule>.<pid>.ts` beside the
+/// rule and removes it in a `finally` — a killed build leaves one behind,
+/// and it is generated code that must never be committed.
+const GITIGNORE: &str = "node_modules/\n.secreq-entry.*.ts\n";
 
 /// Launch `editor` on `path`, detached from this process. Best-effort:
 /// GUI editors (`code`, `zed`, …) open the file; terminal editors
@@ -369,16 +928,284 @@ mod tests {
         assert!(detect_editors_with(|_| false).is_empty());
     }
 
+    /// The scaffold's whole point is that `npm install && npm run build`
+    /// works in the directory it wrote — so the manifest, the entry, the
+    /// spec and the runner config all have to land, not just the rule.
     #[test]
-    fn scaffold_writes_rule_ts_and_readme() {
+    fn scaffold_writes_a_buildable_project() {
         let tmp = tempfile::tempdir().expect("tmp");
         let out = scaffold_rule(tmp.path(), "rule-abc123").expect("scaffold");
-        assert!(out.entry.ends_with("rule.ts"));
-        assert!(out.entry.exists());
-        assert!(out.dir.join("README.md").exists());
+
+        assert_eq!(out.entry, out.dir.join("assembly").join("rule.ts"));
+        for rel in [
+            "package.json",
+            "README.md",
+            ".gitignore",
+            "as-pect.config.js",
+            "as-pect.asconfig.json",
+            "assembly/rule.ts",
+            "assembly/tsconfig.json",
+            "assembly/__tests__/rule.spec.ts",
+            "assembly/__tests__/as-pect.d.ts",
+        ] {
+            assert!(out.dir.join(rel).exists(), "missing {rel}");
+        }
         let src = std::fs::read_to_string(&out.entry).expect("read");
         assert!(src.contains("export function decide"));
         assert!(src.contains("secreq-rule"));
+    }
+
+    /// The manifest has to parse as JSON and carry the build script the
+    /// README and the printed next steps promise. A path with a quote in
+    /// it is the case a naive `format!` gets wrong.
+    #[test]
+    fn the_manifest_is_valid_json_with_the_build_script() {
+        let opts = ProjectOpts {
+            name: "my-rule".to_owned(),
+            sdk: SdkDep::Local(PathBuf::from("/tmp/od\"d path/packages/secreq-rule")),
+            seed: None,
+        };
+        let pkg: serde_json::Value =
+            serde_json::from_str(&package_json(&opts)).expect("valid JSON");
+
+        assert_eq!(pkg["name"], "my-rule");
+        assert_eq!(
+            pkg["scripts"]["build"],
+            "secreq-rule-build assembly/rule.ts -o rule.wasm"
+        );
+        assert_eq!(
+            pkg["devDependencies"]["secreq-rule"],
+            "file:/tmp/od\"d path/packages/secreq-rule"
+        );
+    }
+
+    /// Without a local SDK the manifest names the registry package — the
+    /// half of [`SdkDep`] that does not resolve yet, which is why the
+    /// command warns about it.
+    #[test]
+    fn the_published_fallback_names_the_registry_package() {
+        let opts = ProjectOpts {
+            name: "my-rule".to_owned(),
+            sdk: SdkDep::Published,
+            seed: None,
+        };
+        let pkg: serde_json::Value =
+            serde_json::from_str(&package_json(&opts)).expect("valid JSON");
+        assert_eq!(pkg["devDependencies"]["secreq-rule"], SDK_VERSION_RANGE);
+    }
+
+    /// `--from` replaces `assembly/` wholesale and leaves the manifest and
+    /// runner config this module owns.
+    #[test]
+    fn a_seed_supplies_the_assembly_tree() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let seed = tmp.path().join("example");
+        std::fs::create_dir_all(seed.join("assembly").join("__tests__")).expect("mkdir");
+        std::fs::write(seed.join("assembly/rule.ts"), "// seeded rule\n").expect("write");
+        std::fs::write(
+            seed.join("assembly/__tests__/rule.spec.ts"),
+            "// seeded spec\n",
+        )
+        .expect("write");
+
+        let dir = tmp.path().join("out");
+        std::fs::create_dir(&dir).expect("mkdir");
+        let out = write_project(
+            &dir,
+            &ProjectOpts {
+                name: "seeded".to_owned(),
+                sdk: SdkDep::Published,
+                seed: Some(seed),
+            },
+        )
+        .expect("scaffold");
+
+        assert_eq!(
+            std::fs::read_to_string(&out.entry).expect("read"),
+            "// seeded rule\n"
+        );
+        assert!(out.dir.join("assembly/__tests__/rule.spec.ts").exists());
+        assert!(out.dir.join("package.json").exists());
+    }
+
+    /// A seed with no `assembly/` fails before anything is written, so a
+    /// mistyped `--from` cannot leave half a project on disk.
+    #[test]
+    fn a_seed_with_no_sources_writes_nothing() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let dir = tmp.path().join("out");
+        std::fs::create_dir(&dir).expect("mkdir");
+
+        let out = write_project(
+            &dir,
+            &ProjectOpts {
+                name: "seeded".to_owned(),
+                sdk: SdkDep::Published,
+                seed: Some(tmp.path().join("nope")),
+            },
+        );
+
+        assert!(out.is_err(), "a missing seed must fail");
+        assert!(std::fs::read_dir(&dir).expect("read").next().is_none());
+    }
+
+    /// Every generated file carries the mode secreq chose, not the one the
+    /// umask left. Asserted exactly for the reason
+    /// [`a_scaffolded_project_is_owner_only`] is: under the ambient 022 an
+    /// unforced write lands 0644, which a `& 0o022 == 0` check would call
+    /// clean — and under a umask that clears an owner bit it lands on a
+    /// file its own owner cannot read. The second half needs a hostile
+    /// umask, which is process-global and so lives in an integration test
+    /// (`tests/cli.rs`); this half runs in the fast suite.
+    #[test]
+    fn generated_files_carry_the_mode_secreq_chose() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let out = scaffold_rule(tmp.path(), "rule-abc123").expect("scaffold");
+
+        for rel in ["package.json", "assembly/rule.ts"] {
+            let path = out.dir.join(rel);
+            assert_eq!(mode_of(&path), 0o600, "{rel}");
+            assert!(
+                !std::fs::read_to_string(&path)
+                    .expect("read back")
+                    .is_empty(),
+                "{rel} must be readable and non-empty"
+            );
+        }
+        assert_eq!(mode_of(&out.dir.join("assembly")), 0o700);
+    }
+
+    /// npm refuses a `name` with a capital or a space in it, so an
+    /// explicit `--name` gets the same folding the directory name does —
+    /// a scaffold that cannot `npm install` defeats the command.
+    #[test]
+    fn package_names_are_folded_to_something_npm_accepts() {
+        assert_eq!(package_name_from_dir(Path::new("/tmp/My Rule!")), "my-rule");
+        assert_eq!(package_name_from_dir(Path::new("/tmp/.hidden")), "hidden");
+        assert_eq!(package_name("npm publish guard"), "npm-publish-guard");
+    }
+
+    /// npm caps a name at 214 characters, so a long directory name folds
+    /// into a long *invalid* name unless something truncates it. The
+    /// re-trim matters: a cut can land right after a `-`.
+    #[test]
+    fn a_long_directory_name_is_capped_at_npms_limit() {
+        let name = package_name(&format!("{}-tail", "a".repeat(NPM_NAME_MAX)));
+
+        assert_eq!(name.len(), NPM_NAME_MAX);
+        assert!(!name.ends_with('-'), "{name}");
+    }
+
+    /// The fallback cannot be the SDK's own name: npm refuses to install a
+    /// dependency under a package called the same thing (`ENOSELF`), and
+    /// every generated project depends on `secreq-rule`.
+    #[test]
+    fn the_fallback_name_is_not_the_sdks_own() {
+        assert_eq!(package_name_from_dir(Path::new("/")), FALLBACK_PACKAGE_NAME);
+        assert_ne!(FALLBACK_PACKAGE_NAME, SDK_PACKAGE_NAME);
+    }
+
+    /// A Unix filename may hold a newline or a tab, and `--sdk` puts one
+    /// straight into the manifest. Unescaped, that is JSON no parser
+    /// accepts — found out by npm, several steps from the cause.
+    #[test]
+    fn a_control_character_in_the_sdk_path_survives_as_json() {
+        let path = PathBuf::from("/tmp/od\td\n\u{1}path/packages/secreq-rule");
+        let opts = ProjectOpts {
+            name: "my-rule".to_owned(),
+            sdk: SdkDep::Local(path.clone()),
+            seed: None,
+        };
+
+        let pkg: serde_json::Value =
+            serde_json::from_str(&package_json(&opts)).expect("valid JSON");
+
+        assert_eq!(
+            pkg["devDependencies"]["secreq-rule"],
+            format!("file:{}", path.display())
+        );
+    }
+
+    /// Shape alone matched any `packages/<x>` carrying a `package.json`
+    /// and a `bin/build.js`, and the ancestor walk takes the first hit —
+    /// so a lookalike would be picked up silently and fail at build time.
+    #[test]
+    fn a_lookalike_package_is_not_taken_for_the_sdk() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let dir = tmp.path().join("secreq-rule");
+        std::fs::create_dir_all(dir.join("bin")).expect("mkdir");
+        std::fs::write(dir.join("bin/build.js"), "// not it\n").expect("write");
+        std::fs::write(dir.join("package.json"), r#"{"name":"some-other-sdk"}"#).expect("write");
+
+        assert!(
+            resolve_sdk_dir(&dir).is_err(),
+            "a lookalike must be refused"
+        );
+
+        std::fs::write(dir.join("package.json"), r#"{"name":"secreq-rule"}"#).expect("write");
+        assert!(resolve_sdk_dir(&dir).is_ok(), "the real thing must resolve");
+    }
+
+    /// The registry fallback is a literal in this file and the SDK's
+    /// version is a literal in its `package.json`; nothing else holds the
+    /// two together, so a version bump would otherwise leave scaffolds
+    /// asking for the previous release.
+    #[test]
+    fn the_fallback_range_tracks_the_sdk_version() {
+        let manifest = concat!(env!("CARGO_MANIFEST_DIR"), "/../secreq-rule/package.json");
+        let pkg: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(manifest).expect("read SDK manifest"))
+                .expect("SDK manifest must be valid JSON");
+        let version = pkg["version"]
+            .as_str()
+            .expect("SDK manifest declares a version");
+
+        assert_eq!(
+            SDK_VERSION_RANGE,
+            format!("^{version}"),
+            "SDK_VERSION_RANGE is stale against packages/secreq-rule/package.json"
+        );
+    }
+
+    /// The project directory a user names is created owner-only for the
+    /// same reason the editor's draft is: whoever can edit `rule.ts`
+    /// before the build writes the policy.
+    #[test]
+    fn a_user_named_project_dir_is_owner_only() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let dir = tmp.path().join("nested").join("my-rule");
+
+        create_project_dir(&dir).expect("create");
+
+        assert_eq!(mode_of(&dir), 0o700, "{}", dir.display());
+    }
+
+    /// …but an existing directory keeps its mode. `ensure_private_dir`
+    /// would narrow it, and `secreq rules new-wasm .` must not chmod the
+    /// user's working directory.
+    #[test]
+    fn an_existing_empty_project_dir_keeps_its_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().expect("tmp");
+        let dir = tmp.path().join("mine");
+        std::fs::create_dir(&dir).expect("mkdir");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        create_project_dir(&dir).expect("create");
+
+        assert_eq!(mode_of(&dir), 0o755);
+    }
+
+    #[test]
+    fn a_non_empty_project_dir_is_refused() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let dir = tmp.path().join("mine");
+        std::fs::create_dir(&dir).expect("mkdir");
+        std::fs::write(dir.join("package.json"), "{}").expect("write");
+
+        let err = create_project_dir(&dir).expect_err("must refuse");
+
+        assert!(format!("{err:#}").contains("not empty"));
     }
 
     #[test]

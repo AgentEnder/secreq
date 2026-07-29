@@ -258,7 +258,7 @@ pub fn default_shims_dir() -> Result<PathBuf> {
 }
 
 /// Owner-only mode for every directory secreq creates under its root.
-const PRIVATE_DIR_MODE: u32 = 0o700;
+pub(crate) const PRIVATE_DIR_MODE: u32 = 0o700;
 
 /// Owner-only mode for every file secreq creates under its root.
 pub(crate) const PRIVATE_FILE_MODE: u32 = 0o600;
