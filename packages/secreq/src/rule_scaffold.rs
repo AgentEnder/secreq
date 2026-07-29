@@ -180,11 +180,31 @@ pub fn locate_sdk() -> Option<PathBuf> {
     })
 }
 
+/// The npm package name the SDK publishes under, and the one a generated
+/// project's `import … from 'secreq-rule'` resolves through.
+const SDK_PACKAGE_NAME: &str = "secreq-rule";
+
 /// Does `dir` hold the `secreq-rule` package? Checks the two files a
 /// generated project actually consumes — the manifest npm resolves and the
-/// build wrapper `npm run build` shells out to.
+/// build wrapper `npm run build` shells out to — **and** that the manifest
+/// names the SDK.
+///
+/// Shape alone is not enough for the ancestor walk. `packages/<x>` with a
+/// `package.json` and a `bin/build.js` describes plenty of packages, and
+/// the first match wins silently; since a local path is the only SDK
+/// specifier that resolves today, a plausible-but-wrong match would be
+/// found out at `npm run build`, several steps from the cause.
 fn is_sdk_dir(dir: &Path) -> bool {
-    dir.join("package.json").is_file() && dir.join("bin").join("build.js").is_file()
+    if !dir.join("bin").join("build.js").is_file() {
+        return false;
+    }
+    let Ok(text) = std::fs::read_to_string(dir.join("package.json")) else {
+        return false;
+    };
+    let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    pkg.get("name").and_then(serde_json::Value::as_str) == Some(SDK_PACKAGE_NAME)
 }
 
 /// Resolve a user-supplied `--sdk` path to the absolute one that goes in
@@ -196,8 +216,8 @@ pub fn resolve_sdk_dir(dir: &Path) -> Result<PathBuf> {
         .with_context(|| format!("--sdk path not readable: {}", dir.display()))?;
     if !is_sdk_dir(&abs) {
         bail!(
-            "{} is not a secreq-rule package (no package.json + bin/build.js); \
-             point --sdk at `packages/secreq-rule` in a secreq checkout",
+            "{} is not the {SDK_PACKAGE_NAME} package (wanted a package.json naming it, \
+             plus bin/build.js); point --sdk at `packages/secreq-rule` in a secreq checkout",
             abs.display()
         );
     }
@@ -282,7 +302,7 @@ pub fn scaffold_rule(parent: &Path, slug: &str) -> Result<Scaffold> {
 /// several files; landing them into a directory that already holds work is
 /// how you lose a `package.json`.
 pub fn create_project_dir(dir: &Path) -> Result<()> {
-    use std::os::unix::fs::DirBuilderExt;
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 
     if dir.exists() {
         if !dir.is_dir() {
@@ -307,18 +327,40 @@ pub fn create_project_dir(dir: &Path) -> Result<()> {
     std::fs::DirBuilder::new()
         .mode(paths::PRIVATE_DIR_MODE)
         .create(dir)
-        .with_context(|| format!("create rule project dir {}", dir.display()))
+        .with_context(|| format!("create rule project dir {}", dir.display()))?;
+    // `DirBuilder::mode` is masked by the umask, which can only clear bits —
+    // but an owner bit cleared there leaves a directory secreq cannot write
+    // the project into, so say it unmasked. Same follow-up as
+    // `paths::ensure_private_dir` and `scoped_agent::create_staging_dir`.
+    std::fs::set_permissions(
+        dir,
+        std::fs::Permissions::from_mode(paths::PRIVATE_DIR_MODE),
+    )
+    .with_context(|| format!("set mode 0700 on {}", dir.display()))
 }
 
 /// Write a buildable rule project into the (existing, empty) directory
-/// `dir`. The whole file set is assembled before anything lands, so a
-/// `--from` seed that turns out to be unreadable fails with nothing
-/// written.
+/// `dir`.
+///
+/// Resolving the whole file set first is what makes an unreadable `--from`
+/// seed cheap: it fails before the first `write`, so a mistyped example
+/// name leaves nothing behind. It is **not** a rollback — a write that
+/// fails partway through (a full disk, a revoked permission) leaves the
+/// files already written where they are, and the directory is the user's
+/// to delete.
+///
+/// The `assembly/` subdirectories go through
+/// [`crate::paths::ensure_private_dir`] rather than `create_dir_all` for
+/// the reason [`create_project_dir`] does the same for the project root:
+/// `create_dir_all` takes the umask's answer, and under one that clears an
+/// owner bit that is a directory this function cannot then write into.
+/// Narrowing is safe here — every component is either a constant of this
+/// module or a name read out of the seed tree, never a path a user typed.
 pub fn write_project(dir: &Path, opts: &ProjectOpts) -> Result<Scaffold> {
     for (rel, contents) in project_files(opts)? {
         let path = dir.join(rel);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
+        if let Some(parent) = path.parent().filter(|p| *p != dir) {
+            paths::ensure_private_dir(parent)
                 .with_context(|| format!("create dir {}", parent.display()))?;
         }
         std::fs::write(&path, contents).with_context(|| format!("write {}", path.display()))?;
@@ -406,12 +448,22 @@ pub fn package_name_from_dir(dir: &Path) -> String {
     package_name(&dir.file_name().unwrap_or_default().to_string_lossy())
 }
 
-/// Fold `raw` into a name npm accepts: lowercased, with anything it would
-/// refuse turned into `-`. Applied to `--name` as well as to the directory
-/// name, because npm rejects a manifest whose `name` has a space or a
-/// capital in it — and a scaffold that cannot `npm install` is the thing
-/// this command exists to stop shipping. A string with nothing usable in it
-/// falls back to a fixed name.
+/// npm's hard cap on a package name, in characters.
+const NPM_NAME_MAX: usize = 214;
+
+/// Name for a project whose directory name folds away to nothing. Not
+/// [`SDK_PACKAGE_NAME`]: npm refuses to install a dependency under a
+/// package of the same name (`ENOSELF`), and every generated project
+/// depends on the SDK.
+const FALLBACK_PACKAGE_NAME: &str = "my-secreq-rule";
+
+/// Fold `raw` into a name npm accepts: lowercased, capped at
+/// [`NPM_NAME_MAX`], with anything npm would refuse turned into `-`.
+/// Applied to `--name` as well as to the directory name, because npm
+/// rejects a manifest whose `name` has a space or a capital in it — and a
+/// scaffold that cannot `npm install` is the thing this command exists to
+/// stop shipping. A string with nothing usable in it falls back to
+/// [`FALLBACK_PACKAGE_NAME`].
 pub fn package_name(raw: &str) -> String {
     let folded: String = raw
         .chars()
@@ -424,20 +476,45 @@ pub fn package_name(raw: &str) -> String {
         })
         .collect();
     // npm refuses a name starting with `.` or `_`, and a trailing dash is
-    // just noise.
+    // just noise. Trimmed again after the cap, which can leave one.
     let trimmed = folded.trim_matches(['-', '.', '_'].as_slice());
-    if trimmed.is_empty() {
-        "secreq-rule".to_owned()
+    // Every char is ASCII by construction, so a byte truncation is a char
+    // truncation and cannot split a code point.
+    let capped = trimmed
+        .get(..NPM_NAME_MAX)
+        .unwrap_or(trimmed)
+        .trim_matches(['-', '.', '_'].as_slice());
+    if capped.is_empty() {
+        FALLBACK_PACKAGE_NAME.to_owned()
     } else {
-        trimmed.to_owned()
+        capped.to_owned()
     }
 }
 
-/// Escape a string for a JSON string literal. Only two characters need it
-/// here — the values are a package name this module folded and a
-/// filesystem path — but a path may legally contain either.
+/// Escape a string for a JSON string literal.
+///
+/// `opts.name` is folded to `[a-z0-9._-]` and needs none of this, but the
+/// SDK path does: a Unix filename may legally hold a quote, a backslash, a
+/// newline or a tab, and an unescaped one of the last two is a manifest
+/// that parses nowhere. Reached only through `--sdk`, and cheap to close.
 fn json_escape(raw: &str) -> String {
-    raw.replace('\\', "\\\\").replace('"', "\\\"")
+    let mut out = String::with_capacity(raw.len());
+    for c in raw.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            // The rest of C0, which JSON forbids raw and has no short form
+            // for.
+            c if c < ' ' => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// The generated `package.json`. Mirrors the worked example's, with the
@@ -959,8 +1036,68 @@ mod tests {
     fn package_names_are_folded_to_something_npm_accepts() {
         assert_eq!(package_name_from_dir(Path::new("/tmp/My Rule!")), "my-rule");
         assert_eq!(package_name_from_dir(Path::new("/tmp/.hidden")), "hidden");
-        assert_eq!(package_name_from_dir(Path::new("/")), "secreq-rule");
         assert_eq!(package_name("npm publish guard"), "npm-publish-guard");
+    }
+
+    /// npm caps a name at 214 characters, so a long directory name folds
+    /// into a long *invalid* name unless something truncates it. The
+    /// re-trim matters: a cut can land right after a `-`.
+    #[test]
+    fn a_long_directory_name_is_capped_at_npms_limit() {
+        let name = package_name(&format!("{}-tail", "a".repeat(NPM_NAME_MAX)));
+
+        assert_eq!(name.len(), NPM_NAME_MAX);
+        assert!(!name.ends_with('-'), "{name}");
+    }
+
+    /// The fallback cannot be the SDK's own name: npm refuses to install a
+    /// dependency under a package called the same thing (`ENOSELF`), and
+    /// every generated project depends on `secreq-rule`.
+    #[test]
+    fn the_fallback_name_is_not_the_sdks_own() {
+        assert_eq!(package_name_from_dir(Path::new("/")), FALLBACK_PACKAGE_NAME);
+        assert_ne!(FALLBACK_PACKAGE_NAME, SDK_PACKAGE_NAME);
+    }
+
+    /// A Unix filename may hold a newline or a tab, and `--sdk` puts one
+    /// straight into the manifest. Unescaped, that is JSON no parser
+    /// accepts — found out by npm, several steps from the cause.
+    #[test]
+    fn a_control_character_in_the_sdk_path_survives_as_json() {
+        let path = PathBuf::from("/tmp/od\td\n\u{1}path/packages/secreq-rule");
+        let opts = ProjectOpts {
+            name: "my-rule".to_owned(),
+            sdk: SdkDep::Local(path.clone()),
+            seed: None,
+        };
+
+        let pkg: serde_json::Value =
+            serde_json::from_str(&package_json(&opts)).expect("valid JSON");
+
+        assert_eq!(
+            pkg["devDependencies"]["secreq-rule"],
+            format!("file:{}", path.display())
+        );
+    }
+
+    /// Shape alone matched any `packages/<x>` carrying a `package.json`
+    /// and a `bin/build.js`, and the ancestor walk takes the first hit —
+    /// so a lookalike would be picked up silently and fail at build time.
+    #[test]
+    fn a_lookalike_package_is_not_taken_for_the_sdk() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let dir = tmp.path().join("secreq-rule");
+        std::fs::create_dir_all(dir.join("bin")).expect("mkdir");
+        std::fs::write(dir.join("bin/build.js"), "// not it\n").expect("write");
+        std::fs::write(dir.join("package.json"), r#"{"name":"some-other-sdk"}"#).expect("write");
+
+        assert!(
+            resolve_sdk_dir(&dir).is_err(),
+            "a lookalike must be refused"
+        );
+
+        std::fs::write(dir.join("package.json"), r#"{"name":"secreq-rule"}"#).expect("write");
+        assert!(resolve_sdk_dir(&dir).is_ok(), "the real thing must resolve");
     }
 
     /// The registry fallback is a literal in this file and the SDK's

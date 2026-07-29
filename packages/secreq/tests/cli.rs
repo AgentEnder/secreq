@@ -2376,3 +2376,56 @@ fn agent_open_honours_an_explicit_sock_override() {
     child.kill().expect("kill agent open");
     child.wait().expect("reap agent open");
 }
+
+// ── rules new-wasm ────────────────────────────────────────────────────────
+
+/// `DirBuilder::mode` is a *request*: the kernel masks it with the process
+/// umask, and a umask can clear owner bits as readily as group and world
+/// ones. Under `umask 0300` the 0700 the scaffold asks for lands as 0400 —
+/// a directory secreq itself cannot then write the project into, so the
+/// first `fs::write` fails with EACCES and leaves an unusable stub behind.
+///
+/// The two other places this codebase creates a private directory
+/// (`paths::ensure_private_dir`, `scoped_agent::create_staging_dir`) both
+/// follow the create with an explicit `set_permissions` for exactly this
+/// reason; this is the third.
+///
+/// Driven through the real binary because the umask is process-global: a
+/// unit test that set one would hand the same hostile mask to every other
+/// test running beside it in the same binary. `pre_exec` scopes it to the
+/// child, which is also how `init`'s umask test does it.
+#[test]
+fn a_scaffolded_project_is_owner_only_whatever_the_umask() {
+    let sb = Sandbox::new();
+    sb.stamp_migrations();
+    let project = sb.path().join("my-rule");
+
+    let mut cmd = sb.cmd(&["rules", "new-wasm"]);
+    cmd.arg(&project);
+    // SAFETY: `umask` is async-signal-safe and touches only the child.
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            // Clears the owner's write and execute bits — the case a
+            // `& 0o022` style assertion would call clean.
+            libc::umask(0o300);
+            Ok(())
+        });
+    }
+    let out = cmd.output().expect("run rules new-wasm");
+
+    assert!(
+        out.status.success(),
+        "scaffold failed under a hostile umask:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        fs::metadata(&project).unwrap().permissions().mode() & 0o777,
+        0o700,
+        "the project dir must be owner-only whatever the umask cleared"
+    );
+    assert!(
+        project.join("package.json").exists(),
+        "a directory secreq cannot write into is not a scaffold"
+    );
+}
