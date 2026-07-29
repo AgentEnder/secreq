@@ -240,9 +240,22 @@ const MAXIMAL_WRAPS_CONFIG: &str = r#"{
   "gh": {
     "$reason": "GitHub API access",
     "$description": "ignored at runtime",
-    "env": { "GITHUB_TOKEN": "secret://op/Personal/GitHub/token" }
+    "env": {
+      "GITHUB_TOKEN": "secret://op/Personal/GitHub/token",
+      "GH_TOKEN": "secret://declared_with_ttl",
+      "GH_ALT": "secret://declared_without_ttl"
+    }
   },
   "op": {},
+  "secrets": {
+    "declared_with_ttl": {
+      "ref": "secret://op/Personal/GitHub/other",
+      "ttl": "15m"
+    },
+    "declared_without_ttl": {
+      "ref": "secret://op/Personal/GitHub/third"
+    }
+  },
   "ssh": {
     "github": {
       "$reason": "git pushes",

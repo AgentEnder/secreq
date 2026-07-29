@@ -313,8 +313,16 @@ pub struct State {
     /// shares the fixed wrap `"run"`. So one global namespace answered for
     /// every session that ever ran: a value cached by a 9am deploy satisfied
     /// a nested ask in an unrelated 10am shell, silently, because both were
-    /// "run". The secret cache has no TTL and the daemon does not idle-exit
-    /// while the SSH agent is on, so the window was machine uptime.
+    /// "run". A cached value lives for the daemon by default, and the daemon
+    /// does not idle-exit while the SSH agent is on, so that window was
+    /// machine uptime.
+    ///
+    /// A declared `ttl` shortens the window for the secret that carries one
+    /// (see [`super::cache`]'s "Lifetime"), but it is not what closes this
+    /// hole and must not be read as a mitigation: the default is still the
+    /// daemon's lifetime, and a secret nobody wrote a `ttl` for — which is
+    /// most of them — has exactly the old window. What closes it is the
+    /// per-session authorization recorded here.
     ///
     /// The cache stays global — it is a *value* cache, and re-resolving costs
     /// a biometric, which is the property it exists for. This records the
@@ -2077,6 +2085,24 @@ impl State {
         self.secret_cache.clone()
     }
 
+    /// Drop every cached secret value whose TTL has elapsed, returning how
+    /// many went. Called once per tick by the daemon main loop — see
+    /// [`super::cache`]'s "Lifetime" section for why expiry is swept
+    /// actively rather than noticed on the next read.
+    ///
+    /// Touches no activity clock and no approval. An expiring **value** does
+    /// not expire the **approval** that released it: the next ask re-runs the
+    /// provider (and its biometric prompt) but rides the remembered approval,
+    /// so no consent window opens. A TTL says how long a value may be reused;
+    /// making it silently revoke consent as well would be a re-consent feature
+    /// wearing a cache TTL's name.
+    pub fn prune_expired_secrets(&mut self) -> usize {
+        self.secret_cache
+            .lock()
+            .expect("secret cache mutex")
+            .prune_expired()
+    }
+
     /// Hand back the singleflight Arc alongside the cache. Both are
     /// passed together to `resolve_for_ask`; pairing the accessors
     /// makes the call site at the rule-hit path symmetric with the
@@ -2248,11 +2274,7 @@ pub(super) fn ask_fully_cached(ask: &Ask, cache: &Arc<Mutex<SecretCache>>) -> bo
     let guard = cache.lock().expect("secret cache mutex");
     ask.secrets().iter().all(|s| {
         guard
-            .get(&CacheKey {
-                wrap: ask.dedupe_key.wrap.clone(),
-                provider: s.provider.clone(),
-                locator: s.locator.clone(),
-            })
+            .get(&CacheKey::new(s.provider.clone(), s.locator.clone()))
             .is_some()
     })
 }
@@ -2289,12 +2311,9 @@ impl State {
         let mut guard = self.secret_cache.lock().expect("secret cache mutex");
         for secret in ask.secrets() {
             guard.put(
-                CacheKey {
-                    wrap: ask.dedupe_key.wrap.clone(),
-                    provider: secret.provider.clone(),
-                    locator: secret.locator.clone(),
-                },
+                CacheKey::new(secret.provider.clone(), secret.locator.clone()),
                 value,
+                secret.ttl,
             );
         }
     }
@@ -2415,11 +2434,7 @@ pub(super) fn resolve_for_ask(
     let mut guards: Vec<InFlightGuard> = Vec::new();
 
     for s in ask.secrets() {
-        let key = CacheKey {
-            wrap: ask.dedupe_key.wrap.clone(),
-            provider: s.provider.clone(),
-            locator: s.locator.clone(),
-        };
+        let key = CacheKey::new(s.provider.clone(), s.locator.clone());
         // Cache check — held only for the lookup itself.
         {
             let guard = cache.lock().expect("secret cache mutex");
@@ -2482,6 +2497,7 @@ pub(super) fn resolve_for_ask(
                 reason: s.reason.clone(),
                 description: s.description.clone(),
                 default: s.default.clone(),
+                declared_as: s.declared_as.clone(),
             })
             .collect(),
     };
@@ -2498,12 +2514,8 @@ pub(super) fn resolve_for_ask(
                         continue;
                     };
                     let exposed = value.expose().to_owned();
-                    let key = CacheKey {
-                        wrap: ask.dedupe_key.wrap.clone(),
-                        provider: s.provider.clone(),
-                        locator: s.locator.clone(),
-                    };
-                    guard.put(key, &exposed);
+                    let key = CacheKey::new(s.provider.clone(), s.locator.clone());
+                    guard.put(key, &exposed, s.ttl);
                     secrets.insert(s.name.clone(), exposed);
                 }
             }
@@ -2544,13 +2556,28 @@ pub(super) fn resolve_for_ask(
 /// Each entry in the returned map is `Ok(value)` or `Err(message)` for that
 /// specific pair, so a caller can succeed a waiter whose slice resolved
 /// cleanly while erroring only the waiters that needed a failed pair.
+/// The TTL to store a resolved pair under: the one the first ask naming that
+/// reference carried.
+///
+/// First-wins is unambiguous rather than arbitrary, because the config cannot
+/// hold two TTLs for one reference — [`crate::wraps::WrapsConfig::ttl_for`]
+/// reads it off the reference, and the loader refuses two declarations of the
+/// same reference that disagree.
+fn ttl_for(
+    first_ask: &HashMap<(String, String), &super::proto::SecretAsk>,
+    provider: &str,
+    locator: &str,
+) -> crate::wraps::CacheTtl {
+    first_ask
+        .get(&(provider.to_owned(), locator.to_owned()))
+        .map_or_else(crate::wraps::CacheTtl::default, |ask| ask.ttl)
+}
+
 fn resolve_union(
     rep: &Ask,
     cache: Arc<Mutex<SecretCache>>,
     in_flight: Arc<InFlightMap>,
 ) -> HashMap<(String, String), Result<String, String>> {
-    let wrap = rep.dedupe_key.wrap.clone();
-
     // Collect the distinct (provider, locator) pairs, remembering the first
     // SecretAsk seen for each so provider-facing metadata (reason,
     // description, default) is preserved. Insertion order is stable so the
@@ -2575,11 +2602,7 @@ fn resolve_union(
 
     for pl in &order {
         let (provider, locator) = pl;
-        let key = CacheKey {
-            wrap: wrap.clone(),
-            provider: provider.clone(),
-            locator: locator.clone(),
-        };
+        let key = CacheKey::new(provider.clone(), locator.clone());
         // Cache check — held only for the lookup.
         {
             let guard = cache.lock().expect("secret cache mutex");
@@ -2654,6 +2677,7 @@ fn resolve_union(
                     reason: ask.reason.clone(),
                     description: ask.description.clone(),
                     default: ask.default.clone(),
+                    declared_as: ask.declared_as.clone(),
                 }
             })
             .collect(),
@@ -2669,12 +2693,9 @@ fn resolve_union(
                     Some(value) => {
                         let exposed = value.expose().to_owned();
                         guard.put(
-                            CacheKey {
-                                wrap: wrap.clone(),
-                                provider: provider.clone(),
-                                locator: locator.clone(),
-                            },
+                            CacheKey::new(provider.clone(), locator.clone()),
                             &exposed,
+                            ttl_for(&first_ask, provider, locator),
                         );
                         out.insert(pl, Ok(exposed));
                     }
@@ -2731,6 +2752,7 @@ pub(super) fn resolve_single_cached(
     cache: &Arc<Mutex<SecretCache>>,
     in_flight: &Arc<InFlightMap>,
     key: CacheKey,
+    ttl: crate::wraps::CacheTtl,
     name: &str,
     reason: Option<&str>,
     providers: &std::collections::BTreeMap<String, Provider>,
@@ -2756,6 +2778,7 @@ pub(super) fn resolve_single_cached(
                     reason: reason.map(str::to_owned),
                     description: None,
                     default: None,
+                    declared_as: None,
                 }],
             };
             let resolved = resolve::resolve_all(&manifest, &plan).and_then(|(rows, _stats)| {
@@ -2769,7 +2792,7 @@ pub(super) fn resolve_single_cached(
                     let exposed = Zeroizing::new(secret.expose().to_owned());
                     {
                         let mut guard = cache.lock().expect("secret cache mutex");
-                        guard.put(key, exposed.as_str());
+                        guard.put(key, exposed.as_str(), ttl);
                     }
                     // Cache populated → wake any parked waiters (also drops
                     // the in-flight slot).
@@ -3375,6 +3398,8 @@ mod tests {
                 callers_truncated: false,
                 callers: vec![],
                 secrets: vec![super::super::proto::SecretAsk {
+                    declared_as: None,
+                    ttl: crate::wraps::CacheTtl::default(),
                     name: secret.to_owned(),
                     provider: "fake".to_owned(),
                     locator: "x".to_owned(),
@@ -3838,6 +3863,8 @@ mod tests {
         wrap_of(&mut nested_uncached)
             .secrets
             .push(super::super::proto::SecretAsk {
+                declared_as: None,
+                ttl: crate::wraps::CacheTtl::default(),
                 name: "OTHER".to_owned(),
                 provider: "fake".to_owned(),
                 locator: "uncached".to_owned(),
@@ -3894,12 +3921,9 @@ mod tests {
         {
             let mut guard = cache.lock().expect("secret cache mutex");
             guard.put(
-                CacheKey {
-                    wrap: "gh".into(),
-                    provider: "fake".into(),
-                    locator: "x".into(),
-                },
+                CacheKey::new("fake", "x"),
                 "ghp_value",
+                crate::wraps::CacheTtl::default(),
             );
         }
         let mut ask = ask_with_secret("gh", &["gh", "api"], "GITHUB_TOKEN");
@@ -4014,6 +4038,160 @@ mod tests {
         );
     }
 
+    /// How many times the counter-file provider script has run.
+    fn invocations(counter: &std::path::Path) -> usize {
+        std::fs::read_to_string(counter)
+            .expect("read counter")
+            .lines()
+            .count()
+    }
+
+    #[test]
+    fn an_expired_value_re_runs_the_provider_but_leaves_the_approval_alone() {
+        // The TTL feature end to end at the daemon, and the decision the task
+        // insisted be written down: an expiring **value** does not expire the
+        // **approval**. The next ask pays for the provider (on 1Password, a
+        // biometric prompt) but rides the remembered approval, so no consent
+        // window opens.
+        //
+        // The clock is a parameter, not a sleep: the entry is stored now and
+        // the prune is asked about a synthetic instant past the TTL.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let counter = tmp.path().join("invocations");
+        std::fs::write(&counter, b"").expect("create counter");
+        let script = format!(
+            "echo invoked >> {counter}; echo secret-{{locator}}",
+            counter = counter.display(),
+        );
+        let mut providers = HashMap::new();
+        providers.insert(
+            "fake".to_owned(),
+            super::super::proto::WireProvider {
+                name: "fake".to_owned(),
+                retrieve: vec!["sh".to_owned(), "-c".to_owned(), script],
+                retrieve_batch: None,
+            },
+        );
+
+        let mut ask = ask_with_secret("gh", &["gh", "api"], "GITHUB_TOKEN");
+        {
+            let wrap = wrap_of(&mut ask);
+            wrap.providers = providers;
+            // What a `secrets` declaration with `ttl: "1m"` puts on the wire.
+            wrap.secrets[0].ttl = crate::wraps::CacheTtl::Secs(60);
+        }
+
+        let mut state = State::new();
+        state.remember_approval_for_test(&ask);
+        assert!(state.has_cached_approval(&ask));
+        let cache = state.secret_cache_arc();
+        let in_flight = state.in_flight_arc();
+
+        // Cold cache → one provider invocation.
+        super::resolve_for_ask(&ask, cache.clone(), in_flight.clone());
+        assert_eq!(invocations(&counter), 1);
+
+        // Inside the window → served from cache, provider untouched.
+        super::resolve_for_ask(&ask, cache.clone(), in_flight.clone());
+        assert_eq!(invocations(&counter), 1, "a live entry must not re-resolve");
+
+        // Past the TTL, the daemon's tick sweeps it out.
+        let past = Instant::now() + Duration::from_secs(61);
+        assert_eq!(
+            cache
+                .lock()
+                .expect("secret cache mutex")
+                .prune_expired_at(past),
+            1
+        );
+
+        // The next ask pays for the provider again …
+        super::resolve_for_ask(&ask, cache, in_flight);
+        assert_eq!(invocations(&counter), 2, "an expired entry must re-resolve");
+
+        // … and the approval is exactly where it was.
+        assert!(
+            state.has_cached_approval(&ask),
+            "an expiring value must not expire the approval"
+        );
+    }
+
+    #[test]
+    fn a_value_with_no_declared_ttl_survives_every_prune() {
+        // The default is the daemon's own lifetime, so the tick that exists
+        // for TTL'd secrets must never touch anything else.
+        let mut state = State::new();
+        {
+            let cache = state.secret_cache_arc();
+            let mut guard = cache.lock().expect("secret cache mutex");
+            guard.put(
+                CacheKey::new("fake", "x"),
+                "v",
+                crate::wraps::CacheTtl::default(),
+            );
+        }
+        assert_eq!(state.prune_expired_secrets(), 0);
+        let cache = state.secret_cache_arc();
+        let guard = cache.lock().expect("secret cache mutex");
+        assert!(guard.get(&CacheKey::new("fake", "x")).is_some());
+    }
+
+    #[test]
+    fn a_second_wrap_reuses_the_first_wraps_cached_value() {
+        // Dropping `wrap` from the cache key, stated as the user-facing win:
+        // approving a second wrap for a secret already approved elsewhere no
+        // longer costs a second provider call. Authorization is unchanged —
+        // this ask is only reached once its own gate has passed.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let counter = tmp.path().join("invocations");
+        std::fs::write(&counter, b"").expect("create counter");
+        let script = format!(
+            "echo invoked >> {counter}; echo secret-{{locator}}",
+            counter = counter.display(),
+        );
+        let mut providers = HashMap::new();
+        providers.insert(
+            "fake".to_owned(),
+            super::super::proto::WireProvider {
+                name: "fake".to_owned(),
+                retrieve: vec!["sh".to_owned(), "-c".to_owned(), script],
+                retrieve_batch: None,
+            },
+        );
+        let make = |wrap: &str, env: &str| {
+            let mut ask = ask_with_secret(wrap, &[wrap], env);
+            wrap_of(&mut ask).providers = providers.clone();
+            ask
+        };
+
+        let state = State::new();
+        let cache = state.secret_cache_arc();
+        let in_flight = state.in_flight_arc();
+
+        super::resolve_for_ask(
+            &make("gh", "GITHUB_TOKEN"),
+            cache.clone(),
+            in_flight.clone(),
+        );
+        assert_eq!(invocations(&counter), 1);
+
+        // A different wrap, different env-var name, same reference.
+        match super::resolve_for_ask(&make("hub", "GH_TOKEN"), cache, in_flight) {
+            WaiterReply::Decision { secrets, .. } => {
+                assert_eq!(
+                    secrets.get("GH_TOKEN").map(String::as_str),
+                    Some("secret-x")
+                );
+            }
+            WaiterReply::Err { message } => panic!("expected a cache hit, got: {message}"),
+        }
+        assert_eq!(
+            invocations(&counter),
+            1,
+            "a second wrap naming the same reference must reuse the cached value"
+        );
+    }
+
     #[test]
     fn resolve_single_cached_resolves_once_then_serves_from_cache() {
         // The SSH-key regression in one test: the first sign resolves the
@@ -4042,16 +4220,14 @@ mod tests {
         let state = State::new();
         let cache = state.secret_cache_arc();
         let in_flight = state.in_flight_arc();
-        let key = CacheKey {
-            wrap: "ssh:github".into(),
-            provider: "fake".into(),
-            locator: "x".into(),
-        };
+        let key = CacheKey::new("fake", "x");
 
+        let ttl = crate::wraps::CacheTtl::default();
         let first = super::resolve_single_cached(
             &cache,
             &in_flight,
             key.clone(),
+            ttl,
             "github",
             None,
             &providers,
@@ -4060,7 +4236,7 @@ mod tests {
         assert_eq!(&*first, "secret-x");
 
         let second =
-            super::resolve_single_cached(&cache, &in_flight, key, "github", None, &providers)
+            super::resolve_single_cached(&cache, &in_flight, key, ttl, "github", None, &providers)
                 .expect("second resolve");
         assert_eq!(&*second, "secret-x");
 
@@ -4136,6 +4312,8 @@ mod tests {
         wrap_of(&mut ask)
             .secrets
             .push(super::super::proto::SecretAsk {
+                declared_as: None,
+                ttl: crate::wraps::CacheTtl::default(),
                 name: "S2".to_owned(),
                 provider: "bat".to_owned(),
                 locator: "loc-b".to_owned(),

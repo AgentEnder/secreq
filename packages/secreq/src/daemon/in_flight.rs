@@ -183,12 +183,10 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    fn key(wrap: &str) -> CacheKey {
-        CacheKey {
-            wrap: wrap.to_owned(),
-            provider: "op".to_owned(),
-            locator: "x".to_owned(),
-        }
+    /// A distinct cache key per test name. The map keys on
+    /// `(provider, locator)` now, so the *locator* is what varies.
+    fn key(locator: &str) -> CacheKey {
+        CacheKey::new("op", locator)
     }
 
     #[test]

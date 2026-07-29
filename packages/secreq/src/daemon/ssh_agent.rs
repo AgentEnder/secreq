@@ -42,7 +42,6 @@ use super::state::{SharedState, WaiterReply};
 use crate::consent::{Decision, SshGrant, SshGrantScope};
 use crate::manifest::Provider;
 use crate::provenance::{SignAnchor, SignAnchorKind};
-use crate::wraps::SshIdentity;
 
 /// Upper bound on a single agent frame's payload length. Mirrors OpenSSH's
 /// `AGENT_MAX_MSGLEN` (256 KiB) from `authfd.h`: the agent protocol never
@@ -89,6 +88,13 @@ pub struct PreparedIdentity {
     pub reference: crate::reference::Reference,
     /// `$reason` from the config, shown in the consent prompt.
     pub reason: Option<String>,
+    /// How long a resolved private key may be served from the cache.
+    /// Read off the reference via [`crate::wraps::WrapsConfig::ttl_for`], so
+    /// declaring the key's reference in the `secrets` block with a `ttl` bounds
+    /// how long it stays decryptable in the daemon — the highest-value use of
+    /// the feature, since a private key is exactly the sort of secret someone
+    /// accepts a re-prompt for.
+    pub ttl: crate::wraps::CacheTtl,
 }
 
 /// Everything the per-connection SIGN handler needs that isn't on the wire:
@@ -117,7 +123,8 @@ pub fn default_agent_socket_path() -> Result<PathBuf> {
 /// An unparseable `public_key` is skipped with a daemon-log warning rather
 /// than failing the whole agent — one malformed entry shouldn't hide every
 /// other key from `ssh-add -l`.
-pub fn prepare_identities(ssh: &BTreeMap<String, SshIdentity>) -> Vec<PreparedIdentity> {
+pub fn prepare_identities(config: &crate::wraps::WrapsConfig) -> Vec<PreparedIdentity> {
+    let ssh = &config.ssh;
     let mut prepared = Vec::with_capacity(ssh.len());
     for (name, identity) in ssh {
         match ssh_key::PublicKey::from_openssh(&identity.public_key) {
@@ -129,6 +136,7 @@ pub fn prepare_identities(ssh: &BTreeMap<String, SshIdentity>) -> Vec<PreparedId
                     key_id: name.clone(),
                     reference: identity.private_key.clone(),
                     reason: identity.reason.clone(),
+                    ttl: config.ttl_for(&identity.private_key),
                 }),
                 Err(err) => super::log::log_at(
                     "ssh-agent",
@@ -151,11 +159,10 @@ pub fn prepare_identities(ssh: &BTreeMap<String, SshIdentity>) -> Vec<PreparedId
 /// no agent socket is created in that case.
 pub fn start(
     socket_path: PathBuf,
-    ssh: &BTreeMap<String, SshIdentity>,
-    providers: BTreeMap<String, Provider>,
+    config: &crate::wraps::WrapsConfig,
     state: SharedState,
 ) -> Result<Option<UnixListener>> {
-    if ssh.is_empty() {
+    if config.ssh.is_empty() {
         return Ok(None);
     }
     if let Some(parent) = socket_path.parent() {
@@ -171,7 +178,7 @@ pub fn start(
     perms.set_mode(0o600);
     std::fs::set_permissions(&socket_path, perms)?;
 
-    let identities = prepare_identities(ssh);
+    let identities = prepare_identities(config);
     super::log::log_at(
         "ssh-agent",
         format_args!(
@@ -184,7 +191,7 @@ pub fn start(
 
     let ctx = SignContext {
         identities: Arc::new(identities),
-        providers: Arc::new(providers),
+        providers: Arc::new(config.providers.clone()),
         state: Some(state),
     };
 
@@ -790,11 +797,17 @@ fn sign_ask(
 /// Resolve the identity's private-key reference through the shared encrypted
 /// cache and sign `data`.
 ///
-/// The key is cached under `CacheKey { wrap: "ssh:<key_id>", provider,
-/// locator }` exactly like any other secret (encrypted at rest with a
-/// per-entry key; see [`super::cache`]), so the provider — and its biometric
-/// prompt — runs at most once per key per daemon lifetime instead of on
-/// every sign. `secreq daemon stop` is the reset, same as for wrap secrets.
+/// The key is cached under `CacheKey { provider, locator }` exactly like any
+/// other secret (encrypted at rest with a per-entry key; see [`super::cache`]),
+/// so the provider — and its biometric prompt — runs at most once per key per
+/// TTL window instead of on every sign. That window is the daemon's lifetime
+/// unless the `secrets` block declares this reference with a shorter `ttl`;
+/// `secreq daemon stop` is the blanket reset, same as for wrap secrets.
+///
+/// The cache slot is the reference's, not this identity's. A wrap that names
+/// the same reference therefore shares it — correct, because it is the same
+/// secret, and the reason the key no longer carries an `ssh:<key_id>`
+/// namespace.
 /// The returned PEM is a `Zeroizing` buffer that scrubs when this function
 /// returns; only the encrypted ciphertext outlives the call.
 fn resolve_and_sign(
@@ -805,15 +818,15 @@ fn resolve_and_sign(
     data: &[u8],
     flags: u32,
 ) -> Result<Vec<u8>> {
-    let key = CacheKey {
-        wrap: format!("ssh:{}", identity.key_id),
-        provider: identity.reference.provider.clone(),
-        locator: identity.reference.locator.clone(),
-    };
+    let key = CacheKey::new(
+        identity.reference.provider.clone(),
+        identity.reference.locator.clone(),
+    );
     let pem = super::state::resolve_single_cached(
         cache,
         in_flight,
         key,
+        identity.ttl,
         &identity.key_id,
         identity.reason.as_deref(),
         providers,
@@ -1012,6 +1025,7 @@ mod tests {
                 locator: "SSH_KEY".to_owned(),
             },
             reason: None,
+            ttl: crate::wraps::CacheTtl::default(),
         };
         let chain = whole_chain(Vec::new());
 
@@ -1054,6 +1068,7 @@ mod tests {
                 locator: "SSH_KEY".to_owned(),
             },
             reason: None,
+            ttl: crate::wraps::CacheTtl::default(),
         }
     }
 

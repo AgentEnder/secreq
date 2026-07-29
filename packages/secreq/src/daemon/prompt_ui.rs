@@ -2017,6 +2017,8 @@ mod tests {
 
     fn secret(name: &str) -> SecretAsk {
         SecretAsk {
+            declared_as: None,
+            ttl: crate::wraps::CacheTtl::default(),
             name: name.to_owned(),
             provider: "op".to_owned(),
             locator: format!("op://Dev/npm/{name}"),

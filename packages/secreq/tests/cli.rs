@@ -787,8 +787,10 @@ fn wraps_list_shows_configured_wraps() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("gh — GitHub"));
     assert!(stdout.contains("aws"));
-    assert!(stdout.contains("GITHUB_TOKEN (op)"));
-    assert!(stdout.contains("AWS_KEY (op)"));
+    // The provider, and the lifetime the value is cached for — the default
+    // being the daemon's own, which is what an undeclared secret gets.
+    assert!(stdout.contains("GITHUB_TOKEN (op, ttl daemon lifetime)"));
+    assert!(stdout.contains("AWS_KEY (op, ttl daemon lifetime)"));
     // Values never appear.
     assert!(!stdout.contains("secret://"));
 }
@@ -1713,18 +1715,47 @@ fn read_refuses_re_entrant_call_during_resolution() {
 }
 
 #[test]
-fn read_rejects_a_malformed_reference_before_daemon_contact() {
+fn read_rejects_an_undeclared_no_slash_reference_naming_both_readings() {
     let sb = Sandbox::new();
     // A provider that would echo the locator — proves we never reach it.
     write_config(
         &sb.config_path(),
         r#"{ providers: { op: { retrieve: ["printf", "%s", "{locator}"] } } }"#,
     );
-    // `noslash` has no `/`, so it can't be a `provider/locator`.
+    // `noslash` has no `/`, so it is a declared secret's name — and nothing
+    // declares it. The message has to offer the other reading too, because
+    // the common mistake is forgetting the locator, not misspelling a name.
     let out = sb.run(&["read", "noslash"]);
-    assert_eq!(out.status.code(), Some(1), "malformed ref should exit 1");
+    assert_eq!(out.status.code(), Some(1), "unknown name should exit 1");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("not a valid reference"), "stderr: {stderr}");
+    assert!(stderr.contains("not a declared secret"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("secret://noslash/<locator>"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn read_resolves_a_declared_secret_by_name() {
+    let sb = Sandbox::new();
+    write_config(
+        &sb.config_path(),
+        r#"{
+            providers: { op: { retrieve: ["printf", "%s", "{locator}"] } },
+            secrets: { github_token: { ref: "secret://op/Personal/GitHub/token" } },
+        }"#,
+    );
+    // The config is in hand on this path, so a bare name resolves through
+    // the `secrets` block on the same slash rule a wrap's `env` uses. The
+    // daemon is not running in the sandbox, so this gets as far as consent
+    // and stops — which is enough to prove the name resolved rather than
+    // failing as a malformed reference.
+    let out = sb.run(&["read", "github_token"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("not a declared secret") && !stderr.contains("not a valid reference"),
+        "a declared name must resolve, not fail parsing: {stderr}"
+    );
 }
 
 #[test]

@@ -62,11 +62,10 @@ pub fn start(socket_path: PathBuf, state: SharedState) -> Result<UnixListener> {
 /// drives the consent prompt + SSH approval cache.
 pub fn start_ssh_agent(
     socket_path: PathBuf,
-    ssh: &std::collections::BTreeMap<String, crate::wraps::SshIdentity>,
-    providers: std::collections::BTreeMap<String, crate::manifest::Provider>,
+    config: &crate::wraps::WrapsConfig,
     state: SharedState,
 ) -> Result<Option<UnixListener>> {
-    super::ssh_agent::start(socket_path, ssh, providers, state)
+    super::ssh_agent::start(socket_path, config, state)
 }
 
 fn accept_loop(listener: UnixListener, state: SharedState) {

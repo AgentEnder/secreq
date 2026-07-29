@@ -258,17 +258,18 @@ pub fn read(refs: &[String], config_path: Option<&Path>) -> Result<i32> {
     // Parse every arg up front so a malformed ref fails before any daemon
     // contact. Dedupe by the typed string (preserving order) so a repeated
     // ref can't produce duplicate JSON keys.
-    let mut parsed: Vec<(String, Reference)> = Vec::with_capacity(refs.len());
+    let mut parsed: Vec<(String, crate::wraps::ResolvedRef)> = Vec::with_capacity(refs.len());
     let mut seen: Vec<String> = Vec::new();
     for raw in refs {
-        let reference = Reference::parse_arg(raw).with_context(|| {
-            format!("`{raw}` is not a valid reference (expected `secret://provider/locator` or `provider/locator`)")
-        })?;
+        // The config is already in hand here, so a bare `secreq read
+        // github_token` resolves through the `secrets` block on the same rule
+        // a wrap's `env` uses — no-slash means a declared name.
+        let resolved = config.resolve_arg(raw)?;
         if seen.contains(raw) {
             continue;
         }
         seen.push(raw.clone());
-        parsed.push((raw.clone(), reference));
+        parsed.push((raw.clone(), resolved));
     }
 
     let cwd = std::env::current_dir().context("could not determine current directory")?;

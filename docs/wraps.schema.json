@@ -115,6 +115,28 @@
       },
       "type": "object"
     },
+    "SecretDecl": {
+      "additionalProperties": false,
+      "description": "One entry in the reserved `secrets` block: a provider reference declared **once**, under a name any number of wraps can reference as `secret://<name>`.\n\nThe name is what a TTL hangs on. Before this existed a secret had no declaration — it was a string repeated in every wrap that needed it — so there was nowhere for a per-secret setting to live.",
+      "properties": {
+        "ref": {
+          "description": "The `secret://provider/locator` reference this name stands for. Always the direct form: a declaration naming another declaration would make resolution a graph walk with cycles to detect, for no reuse a second name buys.",
+          "pattern": "^secret://[^/]+/.+$",
+          "type": "string"
+        },
+        "ttl": {
+          "description": "How long the daemon may serve this secret from its in-memory cache before re-running the provider, as a count and a unit — `30s`, `15m`, `2h`, `1d`. Omit for the default, which is the daemon's own lifetime; any value here is a shortening, and shortening means the provider (and on 1Password, a biometric prompt) runs again once it elapses.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "ref"
+      ],
+      "type": "object"
+    },
     "SshIdentity": {
       "additionalProperties": false,
       "description": "One SSH identity served by the agent. `public_key` is the inline OpenSSH public key (not secret); `private_key` is a `secret://provider/locator` reference resolved only at SIGN time.",
@@ -193,19 +215,19 @@
         },
         "env": {
           "additionalProperties": {
-            "description": "A `secret://provider/locator` reference.",
-            "pattern": "^secret://[^/]+/.+$",
+            "description": "A `secret://provider/locator` reference, or `secret://<name>` naming an entry in the top-level `secrets` block.",
+            "pattern": "^secret://[^/]+(/.+)?$",
             "type": "string"
           },
           "default": {},
-          "description": "Environment variables to inject. Each value is a `secret://provider/locator` reference; resolution happens at invocation time. Omit (or leave empty) for a gate-only wrap.",
+          "description": "Environment variables to inject. Each value is either an inline `secret://provider/locator` reference or `secret://<name>` naming an entry in the top-level `secrets` block; resolution happens at invocation time. Omit (or leave empty) for a gate-only wrap.",
           "type": "object"
         }
       },
       "type": "object"
     }
   },
-  "description": "Per-binary wrap configuration for `secreq` (`~/.secreq/wraps.json5`, or `$SECREQ_HOME/wraps.json5`). Top-level keys are binary names; reserved keys are `providers` and any `$`-prefixed metadata. See docs/wraps.md.",
+  "description": "Per-binary wrap configuration for `secreq` (`~/.secreq/wraps.json5`, or `$SECREQ_HOME/wraps.json5`). Top-level keys are binary names; reserved keys are `providers`, `secrets`, `ssh`, and any `$`-prefixed metadata. See docs/wraps.md.",
   "patternProperties": {
     "^\\$": true
   },
@@ -231,6 +253,13 @@
         "$ref": "#/definitions/Provider"
       },
       "description": "Provider scheme definitions. Built-in providers (`op`, `keychain` on macOS, `lastpass` / `pass` on Unix) are available without an explicit entry; entries here override or add new schemes.",
+      "type": "object"
+    },
+    "secrets": {
+      "additionalProperties": {
+        "$ref": "#/definitions/SecretDecl"
+      },
+      "description": "Secrets declared once under a name, keyed by that name. A wrap references one as `secret://<name>` instead of repeating its provider reference, and the declaration is where a per-secret cache `ttl` lives. A name contains no `/`, which is what tells the two reference forms apart.",
       "type": "object"
     },
     "ssh": {

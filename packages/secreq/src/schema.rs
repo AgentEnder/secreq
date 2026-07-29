@@ -53,7 +53,7 @@ use serde_json::{json, Value};
 
 use crate::manifest::Provider;
 use crate::rules::RulesFile;
-use crate::wraps::{SshIdentity, Wrap};
+use crate::wraps::{SecretDecl, SshIdentity, Wrap};
 
 // An `$id` is what a user's editor fetches when they put `$schema` at the top
 // of their config, so it has to be the URL the file is actually served from.
@@ -139,11 +139,19 @@ pub fn wrap_description_property() -> Value {
     })
 }
 
-/// A wrap's `env` map: env-var name to `secret://provider/locator` reference.
+/// A wrap's `env` map: env-var name to a `secret://…` reference, in either of
+/// the scheme's two forms.
 ///
 /// A named type so [`Wrap`]'s `env` values carry the reference pattern that
 /// `BTreeMap<String, String>` alone would not. Never constructed — it exists
 /// to be a `schemars(with = …)` target.
+///
+/// The pattern admits the no-slash form, because this is the one place a
+/// declared secret's name is legal. Without that, every `secret://<name>` an
+/// editor validated would be underlined as invalid against secreq's own
+/// published schema. [`crate::reference::Reference`]'s pattern stays
+/// direct-only for the opposite reason: every field typed as one resolves a
+/// name rather than holding it.
 pub struct SecretRefMap;
 
 impl schemars::JsonSchema for SecretRefMap {
@@ -160,8 +168,8 @@ impl schemars::JsonSchema for SecretRefMap {
             "type": "object",
             "additionalProperties": {
                 "type": "string",
-                "pattern": r"^secret://[^/]+/.+$",
-                "description": "A `secret://provider/locator` reference."
+                "pattern": r"^secret://[^/]+(/.+)?$",
+                "description": "A `secret://provider/locator` reference, or `secret://<name>` naming an entry in the top-level `secrets` block."
             }
         })
     }
@@ -243,6 +251,7 @@ pub fn wraps_schema() -> Value {
     let wrap = generator.subschema_for::<Wrap>().to_value();
     let provider = generator.subschema_for::<Provider>().to_value();
     let ssh_identity = generator.subschema_for::<SshIdentity>().to_value();
+    let secret_decl = generator.subschema_for::<SecretDecl>().to_value();
     let mut definitions = Value::Object(generator.take_definitions(true));
 
     // The keys the parser accepts that are not fields on any type: legacy
@@ -272,7 +281,7 @@ pub fn wraps_schema() -> Value {
         "title": "secreq wraps config",
         "description": "Per-binary wrap configuration for `secreq` \
             (`~/.secreq/wraps.json5`, or `$SECREQ_HOME/wraps.json5`). Top-level keys are \
-            binary names; reserved keys are `providers` and any \
+            binary names; reserved keys are `providers`, `secrets`, `ssh`, and any \
             `$`-prefixed metadata. See docs/wraps.md.",
         "type": "object",
         "properties": {
@@ -295,6 +304,11 @@ pub fn wraps_schema() -> Value {
                 "type": "object",
                 "description": "Provider scheme definitions. Built-in providers (`op`, `keychain` on macOS, `lastpass` / `pass` on Unix) are available without an explicit entry; entries here override or add new schemes.",
                 "additionalProperties": provider
+            },
+            "secrets": {
+                "type": "object",
+                "description": "Secrets declared once under a name, keyed by that name. A wrap references one as `secret://<name>` instead of repeating its provider reference, and the declaration is where a per-secret cache `ttl` lives. A name contains no `/`, which is what tells the two reference forms apart.",
+                "additionalProperties": secret_decl
             },
             "ssh": {
                 "type": "object",

@@ -36,7 +36,7 @@ use secreq::daemon::ssh_proto::{self, SSH_AGENT_FAILURE, SSH_AGENT_IDENTITIES_AN
 use secreq::daemon::state::State;
 use secreq::manifest::Provider;
 use secreq::reference::Reference;
-use secreq::wraps::SshIdentity;
+use secreq::wraps::{SshIdentity, WrapsConfig};
 
 use rsa::signature::Verifier;
 use ssh_encoding::{Decode, Encode};
@@ -51,6 +51,16 @@ use ssh_key::{LineEnding, PrivateKey, PublicKey, Signature};
 // `~/.secreq` daemon log. (The lib's own unit tests get an automatic
 // fallback in `paths::secreq_root`, but integration tests link the lib
 // without `cfg(test)` and must pin it themselves.)
+
+/// Wrap an `ssh` map in the `WrapsConfig` `prepare_identities` now reads, so a
+/// fixture that only cares about identities still gets the config-derived
+/// per-secret TTL lookup the daemon does.
+fn config_with_ssh(ssh: BTreeMap<String, SshIdentity>) -> WrapsConfig {
+    WrapsConfig {
+        ssh,
+        ..WrapsConfig::default()
+    }
+}
 
 /// A real OpenSSH ed25519 public key (generated once for this test). The
 /// private half is irrelevant: listing never resolves a private key.
@@ -103,7 +113,7 @@ fn lists_configured_identities_without_resolving() {
     );
 
     // Prepare the identities once, exactly as the daemon does.
-    let identities = ssh_agent::prepare_identities(&ssh);
+    let identities = ssh_agent::prepare_identities(&config_with_ssh(ssh.clone()));
     assert_eq!(identities.len(), 1, "one identity prepared");
 
     // The expected wire blob + comment, derived independently from the
@@ -204,7 +214,7 @@ fn signing_context_with_seeded_approval(
     let mut ssh: BTreeMap<String, SshIdentity> = BTreeMap::new();
     ssh.insert("github".to_owned(), identity.clone());
 
-    let identities = ssh_agent::prepare_identities(&ssh);
+    let identities = ssh_agent::prepare_identities(&config_with_ssh(ssh.clone()));
     let [identity_blob] = identities.as_slice() else {
         panic!("one declared identity should prepare exactly one blob");
     };
@@ -405,7 +415,7 @@ fn a_flood_of_silent_connections_cannot_starve_the_agent_forever() {
         },
     );
     let ctx = SignContext {
-        identities: Arc::new(ssh_agent::prepare_identities(&ssh)),
+        identities: Arc::new(ssh_agent::prepare_identities(&config_with_ssh(ssh.clone()))),
         providers: Arc::new(BTreeMap::new()),
         state: None,
     };

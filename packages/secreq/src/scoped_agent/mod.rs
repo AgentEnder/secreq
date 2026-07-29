@@ -560,7 +560,10 @@ fn resolve_fresh(manifest: &Manifest, reference: &Reference) -> Result<SecretVal
             // must get an error, never a silent default.
             default: None,
             // The ref came from outside our own manifest, like an ambient
-            // `secret://` env value would have.
+            // `secret://` env value would have — and a guest never names a
+            // declared secret (see the `Request::Resolve` arm), so there is
+            // no declaration to attribute this to.
+            declared_as: None,
         }],
     };
     let (mut resolved, _stats) = resolve_all(manifest, &plan)
@@ -678,12 +681,23 @@ pub fn handle_request(
             // see [`GuestChain`].
             let guest_chain = GuestChain::new(guest_chain);
 
+            // Deliberately `Reference::parse`, which refuses the
+            // `secret://<name>` form. A guest may not name a declared secret,
+            // and this is the decision rather than a side effect of sharing a
+            // parser: the host-declared scope is the principal here (see
+            // `brain: areas/secreq/design/2026-07-16-remote-secret-agent.md`),
+            // and scope is a set of references. Admitting names would make it
+            // "names, or expanded names" — a change to the trust model, for an
+            // ergonomic win the guest is not the one who benefits from. The
+            // host expands its own names before it declares the scope.
             let Some(reference) = Reference::parse(&reference) else {
                 // Malformed input is an error, not a denial: nothing was
                 // refused because nothing coherent was asked. The message
                 // echoes no other ref.
                 return Response::Error {
-                    message: "not a well-formed secret://provider/locator reference".to_owned(),
+                    message: "not a well-formed secret://provider/locator reference \
+                              (a declared secret's name is host-side only)"
+                        .to_owned(),
                 };
             };
 

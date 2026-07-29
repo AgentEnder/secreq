@@ -155,13 +155,8 @@ pub fn run() -> Result<i32> {
                 // wrap path gets via `load_config_or_default`.
                 config.merge_builtin_providers();
                 let agent_socket = server::default_agent_socket_path()?;
-                server::start_ssh_agent(
-                    agent_socket,
-                    &config.ssh,
-                    config.providers.clone(),
-                    state.clone(),
-                )
-                .context("start ssh agent listener")?
+                server::start_ssh_agent(agent_socket, &config, state.clone())
+                    .context("start ssh agent listener")?
             }
             Ok(_) => None,
             Err(err) => {
@@ -211,6 +206,29 @@ pub fn run() -> Result<i32> {
         }
 
         let mut guard = state.lock().expect("state mutex");
+
+        // Expire cached secret values actively, not on the next read. A
+        // secret whose TTL was set precisely because it is sensitive should
+        // not sit decryptable in RAM for an hour after it expired just
+        // because nobody asked for it — so the sweep is folded into this
+        // tick rather than given a timer of its own, which would be a
+        // second thread to wake a daemon whose whole job here is to sleep.
+        //
+        // Deliberately does **not** `touch()`: a prune is the daemon
+        // tidying up after itself, not activity, and counting it as
+        // activity would resurrect a daemon on its way to an idle exit
+        // every time an entry expired.
+        let pruned = guard.prune_expired_secrets();
+        if pruned > 0 {
+            log::log_at(
+                "cache",
+                format_args!(
+                    "pruned {pruned} expired secret cache entr{}",
+                    if pruned == 1 { "y" } else { "ies" }
+                ),
+            );
+        }
+
         let ui_attached =
             guard.consent_subscriber_count() > 0 || guard.manager_subscriber_count() > 0;
         if ui_attached {

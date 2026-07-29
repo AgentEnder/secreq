@@ -51,6 +51,8 @@ binary. `$`-prefixed keys are settings.
 | `$editor`         | Editor id (`code`, `cursor`, `zed`, `nvim`) the rule editor's "Open in editor" button defaults to. Written when you pick one in the manager's Rules view.                                                      |
 | `$schema`         | Editor pointer; ignored at runtime.                                                                                                                                                                            |
 | `providers`       | Provider definitions. Optional; see [providers](./providers.md).                                                                                                                                               |
+| `secrets`         | Secrets declared once under a name, with an optional per-secret cache `ttl`. See [declared secrets](#declared-secrets).                                                                                        |
+| `ssh`             | Identities served by the consent-gated SSH agent. See [the SSH agent](./ssh-agent.md).                                                                                                                         |
 
 Other `$`-prefixed keys are reserved. A per-wrap `$description` parses but
 does nothing yet.
@@ -60,11 +62,15 @@ does nothing yet.
 | Setting   | Type              | Meaning                                                                                                                                                     |
 | --------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `$reason` | string            | Rationale shown in the consent prompt.                                                                                                                      |
-| `env`     | object (optional) | Environment variables to inject. Each value is a full `secret://provider/locator` reference. Bare locators aren't accepted here. Omit for a gate-only wrap. |
+| `env`     | object (optional) | Environment variables to inject. Each value is a `secret://provider/locator` reference or a `secret://<name>` naming a [declared secret](#declared-secrets). Bare locators aren't accepted here. Omit for a gate-only wrap. |
 
 A reference is `secret://<provider>/<locator>`: the provider is a scheme
 name (built-in or declared in `providers`), and the locator is everything
 after the first `/`. See [providers](./providers.md).
+
+A reference with **no** `/` after the scheme is a declared secret's name
+instead. The slash is the whole rule, so `secret://op/Personal/GitHub/token`
+and `secret://github_token` can never be read the same way.
 
 At the `Locator` prompt you can paste the store's own reference instead of
 retyping the tail of it. 1Password's "Copy Secret Reference" gives you
@@ -114,6 +120,77 @@ with an internal marker that makes the wrapped `op` pass straight through.
 Only the `op` calls _you_ make are gated, never the ones secreq makes to
 fetch a value for another wrap.
 
+## Declared secrets
+
+A secret written inline in a wrap's `env` is a string, repeated in every
+wrap that needs it. Declaring it under `secrets` gives it a name to reference
+and a place for per-secret settings to live:
+
+```json5
+{
+  secrets: {
+    github_token: {
+      ref: 'secret://op/Personal/GitHub Token/credential',
+      ttl: '15m',
+    },
+  },
+
+  gh: {
+    env: { GITHUB_TOKEN: 'secret://github_token' },
+  },
+
+  hub: {
+    env: { GH_TOKEN: 'secret://github_token' },
+  },
+}
+```
+
+| Setting | Type              | Meaning                                                                                                                            |
+| ------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `ref`   | string            | The `secret://provider/locator` this name stands for. Always a provider reference — a declaration can't name another declaration. |
+| `ttl`   | string (optional) | How long the daemon may serve this secret from its cache. A count and a unit: `30s`, `15m`, `2h`, `1d`.                            |
+
+A name contains no `/`. Two names for one `ref` are fine as long as they
+agree on the `ttl`; a file where they disagree fails to load, because one
+reference is one cached value and so has one lifetime.
+
+Changing a declaration's `ref` changes it for every wrap that references
+the name, which is the point. `secreq check` reports a `secret://<name>`
+that names nothing declared.
+
+### How long a value stays cached
+
+The daemon caches a resolved value so a second command doesn't pay for a
+second provider call — on 1Password, a second biometric prompt. Without a
+`ttl` that value lives as long as the daemon, which is the default and what
+every secret does unless you say otherwise.
+
+A `ttl` shortens it, for that secret only:
+
+```json5
+secrets: {
+  prod_deploy_key: { ref: 'secret://op/Work/Deploy/key', ttl: '5m' },
+}
+```
+
+Five minutes after the value is fetched the daemon drops and scrubs it. The
+next command that needs it re-runs the provider, biometric prompt included —
+which is the trade you are making, and why this is per secret rather than a
+global setting. Set it on the credential you want re-confirmed, not on
+everything.
+
+Two consequences worth knowing:
+
+- **The approval is untouched.** A wrap you approved and told secreq to
+  remember stays approved. Only the value expires; the prompt does not
+  come back.
+- **The `ttl` follows the reference, not the name.** A wrap that writes
+  `secret://op/Work/Deploy/key` inline gets the same five minutes, because
+  the daemon caches one value per reference.
+
+A `ttl` is also the answer to a secret you rotate upstream: without one, the
+old value is served until the daemon restarts.
+
 ## How approval is scoped
 
 When you approve a wrap invocation, the decision is cached against the
@@ -132,13 +209,18 @@ The start-time component is what makes this pid-recycle safe: `(ppid,
 start_time)` identifies exactly one process across its lifetime, so a new
 process inheriting the number gets a fresh prompt.
 
-**There is no TTL and no on-disk file.** Cache lifetime is bounded by two
-natural boundaries: the parent process's lifetime, and the daemon's. When
-the shell that approved a wrap exits, no process can share both its pid and
-its start time, so the entry becomes unreachable. When the daemon exits
+**An approval has no TTL and no on-disk file.** Its lifetime is bounded by
+two natural boundaries: the parent process's lifetime, and the daemon's.
+When the shell that approved a wrap exits, no process can share both its pid
+and its start time, so the entry becomes unreachable. When the daemon exits
 (`secreq daemon stop`, `--force`, or the two-hour idle timeout), the whole
-cache goes with it. Nothing artificial expires entries in between, and a
+cache goes with it. Nothing artificial expires an approval in between, and a
 daemon restart is always the clean reset.
+
+A secret's [cache `ttl`](#how-long-a-value-stays-cached) is a different
+thing and does not touch this: when a value expires, the next command
+re-fetches it from the provider, but the approval it was released under
+still stands, so no prompt opens.
 
 Two kinds of request never remember: `secreq run`, whose
 identity is fixed and would over-match, and SSH signatures, which have
