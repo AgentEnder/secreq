@@ -1,9 +1,19 @@
-# Phase 1 lays only the workspace foundation. `docs-site` is added in Phase 2;
-# listing it now is a harmless no-op until that directory exists.
+# `packages/secreq-rule` IS a member, and the docs site depends on it as
+# `workspace:*`. That is the point: it is what makes Nx infer the
+# `docs-site -> secreq-rule` edge rather than having it asserted by hand in a
+# project.json. typedoc reads the SDK's source as the site's API reference, so
+# the edge is real whether or not the graph knows it — and a graph that doesn't
+# know it can't order the build or answer `nx affected`.
 #
-# NOTE: `packages/secreq-rule` is deliberately NOT a member of this pnpm
-# workspace. It keeps its own npm `package-lock.json` island so its publish /
-# build behavior is unchanged by the monorepo conversion. Do not add
-# `packages/*` here — that would fold secreq-rule in.
+# The cost is that the SDK no longer keeps its own npm `package-lock.json`
+# island. pnpm owns its `node_modules` now, which is why
+# `packages/secreq/tests/fixtures/wasm_rules/rebuild.sh` installs through pnpm:
+# an `npm install` in there would fight for the same directory.
+#
+# `packages/*` does not match `packages/secreq-rule/examples/*`, and that is
+# deliberate. The worked example resolves the SDK through
+# `"secreq-rule": "file:../.."` because being an ordinary external consumer is
+# the whole thing it demonstrates.
 packages:
   - docs-site
+  - packages/*

@@ -3,12 +3,8 @@
   "version": "0.0.0",
   "private": true,
   "license": "MIT",
-  "scripts": {
-    "format": "oxfmt .",
-    "format:check": "oxfmt --check .",
-    "lint": "oxlint"
-  },
   "devDependencies": {
+    "@monodon/rust": "^3.0.0",
     "@nx/js": "23.1.0",
     "nx": "23.1.0",
     "nx-github-pages": "^1.2.0",
@@ -16,5 +12,30 @@
     "oxlint": "1.75.0",
     "typescript": "6.0.3"
   },
-  "packageManager": "pnpm@10.33.2"
+  "packageManager": "pnpm@10.33.2",
+  "nx": {
+    "name": "workspace",
+    "targets": {
+      "lint": {
+        "command": "oxlint . --ignore-pattern 'docs-site/**' --ignore-pattern 'packages/**' --ignore-pattern 'docs/**'",
+        "inputs": [
+          "rootSources"
+        ],
+        "cache": true,
+        "outputs": []
+      },
+      "format:check": {
+        "command": "oxfmt --check . '!docs-site/**' '!packages/**' '!docs/**'",
+        "inputs": [
+          "rootSources"
+        ],
+        "cache": true,
+        "outputs": []
+      },
+      "format": {
+        "command": "oxfmt . '!docs-site/**' '!packages/**' '!docs/**'",
+        "cache": false
+      }
+    }
+  }
 }

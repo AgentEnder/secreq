@@ -38,23 +38,52 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.2",
     "pagefind": "^1.4.0",
+    "secreq-rule": "workspace:*",
     "tailwindcss": "^4.1.18",
     "typescript": "^5.9.2",
     "vite": "^7.3.1"
   },
   "nx": {
     "name": "docs-site",
+    "implicitDependencies": [
+      "docs",
+      "dev-docs",
+      "secreq-webfonts"
+    ],
     "targets": {
+      "lint": {
+        "command": "oxlint docs-site",
+        "inputs": [
+          "js"
+        ],
+        "cache": true,
+        "outputs": []
+      },
+      "format:check": {
+        "command": "oxfmt --check docs-site",
+        "inputs": [
+          "js"
+        ],
+        "cache": true,
+        "outputs": []
+      },
+      "format": {
+        "command": "oxfmt docs-site",
+        "cache": false
+      },
       "build": {
         "dependsOn": [
-          "^build",
-          "gen-webfonts"
+          "^build"
         ],
         "outputs": [
           "{projectRoot}/dist"
         ],
         "inputs": [
-          "...",
+          "js",
+          "^js",
+          "{workspaceRoot}/docs/**/*",
+          "{workspaceRoot}/dev-docs/**/*",
+          "{workspaceRoot}/dist/install.sh",
           {
             "env": "BASE_URL"
           }
@@ -71,30 +100,14 @@
         ],
         "outputs": []
       },
-      "gen-webfonts": {
-        "executor": "nx:run-commands",
-        "cache": true,
-        "inputs": [
-          "{workspaceRoot}/packages/webfonts/**/*",
-          "{workspaceRoot}/Cargo.lock"
-        ],
-        "outputs": [
-          "{projectRoot}/public/fonts/*.woff2",
-          "{projectRoot}/public/fonts/*.txt"
-        ],
-        "options": {
-          "command": "cargo run -p secreq-webfonts",
-          "cwd": "{workspaceRoot}"
-        }
-      },
       "dev": {
         "dependsOn": [
-          "gen-webfonts"
+          "^build"
         ]
       },
       "preview": {
         "dependsOn": [
-          "gen-webfonts"
+          "^build"
         ]
       },
       "deploy": {

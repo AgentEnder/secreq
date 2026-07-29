@@ -2,19 +2,76 @@
   "name": "secreq",
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "projectType": "application",
+  "tags": ["lang:rust"],
+  "implicitDependencies": ["docs", "dev-docs"],
   "targets": {
-    "check": {
-      "command": "cargo check --all-targets",
-      "options": { "cwd": "{projectRoot}" }
-    },
     "build": {
-      "command": "cargo build --release",
-      "options": { "cwd": "{projectRoot}" },
+      "command": "cargo build --release -p secreq",
+      "inputs": ["rust", "^rust"],
+      "outputs": ["{workspaceRoot}/target/release/secreq"],
       "cache": false
     },
+    "check": {
+      "command": "cargo check -p secreq --all-targets",
+      "inputs": ["rust", "^rust"]
+    },
     "test": {
-      "command": "cargo test",
-      "options": { "cwd": "{projectRoot}" }
+      "command": "cargo test -p secreq",
+      "inputs": ["rust", "^rust", "{workspaceRoot}/docs/**/*", "{workspaceRoot}/dev-docs/**/*"]
+    },
+    "lint": {
+      "command": "cargo clippy -p secreq --all-targets -- -D warnings",
+      "inputs": ["rust", "^rust"]
+    },
+    "format:check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "parallel": false,
+        "commands": ["cargo fmt -p secreq -- --check", "oxfmt --check packages/secreq"]
+      },
+      "inputs": ["rust"]
+    },
+    "format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "parallel": false,
+        "commands": ["cargo fmt -p secreq", "oxfmt packages/secreq"]
+      },
+      "cache": false
+    },
+    "extract-docs-artifacts": {
+      "executor": "nx:run-commands",
+      "options": {
+        "parallel": false,
+        "commands": [
+          "cargo run --quiet --example gen-schema > docs/wraps.schema.json",
+          "cargo run --quiet --example gen-auto-rules-schema > docs/auto-rules.schema.json",
+          "cargo run --quiet --example gen-cli-reference > docs/cli-reference.md"
+        ]
+      },
+      "inputs": ["rust"],
+      "outputs": [
+        "{workspaceRoot}/docs/wraps.schema.json",
+        "{workspaceRoot}/docs/auto-rules.schema.json",
+        "{workspaceRoot}/docs/cli-reference.md"
+      ],
+      "cache": true
+    },
+    "bless-screenshots": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo test -p secreq --test ui_screenshots -- --nocapture --test-threads=1",
+        "env": {
+          "SECREQ_BLESS_SHOTS": "1"
+        }
+      },
+      "outputs": ["{workspaceRoot}/dev-docs/ui-screenshots"],
+      "cache": false
+    },
+    "record-transcripts": {
+      "command": "cargo test -p secreq --test cli_transcripts -- --ignored --nocapture --test-threads=1",
+      "outputs": ["{workspaceRoot}/dev-docs/cli-transcripts"],
+      "cache": false
     }
   }
 }

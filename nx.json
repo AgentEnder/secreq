@@ -2,12 +2,28 @@
   "$schema": "./node_modules/nx/schemas/nx-schema.json",
   "namedInputs": {
     "default": ["{projectRoot}/**/*", "sharedGlobals"],
-    "production": [
+    "sharedGlobals": ["{workspaceRoot}/mise.toml"],
+    "rust": [
       "default",
-      "!{projectRoot}/**/?(*.)+(spec|test).[jt]s?(x)?(.snap)",
-      "!{projectRoot}/tsconfig.spec.json"
+      "{workspaceRoot}/Cargo.toml",
+      "{workspaceRoot}/Cargo.lock",
+      "{workspaceRoot}/clippy.toml"
     ],
-    "sharedGlobals": []
+    "js": [
+      "default",
+      "{workspaceRoot}/tsconfig.base.json",
+      "{workspaceRoot}/.oxlintrc.json",
+      "{workspaceRoot}/.oxfmtrc.json"
+    ],
+    "prose": ["default", "{workspaceRoot}/.vale.ini", "{workspaceRoot}/.vale/styles/**/*"],
+    "rootSources": [
+      "sharedGlobals",
+      "{workspaceRoot}/**/*.{ts,tsx,mts,cts,js,mjs,cjs,jsx,json,jsonc,css,md,yml,yaml}",
+      "!{workspaceRoot}/docs-site/**/*",
+      "!{workspaceRoot}/packages/**/*",
+      "!{workspaceRoot}/docs/**/*",
+      "!{workspaceRoot}/dev-docs/**/*"
+    ]
   },
   "targetDefaults": {
     "build": {
@@ -16,6 +32,22 @@
     },
     "typecheck": {
       "cache": true
+    },
+    "check": {
+      "cache": true,
+      "outputs": []
+    },
+    "test": {
+      "cache": true,
+      "outputs": []
+    },
+    "lint": {
+      "cache": true,
+      "outputs": []
+    },
+    "format:check": {
+      "cache": true,
+      "outputs": []
     }
   },
   "plugins": [
@@ -26,7 +58,11 @@
           "targetName": "typecheck"
         }
       }
-    }
+    },
+    "@monodon/rust"
   ],
+  "release": {
+    "projects": ["secreq-rule"]
+  },
   "analytics": true
 }

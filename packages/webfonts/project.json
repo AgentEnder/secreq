@@ -1,0 +1,38 @@
+{
+  "name": "secreq-webfonts",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "tags": ["lang:rust"],
+  "targets": {
+    "build": {
+      "command": "cargo run --quiet -p secreq-webfonts",
+      "inputs": ["rust"],
+      "outputs": ["{projectRoot}/dist"],
+      "cache": true
+    },
+    "check": {
+      "command": "cargo check -p secreq-webfonts --all-targets",
+      "inputs": ["rust"]
+    },
+    "lint": {
+      "command": "cargo clippy -p secreq-webfonts --all-targets -- -D warnings",
+      "inputs": ["rust"]
+    },
+    "format:check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "parallel": false,
+        "commands": ["cargo fmt -p secreq-webfonts -- --check", "oxfmt --check packages/webfonts"]
+      },
+      "inputs": ["rust"]
+    },
+    "format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "parallel": false,
+        "commands": ["cargo fmt -p secreq-webfonts", "oxfmt packages/webfonts"]
+      },
+      "cache": false
+    }
+  }
+}

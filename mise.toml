@@ -6,7 +6,11 @@
 # morning, and `vale` was on PATH or it wasn't.
 #
 #   mise install     # once, and after any change here
-#   mise run docs    # lint prose
+#
+# This file pins tools and nothing else. It used to also carry `[tasks.docs]`
+# and `[tasks.docs-audit]`, which meant two of the repo's checks were invisible
+# to nx — uncacheable, and unable to say which projects they applied to. They
+# are `nx run docs:lint` and `nx run docs:audit` now.
 #
 [tools]
 # Matches the release workflow's toolchain. Pinned rather than "stable"
@@ -27,11 +31,3 @@ node = "26"
 
 # Prose linter. See .vale.ini and .vale/styles/Secreq/.
 vale = "3.15.2"
-
-[tasks.docs]
-description = "Lint published prose with Vale"
-run = "vale docs README.md CONTRIBUTING.md packages/secreq-rule/README.md dev-docs"
-
-[tasks.docs-audit]
-description = "Sweep the docs for redundancy, stale claims and unused fixtures"
-run = "node .claude/skills/docs-audit/scripts/audit.mjs"

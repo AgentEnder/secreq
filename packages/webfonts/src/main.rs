@@ -24,14 +24,23 @@
 //! UI avoids emoji entirely, so no fixture can reference a glyph from them and
 //! shipping ~700 KB to prove it would be silly.
 //!
-//! Run: `cargo run -p secreq-webfonts` (or let `nx build docs-site` do it).
+//! Run: `nx build secreq-webfonts` (or let `nx build docs-site` do it, which
+//! reaches this through `^build`). `cargo run -p secreq-webfonts` still works
+//! and is what the target wraps.
 
 use std::path::PathBuf;
 
 use ttf2woff2::BrotliQuality;
 
-/// Where the docs site serves fonts from, relative to the workspace root.
-const OUT_DIR: &str = "docs-site/public/fonts";
+/// This crate's own build output, relative to the workspace root.
+///
+/// The site serves these from `docs-site/public/fonts`, but writing them
+/// straight there would make one project's build output land inside another
+/// project's tree — nx could not declare an output it does not own, and the
+/// docs site would be carrying a directory nothing in it produces. So the
+/// fonts land here, and `docs-site/vite.config.ts` mirrors them into `public/`
+/// alongside the schemas and screenshots it already mirrors out of the repo.
+const OUT_DIR: &str = "packages/webfonts/dist";
 
 /// Brotli effort, pinned rather than left to the crate's default.
 ///

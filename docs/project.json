@@ -1,0 +1,42 @@
+{
+  "name": "docs",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "targets": {
+    "format:check": {
+      "command": "oxfmt --check docs",
+      "inputs": ["js"],
+      "cache": true,
+      "outputs": []
+    },
+    "format": {
+      "command": "oxfmt docs",
+      "cache": false
+    },
+    "vale": {
+      "command": "vale docs README.md CONTRIBUTING.md packages/secreq-rule/README.md dev-docs",
+      "inputs": [
+        "prose",
+        "{workspaceRoot}/README.md",
+        "{workspaceRoot}/CONTRIBUTING.md",
+        "{workspaceRoot}/packages/secreq-rule/README.md",
+        "{workspaceRoot}/dev-docs/**/README.md"
+      ],
+      "cache": true,
+      "outputs": []
+    },
+    "audit": {
+      "command": "node .claude/skills/docs-audit/scripts/audit.mjs",
+      "inputs": [
+        "default",
+        "{workspaceRoot}/README.md",
+        "{workspaceRoot}/CONTRIBUTING.md",
+        "{workspaceRoot}/dev-docs/**/*",
+        "{workspaceRoot}/docs-site/pages/**/*",
+        "{workspaceRoot}/.claude/skills/docs-audit/scripts/audit.mjs"
+      ],
+      "outputs": [],
+      "cache": true
+    }
+  }
+}

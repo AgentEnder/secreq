@@ -1,0 +1,23 @@
+{
+  "name": "secreq-rule",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "targets": {
+    "lint": {
+      "command": "oxlint packages/secreq-rule",
+      "inputs": ["js"],
+      "cache": true,
+      "outputs": []
+    },
+    "format:check": {
+      "command": "oxfmt --check packages/secreq-rule",
+      "inputs": ["js"],
+      "cache": true,
+      "outputs": []
+    },
+    "format": {
+      "command": "oxfmt packages/secreq-rule",
+      "cache": false
+    }
+  }
+}

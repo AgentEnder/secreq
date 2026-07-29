@@ -1,6 +1,12 @@
 # Rust build output
 /target
 
+# The woff2 cuts + licences built by `nx build secreq-webfonts`. Not committed:
+# the output is a pure function of a pinned crate, so a stored copy could only
+# ever fall behind it. `docs-site/vite.config.ts` mirrors this into the site's
+# `public/fonts` at build time.
+/packages/webfonts/dist
+
 # Node dependencies (SDK + examples) and the Nx monorepo scaffold
 node_modules/
 .nx/
