@@ -1,9 +1,15 @@
 name: CI
 
 # Quality gates for a distributable build: formatting, lints (warnings are
-# errors), the test suite, and the schema-drift guard (tests/schema_drift.rs,
-# run as part of `cargo test`). macOS and Linux are the two first-class
-# targets, so the build/lint/test job runs on both.
+# errors), the test suite, prose, and the schema-drift guard
+# (tests/schema_drift.rs, run as part of `cargo test`). macOS and Linux are the
+# two first-class targets, so the job runs on both.
+#
+# It is ONE job running `nx affected`, not a job per tool. What runs is decided
+# by the graph, so a docs-only PR stops paying for clippy and the Rust test
+# suite and a Rust-only PR stops rebuilding the docs site. That is the whole of
+# the saving: this workspace has no Nx Cloud, so there is no remote cache and
+# nothing is reused between runs. Enabling one would make the cache do the rest.
 on:
   push:
     branches: [main]
@@ -19,70 +25,33 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
-  fmt:
-    name: rustfmt
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - &miseCache
-        name: Cache mise tools and rust toolchain
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: |
-            ~/.local/share/mise/installs
-            ~/.cargo/bin
-            ~/.rustup
-          key: mise-rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.toml', 'rust-toolchain.toml') }}
-      - &miseInstall
-        name: Setup mise
-        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
-        with:
-          cache: false
-      - run: cargo fmt --all -- --check
-
-  # The JS/TS/CSS half of the same gate. Without it these files drift: before
-  # this job existed nothing checked them, and 60 of the 61 files under
-  # docs-site had wandered into their own shape.
-  web:
-    name: oxfmt + oxlint + doc fragments
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - *miseCache
-      - *miseInstall
-      - uses: pnpm/action-setup@v4
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run format:check
-      - run: pnpm run lint
-
-      # The TypeScript fragments in docs/wasm-rules.md and the SDK's README are
-      # compiled against the real secreq-rule typings. A field renamed on
-      # RuleCtx, a changed `decide` signature, a constructor that no longer
-      # exists — each fails here by markdown line number, rather than shipping a
-      # guide that teaches a package nobody publishes.
-      - run: pnpm --filter @secreq/docs-site run typecheck-docs
-
-      # Prose linting. Errors fail the build; warnings and suggestions do not,
-      # so a rule can be tightened without turning every open PR red. See
-      # .vale.ini for scope and .vale/styles/Secreq/ for the rules.
-      - name: Vale (published prose)
-        run: mise run docs
-
-  test:
-    name: build / clippy / test (${{ matrix.os }})
+  # One job, not one per tool. The old split (rustfmt / web / test) meant three
+  # runners each paying its own checkout, toolchain install and dependency
+  # restore to run a few seconds of work — and the split had to be maintained
+  # by hand as targets were added. `nx affected` already decides what runs, so
+  # the job only has to provide a machine that can run all of it.
+  #
+  # The matrix stays: macOS and Linux are both first-class targets for the
+  # crate. The JS and prose checks are repeated on macOS as a result, which
+  # costs a couple of seconds and buys not having to special-case them.
+  checks:
+    name: checks (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
+      # `nx affected` diffs against the merge base, so it needs the history.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # eframe/wgpu/winit pull in the wayland + xkbcommon stack; the wayland
       # crates link the system library at build time. x11 and xkbcommon are
       # dlopen'd at runtime, but the packages are installed anyway so the UI
-      # screenshot tests link — their CPU layout half runs in this job, and the
-      # wgpu half must at least compile. No-op on macOS, which uses native
+      # screenshot tests link — their CPU layout half runs here, and the wgpu
+      # half must at least compile. No-op on macOS, which uses native
       # frameworks.
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
@@ -95,30 +64,56 @@ jobs:
             libxcb-shape0-dev \
             libxcb-xfixes0-dev
 
-      - *miseCache
-      - *miseInstall
+      - name: Cache mise tools and rust toolchain
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.local/share/mise/installs
+            ~/.cargo/bin
+            ~/.rustup
+          key: mise-rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.toml', 'rust-toolchain.toml') }}
+      - name: Setup mise
+        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+        with:
+          cache: false
 
       - name: Cache cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.os }}
 
-      - name: Clippy (warnings are errors)
-        run: cargo clippy --all-targets -- -D warnings
+      - uses: pnpm/action-setup@v4
+      - run: pnpm install --frozen-lockfile
 
-      # `cargo test` runs the unit, integration, and doc tests, including the
-      # schema-drift guard in tests/schema_drift.rs.
+      # Derives NX_BASE / NX_HEAD, which `nx affected` reads with no flags.
+      - uses: nrwl/nx-set-shas@v4
+
+      # Everything, selected by the graph:
       #
-      # It also runs tests/ui_screenshots.rs, which needs no GPU here: without
-      # $SECREQ_BLESS_SHOTS each fixture only lays its window out on the CPU
-      # and compares the result against the layout.json committed beside its
-      # renders, so a UI change that never got a regen fails this job. Only
-      # re-rendering the PNGs needs wgpu, and that is what the env var gates.
+      #   lint          clippy on the crates, oxlint on the JS
+      #   format:check  cargo fmt and oxfmt
+      #   test          cargo test — the unit, integration and doc tests,
+      #                 including the schema-drift guard in
+      #                 tests/schema_drift.rs and the CPU layout half of
+      #                 tests/ui_screenshots.rs, which needs no GPU: without
+      #                 $SECREQ_BLESS_SHOTS each fixture only lays its window
+      #                 out and compares against the layout.json committed
+      #                 beside its renders, so a UI change that never got a
+      #                 regen fails here. Only re-rendering needs wgpu.
+      #                 Pixels are deliberately never compared — a wgpu render
+      #                 is not byte-reproducible across GPUs. See
+      #                 tests/screenshot_freshness.rs for the rest.
+      #   typecheck-docs  the TypeScript fragments in docs/wasm-rules.md and
+      #                 the SDK README, compiled against the real typings
+      #   vale          published prose; errors fail, warnings do not
+      #   audit         redundancy / stale-claim / unused-fixture sweep
       #
-      # Pixels are deliberately never compared: a wgpu render is not
-      # byte-reproducible across GPUs, so doing so would force a choice between
-      # fixtures that are reviewable in a PR and fixtures that are verified in
-      # CI. See tests/screenshot_freshness.rs for the rest of the bookkeeping
-      # this job enforces (completeness, orphans, snapshots, README rows).
-      - name: Test
-        run: cargo test
+      # Affected-gating the Rust half is only sound because a docs-only change
+      # reaches `secreq`. `docs/` and `dev-docs/` are fixtures for the drift and
+      # freshness tests, so touching them really can turn this red. Two things
+      # carry that, and both are deliberate: `secreq` has implicit dependencies
+      # on the `docs` and `dev-docs` projects, AND `secreq:test` declares those
+      # trees as `{workspaceRoot}` inputs — which `nx affected` honours on its
+      # own (a file owned by no project still marks every project declaring it
+      # as an input). Removing both would silently un-gate this job.
+      - run: npx nx affected -t lint,format:check,test,typecheck-docs,vale,audit

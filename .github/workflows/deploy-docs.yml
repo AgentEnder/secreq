@@ -53,10 +53,12 @@ jobs:
           git config --global user.name "${GITHUB_ACTOR}"
           git config --global user.email "${GITHUB_ACTOR}@users.noreply.github.com"
 
-      # The docs build generates its webfonts from the fonts egui embeds
-      # (packages/webfonts), so this job needs a Rust toolchain. It is a tiny
-      # standalone crate — no egui, no wgpu — so the compile is seconds, and
-      # the cache makes repeat runs free.
+      # docs-site reaches `secreq-webfonts:build` through `^build`, which cuts
+      # the site's woff2 from the fonts egui embeds — so this job needs a Rust
+      # toolchain. It is a tiny standalone crate — no egui, no wgpu — so the
+      # compile is seconds, and the cache makes repeat runs free. docs-site
+      # deliberately does NOT depend on the `secreq` crate, which is what keeps
+      # a release build of the whole app out of this job.
       - name: Install stable toolchain (webfonts)
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo registry and build artifacts
