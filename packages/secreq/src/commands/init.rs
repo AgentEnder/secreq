@@ -13,7 +13,7 @@ use crate::path_setup;
 use crate::shim;
 use crate::wraps::WrapsConfig;
 
-use super::config::write_config;
+use super::config::{edit_config, ConfigEdit};
 use super::ssh::ssh_setup_core;
 use super::{prompt, resolve_config_path};
 
@@ -181,14 +181,13 @@ pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Re
         }
     }
 
-    // 4. Write the wraps file (preserving anything already there).
-    let mut config = if config_path.is_file() {
+    // 4. Record the shim dir, and touch nothing else in the file.
+    edit_config(&config_path, &[ConfigEdit::SetShimDir(shim_dir.clone())])?;
+    let config = if config_path.is_file() {
         WrapsConfig::load(&config_path)?
     } else {
         WrapsConfig::default()
     };
-    config.shim_dir = Some(shim_dir.clone());
-    write_config(&config_path, &config)?;
 
     // 4b. Repair/migrate managed shims. `install` rewrites the body of any
     // shim that carries our sentinel, so reinstalling every configured wrap's

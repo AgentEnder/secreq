@@ -1,14 +1,17 @@
 //! Authoring and inspecting `config.toml`: `secreq wrap` / `unwrap` /
-//! `wraps` / `edit` / `check` / `doctor`, plus the serializer every one of
-//! those (and `ssh add`, and `init`) writes the file through.
+//! `wraps` / `edit` / `check` / `doctor`, plus the writer every one of
+//! those (and `ssh add`, and `init`) goes through.
 //!
-//! [`write_config`] is the single writer. It round-trips the serialized
-//! text back through the parser before touching the file, so a config we
-//! cannot re-read is never the one on disk.
+//! [`edit_config`] is the single writer, and it takes [`ConfigEdit`]s rather
+//! than a whole [`WrapsConfig`]: a write touches the entries it names and
+//! leaves the rest of the file — including everything the model cannot see —
+//! byte for byte as the user wrote it. It round-trips the edited text back
+//! through the parser before touching the file, so a config we cannot re-read
+//! is never the one on disk.
 
 use std::collections::BTreeMap;
 use std::io::IsTerminal as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
@@ -17,7 +20,7 @@ use crate::path_setup;
 use crate::provider;
 use crate::reference::Reference;
 use crate::shim;
-use crate::wraps::{Wrap, WrapsConfig, SECRETS_KEY};
+use crate::wraps::{Wrap, WrapsConfig};
 
 use super::binaries::first_on_path;
 use super::{prompt, resolve_config_path, which_on_path};
@@ -40,8 +43,8 @@ pub fn wrap(args: WrapArgs, config_path: Option<&Path>) -> Result<i32> {
         WrapsConfig::default()
     };
     // Overlay the built-ins so the interactive picker can offer them even
-    // when the user has no `providers` block. `write_config` filters
-    // built-ins back out, so the file on disk doesn't get them baked in.
+    // when the user has no `providers` block. Nothing writes `providers`, so
+    // they cannot reach the file.
     config.merge_builtin_providers();
 
     if args.binary.starts_with('-') || args.binary.contains('/') {
@@ -101,14 +104,14 @@ pub fn wrap(args: WrapArgs, config_path: Option<&Path>) -> Result<i32> {
         reason,
         env,
     };
-    // An empty env means we created a gate-only wrap. Read off `wrap` here,
-    // before the insert takes it — reading it back out of the map afterwards
-    // meant re-establishing that the key we just wrote is still there.
+    // An empty env means we created a gate-only wrap.
     let gate_only = wrap.env.is_empty();
-    config.wraps.insert(args.binary.clone(), wrap);
 
-    // Validate by round-tripping through the parser before writing.
-    write_config(&config_path, &config)?;
+    // Only this wrap is written. The built-ins merged in above were for the
+    // picker's benefit and never reach the file, because nothing asks to write
+    // `providers` — where a whole-model write had to filter them back out to
+    // avoid freezing today's defaults into the user's config.
+    edit_config(&config_path, &[ConfigEdit::UpsertWrap(wrap)])?;
 
     // Drop the shim.
     let shim_path = shim::install(&shim_dir, &args.binary)?;
@@ -152,14 +155,16 @@ pub fn unwrap_cmd(binary: &str, config_path: Option<&Path>) -> Result<i32> {
     if !config_path.is_file() {
         bail!("no config at {}", config_path.display());
     }
-    let mut config = WrapsConfig::load(&config_path)?;
-    let removed = config.wraps.remove(binary).is_some();
+    let config = WrapsConfig::load(&config_path)?;
+    let removed = config.wrap(binary).is_some();
     let shim_removed = if let Some(shim_dir) = &config.shim_dir {
         shim::remove(shim_dir, binary)?
     } else {
         false
     };
-    write_config(&config_path, &config)?;
+    if removed {
+        edit_config(&config_path, &[ConfigEdit::RemoveWrap(binary.to_owned())])?;
+    }
     // The daemon's approvals cache may still hold entries for this wrap, and
     // nothing here can reach them: they are keyed on a `ProcessIdentity` this
     // process cannot enumerate, and they carry no TTL — the parent process's
@@ -470,102 +475,89 @@ fn parse_env_assignments(envs: &[String]) -> Result<BTreeMap<String, String>> {
 /// would be redundant on the default path and actively dangerous on the
 /// `--config` one, where `--config /tmp/x.toml` would `chmod 0700 /tmp`.
 ///
-/// ## The write is a merge, not a rebuild
+/// ## The write is a targeted edit, not a rebuild
 ///
 /// This used to reconstruct the whole file from [`WrapsConfig`] and hand it to
 /// a serializer, which meant every `wrap add`, `ssh add` or editor pick
-/// silently deleted the user's comments and layout. Now the existing document
-/// is parsed with `toml_edit`, the changed values are set *into* it, and
-/// everything the parser doesn't model — comments, blank lines, key order —
-/// survives untouched.
-pub(super) fn write_config(path: &Path, config: &WrapsConfig) -> Result<()> {
+/// silently deleted the user's comments and layout. Parsing with `toml_edit`
+/// fixed the *file* level, but the shape stayed a rebuild: reconciling a whole
+/// [`WrapsConfig`] re-serialized **every** entry on every write, so a comment
+/// inside `[wraps.gh]` still died to a `secreq wrap aws` that never mentioned
+/// `gh`.
+///
+/// So callers say what changed. Each [`ConfigEdit`] names one entry, and
+/// nothing else in the document is read, rewritten, or reordered.
+pub(super) fn edit_config(path: &Path, edits: &[ConfigEdit]) -> Result<()> {
     let existing = std::fs::read_to_string(path).unwrap_or_default();
     let mut doc: toml_edit::DocumentMut = existing
         .parse()
         .with_context(|| format!("{} is not valid TOML", path.display()))?;
 
-    sync_document(&mut doc, config);
+    for edit in edits {
+        apply_edit(&mut doc, edit);
+    }
 
     let text = doc.to_string();
-    // Validate by round-tripping before writing.
+    // Validate by round-tripping before writing. An edit that produced a
+    // config secreq cannot read — an `env` naming an undeclared secret, say —
+    // fails here rather than on the user's next command.
     WrapsConfig::parse(&text, &path.display().to_string())
-        .context("internal: serialized config doesn't re-parse")?;
+        .context("internal: edited config doesn't re-parse")?;
     crate::atomic::replace(path, text.as_bytes(), crate::atomic::Mode::Like(path))
         .with_context(|| format!("failed to write {}", path.display()))
 }
 
-/// Set every value `config` carries into `doc`, and drop the entries it no
-/// longer has. Anything else in the document is left exactly as written.
-fn sync_document(doc: &mut toml_edit::DocumentMut, config: &WrapsConfig) {
+/// One targeted change to `config.toml`.
+///
+/// Deliberately not "here is the new [`WrapsConfig`], work out the diff". A
+/// diff against the model can only see what the model holds, so it reports a
+/// comment, a blank line or a key order as no change at all and then destroys
+/// them anyway. Naming the entry is what keeps the rest of the file out of the
+/// write entirely.
+pub(super) enum ConfigEdit {
+    /// Where `secreq wrap` drops PATH shims. Written back with a leading `~/`.
+    SetShimDir(PathBuf),
+    /// Add a wrap, or replace the one of the same name.
+    UpsertWrap(Wrap),
+    /// Drop a wrap. A no-op when it was not there.
+    RemoveWrap(String),
+    /// Add an SSH identity, or replace the one of the same name.
+    UpsertSshIdentity(String, crate::wraps::SshIdentity),
+}
+
+fn apply_edit(doc: &mut toml_edit::DocumentMut, edit: &ConfigEdit) {
     use toml_edit::Item;
-
-    fn set_or_remove(doc: &mut toml_edit::DocumentMut, key: &str, v: Option<toml_edit::Value>) {
-        match v {
-            Some(v) => {
-                crate::rule_scaffold::set_preserving_decor(doc.as_table_mut(), key, Item::Value(v));
-            }
-            None => {
-                doc.remove(key);
-            }
+    match edit {
+        ConfigEdit::SetShimDir(dir) => {
+            let shown = crate::daemon::ui::abbreviate_home(&dir.display().to_string());
+            crate::rule_scaffold::set_preserving_decor(
+                doc.as_table_mut(),
+                "shim_dir",
+                Item::Value(shown.into()),
+            );
         }
-    }
-
-    set_or_remove(
-        doc,
-        "shim_dir",
-        config
-            .shim_dir
-            .as_ref()
-            .map(|p| crate::daemon::ui::abbreviate_home(&p.display().to_string()).into()),
-    );
-    set_or_remove(doc, "wait_indicator", config.wait_indicator.map(Into::into));
-    set_or_remove(
-        doc,
-        "editor",
-        config.editor.as_ref().map(|e| e.as_str().into()),
-    );
-
-    // Built-ins overlay at load time, so they are never written back — baking
-    // them into the file would freeze today's defaults into the user's config.
-    let builtin = crate::manifest::builtin_providers();
-    let user_providers: BTreeMap<&String, &crate::manifest::Provider> = config
-        .providers
-        .iter()
-        .filter(|(name, _)| !builtin.contains_key(name.as_str()))
-        .collect();
-
-    sync_table(doc, "wraps", &config.wraps);
-    sync_table(doc, "providers", &user_providers);
-    sync_table(doc, "ssh", &config.ssh);
-    // Declarations are synced for the same reason the `ssh` block is: a block
-    // this writer forgets is a block the next `wrap add` silently deletes —
-    // taking every wrap's `secret://<name>` with it.
-    sync_table(doc, SECRETS_KEY, &config.secrets);
-
-    // An emptied-out section is removed rather than left as a bare header.
-    for key in ["wraps", "providers", "ssh", SECRETS_KEY] {
-        if doc
-            .get(key)
-            .and_then(Item::as_table)
-            .is_some_and(toml_edit::Table::is_empty)
-        {
-            doc.remove(key);
-        }
+        ConfigEdit::UpsertWrap(wrap) => upsert_entry(doc, "wraps", &wrap.name, wrap),
+        ConfigEdit::RemoveWrap(name) => remove_entry(doc, "wraps", name),
+        ConfigEdit::UpsertSshIdentity(name, identity) => upsert_entry(doc, "ssh", name, identity),
     }
 }
 
-/// Merge one `[section.<name>]` map into the document, serializing each entry
-/// through its `Serialize` impl and removing names that are gone.
-fn sync_table<K, V>(doc: &mut toml_edit::DocumentMut, section: &str, entries: &BTreeMap<K, V>)
-where
-    K: std::borrow::Borrow<String> + Ord,
-    V: serde::Serialize,
-{
+/// Write one `[section.<name>]` entry. Every other entry in the section is
+/// left exactly as the user wrote it — not re-serialized, not reordered.
+fn upsert_entry<V: serde::Serialize>(
+    doc: &mut toml_edit::DocumentMut,
+    section: &str,
+    name: &str,
+    entry: &V,
+) {
     use toml_edit::{Item, Table};
 
-    if entries.is_empty() && doc.get(section).is_none() {
-        return;
-    }
+    let mut serialized = toml_edit::ser::to_document(entry)
+        .expect("config entries serialize infallibly")
+        .as_table()
+        .clone();
+    crate::rule_scaffold::shape_config_entry(&mut serialized);
+
     let table = doc
         .entry(section)
         .or_insert_with(|| {
@@ -576,23 +568,32 @@ where
         .as_table_mut()
         .expect("config section must be a table");
 
-    let names: Vec<String> = entries.keys().map(|k| k.borrow().clone()).collect();
-    table.retain(|existing, _| names.iter().any(|n| n == existing));
+    // A comment above `[wraps.gh]` labels the entry, not its current body, so
+    // it survives the body being rewritten. `set_preserving_decor` cannot do
+    // this one: a table's header decoration lives on the table, not the key.
+    if let Some(existing) = table.get(name).and_then(Item::as_table) {
+        *serialized.decor_mut() = existing.decor().clone();
+    }
+    crate::rule_scaffold::set_preserving_decor(table, name, Item::Table(serialized));
+}
 
-    for (name, entry) in entries {
-        let mut serialized = toml_edit::ser::to_document(entry)
-            .expect("config entries serialize infallibly")
-            .as_table()
-            .clone();
-        crate::rule_scaffold::shape_config_entry(&mut serialized);
-        crate::rule_scaffold::set_preserving_decor(table, name.borrow(), Item::Table(serialized));
+/// Drop one `[section.<name>]` entry, and the section header with it once it
+/// holds nothing — an emptied-out section would otherwise sit in the file as a
+/// bare header.
+fn remove_entry(doc: &mut toml_edit::DocumentMut, section: &str, name: &str) {
+    let Some(table) = doc.get_mut(section).and_then(toml_edit::Item::as_table_mut) else {
+        return;
+    };
+    table.remove(name);
+    if table.is_empty() {
+        doc.remove(section);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wraps::{CacheTtl, SecretDecl};
+    use crate::wraps::CacheTtl;
 
     #[test]
     fn env_assignment_errors_are_a_single_clean_sentence() {
@@ -630,66 +631,58 @@ mod tests {
         assert_eq!(ok["B"], "secret://github_token");
     }
 
+    /// Nothing writes `secrets`, so a `wrap add` beside a declaration block
+    /// leaves it exactly as the user typed it — the `ttl` unit, the comment,
+    /// the blank line and all.
+    ///
+    /// Under a whole-model write this was a live hazard rather than a
+    /// tautology: the writer had to remember to re-emit the block, and a
+    /// writer that forgot deleted every declaration in the file along with the
+    /// `secret://<name>` references pointing at them.
     #[test]
-    fn write_config_preserves_declared_secrets_and_the_names_that_reference_them() {
-        // `secreq wrap` re-serializes the whole model, so a block this writer
-        // forgets is a block the next `wrap add` silently deletes — taking
-        // every `secret://<name>` in the file with it. The round-trip through
-        // the parser inside `write_config` would then fail on the dangling
-        // names, so this also proves the two halves agree.
+    fn an_unrelated_secrets_block_is_untouched_by_a_wrap_add() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
+        let original = "\
+# tokens I reuse
+[secrets.github_token]
+ref = \"secret://op/Personal/GitHub/token\"
+ttl = \"15m\"
 
-        let mut config = WrapsConfig::default();
-        config.secrets.insert(
-            "github_token".to_owned(),
-            SecretDecl {
-                reference: Reference::parse("secret://op/Personal/GitHub/token").unwrap(),
-                ttl: CacheTtl::Secs(900),
-            },
-        );
-        config.secrets.insert(
-            "no_ttl".to_owned(),
-            SecretDecl {
-                reference: Reference::parse("secret://op/Personal/Other/token").unwrap(),
-                ttl: CacheTtl::DaemonLifetime,
-            },
-        );
-        config.wraps.insert(
-            "gh".to_owned(),
-            Wrap {
-                name: "gh".to_owned(),
+[wraps.gh.env]
+GITHUB_TOKEN = \"secret://github_token\"
+";
+        std::fs::write(&path, original).unwrap();
+
+        edit_config(
+            &path,
+            &[ConfigEdit::UpsertWrap(Wrap {
+                name: "aws".to_owned(),
                 reason: None,
-                env: std::iter::once((
-                    "GITHUB_TOKEN".to_owned(),
-                    "secret://github_token".to_owned(),
-                ))
-                .collect(),
-            },
+                env: std::iter::once(("AWS_KEY".to_owned(), "secret://op/Work/AWS/k".to_owned()))
+                    .collect(),
+            })],
+        )
+        .unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.starts_with(original),
+            "the existing file must be a prefix of the new one:\n{text}"
         );
+        assert!(text.contains("[wraps.aws.env]"), "{text}");
 
-        write_config(&path, &config).unwrap();
+        // And the declaration still resolves for the wrap that names it.
         let reloaded = WrapsConfig::load(&path).unwrap();
-
-        assert_eq!(reloaded.secrets, config.secrets);
+        assert_eq!(reloaded.secrets["github_token"].ttl, CacheTtl::Secs(900));
         assert_eq!(
             reloaded
-                .wrap("gh")
+                .resolve_ref("secret://github_token")
                 .unwrap()
-                .env
-                .get("GITHUB_TOKEN")
-                .unwrap(),
-            "secret://github_token",
-            "the wrap must still reference the declaration by name"
+                .reference
+                .locator,
+            "Personal/GitHub/token"
         );
-        // A default TTL writes no `ttl` key, so a file the user never gave one
-        // does not grow one. And the one that is written keeps the unit it was
-        // declared in rather than being normalised to seconds.
-        let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.contains("ttl = \"15m\""), "{text}");
-        // `ttl = `, not `ttl` — the `no_ttl` declaration's *name* contains the
-        // substring, and counting that would pass no matter what was written.
-        assert_eq!(text.matches("ttl = ").count(), 1, "{text}");
     }
 
     /// A wrap that only injects env vars needs no header of its own:
@@ -705,26 +698,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
 
-        let mut config = WrapsConfig::default();
-        config.wraps.insert(
-            "gh".to_owned(),
-            Wrap {
-                name: "gh".to_owned(),
-                reason: None,
-                env: std::iter::once(("GH_TOKEN".to_owned(), "secret://op/x/y".to_owned()))
-                    .collect(),
-            },
-        );
-        config.wraps.insert(
-            "op".to_owned(),
-            Wrap {
-                name: "op".to_owned(),
-                reason: None,
-                env: BTreeMap::new(),
-            },
-        );
-
-        write_config(&path, &config).unwrap();
+        edit_config(
+            &path,
+            &[
+                ConfigEdit::UpsertWrap(Wrap {
+                    name: "gh".to_owned(),
+                    reason: None,
+                    env: std::iter::once(("GH_TOKEN".to_owned(), "secret://op/x/y".to_owned()))
+                        .collect(),
+                }),
+                ConfigEdit::UpsertWrap(Wrap {
+                    name: "op".to_owned(),
+                    reason: None,
+                    env: BTreeMap::new(),
+                }),
+            ],
+        )
+        .unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
 
         assert!(!text.contains("[wraps.gh]"), "{text}");
@@ -745,21 +735,73 @@ mod tests {
         );
     }
 
-    /// The shape the migration writes has to survive the first `wrap add`.
+    /// Adding one wrap must not reformat a different one.
     ///
-    /// These two author the same file. While they disagreed, a freshly
-    /// migrated config reflowed the first time secreq touched it — the
-    /// `[wraps.gh.env]` stanza collapsing onto one inline `env = { … }` line,
-    /// which is the clobbering this whole format change exists to stop.
+    /// The whole point of `toml_edit` is that a write touches what changed and
+    /// nothing else. Reconciling the entire model re-serializes every entry on
+    /// every write, so a comment a user wrote inside `[wraps.gh]` is deleted by
+    /// a `secreq wrap aws` that never mentioned `gh`.
     #[test]
-    fn a_migrated_configs_shape_survives_a_rewrite() {
+    fn adding_a_wrap_leaves_every_other_entry_byte_identical() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let original = "\
+# the GitHub CLI
+[wraps.gh]
+reason = \"GitHub API access\"
+
+# the token lives in the Personal vault
+[wraps.gh.env]
+GITHUB_TOKEN = \"secret://op/Personal/GitHub/token\"
+";
+        std::fs::write(&path, original).unwrap();
+
+        edit_config(
+            &path,
+            &[ConfigEdit::UpsertWrap(Wrap {
+                name: "aws".to_owned(),
+                reason: None,
+                env: std::iter::once(("AWS_KEY".to_owned(), "secret://op/Work/AWS/k".to_owned()))
+                    .collect(),
+            })],
+        )
+        .unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.starts_with(original),
+            "an untouched entry must stay byte-identical:\n{text}"
+        );
+        assert!(text.contains("# the GitHub CLI"), "{text}");
+        assert!(
+            text.contains("# the token lives in the Personal vault"),
+            "{text}"
+        );
+        assert!(text.contains("[wraps.aws.env]"), "{text}");
+    }
+
+    /// The two writers have to author an entry the same way.
+    ///
+    /// Re-writing a wrap the migration produced, with the same contents, must
+    /// be a no-op on the bytes. While they disagreed, a freshly migrated config
+    /// reflowed the first time secreq touched it — the `[wraps.gh.env]` stanza
+    /// collapsing onto one inline `env = { … }` line, which is the clobbering
+    /// this whole format change exists to stop.
+    #[test]
+    fn re_writing_a_migrated_entry_unchanged_is_a_no_op_on_the_bytes() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         let migrated = "[wraps.gh.env]\nGH_TOKEN = \"secret://op/x/y\"\n\n[wraps.op]\n";
         std::fs::write(&path, migrated).unwrap();
 
         let config = WrapsConfig::load(&path).unwrap();
-        write_config(&path, &config).unwrap();
+        let edits: Vec<ConfigEdit> = config
+            .wraps
+            .values()
+            .cloned()
+            .map(ConfigEdit::UpsertWrap)
+            .collect();
+        edit_config(&path, &edits).unwrap();
 
         assert_eq!(std::fs::read_to_string(&path).unwrap(), migrated);
     }
@@ -770,51 +812,39 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
 
-        let mut config = WrapsConfig::default();
-        config.wraps.insert(
-            "gh".to_owned(),
-            Wrap {
+        edit_config(
+            &path,
+            &[ConfigEdit::UpsertWrap(Wrap {
                 name: "gh".to_owned(),
                 reason: Some("GitHub API access".to_owned()),
                 env: std::iter::once(("GH_TOKEN".to_owned(), "secret://op/x/y".to_owned()))
                     .collect(),
-            },
-        );
-
-        write_config(&path, &config).unwrap();
+            })],
+        )
+        .unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("[wraps.gh]"), "{text}");
         assert!(text.contains("reason = \"GitHub API access\""), "{text}");
     }
 
     #[test]
-    fn write_config_preserves_ssh_block() {
+    fn an_ssh_identity_round_trips_through_an_edit() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
 
-        let mut config = WrapsConfig::default();
-        config.wraps.insert(
-            "gh".to_owned(),
-            Wrap {
-                name: "gh".to_owned(),
-                reason: Some("GitHub API access".to_owned()),
-                env: std::iter::once((
-                    "GITHUB_TOKEN".to_owned(),
-                    "secret://op/Private/gh/token".to_owned(),
-                ))
-                .collect(),
-            },
-        );
-        config.ssh.insert(
-            "github".to_owned(),
-            crate::wraps::SshIdentity {
-                reason: Some("git pushes".to_owned()),
-                public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1 me@mac".to_owned(),
-                private_key: Reference::parse("secret://op/Private/GitHub/private key").unwrap(),
-            },
-        );
-
-        write_config(&path, &config).unwrap();
+        edit_config(
+            &path,
+            &[ConfigEdit::UpsertSshIdentity(
+                "github".to_owned(),
+                crate::wraps::SshIdentity {
+                    reason: Some("git pushes".to_owned()),
+                    public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1 me@mac".to_owned(),
+                    private_key: Reference::parse("secret://op/Private/GitHub/private key")
+                        .unwrap(),
+                },
+            )],
+        )
+        .unwrap();
 
         let reloaded = WrapsConfig::load(&path).unwrap();
         let id = reloaded
@@ -827,25 +857,88 @@ mod tests {
         assert_eq!(id.private_key.locator, "Private/GitHub/private key");
     }
 
+    /// The machine-local toggles and an unrelated `ssh` block survive a
+    /// `wrap add` because nothing names them, so nothing rewrites them.
+    ///
+    /// This is the failure `config_to_json_value` carried a comment about: it
+    /// had to re-emit `wait_indicator` and `editor` by hand or a `wrap add`
+    /// dropped them. Naming the edit retires that whole class of bug rather
+    /// than patching the two fields that were noticed.
     #[test]
-    fn write_config_preserves_editor_and_wait_indicator() {
-        // A later `wrap add` / `ssh add` rewrites the whole file via
-        // `write_config`; the reserved machine-local toggles must survive
-        // so a GUI-set `editor` (and a hand-set `wait_indicator`) aren't
-        // silently dropped.
+    fn the_reserved_blocks_and_toggles_are_untouched_by_a_wrap_add() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
+        let original = "\
+editor = \"zed\"
+wait_indicator = false
 
-        let config = WrapsConfig {
-            editor: Some("zed".to_owned()),
-            wait_indicator: Some(false),
-            ..Default::default()
-        };
-        write_config(&path, &config).unwrap();
+[ssh.github]
+public_key = \"ssh-ed25519 AAAAC3NzaC1lZDI1 me@mac\"
+private_key = \"secret://op/Private/GitHub/private key\"
+";
+        std::fs::write(&path, original).unwrap();
+
+        edit_config(
+            &path,
+            &[ConfigEdit::UpsertWrap(Wrap {
+                name: "gh".to_owned(),
+                reason: None,
+                env: BTreeMap::new(),
+            })],
+        )
+        .unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with(original), "{text}");
 
         let reloaded = WrapsConfig::load(&path).unwrap();
         assert_eq!(reloaded.editor.as_deref(), Some("zed"));
         assert_eq!(reloaded.wait_indicator, Some(false));
+        assert!(reloaded.ssh.contains_key("github"));
+        assert!(reloaded.wrap("gh").is_some());
+    }
+
+    /// Removing the last wrap takes the `[wraps]` section with it, rather than
+    /// leaving a bare header behind.
+    #[test]
+    fn removing_the_last_wrap_removes_the_section_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "editor = \"zed\"\n\n[wraps.gh.env]\nT = \"secret://op/x/y\"\n",
+        )
+        .unwrap();
+
+        edit_config(&path, &[ConfigEdit::RemoveWrap("gh".to_owned())]).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("wraps"), "{text}");
+        assert!(text.contains("editor = \"zed\""), "{text}");
+    }
+
+    /// A comment above `[wraps.gh]` labels the entry, so re-wrapping `gh`
+    /// keeps it even though the body is rewritten.
+    #[test]
+    fn re_wrapping_keeps_the_comment_that_labels_the_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "# the GitHub CLI\n[wraps.gh]\nreason = \"old\"\n").unwrap();
+
+        edit_config(
+            &path,
+            &[ConfigEdit::UpsertWrap(Wrap {
+                name: "gh".to_owned(),
+                reason: Some("new".to_owned()),
+                env: BTreeMap::new(),
+            })],
+        )
+        .unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("# the GitHub CLI"), "{text}");
+        assert!(text.contains("reason = \"new\""), "{text}");
+        assert!(!text.contains("old"), "{text}");
     }
 
     // ── The config's mode ─────────────────────────────────────────────
@@ -870,7 +963,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
 
-        write_config(&path, &WrapsConfig::default()).unwrap();
+        edit_config(
+            &path,
+            &[ConfigEdit::SetShimDir(PathBuf::from("/tmp/shims"))],
+        )
+        .unwrap();
 
         assert_eq!(mode_of(&path), 0o600, "{}", path.display());
     }
@@ -879,7 +976,7 @@ mod tests {
     /// `Mode::Exactly(0o600)`. This file is hand-editable with a published
     /// schema, migration 0001 already promises to carry its mode across an
     /// upgrade (`moved_config_keeps_the_mode_the_user_chose` moves a
-    /// `config.toml`), and `--config` points `write_config` at files secreq
+    /// `config.toml`), and `--config` points `edit_config` at files secreq
     /// does not own at all. Clamping here would make the migration's promise
     /// last until the user's next `wrap add`.
     #[test]
@@ -887,10 +984,18 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        write_config(&path, &WrapsConfig::default()).unwrap();
+        edit_config(
+            &path,
+            &[ConfigEdit::SetShimDir(PathBuf::from("/tmp/shims"))],
+        )
+        .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
 
-        write_config(&path, &WrapsConfig::default()).unwrap();
+        edit_config(
+            &path,
+            &[ConfigEdit::SetShimDir(PathBuf::from("/tmp/shims"))],
+        )
+        .unwrap();
 
         assert_eq!(mode_of(&path), 0o640);
     }
@@ -904,10 +1009,18 @@ mod tests {
         use std::os::unix::fs::MetadataExt;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        write_config(&path, &WrapsConfig::default()).unwrap();
+        edit_config(
+            &path,
+            &[ConfigEdit::SetShimDir(PathBuf::from("/tmp/shims"))],
+        )
+        .unwrap();
         let before = std::fs::metadata(&path).unwrap().ino();
 
-        write_config(&path, &WrapsConfig::default()).unwrap();
+        edit_config(
+            &path,
+            &[ConfigEdit::SetShimDir(PathBuf::from("/tmp/shims"))],
+        )
+        .unwrap();
 
         assert_ne!(std::fs::metadata(&path).unwrap().ino(), before);
         // And no staging litter beside it.

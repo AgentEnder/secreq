@@ -17,7 +17,7 @@ use crate::reference::Reference;
 use crate::ssh_setup;
 use crate::wraps::{self, WrapsConfig};
 
-use super::config::write_config;
+use super::config::{edit_config, ConfigEdit};
 use super::daemon::daemon_install_core;
 use super::{load_config_or_default, prompt, resolve_config_path, which_on_path};
 
@@ -339,7 +339,7 @@ pub fn ssh_add(args: SshAddArgs, assume_yes: bool, config_path: Option<&Path>) -
 /// the path the orchestrator takes (it has no name to preset).
 fn ssh_add_core(args: SshAddArgs, assume_yes: bool, config_path: Option<&Path>) -> Result<()> {
     let config_path = resolve_config_path(config_path)?;
-    let mut config = if config_path.is_file() {
+    let config = if config_path.is_file() {
         WrapsConfig::load(&config_path)?
     } else {
         WrapsConfig::default()
@@ -404,9 +404,10 @@ fn ssh_add_core(args: SshAddArgs, assume_yes: bool, config_path: Option<&Path>) 
         public_key,
         private_key,
     };
-    config.ssh.insert(name.clone(), identity);
-
-    write_config(&config_path, &config)?;
+    edit_config(
+        &config_path,
+        &[ConfigEdit::UpsertSshIdentity(name.clone(), identity)],
+    )?;
 
     println!("Added SSH identity `{name}`.");
     println!(
