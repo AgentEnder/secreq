@@ -593,7 +593,7 @@ pub struct SshAskInfo {
     /// `SHA256:Nh0Me49Zh9fDw/VYUfq43IJmI1T+XrjiYONPND8GzaM` — what
     /// `ssh-add -l` prints, so the user can match it against a key they know.
     pub fingerprint: String,
-    /// The identity's configured `$reason`, shown in the prompt to explain
+    /// The identity's configured `reason`, shown in the prompt to explain
     /// what the key is for (e.g. "git pushes"). `None` when the identity has
     /// no reason set. Lives here rather than on a `SecretAsk` because SSH
     /// signs carry no secrets to inject.

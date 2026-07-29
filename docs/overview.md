@@ -37,7 +37,7 @@ consent**. Nobody else covers all three.
 ## Mental model
 
 ```
-   ┌─ wraps.json5 (user-scope) ────────────────────────────────────────┐
+   ┌─ config.toml (user-scope) ────────────────────────────────────────┐
    │  per-binary wraps: { gh, aws, kubectl, … }                        │
    │  each names env vars and `secret://provider/locator` references   │
    │  providers (built-ins + your overrides): op, keychain, pass, …    │

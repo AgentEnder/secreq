@@ -1,39 +1,33 @@
-//! The `wraps.json5` config model: per-binary wraps.
+//! The `config.toml` model: per-binary wraps, providers, SSH identities.
 //!
-//! `secreq` resolves secrets *for specific binaries you've wrapped*. The
-//! config lives at `~/.secreq/wraps.json5` (`$SECREQ_HOME/wraps.json5`;
-//! user-scope only — there's no project scope; that's varlock's
-//! territory). Each top-level
-//! key (other than reserved `providers` and `$`-prefixed metadata) names a
-//! binary; its value is the wrap config for that binary.
+//! `secreq` resolves secrets *for specific binaries you've wrapped*. The config
+//! lives at `~/.secreq/config.toml` (`$SECREQ_HOME/config.toml`; user-scope
+//! only — there's no project scope, that's varlock's territory).
 //!
-//! ```json5
-//! {
-//!   $shim_dir: "~/.secreq/shims",    // set by `secreq init`
+//! ```toml
+//! shim_dir = "~/.secreq/shims"       # set by `secreq init`
 //!
-//!   gh: {
-//!     $reason: "GitHub API access",
-//!     env: {
-//!       GITHUB_TOKEN: "secret://op/Personal/GitHub Token/credential",
-//!     },
-//!   },
+//! [secrets.github_token]             # declare once, reference by name
+//! ref = "secret://op/Personal/GitHub Token/credential"
+//! ttl = "15m"
 //!
-//!   aws: {
-//!     $reason: "AWS deployments",
-//!     env: {
-//!       AWS_ACCESS_KEY_ID:     "secret://op/Work/AWS/access_key_id",
-//!       AWS_SECRET_ACCESS_KEY: "secret://op/Work/AWS/secret_access_key",
-//!     },
-//!   },
+//! [wraps.gh]
+//! reason = "GitHub API access"
+//! env.GITHUB_TOKEN = "secret://github_token"
 //!
-//!   providers: { /* … same shape as the old manifest's providers block … */ },
-//! }
+//! [wraps.aws]
+//! reason = "AWS deployments"
+//! env.AWS_ACCESS_KEY_ID = "secret://op/Work/AWS/access_key_id"
+//! env.AWS_SECRET_ACCESS_KEY = "secret://op/Work/AWS/secret_access_key"
+//!
+//! [providers.op]
+//! retrieve = ["op", "read", "op://{locator}"]
 //! ```
 //!
-//! Provider definitions (`Provider`, `StoreCapability`, `BatchRetrieve`,
-//! `FieldSpec`, `ValueMode`) are unchanged from the previous model — that
-//! engine carries over wholesale. What changes is the *top-level shape*:
-//! groups + secrets + eager-set/ambient-ref union → wraps + env maps.
+//! **The top level is closed.** Wraps sit under `[wraps.<binary>]` rather than
+//! at the root, so every root key is one this struct declares and an
+//! unrecognised one is an error — where the root used to be an open namespace
+//! in which a mistyped `providers` silently became a wrap.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -41,57 +35,59 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-// We reuse the provider model and the json-helpers from the existing
-// `manifest` module. They aren't config-shape-specific.
-use crate::manifest::{builtin_providers, parse_providers_value, present, Provider};
+use crate::manifest::{builtin_providers, Provider};
 use crate::reference::{undeclared_secret_message, RefForm, Reference};
 
-/// The reserved top-level key holding provider scheme definitions.
-pub const PROVIDERS_KEY: &str = "providers";
-
-/// The reserved top-level key holding named secret declarations.
+/// The reserved top-level key holding named secret declarations. The section
+/// name in the file, and how errors spell a declaration's path.
 pub const SECRETS_KEY: &str = "secrets";
 
-/// `$shim_dir` — where `secreq wrap` drops PATH shims. Set by `secreq init`.
-pub const SHIM_DIR_KEY: &str = "$shim_dir";
-
-/// The reserved top-level key holding SSH identity definitions for the agent.
-pub const SSH_KEY: &str = "ssh";
-
-/// `$wait_indicator` — global toggle for the wrap's stderr "waiting for
-/// approval" indicator. Absent / `true` = shown; `false` = silenced.
-pub const WAIT_INDICATOR_KEY: &str = "$wait_indicator";
-
-/// `$editor` — the editor the rule-editor's "Open in editor" split-button
-/// defaults to (an id from [`crate::rule_scaffold`]'s catalog, e.g.
-/// `"code"`). Machine-local like `$shim_dir`; written by the rule editor
-/// when the user picks an editor.
-pub const EDITOR_KEY: &str = "$editor";
-
-/// Top-level configuration loaded from `wraps.json5`.
-#[derive(Debug, Clone, Default, PartialEq)]
+/// Top-level configuration loaded from `config.toml`.
+///
+/// **Every top-level key is known.** Wraps live under `[wraps.<binary>]`
+/// rather than at the root, which is what lets this be an ordinary
+/// `deny_unknown_fields` struct: a mistyped `provdiers` is an error instead of
+/// silently becoming a wrap for a binary of that name.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct WrapsConfig {
     /// Where the PATH shims live. `None` until `secreq init` runs.
+    #[serde(
+        default,
+        deserialize_with = "de_tilde_path",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub shim_dir: Option<PathBuf>,
-    /// Configured per-binary wraps.
+    /// Configured per-binary wraps, keyed by binary name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub wraps: BTreeMap<String, Wrap>,
     /// Secrets declared once under a name, referenced from any number of wraps
     /// as `secret://<name>`. Carries the per-secret cache TTL.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub secrets: BTreeMap<String, SecretDecl>,
     /// Provider scheme definitions (built-ins overlay these).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub providers: BTreeMap<String, Provider>,
     /// SSH identities served by the agent, keyed by identity name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub ssh: BTreeMap<String, SshIdentity>,
-    /// `$wait_indicator` — whether a blocked wrap prints the stderr "waiting
-    /// for approval" indicator. `None` means unset (defaults to enabled); see
+    /// Whether a blocked wrap prints the stderr "waiting for approval"
+    /// indicator. `None` means unset (defaults to enabled); see
     /// [`WrapsConfig::wait_indicator_enabled`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wait_indicator: Option<bool>,
-    /// `$editor` — the rule editor's preferred "Open in editor" target
-    /// (an editor id). `None` means the split-button falls back to the
-    /// first detected editor.
+    /// The rule editor's preferred "Open in editor" target (an editor id).
+    /// `None` means the split-button falls back to the first detected editor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub editor: Option<String>,
+}
+
+/// `shim_dir` is written with a leading `~/` by `secreq init` and read back as
+/// an absolute path.
+fn de_tilde_path<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<PathBuf>, D::Error> {
+    let raw = Option::<String>::deserialize(d)?;
+    Ok(raw.as_deref().map(expand_tilde))
 }
 
 /// How long the daemon may keep serving a resolved secret value from its
@@ -111,6 +107,14 @@ pub struct WrapsConfig {
 /// high-sensitivity secret is the user saying "re-fetch this one, I accept the
 /// re-prompt" — a local, informed choice rather than a default that surprises
 /// everyone.
+///
+/// **Two serde representations, deliberately.** The derive below is the
+/// daemon's wire form ([`crate::daemon::proto`]), where an enum shape is
+/// exactly right and no human reads it. The *config* spelling is a count and a
+/// unit (`15m`), which no derive produces — so [`SecretDecl::ttl`] names
+/// [`de_ttl`] / [`ser_ttl`] instead, keeping the file's syntax next to the
+/// field that has it. Don't collapse them: the wire form is not a spelling any
+/// user should have to write, and `15m` is not a shape the IPC needs to parse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CacheTtl {
@@ -142,12 +146,36 @@ impl CacheTtl {
             CacheTtl::Secs(secs) => format!("{secs}s"),
         }
     }
+
+    /// Is this the default? Drives `skip_serializing_if`, so an unset TTL stays
+    /// absent from the file rather than being written back as an explicit one.
+    fn is_daemon_lifetime(&self) -> bool {
+        matches!(self, CacheTtl::DaemonLifetime)
+    }
+
+    /// The largest unit that divides this TTL exactly, so a `15m` the user
+    /// wrote comes back out of a `wrap add` as `15m` and not `900s`.
+    ///
+    /// [`CacheTtl::label`] is deliberately not this: it is prose for an error
+    /// message, where one unit for every duration is easier to compare.
+    fn to_config_string(self) -> String {
+        const MIN: u64 = 60;
+        const HOUR: u64 = 60 * 60;
+        const DAY: u64 = 24 * 60 * 60;
+        match self {
+            CacheTtl::DaemonLifetime => String::new(),
+            CacheTtl::Secs(secs) if secs > 0 && secs % DAY == 0 => format!("{}d", secs / DAY),
+            CacheTtl::Secs(secs) if secs > 0 && secs % HOUR == 0 => format!("{}h", secs / HOUR),
+            CacheTtl::Secs(secs) if secs > 0 && secs % MIN == 0 => format!("{}m", secs / MIN),
+            CacheTtl::Secs(secs) => format!("{secs}s"),
+        }
+    }
 }
 
 /// Parse a `ttl` value: a positive integer followed by a unit, e.g. `30s`,
 /// `15m`, `2h`, `1d`.
 ///
-/// A unit is required. `ttl: 900` would have to mean seconds by convention, and
+/// A unit is required. `ttl = 900` would have to mean seconds by convention, and
 /// a convention nobody can see in the file is how a 15-*minute* TTL gets
 /// written as `15` and silently becomes fifteen seconds.
 fn parse_ttl(raw: &str) -> Result<CacheTtl> {
@@ -174,6 +202,17 @@ fn parse_ttl(raw: &str) -> Result<CacheTtl> {
     Ok(CacheTtl::Secs(secs))
 }
 
+/// Read a `ttl` off the file. Only called when the key is present — an absent
+/// one takes the field's `default`, which is the daemon lifetime.
+fn de_ttl<'de, D: serde::Deserializer<'de>>(d: D) -> Result<CacheTtl, D::Error> {
+    let raw = String::deserialize(d)?;
+    parse_ttl(&raw).map_err(serde::de::Error::custom)
+}
+
+fn ser_ttl<S: serde::Serializer>(ttl: &CacheTtl, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&ttl.to_config_string())
+}
+
 /// One entry in the reserved `secrets` block: a provider reference declared
 /// **once**, under a name any number of wraps can reference as
 /// `secret://<name>`.
@@ -181,7 +220,8 @@ fn parse_ttl(raw: &str) -> Result<CacheTtl> {
 /// The name is what a TTL hangs on. Before this existed a secret had no
 /// declaration — it was a string repeated in every wrap that needed it — so
 /// there was nowhere for a per-secret setting to live.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct SecretDecl {
@@ -189,6 +229,7 @@ pub struct SecretDecl {
     /// the direct form: a declaration naming another declaration would make
     /// resolution a graph walk with cycles to detect, for no reuse a second
     /// name buys.
+    #[serde(rename = "ref")]
     #[cfg_attr(feature = "schema", schemars(rename = "ref"))]
     pub reference: Reference,
     /// How long the daemon may serve this secret from its in-memory cache
@@ -196,6 +237,13 @@ pub struct SecretDecl {
     /// `2h`, `1d`. Omit for the default, which is the daemon's own lifetime;
     /// any value here is a shortening, and shortening means the provider (and
     /// on 1Password, a biometric prompt) runs again once it elapses.
+    #[serde(
+        default,
+        rename = "ttl",
+        deserialize_with = "de_ttl",
+        serialize_with = "ser_ttl",
+        skip_serializing_if = "CacheTtl::is_daemon_lifetime"
+    )]
     #[cfg_attr(feature = "schema", schemars(rename = "ttl", with = "Option<String>"))]
     pub ttl: CacheTtl,
 }
@@ -232,13 +280,14 @@ impl ResolvedRef {
 /// One SSH identity served by the agent. `public_key` is the inline OpenSSH
 /// public key (not secret); `private_key` is a `secret://provider/locator`
 /// reference resolved only at SIGN time.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct SshIdentity {
     /// Rationale shown in the consent prompt when this identity is used to
     /// sign.
-    #[cfg_attr(feature = "schema", schemars(rename = "$reason"))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// Inline OpenSSH public key (`ssh-ed25519 AAAA… comment`). Answered to
     /// REQUEST_IDENTITIES without a resolve.
@@ -252,24 +301,26 @@ pub struct SshIdentity {
 /// *gate-only* — consent is required before the binary runs, but nothing is
 /// injected (used to gate tools like `op` that have no secret to pass).
 /// Everything else is metadata.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct Wrap {
     /// The binary name is the key this wrap is filed under, not a property of
-    /// the object, so it is absent from the schema.
+    /// the object, so it is absent from the schema and the serialized form.
+    #[serde(skip)]
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub name: String,
     /// Rationale shown in the consent prompt when this wrap is invoked.
-    #[cfg_attr(feature = "schema", schemars(rename = "$reason"))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    /// Environment variables to inject. Each value is either an inline
-    /// `secret://provider/locator` reference or `secret://<name>` naming an
-    /// entry in the top-level `secrets` block; resolution happens at invocation
+    /// Environment variables to inject. Each value is a
+    /// `secret://provider/locator` reference; resolution happens at invocation
     /// time. Omit (or leave empty) for a gate-only wrap.
     //
     // Resolution is deferred to run-time so an unreachable provider doesn't
     // break config loading.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[cfg_attr(
         feature = "schema",
         schemars(default, with = "crate::schema::SecretRefMap")
@@ -278,54 +329,22 @@ pub struct Wrap {
 }
 
 impl WrapsConfig {
-    /// Parse from a JSON5 string. `source_label` is used in error messages.
+    /// Parse from a TOML string. `source_label` names the file in errors.
+    ///
+    /// The `toml` crate reports a line, a column and a caret at the offending
+    /// value, so its message is the diagnostic — this only prefixes the file.
     pub fn parse(text: &str, source_label: &str) -> Result<WrapsConfig> {
-        let root: Value = json5::from_str(text)
-            .with_context(|| format!("failed to parse JSON5 config: {source_label}"))?;
-        let obj = root
-            .as_object()
-            .with_context(|| format!("{source_label}: top level must be an object"))?;
+        let mut config: WrapsConfig = toml::from_str(text)
+            .with_context(|| format!("failed to parse config: {source_label}"))?;
 
-        let mut config = WrapsConfig::default();
-
-        for (key, value) in obj {
-            match key.as_str() {
-                PROVIDERS_KEY => {
-                    config.providers = parse_providers_value(value, source_label)?;
-                }
-                SECRETS_KEY => {
-                    config.secrets = parse_secret_decls(value, source_label)?;
-                }
-                SSH_KEY => {
-                    config.ssh = parse_ssh_identities(value, source_label)?;
-                }
-                SHIM_DIR_KEY => {
-                    let raw = value.as_str().with_context(|| {
-                        format!("{source_label}: `{SHIM_DIR_KEY}` must be a string")
-                    })?;
-                    config.shim_dir = Some(expand_tilde(raw));
-                }
-                WAIT_INDICATOR_KEY => {
-                    let on = value.as_bool().with_context(|| {
-                        format!("{source_label}: `{WAIT_INDICATOR_KEY}` must be a boolean")
-                    })?;
-                    config.wait_indicator = Some(on);
-                }
-                EDITOR_KEY => {
-                    let raw = value.as_str().with_context(|| {
-                        format!("{source_label}: `{EDITOR_KEY}` must be a string")
-                    })?;
-                    config.editor = Some(raw.to_owned());
-                }
-                other if other.starts_with('$') => {
-                    // `$schema`, `$version`, future metadata — silently ignored.
-                    continue;
-                }
-                other => {
-                    let wrap = parse_wrap(other, value, source_label)?;
-                    config.wraps.insert(other.to_owned(), wrap);
-                }
-            }
+        // `name` is the map key on both of these, skipped by serde and filled
+        // in here so callers can keep reading `wrap.name` / `provider.name`.
+        for (name, wrap) in &mut config.wraps {
+            wrap.name = name.clone();
+        }
+        for (name, provider) in &mut config.providers {
+            provider.name = name.clone();
+            provider.validate(name, source_label)?;
         }
         config.check_declarations(source_label)?;
         Ok(config)
@@ -344,6 +363,16 @@ impl WrapsConfig {
     fn check_declarations(&self, source: &str) -> Result<()> {
         let mut claimed: BTreeMap<(&str, &str), (&String, CacheTtl)> = BTreeMap::new();
         for (name, decl) in &self.secrets {
+            // The slash is what tells a name from a provider reference, so a
+            // name holding one is a declaration nothing could ever reference.
+            // Serde can't catch this — it's a map *key*, and any string is a
+            // valid one.
+            if name.contains('/') {
+                bail!(
+                    "{source}: `{SECRETS_KEY}.{name}` contains a `/`, so nothing could reference \
+                     it — `secret://{name}` reads as a provider reference, not a name"
+                );
+            }
             let target = (
                 decl.reference.provider.as_str(),
                 decl.reference.locator.as_str(),
@@ -365,7 +394,7 @@ impl WrapsConfig {
         for wrap in self.wraps.values() {
             for (env_name, raw) in &wrap.env {
                 self.resolve_ref(raw)
-                    .with_context(|| format!("{source}: `{}.env.{env_name}`", wrap.name))?;
+                    .with_context(|| format!("{source}: `wraps.{}.env.{env_name}`", wrap.name))?;
             }
         }
         Ok(())
@@ -490,11 +519,6 @@ impl WrapsConfig {
     /// Only values that actually look like a `secret://` reference are
     /// collected; a stray non-reference `env` value (there shouldn't be one,
     /// but the type doesn't forbid it) is skipped rather than suggested.
-    ///
-    /// The test is the bare scheme prefix, so a `secret://<name>` is offered
-    /// as written rather than expanded. That is the wanted behaviour: the name
-    /// is the value a second wrap should be reusing, and expanding it in the
-    /// picker would teach the user to paste the locator back in.
     pub fn known_secret_refs(&self) -> Vec<String> {
         let mut refs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         for wrap in self.wraps.values() {
@@ -519,203 +543,6 @@ impl WrapsConfig {
     }
 }
 
-fn parse_wrap(name: &str, value: &Value, source: &str) -> Result<Wrap> {
-    let obj = value
-        .as_object()
-        .with_context(|| format!("{source}: wrap `{name}` must be an object (got {value})"))?;
-
-    let mut wrap = Wrap {
-        name: name.to_owned(),
-        reason: None,
-        env: BTreeMap::new(),
-    };
-
-    for (key, val) in obj {
-        match key.as_str() {
-            "$reason" => {
-                wrap.reason = match present(Some(val)) {
-                    None => None,
-                    Some(val) => Some(
-                        val.as_str()
-                            .with_context(|| {
-                                format!("{source}: `{name}.$reason` must be a string")
-                            })?
-                            .to_owned(),
-                    ),
-                };
-            }
-            "$description" => {
-                // Future-proof: accept and ignore alongside $reason.
-                continue;
-            }
-            "env" => {
-                let env_obj = val
-                    .as_object()
-                    .with_context(|| format!("{source}: `{name}.env` must be an object"))?;
-                for (env_name, env_val) in env_obj {
-                    let s = env_val.as_str().with_context(|| {
-                        format!("{source}: `{name}.env.{env_name}` must be a string")
-                    })?;
-                    wrap.env.insert(env_name.clone(), s.to_owned());
-                }
-            }
-            other if other.starts_with('$') => {
-                bail!("{source}: wrap `{name}` has unknown setting `{other}`");
-            }
-            other => {
-                bail!("{source}: wrap `{name}` has unknown key `{other}` (env vars belong inside `env: {{ … }}`)");
-            }
-        }
-    }
-
-    // An empty `env` is legal: a wrap with no secrets is a *gate-only*
-    // wrap — consent is still required before the binary runs, but
-    // nothing is injected. This is how you gate a tool like `op` that has
-    // no secret to pass through.
-    Ok(wrap)
-}
-
-/// Parse the reserved `secrets` block: a map of secret name → declaration.
-fn parse_secret_decls(value: &Value, source: &str) -> Result<BTreeMap<String, SecretDecl>> {
-    let obj = value
-        .as_object()
-        .with_context(|| format!("{source}: `{SECRETS_KEY}` must be an object"))?;
-
-    let mut decls = BTreeMap::new();
-    for (name, val) in obj {
-        if name.contains('/') {
-            bail!(
-                "{source}: secret name `{name}` contains a `/`, which is what tells a name from a \
-                 provider reference — `secret://{name}` could never reach it"
-            );
-        }
-        decls.insert(name.clone(), parse_secret_decl(name, val, source)?);
-    }
-    Ok(decls)
-}
-
-/// Parse one declaration. Requires `ref`; accepts an optional `ttl`; rejects
-/// any other key (mirrors `parse_wrap` / `parse_ssh_identity`).
-fn parse_secret_decl(name: &str, value: &Value, source: &str) -> Result<SecretDecl> {
-    let obj = value
-        .as_object()
-        .with_context(|| format!("{source}: secret `{name}` must be an object (got {value})"))?;
-
-    let mut reference = None;
-    let mut ttl = CacheTtl::default();
-
-    for (key, val) in obj {
-        match key.as_str() {
-            "ref" => {
-                let raw = val.as_str().with_context(|| {
-                    format!("{source}: `{SECRETS_KEY}.{name}.ref` must be a string")
-                })?;
-                reference = Some(Reference::parse(raw).with_context(|| {
-                    format!(
-                        "{source}: `{SECRETS_KEY}.{name}.ref` is not a \
-                         `secret://provider/locator` reference"
-                    )
-                })?);
-            }
-            "ttl" => {
-                let Some(val) = present(Some(val)) else {
-                    continue;
-                };
-                let raw = val.as_str().with_context(|| {
-                    format!(
-                        "{source}: `{SECRETS_KEY}.{name}.ttl` must be a string like `15m` \
-                         (omit it for the daemon-lifetime default)"
-                    )
-                })?;
-                ttl = parse_ttl(raw)
-                    .with_context(|| format!("{source}: `{SECRETS_KEY}.{name}.ttl`"))?;
-            }
-            other => {
-                bail!("{source}: secret `{name}` has unknown key `{other}`");
-            }
-        }
-    }
-
-    let reference =
-        reference.with_context(|| format!("{source}: secret `{name}` is missing `ref`"))?;
-    Ok(SecretDecl { reference, ttl })
-}
-
-/// Parse the reserved `ssh` block: a map of identity name → identity.
-fn parse_ssh_identities(value: &Value, source: &str) -> Result<BTreeMap<String, SshIdentity>> {
-    let obj = value
-        .as_object()
-        .with_context(|| format!("{source}: `{SSH_KEY}` must be an object"))?;
-
-    let mut identities = BTreeMap::new();
-    for (name, val) in obj {
-        identities.insert(name.clone(), parse_ssh_identity(name, val, source)?);
-    }
-    Ok(identities)
-}
-
-/// Parse one SSH identity. Requires `public_key` and `private_key`; accepts
-/// an optional `$reason`; rejects any other key (mirrors `parse_wrap`).
-fn parse_ssh_identity(name: &str, value: &Value, source: &str) -> Result<SshIdentity> {
-    let obj = value.as_object().with_context(|| {
-        format!("{source}: ssh identity `{name}` must be an object (got {value})")
-    })?;
-
-    let mut reason = None;
-    let mut public_key = None;
-    let mut private_key = None;
-
-    for (key, val) in obj {
-        match key.as_str() {
-            "$reason" => {
-                reason = match present(Some(val)) {
-                    None => None,
-                    Some(val) => Some(
-                        val.as_str()
-                            .with_context(|| {
-                                format!("{source}: `ssh.{name}.$reason` must be a string")
-                            })?
-                            .to_owned(),
-                    ),
-                };
-            }
-            "public_key" => {
-                public_key = Some(
-                    val.as_str()
-                        .with_context(|| {
-                            format!("{source}: `ssh.{name}.public_key` must be a string")
-                        })?
-                        .to_owned(),
-                );
-            }
-            "private_key" => {
-                let raw = val.as_str().with_context(|| {
-                    format!("{source}: `ssh.{name}.private_key` must be a string")
-                })?;
-                private_key = Some(Reference::parse(raw).with_context(|| {
-                    format!(
-                        "{source}: `ssh.{name}.private_key` is not a valid `secret://` reference"
-                    )
-                })?);
-            }
-            other => {
-                bail!("{source}: ssh identity `{name}` has unknown key `{other}`");
-            }
-        }
-    }
-
-    let public_key = public_key
-        .with_context(|| format!("{source}: ssh identity `{name}` is missing `public_key`"))?;
-    let private_key = private_key
-        .with_context(|| format!("{source}: ssh identity `{name}` is missing `private_key`"))?;
-
-    Ok(SshIdentity {
-        reason,
-        public_key,
-        private_key,
-    })
-}
-
 /// Expand a leading `~/` in a path string.
 fn expand_tilde(raw: &str) -> PathBuf {
     if let Some(rest) = raw.strip_prefix("~/") {
@@ -738,12 +565,11 @@ mod tests {
     #[test]
     fn parses_a_minimal_wrap() {
         let c = WrapsConfig::parse(
-            r#"{
-                gh: {
-                    $reason: "GitHub API access",
-                    env: { GITHUB_TOKEN: "secret://op/Personal/GitHub Token/credential" },
-                },
-            }"#,
+            r#"
+            [wraps.gh]
+            reason = "GitHub API access"
+            env.GITHUB_TOKEN = "secret://op/Personal/GitHub Token/credential"
+            "#,
             "t",
         )
         .unwrap();
@@ -759,16 +585,17 @@ mod tests {
     #[test]
     fn known_secret_refs_dedupes_and_sorts_across_wraps() {
         let c = WrapsConfig::parse(
-            r#"{
-                gh: { env: { GITHUB_TOKEN: "secret://op/Personal/GitHub/token" } },
-                gh_alt: { env: { GH_TOKEN: "secret://op/Personal/GitHub/token" } },
-                aws: {
-                    env: {
-                        AWS_ACCESS_KEY_ID:     "secret://op/Work/AWS/access_key_id",
-                        AWS_SECRET_ACCESS_KEY: "secret://op/Work/AWS/secret_access_key",
-                    },
-                },
-            }"#,
+            r#"
+            [wraps.gh]
+            env.GITHUB_TOKEN = "secret://op/Personal/GitHub/token"
+
+            [wraps.gh_alt]
+            env.GH_TOKEN = "secret://op/Personal/GitHub/token"
+
+            [wraps.aws]
+            env.AWS_ACCESS_KEY_ID = "secret://op/Work/AWS/access_key_id"
+            env.AWS_SECRET_ACCESS_KEY = "secret://op/Work/AWS/secret_access_key"
+            "#,
             "t",
         )
         .unwrap();
@@ -785,14 +612,18 @@ mod tests {
 
     #[test]
     fn known_secret_refs_is_empty_for_gate_only_wraps() {
-        let c = WrapsConfig::parse(r#"{ op: { env: {} } }"#, "t").unwrap();
+        let c = WrapsConfig::parse("[wraps.op]\n", "t").unwrap();
         assert!(c.known_secret_refs().is_empty());
     }
 
     #[test]
     fn parses_shim_dir_with_tilde_expansion() {
         let c = WrapsConfig::parse(
-            r#"{ $shim_dir: "~/.local/bin", gh: { env: { TOK: "secret://op/x" } } }"#,
+            r#"
+            shim_dir = "~/.local/bin"
+            [wraps.gh]
+            env.TOK = "secret://op/x"
+            "#,
             "t",
         )
         .unwrap();
@@ -806,47 +637,47 @@ mod tests {
     #[test]
     fn wait_indicator_defaults_on_and_parses_explicit_toggle() {
         // Absent → enabled (None).
-        let c = WrapsConfig::parse(r#"{ gh: { env: { T: "secret://op/x" } } }"#, "t").unwrap();
+        let c = WrapsConfig::parse("[wraps.gh]\nenv.T = \"secret://op/x\"\n", "t").unwrap();
         assert_eq!(c.wait_indicator, None);
         assert!(c.wait_indicator_enabled());
 
         // Explicit false → silenced.
-        let off = WrapsConfig::parse(r#"{ $wait_indicator: false }"#, "t").unwrap();
+        let off = WrapsConfig::parse("wait_indicator = false\n", "t").unwrap();
         assert_eq!(off.wait_indicator, Some(false));
         assert!(!off.wait_indicator_enabled());
 
         // Explicit true → enabled.
-        let on = WrapsConfig::parse(r#"{ $wait_indicator: true }"#, "t").unwrap();
+        let on = WrapsConfig::parse("wait_indicator = true\n", "t").unwrap();
         assert_eq!(on.wait_indicator, Some(true));
         assert!(on.wait_indicator_enabled());
     }
 
     #[test]
     fn wait_indicator_rejects_non_boolean() {
-        let err = WrapsConfig::parse(r#"{ $wait_indicator: "yes" }"#, "t").unwrap_err();
+        let err = WrapsConfig::parse("wait_indicator = \"yes\"\n", "t").unwrap_err();
         assert!(
-            format!("{err:#}").contains("$wait_indicator"),
+            format!("{err:#}").contains("wait_indicator"),
             "error should name the offending key: {err:#}"
         );
     }
 
     #[test]
     fn editor_preference_parses_and_defaults_none() {
-        let none = WrapsConfig::parse(r#"{ gh: { env: {} } }"#, "t").unwrap();
+        let none = WrapsConfig::parse("[wraps.gh]\n", "t").unwrap();
         assert_eq!(none.editor, None);
 
-        let set = WrapsConfig::parse(r#"{ $editor: "code", gh: { env: {} } }"#, "t").unwrap();
+        let set = WrapsConfig::parse("editor = \"code\"\n[wraps.gh]\n", "t").unwrap();
         assert_eq!(set.editor.as_deref(), Some("code"));
         // The reserved key doesn't leak into the wrap map.
         assert!(set.wraps.contains_key("gh"));
-        assert!(!set.wraps.contains_key("$editor"));
+        assert!(!set.wraps.contains_key("editor"));
     }
 
     #[test]
     fn editor_preference_rejects_non_string() {
-        let err = WrapsConfig::parse(r#"{ $editor: 42 }"#, "t").unwrap_err();
+        let err = WrapsConfig::parse("editor = 42\n", "t").unwrap_err();
         assert!(
-            format!("{err:#}").contains("$editor"),
+            format!("{err:#}").contains("editor"),
             "error should name the offending key: {err:#}"
         );
     }
@@ -854,13 +685,17 @@ mod tests {
     #[test]
     fn parses_multiple_wraps_and_a_providers_block() {
         let c = WrapsConfig::parse(
-            r#"{
-                gh:  { env: { GITHUB_TOKEN: "secret://op/x" } },
-                aws: { env: { AWS_KEY: "secret://op/y", AWS_SECRET: "secret://op/z" } },
-                providers: {
-                    custom: { retrieve: ["printf", "%s", "{locator}"] },
-                },
-            }"#,
+            r#"
+            [wraps.gh]
+            env.GITHUB_TOKEN = "secret://op/x"
+
+            [wraps.aws]
+            env.AWS_KEY = "secret://op/y"
+            env.AWS_SECRET = "secret://op/z"
+
+            [providers.custom]
+            retrieve = ["printf", "%s", "{locator}"]
+            "#,
             "t",
         )
         .unwrap();
@@ -870,32 +705,48 @@ mod tests {
 
     #[test]
     fn remember_setting_is_rejected_now_that_caching_is_authorization_gated() {
-        // Pre-pivot we had a `$remember` field for per-wrap TTLs. The
-        // daemon now drops TTLs entirely: the *approvals* cache lives
-        // for the daemon process, and the *secret value* cache keys on
-        // `(wrap, provider, locator)` with no expiry. `$remember` no
-        // longer maps onto anything we can configure per-wrap.
+        // Pre-pivot we had a `remember` field for per-wrap TTLs. The daemon
+        // now drops TTLs entirely: the *approvals* cache lives for the daemon
+        // process, and the *secret value* cache has no expiry. `remember` no
+        // longer maps onto anything configurable per-wrap, so it is an unknown
+        // key like any other.
         let err = WrapsConfig::parse(
-            r#"{ gh: { $remember: "8h", env: { X: "secret://op/x" } } }"#,
+            "[wraps.gh]\nremember = \"8h\"\nenv.X = \"secret://op/x\"\n",
             "t",
         )
         .unwrap_err();
-        assert!(err.to_string().contains("$remember"));
+        assert!(format!("{err:#}").contains("remember"));
     }
 
     #[test]
-    fn rejects_unknown_dollar_keys_inside_a_wrap() {
-        let err = WrapsConfig::parse(r#"{ gh: { $bogus: 1, env: { X: "secret://op/x" } } }"#, "t")
+    fn rejects_an_unknown_key_inside_a_wrap() {
+        let err = WrapsConfig::parse("[wraps.gh]\nbogus = 1\nenv.X = \"secret://op/x\"\n", "t")
             .unwrap_err();
-        assert!(err.to_string().contains("$bogus"));
+        assert!(format!("{err:#}").contains("bogus"));
     }
 
     #[test]
-    fn rejects_top_level_env_vars_outside_env_block() {
-        // Common mistake: putting GITHUB_TOKEN as a sibling of `env` rather than inside it.
+    fn rejects_env_vars_declared_outside_the_env_table() {
+        // Common mistake: putting GITHUB_TOKEN as a sibling of `env` rather
+        // than inside it. `deny_unknown_fields` catches it and the message
+        // lists the keys a wrap does accept.
         let err =
-            WrapsConfig::parse(r#"{ gh: { GITHUB_TOKEN: "secret://op/x" } }"#, "t").unwrap_err();
-        assert!(err.to_string().contains("env vars belong inside `env"));
+            WrapsConfig::parse("[wraps.gh]\nGITHUB_TOKEN = \"secret://op/x\"\n", "t").unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("GITHUB_TOKEN"), "{msg}");
+        assert!(
+            msg.contains("env"),
+            "the message should point at `env`: {msg}"
+        );
+    }
+
+    /// A mistyped reserved key used to become a wrap for a binary of that
+    /// name, silently. With wraps under `[wraps.*]` the top level is closed,
+    /// so it is an error that names the key.
+    #[test]
+    fn rejects_a_mistyped_top_level_key() {
+        let err = WrapsConfig::parse("[provdiers.op]\nretrieve = [\"true\"]\n", "t").unwrap_err();
+        assert!(format!("{err:#}").contains("provdiers"));
     }
 
     #[test]
@@ -904,7 +755,7 @@ mod tests {
         // required but nothing is injected. This is how you gate a tool
         // like `op` that has no secret to pass.
         let c =
-            WrapsConfig::parse(r#"{ op: { $reason: "1Password vault access" } }"#, "t").unwrap();
+            WrapsConfig::parse("[wraps.op]\nreason = \"1Password vault access\"\n", "t").unwrap();
         let w = c.wrap("op").unwrap();
         assert_eq!(w.name, "op");
         assert_eq!(w.reason.as_deref(), Some("1Password vault access"));
@@ -912,9 +763,9 @@ mod tests {
     }
 
     #[test]
-    fn parses_a_gate_only_wrap_with_empty_env() {
-        // An explicit `env: {}` means the same thing as omitting `env`.
-        let c = WrapsConfig::parse(r#"{ op: { env: {} } }"#, "t").unwrap();
+    fn parses_a_gate_only_wrap_with_an_empty_env_table() {
+        // An explicit empty `env` means the same thing as omitting it.
+        let c = WrapsConfig::parse("[wraps.op]\nenv = {}\n", "t").unwrap();
         let w = c.wrap("op").unwrap();
         assert!(w.env.is_empty());
         assert_eq!(w.reason, None);
@@ -923,15 +774,12 @@ mod tests {
     #[test]
     fn parses_ssh_identities() {
         let cfg = WrapsConfig::parse(
-            r#"{
-                ssh: {
-                    "github": {
-                        $reason: "git pushes",
-                        public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1 me@mac",
-                        private_key: "secret://op/Private/gh/private key",
-                    }
-                }
-            }"#,
+            r#"
+            [ssh.github]
+            reason = "git pushes"
+            public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1 me@mac"
+            private_key = "secret://op/Private/gh/private key"
+            "#,
             "t",
         )
         .unwrap();
@@ -945,50 +793,35 @@ mod tests {
 
     #[test]
     fn ssh_identity_requires_public_and_private_key() {
+        let err =
+            WrapsConfig::parse("[ssh.x]\npublic_key = \"ssh-ed25519 AAAA x\"\n", "t").unwrap_err();
+        assert!(format!("{err:#}").contains("private_key"));
+    }
+
+    /// A `private_key` that is not a `secret://` reference is caught at load,
+    /// naming the value — not at sign time, when the user is waiting on a
+    /// git push.
+    #[test]
+    fn ssh_identity_rejects_a_malformed_private_key_ref() {
         let err = WrapsConfig::parse(
-            r#"{
-                ssh: { "x": { public_key: "ssh-ed25519 AAAA x" } }
-            }"#,
+            "[ssh.x]\npublic_key = \"ssh-ed25519 AAAA x\"\nprivate_key = \"op/no-scheme\"\n",
             "t",
         )
         .unwrap_err();
-        assert!(err.to_string().contains("private_key"));
+        assert!(format!("{err:#}").contains("op/no-scheme"));
     }
-
-    #[test]
-    fn an_explicit_null_reason_means_no_reason() {
-        // Same contract as the provider capabilities: the published schema
-        // derives `$reason` from an `Option<String>`, which reads as "absent
-        // or a string", so a null has to load rather than error.
-        let c = WrapsConfig::parse(
-            r#"{
-                gh: { $reason: null, env: { X: "secret://op/x" } },
-                ssh: {
-                    k: {
-                        $reason: null,
-                        public_key: "ssh-ed25519 AAAA k",
-                        private_key: "secret://op/k",
-                    },
-                },
-            }"#,
-            "t",
-        )
-        .expect("a null $reason loads as an absent one");
-        assert_eq!(c.wrap("gh").expect("gh wrap").reason, None);
-        assert_eq!(c.ssh["k"].reason, None);
-    }
-
-    // ── Declared secrets, named references, and the TTL ──────────────
 
     #[test]
     fn a_declared_secret_expands_at_load_and_keeps_its_name() {
         let c = WrapsConfig::parse(
-            r#"{
-                secrets: {
-                    github_token: { ref: "secret://op/Personal/GitHub/token", ttl: "15m" },
-                },
-                gh: { env: { GITHUB_TOKEN: "secret://github_token" } },
-            }"#,
+            r#"
+            [secrets.github_token]
+            ref = "secret://op/Personal/GitHub/token"
+            ttl = "15m"
+
+            [wraps.gh]
+            env.GITHUB_TOKEN = "secret://github_token"
+            "#,
             "t",
         )
         .expect("a `secrets` block and a `secret://<name>` reference must load");
@@ -1014,11 +847,17 @@ mod tests {
         // several wraps, and every one of them gets the same reference and
         // the same TTL.
         let c = WrapsConfig::parse(
-            r#"{
-                secrets: { tok: { ref: "secret://op/Personal/GitHub/token", ttl: "5m" } },
-                gh:  { env: { GITHUB_TOKEN: "secret://tok" } },
-                hub: { env: { GH_TOKEN: "secret://tok" } },
-            }"#,
+            r#"
+            [secrets.tok]
+            ref = "secret://op/Personal/GitHub/token"
+            ttl = "5m"
+
+            [wraps.gh]
+            env.GITHUB_TOKEN = "secret://tok"
+
+            [wraps.hub]
+            env.GH_TOKEN = "secret://tok"
+            "#,
             "t",
         )
         .unwrap();
@@ -1032,10 +871,14 @@ mod tests {
     #[test]
     fn an_unset_ttl_is_the_daemon_lifetime() {
         let c = WrapsConfig::parse(
-            r#"{
-                secrets: { tok: { ref: "secret://op/x/y" } },
-                gh: { env: { T: "secret://tok", U: "secret://op/a/b" } },
-            }"#,
+            r#"
+            [secrets.tok]
+            ref = "secret://op/x/y"
+
+            [wraps.gh]
+            env.T = "secret://tok"
+            env.U = "secret://op/a/b"
+            "#,
             "t",
         )
         .unwrap();
@@ -1058,10 +901,15 @@ mod tests {
         // get the declared lifetime, not the default. Otherwise one slot
         // would have two claimed lifetimes and last-writer would win.
         let c = WrapsConfig::parse(
-            r#"{
-                secrets: { tok: { ref: "secret://op/x/y", ttl: "30s" } },
-                gh: { env: { INLINE: "secret://op/x/y", NAMED: "secret://tok" } },
-            }"#,
+            r#"
+            [secrets.tok]
+            ref = "secret://op/x/y"
+            ttl = "30s"
+
+            [wraps.gh]
+            env.INLINE = "secret://op/x/y"
+            env.NAMED = "secret://tok"
+            "#,
             "t",
         )
         .unwrap();
@@ -1080,12 +928,12 @@ mod tests {
         // which the slash rule now reads as a name. The message has to offer
         // that reading too, or it sends them off to write a declaration they
         // never wanted.
-        let err = WrapsConfig::parse(r#"{ gh: { env: { T: "secret://op" } } }"#, "t").unwrap_err();
+        let err = WrapsConfig::parse("[wraps.gh]\nenv.T = \"secret://op\"\n", "t").unwrap_err();
         let text = format!("{err:#}");
         assert!(text.contains("not a declared secret"), "{text}");
         assert!(text.contains("secret://op/<locator>"), "{text}");
         // And it names where in the file the offending value is.
-        assert!(text.contains("gh.env.T"), "{text}");
+        assert!(text.contains("wraps.gh.env.T"), "{text}");
     }
 
     #[test]
@@ -1093,12 +941,15 @@ mod tests {
         // One reference is one cache slot, so it has one lifetime. Silently
         // picking the shorter is how a `ttl` stops meaning what the file says.
         let err = WrapsConfig::parse(
-            r#"{
-                secrets: {
-                    a: { ref: "secret://op/x/y", ttl: "5m" },
-                    b: { ref: "secret://op/x/y", ttl: "1h" },
-                },
-            }"#,
+            r#"
+            [secrets.a]
+            ref = "secret://op/x/y"
+            ttl = "5m"
+
+            [secrets.b]
+            ref = "secret://op/x/y"
+            ttl = "1h"
+            "#,
             "t",
         )
         .unwrap_err();
@@ -1114,12 +965,15 @@ mod tests {
     fn two_declarations_of_one_reference_agreeing_on_the_ttl_are_fine() {
         // Aliasing is only a problem when the two claims disagree.
         WrapsConfig::parse(
-            r#"{
-                secrets: {
-                    a: { ref: "secret://op/x/y", ttl: "5m" },
-                    b: { ref: "secret://op/x/y", ttl: "5m" },
-                },
-            }"#,
+            r#"
+            [secrets.a]
+            ref = "secret://op/x/y"
+            ttl = "5m"
+
+            [secrets.b]
+            ref = "secret://op/x/y"
+            ttl = "5m"
+            "#,
             "t",
         )
         .expect("two names for one reference agreeing on its lifetime is not a conflict");
@@ -1130,9 +984,7 @@ mod tests {
         let cases = [("30s", 30), ("15m", 900), ("2h", 7200), ("1d", 86_400)];
         for (spelling, secs) in cases {
             let c = WrapsConfig::parse(
-                &format!(
-                    r#"{{ secrets: {{ t: {{ ref: "secret://op/x/y", ttl: "{spelling}" }} }} }}"#
-                ),
+                &format!("[secrets.t]\nref = \"secret://op/x/y\"\nttl = \"{spelling}\"\n"),
                 "t",
             )
             .unwrap_or_else(|err| panic!("`{spelling}` should parse: {err:#}"));
@@ -1142,31 +994,39 @@ mod tests {
         // A unit is required: `15` would have to mean seconds by a convention
         // nobody can see in the file.
         let err = WrapsConfig::parse(
-            r#"{ secrets: { t: { ref: "secret://op/x/y", ttl: "15" } } }"#,
+            "[secrets.t]\nref = \"secret://op/x/y\"\nttl = \"15\"\n",
             "t",
         )
         .unwrap_err();
         assert!(format!("{err:#}").contains("needs a unit"), "{err:#}");
 
         let err = WrapsConfig::parse(
-            r#"{ secrets: { t: { ref: "secret://op/x/y", ttl: "15w" } } }"#,
+            "[secrets.t]\nref = \"secret://op/x/y\"\nttl = \"15w\"\n",
             "t",
         )
         .unwrap_err();
         assert!(format!("{err:#}").contains("unknown unit"), "{err:#}");
     }
 
+    /// A bare TOML integer is refused rather than read as seconds. Under the
+    /// old walker this was a string-typed field; here it is serde's type
+    /// error, so the guard is worth keeping either way.
+    #[test]
+    fn a_ttl_must_be_a_string_not_a_bare_integer() {
+        let err = WrapsConfig::parse("[secrets.t]\nref = \"secret://op/x/y\"\nttl = 900\n", "t")
+            .unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("string"), "{text}");
+    }
+
     #[test]
     fn a_declaration_requires_a_ref_and_refuses_unknown_keys() {
-        let err = WrapsConfig::parse(r#"{ secrets: { t: { ttl: "5m" } } }"#, "t").unwrap_err();
-        assert!(format!("{err:#}").contains("missing `ref`"), "{err:#}");
+        let err = WrapsConfig::parse("[secrets.t]\nttl = \"5m\"\n", "t").unwrap_err();
+        assert!(format!("{err:#}").contains("ref"), "{err:#}");
 
-        let err = WrapsConfig::parse(
-            r#"{ secrets: { t: { ref: "secret://op/x/y", nope: 1 } } }"#,
-            "t",
-        )
-        .unwrap_err();
-        assert!(format!("{err:#}").contains("unknown key `nope`"), "{err:#}");
+        let err = WrapsConfig::parse("[secrets.t]\nref = \"secret://op/x/y\"\nnope = 1\n", "t")
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("nope"), "{err:#}");
     }
 
     #[test]
@@ -1174,19 +1034,19 @@ mod tests {
         // No alias chains: a declaration naming another declaration would
         // make resolution a graph walk with cycles to detect.
         let err = WrapsConfig::parse(
-            r#"{ secrets: { a: { ref: "secret://op/x/y" }, b: { ref: "secret://a" } } }"#,
+            "[secrets.a]\nref = \"secret://op/x/y\"\n\n[secrets.b]\nref = \"secret://a\"\n",
             "t",
         )
         .unwrap_err();
-        assert!(format!("{err:#}").contains("secrets.b.ref"), "{err:#}");
+        assert!(format!("{err:#}").contains("secret://a"), "{err:#}");
     }
 
     #[test]
     fn a_secret_name_may_not_contain_a_slash() {
         // The slash is what tells a name from a provider reference, so a name
         // holding one is a declaration nothing could ever reference.
-        let err = WrapsConfig::parse(r#"{ secrets: { "a/b": { ref: "secret://op/x/y" } } }"#, "t")
-            .unwrap_err();
+        let err =
+            WrapsConfig::parse("[secrets.\"a/b\"]\nref = \"secret://op/x/y\"\n", "t").unwrap_err();
         assert!(format!("{err:#}").contains("contains a `/`"), "{err:#}");
     }
 
@@ -1195,11 +1055,16 @@ mod tests {
         // The interactive wrap picker suggests values already in use, and a
         // name is the value the user should be reusing.
         let c = WrapsConfig::parse(
-            r#"{
-                secrets: { tok: { ref: "secret://op/x/y" } },
-                gh:  { env: { A: "secret://tok" } },
-                aws: { env: { B: "secret://op/other/thing" } },
-            }"#,
+            r#"
+            [secrets.tok]
+            ref = "secret://op/x/y"
+
+            [wraps.gh]
+            env.A = "secret://tok"
+
+            [wraps.aws]
+            env.B = "secret://op/other/thing"
+            "#,
             "t",
         )
         .unwrap();
@@ -1218,28 +1083,49 @@ mod tests {
         // key stays decryptable in the daemon. The identity still writes the
         // direct reference — the TTL is looked up by reference, not by name.
         let c = WrapsConfig::parse(
-            r#"{
-                secrets: { deploy_key: { ref: "secret://op/Private/gh/key", ttl: "10m" } },
-                ssh: {
-                    github: {
-                        public_key: "ssh-ed25519 AAAA me@mac",
-                        private_key: "secret://op/Private/gh/key",
-                    },
-                },
-            }"#,
+            r#"
+            [secrets.deploy_key]
+            ref = "secret://op/Private/gh/key"
+            ttl = "10m"
+
+            [ssh.github]
+            public_key = "ssh-ed25519 AAAA me@mac"
+            private_key = "secret://op/Private/gh/key"
+            "#,
             "t",
         )
         .unwrap();
         assert_eq!(c.ttl_for(&c.ssh["github"].private_key), CacheTtl::Secs(600));
     }
 
+    /// A `15m` the user wrote has to come back out of a `wrap add` as `15m`.
+    /// `write_config` re-parses what it serialized, so a lossy rendering here
+    /// would be a round-trip failure rather than a cosmetic one.
     #[test]
-    fn ignores_top_level_dollar_metadata_keys() {
-        let c = WrapsConfig::parse(
-            r#"{ $schema: "x", $version: 2, gh: { env: { X: "secret://op/x" } } }"#,
-            "t",
-        )
-        .unwrap();
-        assert!(c.wrap("gh").is_some());
+    fn a_ttl_round_trips_through_serialization_in_the_unit_it_was_written() {
+        for spelling in ["30s", "15m", "2h", "1d", "90s"] {
+            let c = WrapsConfig::parse(
+                &format!("[secrets.t]\nref = \"secret://op/x/y\"\nttl = \"{spelling}\"\n"),
+                "t",
+            )
+            .unwrap();
+            let text = toml::to_string(&c).unwrap();
+            assert!(
+                text.contains(&format!("ttl = \"{spelling}\"")),
+                "`{spelling}` should survive a round-trip, got:\n{text}"
+            );
+            let back = WrapsConfig::parse(&text, "t").unwrap();
+            assert_eq!(back.secrets["t"].ttl, c.secrets["t"].ttl, "{spelling}");
+        }
+    }
+
+    /// An unset TTL stays absent rather than being written back as an
+    /// explicit one — otherwise the first `wrap add` would bake today's
+    /// default into every declaration in the file.
+    #[test]
+    fn an_unset_ttl_is_not_written_back() {
+        let c = WrapsConfig::parse("[secrets.t]\nref = \"secret://op/x/y\"\n", "t").unwrap();
+        let text = toml::to_string(&c).unwrap();
+        assert!(!text.contains("ttl"), "{text}");
     }
 }

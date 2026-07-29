@@ -2000,7 +2000,7 @@ impl State {
         // answer — measured at **0777** under the `umask 000` that container
         // and CI images routinely set. A world-writable module store is a
         // denial of service aimed squarely at the protective *deny* rules:
-        // the sha256 pin in `auto-rules.json5` means a swapped module becomes
+        // the sha256 pin in `auto-rules.toml` means a swapped module becomes
         // a visible REFUSED rule rather than executing, but a refused rule is
         // a rule that no longer denies anything.
         //
@@ -2017,7 +2017,7 @@ impl State {
         // writer of this destination shared.
         //
         // `Exactly(0o600)`, not the `Like(destination)` that `save_rules`
-        // uses for `auto-rules.json5`. That call preserves a mode because
+        // uses for `auto-rules.toml`. That call preserves a mode because
         // migration 0001 commits to preserving one the user chose for a
         // hand-editable, schema-published config. A compiled `.wasm` is the
         // opposite: build output nobody edits, with no schema and no editor
@@ -3882,7 +3882,7 @@ mod tests {
     #[test]
     fn with_rules_path_loads_existing_rules() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let rule = mk_rule("01", "gh", RuleDecision::Approve, Some("gh api *"));
         crate::rules::save_rules(&path, std::slice::from_ref(&rule)).expect("save");
         let state = State::with_rules_path(path);
@@ -4516,7 +4516,7 @@ mod tests {
         // which makes this also a sanity test that the Ask's
         // `command.join(" ")` lines up with what the evaluator expects.
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let rule = mk_rule("01", "gh", RuleDecision::Approve, Some("gh api"));
         crate::rules::save_rules(&path, &[rule]).expect("save");
         let state = State::with_rules_path(path);
@@ -4565,7 +4565,7 @@ mod tests {
         // declare `ssh:<key_id>` as its subject for the guard to have
         // anything to exclude on.
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         // mk_rule trains on GITHUB_TOKEN and matches every ssh:github ask.
         let rule = mk_rule("01", "ssh:github", RuleDecision::Approve, None);
         crate::rules::save_rules(&path, &[rule]).expect("save");
@@ -4584,7 +4584,7 @@ mod tests {
         // the subject is derived, and exists so the fix cannot be "block
         // every ssh ask" and still look correct.
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let mut rule = mk_rule("01", "ssh:github", RuleDecision::Approve, None);
         rule.trained_secrets = ["ssh:github".to_owned()].into_iter().collect();
         crate::rules::save_rules(&path, &[rule]).expect("save");
@@ -4645,7 +4645,7 @@ mod tests {
         // evaluate_rules_for_ask gets the module's decision with the
         // wasm rule's id (so audit attribution works like any rule).
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let rule = wasm_rule_with_module(dir.path(), "wasm01");
         crate::rules::save_rules(&path, &[rule]).expect("save");
         let state = State::with_rules_path(path);
@@ -4665,7 +4665,7 @@ mod tests {
         // The IPC mutation path must enforce the same sha256 pinning
         // as the load path — loudly, aborting the mutation.
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let mut state = State::with_rules_path(path);
         let mut rule = wasm_rule_with_module(dir.path(), "wasm01");
         repin(&mut rule, crate::rules::sha256_hex(b"not the module"));
@@ -4689,7 +4689,7 @@ mod tests {
         // must evict the compiled module, or a later mutation reusing
         // the id would evaluate stale guest code.
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let rule = wasm_rule_with_module(dir.path(), "wasm01");
         crate::rules::save_rules(&path, std::slice::from_ref(&rule)).expect("save");
         let mut state = State::with_rules_path(path);
@@ -4707,7 +4707,7 @@ mod tests {
     #[test]
     fn delete_rule_drops_the_compiled_module() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let rule = wasm_rule_with_module(dir.path(), "wasm01");
         crate::rules::save_rules(&path, std::slice::from_ref(&rule)).expect("save");
         let mut state = State::with_rules_path(path);
@@ -4760,7 +4760,7 @@ mod tests {
         // the rule fires on the next evaluation, both in this daemon
         // and in a fresh one loading the persisted file.
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let mut state = State::with_rules_path(path.clone());
 
         let rule = state
@@ -4801,7 +4801,7 @@ mod tests {
         // A module the sandbox refuses (WASI import) must fail loudly
         // with nothing persisted: no rule, no file in the store.
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let mut state = State::with_rules_path(path.clone());
 
         let bad = wat::parse_str(include_str!(
@@ -4845,7 +4845,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let _store = store_lock();
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let mut state = State::with_rules_path(path);
 
         // Plant a store directory anyone could write, as an install predating
@@ -4886,13 +4886,13 @@ mod tests {
     ///
     /// The id is minted at random inside `add_wasm_rule`, so the old fixed
     /// name cannot be planted the way the `save_rules` test plants
-    /// `auto-rules.json5.tmp`. What is observable is the litter: a listing
+    /// `auto-rules.toml.tmp`. What is observable is the litter: a listing
     /// with exactly one entry.
     #[test]
     fn add_wasm_rule_leaves_no_staging_file_in_the_store() {
         let _store = store_lock();
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let mut state = State::with_rules_path(path);
         let before = store_listing();
 
@@ -4916,7 +4916,7 @@ mod tests {
         // Finding B: an empty trained-secrets set disables the guard —
         // unlimited blast radius — so it demands the explicit opt-in.
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let mut state = State::with_rules_path(path);
 
         let err = format!(
@@ -4945,7 +4945,7 @@ mod tests {
         // the RulesList reply and the wire snapshot), and the rule can
         // never fire.
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let mut state = State::with_rules_path(path.clone());
         let rule = state
             .add_wasm_rule("tamper me", APPROVE_IF_BYTES, trained_github(), false)
@@ -4982,7 +4982,7 @@ mod tests {
         // Finding B, second door: a raw `AddRule` must not sidestep
         // the empty-snapshot guard that `AddWasmRule` enforces.
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let mut state = State::with_rules_path(path);
         let mut rule = wasm_rule_with_module(dir.path(), "wasm01");
         rule.trained_secrets.clear();
@@ -5003,7 +5003,7 @@ mod tests {
     #[test]
     fn add_rule_refuses_a_glob_the_loader_will_refuse() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let mut state = State::with_rules_path(path.clone());
 
         let rule = mk_rule(
@@ -5039,7 +5039,7 @@ mod tests {
     #[test]
     fn add_rule_refuses_a_broken_glob_on_an_approve_too() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let mut state = State::with_rules_path(path);
 
         let rule = mk_rule("r1", "gh", RuleDecision::Approve, Some("gh api [0-"));
@@ -5061,7 +5061,7 @@ mod tests {
     #[test]
     fn update_rule_refuses_a_glob_the_loader_will_refuse() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let mut state = State::with_rules_path(path.clone());
 
         let good = mk_rule("r1", "gh", RuleDecision::Deny, Some("gh api /repos/*"));
@@ -5100,7 +5100,7 @@ mod tests {
     #[test]
     fn a_rule_whose_glob_is_already_broken_can_still_be_disabled_and_deleted() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         // Author the broken rule through the file, the way a hand-edit or an
         // older secreq would have — `add_rule` will no longer admit it.
         let broken = mk_rule("r1", "gh", RuleDecision::Deny, Some("gh api /repos/*["));
@@ -5132,7 +5132,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let blocker = dir.path().join("blocker");
         std::fs::write(&blocker, b"a file where a directory must go").expect("write blocker");
-        let mut state = State::with_rules_path(blocker.join("auto-rules.json5"));
+        let mut state = State::with_rules_path(blocker.join("auto-rules.toml"));
 
         let rule = mk_rule("01", "gh", RuleDecision::Approve, Some("gh api"));
         state.add_rule(rule).expect_err("persist must fail");
@@ -5150,7 +5150,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let blocker = dir.path().join("blocker");
         std::fs::write(&blocker, b"a file where a directory must go").expect("write blocker");
-        let mut state = State::with_rules_path(blocker.join("auto-rules.json5"));
+        let mut state = State::with_rules_path(blocker.join("auto-rules.toml"));
 
         let store_before = store_listing();
         state
@@ -5185,7 +5185,7 @@ mod tests {
         // destination instead leaves the module file beside it readable,
         // which the rollback assertion below needs.
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let rule = wasm_rule_with_module(dir.path(), "wasm01");
         crate::rules::save_rules(&path, std::slice::from_ref(&rule)).expect("seed");
         let mut state = State::with_rules_path(path.clone());
@@ -5222,7 +5222,7 @@ mod tests {
             include_bytes!("../../tests/fixtures/wasm_rules/always_pass.wasm");
         let _store = store_lock();
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let mut state = State::with_rules_path(path.clone());
         let rule = state
             .add_wasm_rule("heal me", APPROVE_IF_BYTES, trained_github(), false)
@@ -5256,7 +5256,7 @@ mod tests {
         // path must not have its file deleted with the rule — only
         // modules in the canonical store are ours to remove.
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let rule = wasm_rule_with_module(dir.path(), "wasm01");
         crate::rules::save_rules(&path, std::slice::from_ref(&rule)).expect("save");
         let mut state = State::with_rules_path(path);
@@ -5275,7 +5275,7 @@ mod tests {
         // a rule, then asserting the reload is a no-op (rules vec
         // unchanged in length, mtime unchanged).
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let mut state = State::with_rules_path(path.clone());
         let rule = mk_rule("01", "gh", RuleDecision::Approve, Some("gh api"));
         state.add_rule(rule.clone()).expect("add");
@@ -5300,7 +5300,7 @@ mod tests {
         // pick up the new content WITHOUT shutting down or returning
         // an error.
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         crate::rules::save_rules(&path, &[]).expect("seed");
         let mut state = State::with_rules_path(path.clone());
         assert!(state.rules.is_empty());
@@ -5334,7 +5334,7 @@ mod tests {
         // truncate the file to garbage, then verify the old ruleset
         // survives.
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let rule = mk_rule("01", "gh", RuleDecision::Approve, None);
         crate::rules::save_rules(&path, std::slice::from_ref(&rule)).expect("seed");
         let mut state = State::with_rules_path(path.clone());
@@ -5354,7 +5354,7 @@ mod tests {
     #[test]
     fn delete_rule_removes_from_disk() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let mut state = State::with_rules_path(path.clone());
         let rule = mk_rule("01", "gh", RuleDecision::Approve, None);
         state.add_rule(rule).expect("add");
@@ -5367,7 +5367,7 @@ mod tests {
     #[test]
     fn set_rule_enabled_toggles_in_place() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let mut state = State::with_rules_path(path);
         let rule = mk_rule("01", "gh", RuleDecision::Approve, None);
         state.add_rule(rule).expect("add");
@@ -5382,7 +5382,7 @@ mod tests {
     #[test]
     fn add_rule_rejects_duplicate_ids() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let mut state = State::with_rules_path(path);
         let rule = mk_rule("01", "gh", RuleDecision::Approve, None);
         state.add_rule(rule.clone()).expect("first add");

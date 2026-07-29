@@ -15,7 +15,7 @@ all three.
 | [overview](./overview.md)                 | What it is, what it isn't, and the threat model.                   |
 | [cli guide](./cli.md)                     | Why there are two run verbs, and the argv contract.                |
 | [all commands](./cli-reference.md)        | Every command and flag. Generated from the CLI itself.             |
-| [wraps](./wraps.md)                       | Authoring `wraps.json5`. Also where approval scoping is explained. |
+| [wraps](./wraps.md)                       | Authoring `config.toml`. Also where approval scoping is explained. |
 | [providers](./providers.md)               | The built-in providers, and how to declare your own.               |
 | [consent-window](./consent-window.md)     | Both windows, and the audit log format.                            |
 | [ssh-agent](./ssh-agent.md)               | Serving your SSH keys, and the key-custody tradeoff.               |
@@ -29,7 +29,7 @@ New here? Read [getting-started](./getting-started.md).
 Two files are generated and should not be hand-edited:
 [`cli-reference.md`](./cli-reference.md) comes from the CLI definition, and
 [`wraps.schema.json`](./wraps.schema.json) from the Rust types. Point your
-editor at the schema for completion while authoring `wraps.json5`.
+editor at the schema for completion while authoring `config.toml`.
 
 ## Contributing
 

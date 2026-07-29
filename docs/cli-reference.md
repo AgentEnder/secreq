@@ -15,7 +15,7 @@ These reach the admin verbs and `run`. They do **not** apply to `x`, whose argv 
 
 | Flag | Meaning |
 | --- | --- |
-| `--config <PATH>` | Use a specific config file instead of `~/.secreq/wraps.json5`. For `x` use `--sq-config` |
+| `--config <PATH>` | Use a specific config file instead of `~/.secreq/config.toml`. For `x` use `--sq-config` |
 | `--raw` | Skip output masking. The wrapped binary still runs with secrets in its env; only redaction of its stdout/stderr is disabled. Applies only to `run`, not admin verbs; for `x` use `--sq-raw` |
 | `-y, --yes` | Auto-approve without prompting. Composes through nested runs. For `x` use `--sq-yes` |
 | `--no-remember` | Don't read or write the remembered-approval cache. For `x` use `--sq-no-remember` |
@@ -98,7 +98,7 @@ Wire SSH clients at secreq's agent socket by writing a managed block to `~/.ssh/
 secreq ssh add [OPTIONS] <NAME>
 ```
 
-Add (or overwrite) an SSH identity in `wraps.json5`. The agent serves this identity once the daemon is running. The public key is stored inline; the private key is a `secret://provider/locator` reference resolved only at sign time. Omit `--public-key`/`--private-key` to resolve them interactively (with 1Password `op` discovery when on PATH). Pass both for a fully non-interactive run
+Add (or overwrite) an SSH identity in `config.toml`. The agent serves this identity once the daemon is running. The public key is stored inline; the private key is a `secret://provider/locator` reference resolved only at sign time. Omit `--public-key`/`--private-key` to resolve them interactively (with 1Password `op` discovery when on PATH). Pass both for a fully non-interactive run
 
 | Argument | Meaning |
 | --- | --- |

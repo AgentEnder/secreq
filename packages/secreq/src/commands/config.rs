@@ -1,4 +1,4 @@
-//! Authoring and inspecting `wraps.json5`: `secreq wrap` / `unwrap` /
+//! Authoring and inspecting `config.toml`: `secreq wrap` / `unwrap` /
 //! `wraps` / `edit` / `check` / `doctor`, plus the serializer every one of
 //! those (and `ssh add`, and `init`) writes the file through.
 //!
@@ -17,7 +17,7 @@ use crate::path_setup;
 use crate::provider;
 use crate::reference::Reference;
 use crate::shim;
-use crate::wraps::{self, Wrap, WrapsConfig};
+use crate::wraps::{Wrap, WrapsConfig, SECRETS_KEY};
 
 use super::binaries::first_on_path;
 use super::{prompt, resolve_config_path, which_on_path};
@@ -449,7 +449,7 @@ fn parse_env_assignments(envs: &[String]) -> Result<BTreeMap<String, String>> {
 /// the umask's `0666 & !umask` to a file it created.
 ///
 /// Forcing 0600 was the tempting answer here in a way it was not for
-/// `auto-rules.json5`, because this file's `providers` entries are shell
+/// `auto-rules.toml`, because this file's `providers` entries are shell
 /// commands secreq executes: a world-writable one is arbitrary code execution
 /// as the user on the next resolve, not a disclosure of which secrets exist.
 /// It is still the wrong answer, for two reasons that do not apply next door:
@@ -458,7 +458,7 @@ fn parse_env_assignments(envs: &[String]) -> Result<BTreeMap<String, String>> {
 ///   function at any file the user names. Clamping would mean `secreq wrap`
 ///   chmods a file secreq does not own, every time.
 /// - **Migration 0001 already promises to carry this exact filename's mode**
-///   across an upgrade (`wraps.json5` is in its `CONFIG_FILES`, copied with
+///   across an upgrade (`config.toml` is in its `CONFIG_FILES`, copied with
 ///   `Mode::Like`). Clamping here would make that promise expire on the
 ///   user's next `wrap add` — worse than either policy alone, because the
 ///   upgrade would still have said it preserved the mode.
@@ -468,152 +468,130 @@ fn parse_env_assignments(envs: &[String]) -> Result<BTreeMap<String, String>> {
 /// `cli::run` before any command sees control, and `init` narrows an existing
 /// one. So no [`crate::paths::ensure_private_dir`] call belongs here — it
 /// would be redundant on the default path and actively dangerous on the
-/// `--config` one, where `--config /tmp/x.json5` would `chmod 0700 /tmp`.
+/// `--config` one, where `--config /tmp/x.toml` would `chmod 0700 /tmp`.
+///
+/// ## The write is a merge, not a rebuild
+///
+/// This used to reconstruct the whole file from [`WrapsConfig`] and hand it to
+/// a serializer, which meant every `wrap add`, `ssh add` or editor pick
+/// silently deleted the user's comments and layout. Now the existing document
+/// is parsed with `toml_edit`, the changed values are set *into* it, and
+/// everything the parser doesn't model — comments, blank lines, key order —
+/// survives untouched.
 pub(super) fn write_config(path: &Path, config: &WrapsConfig) -> Result<()> {
-    let value = config_to_json_value(config)?;
-    let text = serde_json::to_string_pretty(&value)?;
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let mut doc: toml_edit::DocumentMut = existing
+        .parse()
+        .with_context(|| format!("{} is not valid TOML", path.display()))?;
+
+    sync_document(&mut doc, config);
+
+    let text = doc.to_string();
     // Validate by round-tripping before writing.
     WrapsConfig::parse(&text, &path.display().to_string())
         .context("internal: serialized config doesn't re-parse")?;
-    crate::atomic::replace(
-        path,
-        format!("{text}\n").as_bytes(),
-        crate::atomic::Mode::Like(path),
-    )
-    .with_context(|| format!("failed to write {}", path.display()))
+    crate::atomic::replace(path, text.as_bytes(), crate::atomic::Mode::Like(path))
+        .with_context(|| format!("failed to write {}", path.display()))
 }
 
-fn config_to_json_value(config: &WrapsConfig) -> Result<serde_json::Value> {
-    let mut root = serde_json::Map::new();
-    if let Some(shim) = &config.shim_dir {
-        root.insert(
-            "$shim_dir".to_owned(),
-            serde_json::Value::String(shim.display().to_string()),
-        );
-    }
-    // Preserve the reserved machine-local toggles across a rewrite — a
-    // wrap-add / ssh-add must not silently drop a user's `$wait_indicator`
-    // or `$editor` (which the rule editor writes on an editor pick).
-    if let Some(on) = config.wait_indicator {
-        root.insert(
-            wraps::WAIT_INDICATOR_KEY.to_owned(),
-            serde_json::Value::Bool(on),
-        );
-    }
-    if let Some(editor) = &config.editor {
-        root.insert(
-            wraps::EDITOR_KEY.to_owned(),
-            serde_json::Value::String(editor.clone()),
-        );
-    }
-    for (name, wrap) in &config.wraps {
-        let mut obj = serde_json::Map::new();
-        if let Some(reason) = &wrap.reason {
-            obj.insert(
-                "$reason".to_owned(),
-                serde_json::Value::String(reason.clone()),
-            );
+/// Set every value `config` carries into `doc`, and drop the entries it no
+/// longer has. Anything else in the document is left exactly as written.
+fn sync_document(doc: &mut toml_edit::DocumentMut, config: &WrapsConfig) {
+    use toml_edit::Item;
+
+    fn set_or_remove(doc: &mut toml_edit::DocumentMut, key: &str, v: Option<toml_edit::Value>) {
+        match v {
+            Some(v) => {
+                crate::rule_scaffold::set_preserving_decor(doc.as_table_mut(), key, Item::Value(v));
+            }
+            None => {
+                doc.remove(key);
+            }
         }
-        let mut env_obj = serde_json::Map::new();
-        for (k, v) in &wrap.env {
-            env_obj.insert(k.clone(), serde_json::Value::String(v.clone()));
-        }
-        obj.insert("env".to_owned(), serde_json::Value::Object(env_obj));
-        root.insert(name.clone(), serde_json::Value::Object(obj));
     }
-    // Providers: only include user-declared schemes, not built-ins (avoid
-    // baking them into the file; built-ins overlay at load time).
-    let builtin_map = crate::manifest::builtin_providers();
-    let builtin_names: std::collections::BTreeSet<&str> =
-        builtin_map.keys().map(String::as_str).collect();
-    let user_providers: std::collections::BTreeMap<&String, &crate::manifest::Provider> = config
+
+    set_or_remove(
+        doc,
+        "shim_dir",
+        config
+            .shim_dir
+            .as_ref()
+            .map(|p| crate::daemon::ui::abbreviate_home(&p.display().to_string()).into()),
+    );
+    set_or_remove(doc, "wait_indicator", config.wait_indicator.map(Into::into));
+    set_or_remove(
+        doc,
+        "editor",
+        config.editor.as_ref().map(|e| e.as_str().into()),
+    );
+
+    // Built-ins overlay at load time, so they are never written back — baking
+    // them into the file would freeze today's defaults into the user's config.
+    let builtin = crate::manifest::builtin_providers();
+    let user_providers: BTreeMap<&String, &crate::manifest::Provider> = config
         .providers
         .iter()
-        .filter(|(name, _)| !builtin_names.contains(name.as_str()))
+        .filter(|(name, _)| !builtin.contains_key(name.as_str()))
         .collect();
-    if !user_providers.is_empty() {
-        let mut providers_obj = serde_json::Map::new();
-        for (name, p) in user_providers {
-            providers_obj.insert(name.clone(), provider_to_json_value(p));
+
+    sync_table(doc, "wraps", &config.wraps);
+    sync_table(doc, "providers", &user_providers);
+    sync_table(doc, "ssh", &config.ssh);
+    // Declarations are synced for the same reason the `ssh` block is: a block
+    // this writer forgets is a block the next `wrap add` silently deletes —
+    // taking every wrap's `secret://<name>` with it.
+    sync_table(doc, SECRETS_KEY, &config.secrets);
+
+    // An emptied-out section is removed rather than left as a bare header.
+    for key in ["wraps", "providers", "ssh", SECRETS_KEY] {
+        if doc
+            .get(key)
+            .and_then(Item::as_table)
+            .is_some_and(toml_edit::Table::is_empty)
+        {
+            doc.remove(key);
         }
-        root.insert(
-            "providers".to_owned(),
-            serde_json::Value::Object(providers_obj),
-        );
     }
-    // Declarations survive a rewrite for the same reason the `ssh` block and
-    // the machine-local toggles do: `secreq wrap` re-serializes the whole
-    // model, so a block this writer forgets is a block the next `wrap add`
-    // silently deletes — taking every wrap's `secret://<name>` with it.
-    if !config.secrets.is_empty() {
-        let mut secrets_obj = serde_json::Map::new();
-        for (name, decl) in &config.secrets {
-            let mut obj = serde_json::Map::new();
-            obj.insert(
-                "ref".to_owned(),
-                serde_json::Value::String(decl.reference.to_string()),
-            );
-            if let wraps::CacheTtl::Secs(secs) = decl.ttl {
-                obj.insert(
-                    "ttl".to_owned(),
-                    serde_json::Value::String(format!("{secs}s")),
-                );
-            }
-            secrets_obj.insert(name.clone(), serde_json::Value::Object(obj));
-        }
-        root.insert(
-            wraps::SECRETS_KEY.to_owned(),
-            serde_json::Value::Object(secrets_obj),
-        );
-    }
-    if !config.ssh.is_empty() {
-        let mut ssh_obj = serde_json::Map::new();
-        for (name, identity) in &config.ssh {
-            let mut obj = serde_json::Map::new();
-            if let Some(reason) = &identity.reason {
-                obj.insert(
-                    "$reason".to_owned(),
-                    serde_json::Value::String(reason.clone()),
-                );
-            }
-            obj.insert(
-                "public_key".to_owned(),
-                serde_json::Value::String(identity.public_key.clone()),
-            );
-            obj.insert(
-                "private_key".to_owned(),
-                serde_json::Value::String(identity.private_key.to_string()),
-            );
-            ssh_obj.insert(name.clone(), serde_json::Value::Object(obj));
-        }
-        root.insert(
-            wraps::SSH_KEY.to_owned(),
-            serde_json::Value::Object(ssh_obj),
-        );
-    }
-    Ok(serde_json::Value::Object(root))
 }
 
-fn provider_to_json_value(p: &crate::manifest::Provider) -> serde_json::Value {
-    let mut obj = serde_json::Map::new();
-    obj.insert(
-        "retrieve".to_owned(),
-        serde_json::Value::Array(
-            p.retrieve
-                .iter()
-                .map(|s| serde_json::Value::String(s.clone()))
-                .collect(),
-        ),
-    );
-    // We don't currently round-trip store/retrieve_batch from user-defined
-    // providers when we re-emit the config; users who declare those should
-    // edit the file by hand. `secreq edit` is the supported path.
-    serde_json::Value::Object(obj)
+/// Merge one `[section.<name>]` map into the document, serializing each entry
+/// through its `Serialize` impl and removing names that are gone.
+fn sync_table<K, V>(doc: &mut toml_edit::DocumentMut, section: &str, entries: &BTreeMap<K, V>)
+where
+    K: std::borrow::Borrow<String> + Ord,
+    V: serde::Serialize,
+{
+    use toml_edit::{Item, Table};
+
+    if entries.is_empty() && doc.get(section).is_none() {
+        return;
+    }
+    let table = doc
+        .entry(section)
+        .or_insert_with(|| {
+            let mut t = Table::new();
+            t.set_implicit(true);
+            Item::Table(t)
+        })
+        .as_table_mut()
+        .expect("config section must be a table");
+
+    let names: Vec<String> = entries.keys().map(|k| k.borrow().clone()).collect();
+    table.retain(|existing, _| names.iter().any(|n| n == existing));
+
+    for (name, entry) in entries {
+        let serialized = toml_edit::ser::to_document(entry)
+            .expect("config entries serialize infallibly")
+            .as_table()
+            .clone();
+        crate::rule_scaffold::set_preserving_decor(table, name.borrow(), Item::Table(serialized));
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wraps::{CacheTtl, SecretDecl};
 
     #[test]
     fn env_assignment_errors_are_a_single_clean_sentence() {
@@ -659,21 +637,21 @@ mod tests {
         // the parser inside `write_config` would then fail on the dangling
         // names, so this also proves the two halves agree.
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("wraps.json5");
+        let path = dir.path().join("config.toml");
 
         let mut config = WrapsConfig::default();
         config.secrets.insert(
             "github_token".to_owned(),
-            wraps::SecretDecl {
+            SecretDecl {
                 reference: Reference::parse("secret://op/Personal/GitHub/token").unwrap(),
-                ttl: wraps::CacheTtl::Secs(900),
+                ttl: CacheTtl::Secs(900),
             },
         );
         config.secrets.insert(
             "no_ttl".to_owned(),
-            wraps::SecretDecl {
+            SecretDecl {
                 reference: Reference::parse("secret://op/Personal/Other/token").unwrap(),
-                ttl: wraps::CacheTtl::DaemonLifetime,
+                ttl: CacheTtl::DaemonLifetime,
             },
         );
         config.wraps.insert(
@@ -704,16 +682,19 @@ mod tests {
             "the wrap must still reference the declaration by name"
         );
         // A default TTL writes no `ttl` key, so a file the user never gave one
-        // does not grow one.
+        // does not grow one. And the one that is written keeps the unit it was
+        // declared in rather than being normalised to seconds.
         let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.contains("\"ttl\": \"900s\""), "{text}");
-        assert_eq!(text.matches("\"ttl\"").count(), 1, "{text}");
+        assert!(text.contains("ttl = \"15m\""), "{text}");
+        // `ttl = `, not `ttl` — the `no_ttl` declaration's *name* contains the
+        // substring, and counting that would pass no matter what was written.
+        assert_eq!(text.matches("ttl = ").count(), 1, "{text}");
     }
 
     #[test]
     fn write_config_preserves_ssh_block() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("wraps.json5");
+        let path = dir.path().join("config.toml");
 
         let mut config = WrapsConfig::default();
         config.wraps.insert(
@@ -730,7 +711,7 @@ mod tests {
         );
         config.ssh.insert(
             "github".to_owned(),
-            wraps::SshIdentity {
+            crate::wraps::SshIdentity {
                 reason: Some("git pushes".to_owned()),
                 public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1 me@mac".to_owned(),
                 private_key: Reference::parse("secret://op/Private/GitHub/private key").unwrap(),
@@ -754,10 +735,10 @@ mod tests {
     fn write_config_preserves_editor_and_wait_indicator() {
         // A later `wrap add` / `ssh add` rewrites the whole file via
         // `write_config`; the reserved machine-local toggles must survive
-        // so a GUI-set `$editor` (and a hand-set `$wait_indicator`) aren't
+        // so a GUI-set `editor` (and a hand-set `wait_indicator`) aren't
         // silently dropped.
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("wraps.json5");
+        let path = dir.path().join("config.toml");
 
         let config = WrapsConfig {
             editor: Some("zed".to_owned()),
@@ -780,7 +761,7 @@ mod tests {
 
     /// `fs::write` preserves an existing file's mode, so the umask only ever
     /// reached this file on **creation** — which is why it went unnoticed.
-    /// A created `wraps.json5` came out at `0666 & !umask`: 0644 under the
+    /// A created `config.toml` came out at `0666 & !umask`: 0644 under the
     /// common 022, 0666 under the `umask 000` container and CI images set.
     /// The `providers` block in there is a set of shell commands secreq
     /// executes, so a writable one is code execution, not disclosure.
@@ -791,7 +772,7 @@ mod tests {
     #[test]
     fn a_config_secreq_creates_is_owner_only() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("wraps.json5");
+        let path = dir.path().join("config.toml");
 
         write_config(&path, &WrapsConfig::default()).unwrap();
 
@@ -802,14 +783,14 @@ mod tests {
     /// `Mode::Exactly(0o600)`. This file is hand-editable with a published
     /// schema, migration 0001 already promises to carry its mode across an
     /// upgrade (`moved_config_keeps_the_mode_the_user_chose` moves a
-    /// `wraps.json5`), and `--config` points `write_config` at files secreq
+    /// `config.toml`), and `--config` points `write_config` at files secreq
     /// does not own at all. Clamping here would make the migration's promise
     /// last until the user's next `wrap add`.
     #[test]
     fn a_config_write_keeps_a_mode_the_user_chose() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("wraps.json5");
+        let path = dir.path().join("config.toml");
         write_config(&path, &WrapsConfig::default()).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
 
@@ -819,14 +800,14 @@ mod tests {
     }
 
     /// The side effect worth having: `fs::write` truncates in place, so a
-    /// process killed mid-write left the user with a *half* `wraps.json5` —
+    /// process killed mid-write left the user with a *half* `config.toml` —
     /// on a file they hand-edit and whose comments they care about. Staging
     /// and renaming means a reader sees the old contents or the new ones.
     #[test]
     fn a_config_write_replaces_the_inode_rather_than_truncating_it() {
         use std::os::unix::fs::MetadataExt;
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("wraps.json5");
+        let path = dir.path().join("config.toml");
         write_config(&path, &WrapsConfig::default()).unwrap();
         let before = std::fs::metadata(&path).unwrap().ino();
 
@@ -838,6 +819,6 @@ mod tests {
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(names, vec!["wraps.json5".to_string()]);
+        assert_eq!(names, vec!["config.toml".to_string()]);
     }
 }

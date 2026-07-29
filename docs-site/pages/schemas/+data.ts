@@ -20,9 +20,9 @@ export type SchemasData = { schemas: SchemaDoc[] };
 const SCHEMAS = [
   {
     file: 'wraps.schema.json',
-    title: 'wraps.json5 schema',
+    title: 'config.toml schema',
     description:
-      'The schema for your wrap configuration. Add "$schema" pointing here to get completion and validation while authoring wraps.json5.',
+      'The schema for your wrap configuration. Add a "#:schema" comment pointing here to get completion and validation while authoring config.toml.',
   },
   {
     file: 'auto-rules.schema.json',

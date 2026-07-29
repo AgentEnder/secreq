@@ -116,7 +116,7 @@ function fieldsOf(schema: JsonSchema, anchorFor: AnchorFor): SchemaField[] {
     });
   }
 
-  // A pattern key is a real field — in `wraps.json5` it is *the* field, since
+  // A pattern key is a real field — in `config.toml` it is *the* field, since
   // every wrapped binary is one — so it lists alongside the named ones rather
   // than as a footnote.
   for (const [pattern, property] of Object.entries(schema.patternProperties ?? {})) {

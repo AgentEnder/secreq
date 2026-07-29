@@ -51,7 +51,7 @@ export default function DocsPage() {
               <Link href="/schemas" className="doc-card block no-underline p-5 h-full">
                 <span className="t-heading block mb-1.5">JSON Schemas</span>
                 <span className="block text-sm leading-relaxed text-text-3">
-                  Point your editor at the <code>wraps.json5</code> and auto-rules schemas for
+                  Point your editor at the <code>config.toml</code> and auto-rules schemas for
                   completion and validation as you type.
                 </span>
               </Link>

@@ -27,11 +27,10 @@ use common::Sandbox;
 /// positional (`$1`) after `--` so a locator with leading dashes can't be
 /// misread as an `sh` flag.
 fn fake_provider_config() -> &'static str {
-    r#"{
-        providers: {
-            fake: { retrieve: ["sh", "-c", "printf 'resolved-%s' \"$1\"", "--", "{locator}"] },
-        },
-    }"#
+    r#"
+        [providers.fake]
+        retrieve = ["sh", "-c", "printf 'resolved-%s' \"$1\"", "--", "{locator}"]
+    "#
 }
 
 #[test]

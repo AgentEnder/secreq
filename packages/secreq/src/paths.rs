@@ -5,8 +5,8 @@
 //!
 //! ```text
 //! ~/.secreq/
-//!   wraps.json5            config
-//!   auto-rules.json5       config
+//!   config.toml            config
+//!   auto-rules.toml       config
 //!   rules/                 compiled wasm rule modules (<rule-id>.wasm)
 //!   rule-drafts/           scaffolded programmatic-rule source projects
 //!   audit.log              append-only, daemon + wrap clients
@@ -194,11 +194,11 @@ fn root_from(override_env: Option<OsString>, home: Option<PathBuf>) -> Result<Pa
 }
 
 pub fn wraps_path() -> Result<PathBuf> {
-    Ok(secreq_root()?.join("wraps.json5"))
+    Ok(secreq_root()?.join("config.toml"))
 }
 
 pub fn rules_path() -> Result<PathBuf> {
-    Ok(secreq_root()?.join("auto-rules.json5"))
+    Ok(secreq_root()?.join("auto-rules.toml"))
 }
 
 /// Directory holding registered wasm rule modules (`rules/<id>.wasm`).
@@ -215,7 +215,7 @@ pub fn rule_drafts_dir() -> Result<PathBuf> {
 }
 
 /// Canonical on-disk home for rule `rule_id`'s compiled wasm module.
-/// `auto-rules.json5` records the (root-relative) path alongside the
+/// `auto-rules.toml` records the (root-relative) path alongside the
 /// module's sha256; this helper is where the registration tooling puts
 /// the bytes.
 ///
@@ -251,8 +251,8 @@ pub fn daemon_jsonl_path() -> Result<PathBuf> {
     Ok(secreq_root()?.join("daemon.jsonl"))
 }
 
-/// Default `$shim_dir` offered by `init`. Users may point `$shim_dir`
-/// elsewhere in `wraps.json5`; this is only the suggestion.
+/// Default `shim_dir` offered by `init`. Users may point `shim_dir`
+/// elsewhere in `config.toml`; this is only the suggestion.
 pub fn default_shims_dir() -> Result<PathBuf> {
     Ok(secreq_root()?.join("shims"))
 }
@@ -268,7 +268,7 @@ pub(crate) const PRIVATE_FILE_MODE: u32 = 0o600;
 ///
 /// Nothing under the root is low-sensitivity even though none of it holds a
 /// value: `audit.log` records every wrapped command's argv, cwd, caller chain
-/// and the *names* of the secrets released; `auto-rules.json5` records which
+/// and the *names* of the secrets released; `auto-rules.toml` records which
 /// commands skip the prompt, which is a map of where to aim. A plain
 /// `create_dir_all` applies the process umask, so this lands 0755 under the
 /// common 022 and 0777 under the 000 that container and CI images often set.

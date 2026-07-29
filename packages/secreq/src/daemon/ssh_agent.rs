@@ -7,7 +7,7 @@
 //! [`super::ssh_proto`]), NOT the daemon's JSON control protocol.
 //!
 //! `REQUEST_IDENTITIES` answers with the configured public keys, parsed
-//! once from the inline `public_key` strings in `wraps.json5` — **no
+//! once from the inline `public_key` strings in `config.toml` — **no
 //! provider resolve, no consent.**
 //!
 //! `SIGN_REQUEST` is the gated path: derive the connecting peer pid from
@@ -55,7 +55,7 @@ const MAX_AGENT_MSG_LEN: usize = 256 * 1024;
 /// approve-and-remember shortcut). An anchor (shell / IDE / git session) can
 /// live for hours, so a grant is time-bounded rather than tied to the
 /// anchor's lifetime alone. There is no per-identity TTL knob in
-/// `wraps.json5` today, so this constant is the single source of truth — and
+/// `config.toml` today, so this constant is the single source of truth — and
 /// the "30m" in the button labels must track it.
 const SSH_SESSION_GRANT_TTL_SECS: u64 = 1800;
 
@@ -86,7 +86,7 @@ pub struct PreparedIdentity {
     /// `secret://provider/locator` reference to the private key, resolved
     /// through the shared encrypted cache on the first SIGN for this key.
     pub reference: crate::reference::Reference,
-    /// `$reason` from the config, shown in the consent prompt.
+    /// `reason` from the config, shown in the consent prompt.
     pub reason: Option<String>,
     /// How long a resolved private key may be served from the cache.
     /// Read off the reference via [`crate::wraps::WrapsConfig::ttl_for`], so
@@ -1346,7 +1346,7 @@ mod tests {
     #[test]
     fn auto_approve_rule_fires_for_ssh_sign() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         crate::rules::save_rules(
             &path,
             &[ssh_rule(
@@ -1390,7 +1390,7 @@ mod tests {
     #[test]
     fn auto_deny_rule_fires_for_ssh_sign() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         crate::rules::save_rules(
             &path,
             &[ssh_rule("01", "github", crate::rules::RuleDecision::Deny)],

@@ -960,7 +960,7 @@
             "t": "└"
           },
           {
-            "t": "  Wrote ~/.secreq/wraps.json5. Next: `secreq wrap <binary>`, e.g. `secreq"
+            "t": "  Wrote ~/.secreq/config.toml. Next: `secreq wrap <binary>`, e.g. `secreq"
           }
         ],
         [

@@ -30,7 +30,7 @@ use super::server;
 pub const NO_DAEMON_ENV: &str = "SECREQ_NO_DAEMON";
 
 /// Env var that silences the wrap's stderr "waiting for approval" indicator
-/// for this invocation, overriding the `$wait_indicator` config setting. Set
+/// for this invocation, overriding the `wait_indicator` config setting. Set
 /// to any non-empty value to suppress the spinner / waiting line — useful in
 /// CI or scripts where the config can't be edited.
 pub const NO_WAIT_INDICATOR_ENV: &str = "SECREQ_NO_WAIT_INDICATOR";
@@ -112,7 +112,7 @@ pub fn request_consent(ask: Ask, show_indicator: bool) -> Result<ConsentOutcome>
     // Surface a "waiting for approval" indicator on stderr while we block on
     // the daemon's decision, so the terminal doesn't sit silent. Dropped (and
     // the line cleared) the moment the reply lands or the send/recv errors.
-    // Gated by the `$wait_indicator` config (passed in) and the
+    // Gated by the `wait_indicator` config (passed in) and the
     // `SECREQ_NO_WAIT_INDICATOR` env override.
     let wrap_label = ask.dedupe_key.wrap.clone();
     let _indicator = (show_indicator && !wait_indicator_silenced_by_env())

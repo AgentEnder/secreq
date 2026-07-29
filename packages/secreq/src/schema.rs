@@ -28,7 +28,7 @@
 //!
 //! Two things a Rust type cannot say, both of them here rather than scattered:
 //!
-//! - **The file envelope.** `wraps.json5` is keyed by names the user chooses —
+//! - **The file envelope.** `config.toml` is keyed by names the user chooses —
 //!   binary names — which is `patternProperties`, not a struct. `$schema` is
 //!   in the same category: secreq ignores the key, so no type has a field for
 //!   it, but an editor writes it and must not be told it is invalid.
@@ -37,7 +37,7 @@
 //!   enforces it), and a provider's `retrieve`/`read` pair is an `anyOf`
 //!   ([`provider_any_of`]).
 //!
-//! ## The `wraps.json5` parser is hand-written, so its key names are too
+//! ## The `config.toml` parser is hand-written, so its key names are too
 //!
 //! `manifest.rs` and `wraps.rs` walk a [`serde_json::Value`] rather than
 //! deriving `Deserialize`, because a wraps file's top level is arbitrary binary
@@ -123,18 +123,6 @@ pub fn field_spec_optional_property() -> Value {
         "optional": {
             "type": "boolean",
             "description": "Sugar for `required: false`."
-        }
-    })
-}
-
-/// `$description` on a wrap: accepted and ignored by `parse_wrap`, so there is
-/// no field to derive it from — but a file carrying one loads, and an editor
-/// should not underline it.
-pub fn wrap_description_property() -> Value {
-    json!({
-        "$description": {
-            "type": "string",
-            "description": "Optional free-form description (currently unused at runtime; kept for parity with future tooling)."
         }
     })
 }
@@ -226,7 +214,7 @@ fn flatten_descriptions(schema: &mut Value) {
     }
 }
 
-/// The complete JSON Schema for `auto-rules.json5`.
+/// The complete JSON Schema for `auto-rules.toml`.
 ///
 /// The root is [`RulesFile`] — `{ rules: [...] }` really is a struct — so
 /// there is nothing to assemble beyond letting the derive run and declaring
@@ -238,7 +226,7 @@ pub fn auto_rules_schema() -> Value {
     schema
 }
 
-/// The complete JSON Schema for `wraps.json5`.
+/// The complete JSON Schema for `config.toml`.
 ///
 /// Assembled rather than derived from [`crate::wraps::WrapsConfig`], because
 /// the top level is *dynamic*: every key that isn't `providers`, `ssh`, or
@@ -268,37 +256,38 @@ pub fn wraps_schema() -> Value {
             .expect("FieldSpec is reachable from Provider"),
         &field_spec_optional_property(),
     );
-    add_properties(
-        definitions
-            .get_mut("Wrap")
-            .expect("Wrap was just registered"),
-        &wrap_description_property(),
-    );
-
+    // Every root key is declared, because wraps moved into `[wraps.*]`. The
+    // previous envelope could not do this: the root was an open namespace
+    // where any unrecognised key was a binary name, so it needed a
+    // `patternProperties` escape hatch and could never say `additionalProperties:
+    // false`. It also could not tell a mistyped `provdiers` from a wrap — and
+    // neither could the loader.
     let mut schema = json!({
         "$schema": "http://json-schema.org/draft-07/schema#",
         "$id": WRAPS_ID,
-        "title": "secreq wraps config",
-        "description": "Per-binary wrap configuration for `secreq` \
-            (`~/.secreq/wraps.json5`, or `$SECREQ_HOME/wraps.json5`). Top-level keys are \
-            binary names; reserved keys are `providers`, `secrets`, `ssh`, and any \
-            `$`-prefixed metadata. See docs/wraps.md.",
+        "title": "secreq config",
+        "description": "Configuration for `secreq` (`~/.secreq/config.toml`, or \
+            `$SECREQ_HOME/config.toml`). Wraps live under `wraps`, keyed by binary \
+            name; a secret declared once under `secrets` is referenced from any \
+            number of them as `secret://<name>`. See docs/wraps.md.",
         "type": "object",
         "properties": {
-            "$schema": schema_pointer_property()
-                .get("$schema")
-                .expect("schema_pointer_property declares exactly that key"),
-            "$editor": {
+            "editor": {
                 "type": "string",
-                "description": "Editor the rule editor's 'Open in editor' split-button opens by default (an editor id such as `code`, `cursor`, `zed`, or `nvim`). Machine-local, like `$shim_dir`; written when you pick an editor in the Rules view of `secreq view`."
+                "description": "Editor the rule editor's 'Open in editor' split-button opens by default (an editor id such as `code`, `cursor`, `zed`, or `nvim`). Machine-local, like `shim_dir`; written when you pick an editor in the Rules view of `secreq view`."
             },
-            "$shim_dir": {
+            "shim_dir": {
                 "type": "string",
                 "description": "Directory where `secreq wrap` drops PATH shims. Set by `secreq init`. Supports a leading `~/`."
             },
-            "$wait_indicator": {
+            "wait_indicator": {
                 "type": "boolean",
                 "description": "Whether a wrap prints a 'waiting for approval' indicator to stderr while blocked on the consent prompt (spinner on a TTY, a timestamped line on a pipe). Defaults to true; set false to silence. The SECREQ_NO_WAIT_INDICATOR env var overrides this per-invocation."
+            },
+            "wraps": {
+                "type": "object",
+                "description": "Per-binary wrap configuration, keyed by the binary name the shim is installed under. A wrap with no `env` is *gate-only*: consent is required before the binary runs, but nothing is injected.",
+                "additionalProperties": wrap
             },
             "providers": {
                 "type": "object",
@@ -316,19 +305,7 @@ pub fn wraps_schema() -> Value {
                 "additionalProperties": ssh_identity
             }
         },
-        // `WrapsConfig::parse`'s `match` arms, in schema form: the reserved
-        // keys above, then any other `$`-prefixed key ignored as metadata,
-        // then every remaining key read as a binary name.
-        //
-        // Not `patternProperties: { "<binary name>": Wrap }`, which is what
-        // this was. Draft-07 applies `properties` and `patternProperties`
-        // *both*, so a pattern loose enough to match a binary name also
-        // matched `providers` and `ssh` — and validated each of them a second
-        // time as a wrap, where `additionalProperties: false` refused every
-        // provider a user had. Any wraps file with a `providers` block failed
-        // its own published schema.
-        "patternProperties": { "^\\$": true },
-        "additionalProperties": wrap,
+        "additionalProperties": false,
         "definitions": definitions
     });
     flatten_descriptions(&mut schema);

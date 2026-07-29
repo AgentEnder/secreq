@@ -30,7 +30,9 @@
 
 mod m0001_secreq_root;
 mod m0002_ssh_agent_socket;
+mod m0003_config_format;
 
+use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::os::unix::io::AsRawFd;
@@ -120,13 +122,19 @@ const MIGRATIONS: &[Migration] = &[
         snapshot: m0002_ssh_agent_socket::snapshot_files,
         run: m0002_ssh_agent_socket::run,
     },
+    Migration {
+        id: 3,
+        name: "config-format",
+        snapshot: m0003_config_format::snapshot_files,
+        run: m0003_config_format::run,
+    },
 ];
 
 const STATE_FILE: &str = ".migration-state";
 const LOCK_FILE: &str = ".migration.lock";
 const SNAPSHOT_DIR: &str = "migration-snapshots";
 
-/// Machine-local. Deliberately **not** stored in `wraps.json5`: that file is
+/// Machine-local. Deliberately **not** stored in `config.toml`: that file is
 /// dotfile-synced (chezmoi/stow/git), and a synced `migration_level` would
 /// tell a fresh machine it was already migrated when it wasn't, so it would
 /// skip the migration it actually needs.
@@ -201,8 +209,8 @@ pub fn run_pending_in(ctx: &Ctx) -> Result<()> {
     // it lands here is the mode `~/.secreq` has while `init` is still asking
     // questions. `create_dir_all` takes the umask's answer, which is 0755
     // under the common 022 and **0777** under the `umask 000` CI and container
-    // images set, and the root goes on to hold `audit.log`, `auto-rules.json5`
-    // and `wraps.json5`. Inlined at [`OWNER_ONLY_DIR`] rather than routed
+    // images set, and the root goes on to hold `audit.log`, `auto-rules.toml`
+    // and `config.toml`. Inlined at [`OWNER_ONLY_DIR`] rather than routed
     // through `paths::ensure_private_dir` for the same reason as the snapshot
     // dir below: migrations resolve nothing through `paths`, and the mode is a
     // constant rather than a location, so no frozen history is at stake.
@@ -221,6 +229,11 @@ pub fn run_pending_in(ctx: &Ctx) -> Result<()> {
     }
 
     for m in MIGRATIONS.iter().skip(level) {
+        let declared: Vec<PathBuf> = (m.snapshot)(ctx);
+        // Declared but not yet on disk: the only paths this migration could
+        // possibly be said to have created.
+        let absent_before: Vec<PathBuf> =
+            declared.iter().filter(|p| !p.exists()).cloned().collect();
         snapshot_if_absent(ctx, m)?;
         let outcome =
             (m.run)(ctx).with_context(|| format!("migration {:04} ({}) failed", m.id, m.name))?;
@@ -230,10 +243,56 @@ pub fn run_pending_in(ctx: &Ctx) -> Result<()> {
         if let Outcome::Incomplete(detail) = outcome {
             bail!(incomplete_message(m, &detail));
         }
+        record_post_state(ctx, m, &declared, &absent_before);
         // Stamp after each, not at the end, so a failure at 3 keeps 1 and 2.
         write_state(&ctx.root, m.id)?;
     }
     Ok(())
+}
+
+/// Amend the migration's snapshot filemap with what actually happened: which
+/// declared paths it brought into existence, and what every declared file it
+/// touched looked like when it finished.
+///
+/// Written after the run rather than declared up front, so both are records
+/// rather than statements of intent. A migration that only *edits* a file
+/// (0002, rewriting a managed block in the user's `~/.ssh/config`) records
+/// nothing in `created` no matter what it declares, and so can never
+/// contribute a candidate to the restore cleanup.
+///
+/// Best-effort: a missing snapshot dir means there was nothing to roll back to
+/// in the first place, and a filemap we cannot rewrite leaves both fields
+/// empty. That is the conservative reading — an empty `created` removes less,
+/// and an absent digest makes the restore warn rather than stay quiet.
+fn record_post_state(ctx: &Ctx, m: &Migration, declared: &[PathBuf], absent_before: &[PathBuf]) {
+    let created: Vec<PathBuf> = absent_before
+        .iter()
+        .filter(|p| p.is_file())
+        .cloned()
+        .collect();
+    let post_sha256: BTreeMap<PathBuf, String> = declared
+        .iter()
+        .filter_map(|path| {
+            let bytes = std::fs::read(path).ok()?;
+            Some((path.clone(), crate::rules::sha256_hex(&bytes)))
+        })
+        .collect();
+    if created.is_empty() && post_sha256.is_empty() {
+        return;
+    }
+
+    let path = snapshot_dir(&ctx.root, m.id - 1).join("filemap.json");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(mut map) = serde_json::from_str::<FileMap>(&text) else {
+        return;
+    };
+    map.created = created;
+    map.post_sha256 = post_sha256;
+    if let Ok(encoded) = serde_json::to_string_pretty(&map) {
+        let _ = atomic::replace(&path, encoded.as_bytes(), atomic::Mode::Exactly(OWNER_ONLY));
+    }
 }
 
 /// A migration that stopped short is neither a crash nor a success, and the
@@ -423,8 +482,34 @@ fn restore_in(root: &Path, level: u32, assume_yes: bool) -> Result<i32> {
     // returning early here would leave them as stuck as before with a message
     // claiming success.
     let changed: Vec<_> = plan.iter().filter(|(_, _, a, b)| a != b).collect();
+    // Files a later migration created inside the root. The target level has no
+    // snapshot for them, so the restore removes them — and therefore has to
+    // name them here and rescue them below. Deleting a file the DISCARD block
+    // never mentioned is the silent loss this warning exists to prevent.
+    let stale: Vec<(PathBuf, String)> = stale_root_artifacts(&root, level, &plan)
+        .into_iter()
+        .filter_map(|path| {
+            let body = std::fs::read_to_string(&path).ok()?;
+            Some((path, body))
+        })
+        .collect();
 
-    if changed.is_empty() {
+    // Which of these carry the user's *own* edits, as opposed to the
+    // migration's output. `changed` alone cannot tell them apart: the
+    // migration is what made the file differ from its snapshot, so every file
+    // it touched shows up as changed and the warning fires on the ordinary
+    // case. Comparing against the recorded post-migration digest is what
+    // separates "this reverts the upgrade" from "this drops work you did".
+    let digests = recorded_post_digests(&root, level);
+    let hand_edited: Vec<&Path> = changed
+        .iter()
+        .map(|(_, live, live_body, _)| (live.as_path(), live_body))
+        .chain(stale.iter().map(|(path, body)| (path.as_path(), body)))
+        .filter(|(path, body)| is_hand_edited(&digests, path, body))
+        .map(|(path, _)| path)
+        .collect();
+
+    if changed.is_empty() && stale.is_empty() {
         println!("Config already matches the level-{level} snapshot; rolling back the level.");
     } else {
         println!("Restoring the level-{level} snapshot will DISCARD these changes:\n");
@@ -437,9 +522,51 @@ fn restore_in(root: &Path, level: u32, assume_yes: bool) -> Result<i32> {
             );
         }
 
+        for (path, body) in &stale {
+            let diff = similar::TextDiff::from_lines(body.as_str(), "");
+            println!(
+                "{}",
+                diff.unified_diff()
+                    .header(&format!("current {}", path.display()), "(removed)")
+            );
+        }
+
+        if hand_edited.is_empty() {
+            // Deliberately not naming a migration: rolling back to level N
+            // undoes every migration above it, so the files above were written
+            // by several, not by `level + 1`.
+            println!(
+                "Every file above matches what the migrations wrote, so this only\n\
+                 reverts the upgrade — none of your own edits are at stake.\n"
+            );
+        } else {
+            println!("You have edited these since the upgrade; a restore drops those edits:\n");
+            for path in &hand_edited {
+                println!(
+                    "  {}",
+                    crate::daemon::ui::abbreviate_home(&path.display().to_string())
+                );
+            }
+            println!();
+        }
+
         if !assume_yes {
             crate::term::soft_reset();
-            let ok = cliclack::confirm("Restore anyway?").interact()?;
+            // Two different questions, because they carry different weight. A
+            // rollback that only undoes the migration is routine; one that
+            // drops the user's own edits deserves to say so at the prompt,
+            // not only in the wall of diff above it.
+            let question = if hand_edited.is_empty() {
+                "Roll back to this snapshot?".to_owned()
+            } else if hand_edited.len() == 1 {
+                "Discard your edits to 1 file and restore?".to_owned()
+            } else {
+                format!(
+                    "Discard your edits to {} files and restore?",
+                    hand_edited.len()
+                )
+            };
+            let ok = cliclack::confirm(question).interact()?;
             if !ok {
                 println!("Aborted; nothing changed.");
                 return Ok(1);
@@ -483,6 +610,14 @@ fn restore_in(root: &Path, level: u32, assume_yes: bool) -> Result<i32> {
             .with_context(|| format!("save current {}", live.display()))?;
         }
     }
+    for (path, body) in &stale {
+        let name = path.file_name().map_or_else(
+            || "artifact".to_owned(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        atomic::replace(&saved.join(name), body.as_bytes(), atomic::Mode::Like(path))
+            .with_context(|| format!("save current {}", path.display()))?;
+    }
 
     for (entry, live, _, snapshot_body) in &plan {
         // Drop whatever is at the destination first: after migration 0001 it's
@@ -524,10 +659,63 @@ fn restore_in(root: &Path, level: u32, assume_yes: bool) -> Result<i32> {
         }
     }
 
+    for (path, _) in &stale {
+        std::fs::remove_file(path).with_context(|| format!("remove {}", path.display()))?;
+    }
+
     write_state(&root, level)?;
     println!("\nRestored level {level}.");
     println!("Your previous config was saved to {}", saved.display());
     Ok(0)
+}
+
+/// Files a **later** migration created, that the target level therefore has no
+/// snapshot for — so a restore cannot put them back, and leaving them strands
+/// two real configs the next forward run has to choose between.
+///
+/// # This feeds a delete, so both bounds matter
+///
+/// 1. **Recorded, not predicted.** Candidates come from the `created` list each
+///    filemap carries: paths a migration declared, that were absent when its
+///    snapshot was taken, and existed once it finished. A migration that only
+///    *edits* a file records nothing, so 0002's `~/.ssh/config` and shell rc
+///    cannot appear here however they are declared.
+/// 2. **Inside the root.** Belt to that braces. A recorded creation outside
+///    `root` still would not be ours to delete.
+///
+/// The first bound is what makes this correct; the second is what makes a
+/// future mistake in the first survivable. An earlier version had neither — it
+/// re-ran `snapshot_files` against a `Ctx` built from the real
+/// `dirs::home_dir()` — and deleted a user's SSH config and `.zshrc`.
+fn stale_root_artifacts(
+    root: &Path,
+    level: u32,
+    plan: &[(&FileEntry, PathBuf, String, String)],
+) -> Vec<PathBuf> {
+    let restored: Vec<&PathBuf> = plan.iter().map(|(e, _, _, _)| &e.restore_to).collect();
+    let mut out: Vec<PathBuf> = Vec::new();
+
+    for higher in level..MIGRATIONS.len() as u32 {
+        let path = snapshot_dir(root, higher).join("filemap.json");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(map) = serde_json::from_str::<FileMap>(&text) else {
+            continue;
+        };
+        for created in map.created {
+            if !created.starts_with(root) {
+                continue;
+            }
+            if restored.iter().any(|kept| **kept == created) || out.contains(&created) {
+                continue;
+            }
+            if created.exists() {
+                out.push(created);
+            }
+        }
+    }
+    out
 }
 
 /// What mode a restored file must land with.
@@ -633,6 +821,83 @@ fn acquire_lock(root: &Path) -> Result<LockGuard> {
 struct FileMap {
     created_by: String,
     files: Vec<FileEntry>,
+    /// Paths this migration **brought into existence** — declared in its
+    /// `snapshot_files`, absent when the snapshot was taken, present once it
+    /// finished. Recorded by [`record_created`] after the migration returns.
+    ///
+    /// This is the distinction `snapshot_files` alone cannot make. That list
+    /// mixes files a migration *creates* (0003's `config.toml`) with files it
+    /// *edits* (0002's `~/.ssh/config`, where it rewrites a managed block).
+    /// A rollback must remove the first kind and must never remove the second,
+    /// and deriving that from the declaration is how the restore cleanup once
+    /// deleted a user's SSH config and shell rc.
+    ///
+    /// `#[serde(default)]` so a filemap written before this field existed
+    /// deserializes as "recorded nothing" — the safe answer, since an older
+    /// migration's creations are not knowable after the fact.
+    #[serde(default)]
+    created: Vec<PathBuf>,
+    /// What each file this migration touched looked like **immediately after
+    /// it ran**, as a hex SHA-256. Covers the files it edited and the ones it
+    /// created alike.
+    ///
+    /// This is the one fact a restore cannot recompute. The *pre* state is
+    /// already on disk — the snapshot copies are those bytes — so comparing
+    /// live against snapshot only ever says "this file changed", which is
+    /// unhelpful because the migration is what changed it. Comparing live
+    /// against `post` says the thing that matters: whether the user has
+    /// edited it *since*, and therefore whether a restore drops work.
+    ///
+    /// `#[serde(default)]` so an older filemap loads as "unknown". Unknown
+    /// must degrade to warn-and-confirm, never to "unchanged" — an absent
+    /// digest is not evidence of an untouched file.
+    #[serde(default)]
+    post_sha256: BTreeMap<PathBuf, String>,
+}
+
+/// Every post-migration digest recorded at or above `level`, merged.
+///
+/// One filemap is not enough: the digest for a file lives in the filemap of
+/// the migration that *wrote* it, which for `config.toml` is level 2, while a
+/// restore to level 0 reads level 0's. Ascending order, so a later migration's
+/// record wins for a path more than one of them touched.
+fn recorded_post_digests(root: &Path, level: u32) -> BTreeMap<PathBuf, String> {
+    let mut out = BTreeMap::new();
+    for at in level..MIGRATIONS.len() as u32 {
+        let path = snapshot_dir(root, at).join("filemap.json");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(map) = serde_json::from_str::<FileMap>(&text) else {
+            continue;
+        };
+        out.extend(map.post_sha256);
+    }
+    out
+}
+
+/// Has the user edited `path` since the migration wrote it?
+///
+/// Compares the live bytes against the digest recorded when the migration
+/// finished. A path that does not exist is never "edited" — there is nothing
+/// of the user's there to drop, and this is the ordinary state of a moved
+/// file's old location. Otherwise:
+///
+/// - digest recorded and it matches → **no**. The file is the migration's own
+///   output; restoring reverts the upgrade and nothing else.
+/// - digest recorded and it differs → **yes**. Real work is at stake.
+/// - **no digest recorded** → **yes**, conservatively. A filemap written
+///   before `post_sha256` existed knows nothing about this file, and "unknown"
+///   must read as "might be yours" — treating it as untouched would quietly
+///   downgrade the one warning standing between a user and their own edits.
+fn is_hand_edited(digests: &BTreeMap<PathBuf, String>, path: &Path, live_body: &str) -> bool {
+    if !path.exists() {
+        return false;
+    }
+    let Some(recorded) = digests.get(path) else {
+        return true;
+    };
+    crate::rules::sha256_hex(live_body.as_bytes()) != *recorded
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -641,7 +906,7 @@ struct FileEntry {
     snapshot: String,
     /// Absolute restore target. Safe to store absolute because snapshots are
     /// machine-local — same reasoning that keeps `.migration-state` out of
-    /// `wraps.json5`.
+    /// `config.toml`.
     restore_to: PathBuf,
 }
 
@@ -725,6 +990,10 @@ fn snapshot_if_absent(ctx: &Ctx, m: &Migration) -> Result<()> {
     let map = FileMap {
         created_by: build_stamp(),
         files,
+        // Both filled in by `record_post_state` once the migration has
+        // actually run; nothing has happened yet at snapshot time.
+        created: Vec::new(),
+        post_sha256: BTreeMap::new(),
     };
     atomic::replace(
         &staging.join("filemap.json"),
@@ -840,19 +1109,25 @@ mod tests {
 
         run_pending_in(&ctx).unwrap();
 
-        assert_eq!(
-            std::fs::read_to_string(ctx.root.join("wraps.json5")).unwrap(),
-            "{ gh: {} }"
+        // 0001 moved the file and left a symlink; 0003 then converted it to
+        // TOML and cleared that symlink, because an older secreq could not
+        // read the new format wherever the link pointed.
+        let config = ctx.root.join("config.toml");
+        assert!(config.is_file(), "config landed in the root as TOML");
+        assert!(
+            !ctx.root.join("wraps.json5").exists(),
+            "the JSON5 original is gone"
         );
-        let link = legacy.join("wraps.json5");
-        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
-        assert_eq!(
-            std::fs::read_link(&link).unwrap(),
-            ctx.root.join("wraps.json5")
+        assert!(
+            legacy.join("wraps.json5").symlink_metadata().is_err(),
+            "the stale compat symlink is removed rather than left dangling"
         );
-        // Old path still resolves — this is what lets an older secreq keep
-        // working after the migration.
-        assert_eq!(std::fs::read_to_string(&link).unwrap(), "{ gh: {} }");
+        let c = crate::wraps::WrapsConfig::parse(
+            &std::fs::read_to_string(&config).unwrap(),
+            "migrated",
+        )
+        .expect("the migrated config parses");
+        assert!(c.wraps.contains_key("gh"), "the wrap survived both levels");
     }
 
     #[test]
@@ -868,10 +1143,12 @@ mod tests {
         run_pending_in(&ctx).unwrap();
         run_pending_in(&ctx).unwrap();
 
-        assert_eq!(
-            std::fs::read_to_string(ctx.root.join("wraps.json5")).unwrap(),
-            "{ gh: {} }"
-        );
+        let c = crate::wraps::WrapsConfig::parse(
+            &std::fs::read_to_string(ctx.root.join("config.toml")).unwrap(),
+            "migrated",
+        )
+        .expect("the migrated config parses after repeated runs");
+        assert!(c.wraps.contains_key("gh"));
     }
 
     #[test]
@@ -886,12 +1163,13 @@ mod tests {
 
         run_pending_in(&ctx).unwrap();
 
-        assert!(legacy
-            .join("wraps.json5")
-            .symlink_metadata()
-            .unwrap()
-            .file_type()
-            .is_symlink());
+        // 0001 leaves a symlink here; 0003 then clears it, because the
+        // format it points at is one an older secreq cannot read anyway.
+        assert!(
+            legacy.join("wraps.json5").symlink_metadata().is_err(),
+            "the compat symlink is cleared once the format changes under it"
+        );
+        assert!(ctx.root.join("config.toml").is_file());
     }
 
     #[test]
@@ -914,6 +1192,108 @@ mod tests {
             std::fs::read_to_string(ctx.root.join("wraps.json5")).unwrap(),
             "{ aws: {} }"
         );
+    }
+
+    /// `stale_root_artifacts` feeds a delete. It reads the `created` list a
+    /// filemap records — paths a migration brought into existence — never the
+    /// `snapshot_files` declaration, which mixes those with files a migration
+    /// merely *edits*.
+    ///
+    /// That distinction is the whole fix. Migration 0002 manages a block inside
+    /// the user's `~/.ssh/config` and shell rc, so it declares them and creates
+    /// neither. An earlier version derived candidates from the declaration,
+    /// against a `Ctx` holding the real `dirs::home_dir()`, and deleted both out
+    /// of a live home.
+    ///
+    /// Pins both bounds: an edited file recorded in `files` is never a
+    /// candidate, and nothing outside the root is either.
+    #[test]
+    fn stale_root_artifacts_only_removes_recorded_creations_inside_the_root() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("secreq");
+        std::fs::create_dir_all(&root).unwrap();
+
+        // A file a migration *edited* — captured in `files`, not `created`.
+        // This is the `~/.ssh/config` shape.
+        let edited = tmp.path().join("home/.ssh/config");
+        std::fs::create_dir_all(edited.parent().unwrap()).unwrap();
+        std::fs::write(&edited, "Host example\n").unwrap();
+
+        // A creation outside the root. Recorded as created, still not ours.
+        let outside_creation = tmp.path().join("home/somewhere.toml");
+        std::fs::write(&outside_creation, "x = 1\n").unwrap();
+
+        // The real artifact: created, inside the root.
+        let artifact = root.join("config.toml");
+        std::fs::write(&artifact, "[wraps.gh]\n").unwrap();
+
+        let snap = snapshot_dir(&root, 1);
+        std::fs::create_dir_all(&snap).unwrap();
+        let map = FileMap {
+            created_by: "test".to_owned(),
+            post_sha256: BTreeMap::new(),
+            files: vec![FileEntry {
+                snapshot: "config".to_owned(),
+                restore_to: edited.clone(),
+            }],
+            created: vec![artifact.clone(), outside_creation.clone()],
+        };
+        std::fs::write(
+            snap.join("filemap.json"),
+            serde_json::to_string(&map).unwrap(),
+        )
+        .unwrap();
+
+        let found = stale_root_artifacts(&root, 0, &[]);
+
+        assert_eq!(
+            found,
+            vec![artifact],
+            "only the in-root creation is a candidate"
+        );
+        assert!(edited.exists(), "an edited file is never a candidate");
+        assert!(
+            outside_creation.exists(),
+            "even a recorded creation outside the root is out of bounds"
+        );
+    }
+
+    /// A file the migration wrote and nobody has touched since is not the
+    /// user's work, and a restore that reverts it drops nothing of theirs.
+    #[test]
+    fn a_file_matching_its_post_migration_digest_is_not_hand_edited() {
+        let body = "[wraps.gh]\n";
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("config.toml");
+        std::fs::write(&path, body).unwrap();
+
+        let mut digests = BTreeMap::new();
+        digests.insert(path.clone(), crate::rules::sha256_hex(body.as_bytes()));
+
+        assert!(!is_hand_edited(&digests, &path, body));
+        assert!(
+            is_hand_edited(&digests, &path, "[wraps.gh]\nreason = \"mine\"\n"),
+            "an edit since the migration must be reported"
+        );
+    }
+
+    /// The bound that keeps this from ever *weakening* the warning: a filemap
+    /// written before `post_sha256` existed knows nothing, and unknown has to
+    /// read as "might be the user's". Treating it as untouched would silence
+    /// the one warning standing between them and their own edits.
+    #[test]
+    fn an_unrecorded_file_is_treated_as_hand_edited() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("config.toml");
+        std::fs::write(&path, "anything").unwrap();
+        assert!(is_hand_edited(&BTreeMap::new(), &path, "anything"));
+
+        // ...but an absent file still is not, digest or no digest.
+        assert!(!is_hand_edited(
+            &BTreeMap::new(),
+            &tmp.path().join("gone.toml"),
+            ""
+        ));
     }
 
     #[test]
@@ -946,18 +1326,18 @@ mod tests {
         let ctx = ctx_in(&tmp);
         write(
             &ctx.legacy_config_dir.clone().unwrap().join("wraps.json5"),
-            "original",
+            "{ original: {} }",
         );
 
         run_pending_in(&ctx).unwrap();
         // Simulate a re-run from level 0 with the config already moved.
         write_state(&ctx.root, 0).unwrap();
-        std::fs::write(ctx.root.join("wraps.json5"), "changed-after-migration").unwrap();
+        std::fs::write(ctx.root.join("config.toml"), "{ changed_after: {} }").unwrap();
         run_pending_in(&ctx).unwrap();
 
         assert_eq!(
             std::fs::read_to_string(snapshot_dir(&ctx.root, 0).join("wraps.json5")).unwrap(),
-            "original"
+            "{ original: {} }"
         );
     }
 
@@ -1080,18 +1460,20 @@ mod tests {
     fn restore_takes_the_migration_lock() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().join("secreq");
-        let target = tmp.path().join("config/secreq/wraps.json5");
+        let target = tmp.path().join("config/secreq/config.toml");
         write(&target, "live");
 
         // A hand-built level-0 snapshot, so nothing has taken the lock on this
         // root before `restore_in` does.
         let snap = snapshot_dir(&root, 0);
         std::fs::create_dir_all(&snap).unwrap();
-        std::fs::write(snap.join("wraps.json5"), "snapshot").unwrap();
+        std::fs::write(snap.join("config.toml"), "snapshot").unwrap();
         let map = FileMap {
             created_by: "test".into(),
+            created: Vec::new(),
+            post_sha256: BTreeMap::new(),
             files: vec![FileEntry {
-                snapshot: "wraps.json5".into(),
+                snapshot: "config.toml".into(),
                 restore_to: target.clone(),
             }],
         };

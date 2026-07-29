@@ -34,18 +34,16 @@ fn write_config(config_path: &Path, body: &str) {
 /// real-binary `gh` is stubbed by a script we drop into the sandbox bin dir.
 fn echo_provider_config(shim_dir: &Path) -> String {
     format!(
-        r#"{{
-            $shim_dir: "{shim}",
-            gh: {{
-                $reason: "GitHub API access",
-                env: {{
-                    GITHUB_TOKEN: "secret://fake/the-token-value",
-                }},
-            }},
-            providers: {{
-                fake: {{ retrieve: ["printf", "%s", "{{locator}}"] }},
-            }},
-        }}"#,
+        r#"
+            shim_dir = "{shim}"
+
+            [wraps.gh]
+            reason = "GitHub API access"
+            env.GITHUB_TOKEN = "secret://fake/the-token-value"
+
+            [providers.fake]
+            retrieve = ["printf", "%s", "{{locator}}"]
+        "#,
         shim = shim_dir.display(),
     )
 }
@@ -220,18 +218,16 @@ fn x_resolves_only_the_env_vars_the_parent_is_missing() {
     write_config(
         &sb.config_path(),
         &format!(
-            r#"{{
-                $shim_dir: "{shim}",
-                gh: {{
-                    env: {{
-                        GITHUB_TOKEN: "secret://fake/the-token-value",
-                        EXTRA_SECRET: "secret://fake/extra-value",
-                    }},
-                }},
-                providers: {{
-                    fake: {{ retrieve: ["printf", "%s", "{{locator}}"] }},
-                }},
-            }}"#,
+            r#"
+                shim_dir = "{shim}"
+
+                [wraps.gh]
+                env.GITHUB_TOKEN = "secret://fake/the-token-value"
+                env.EXTRA_SECRET = "secret://fake/extra-value"
+
+                [providers.fake]
+                retrieve = ["printf", "%s", "{{locator}}"]
+            "#,
             shim = shim_dir.display(),
         ),
     );
@@ -419,7 +415,7 @@ fn unwrapped_binary_passes_through_unchanged() {
     // Config has shim_dir but NO wrap for `gh`.
     write_config(
         &sb.config_path(),
-        &format!(r#"{{ $shim_dir: "{}" }}"#, shim_dir.display()),
+        &format!("shim_dir = \"{}\"\n", shim_dir.display()),
     );
     let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
 
@@ -544,7 +540,7 @@ fn wrap_can_reference_a_builtin_provider_without_a_providers_block() {
     fs::create_dir_all(&shim_dir).unwrap();
     write_config(
         &sb.config_path(),
-        &format!(r#"{{ $shim_dir: "{}" }}"#, shim_dir.display()),
+        &format!("shim_dir = \"{}\"\n", shim_dir.display()),
     );
 
     let out = sb.run(&[
@@ -572,10 +568,7 @@ fn wrap_records_config_and_drops_shim() {
     let config = sb.config_path();
     let shim_dir = sb.path().join("shims");
     fs::create_dir_all(&shim_dir).unwrap();
-    write_config(
-        &config,
-        &format!(r#"{{ $shim_dir: "{}" }}"#, shim_dir.display()),
-    );
+    write_config(&config, &format!("shim_dir = \"{}\"\n", shim_dir.display()));
 
     let out = sb.run(&[
         "wrap",
@@ -592,7 +585,7 @@ fn wrap_records_config_and_drops_shim() {
     );
     // Config has the new wrap.
     let body = fs::read_to_string(&config).unwrap();
-    assert!(body.contains(r#""gh""#));
+    assert!(body.contains("[wraps.gh]"), "got: {body}");
     assert!(body.contains("secret://op/Personal/GH/credential"));
     // Shim exists with our sentinel.
     let shim = shim_dir.join("gh");
@@ -617,10 +610,7 @@ fn wrap_with_no_env_creates_a_gate_only_wrap() {
     let config = sb.config_path();
     let shim_dir = sb.path().join("shims");
     fs::create_dir_all(&shim_dir).unwrap();
-    write_config(
-        &config,
-        &format!(r#"{{ $shim_dir: "{}" }}"#, shim_dir.display()),
-    );
+    write_config(&config, &format!("shim_dir = \"{}\"\n", shim_dir.display()));
 
     let out = sb.run(&["wrap", "--reason", "1Password vault access", "op"]);
     assert!(
@@ -633,7 +623,7 @@ fn wrap_with_no_env_creates_a_gate_only_wrap() {
 
     // Config has the wrap with an empty env (gate-only) and the reason.
     let body = fs::read_to_string(&config).unwrap();
-    assert!(body.contains(r#""op""#));
+    assert!(body.contains("[wraps.op]"), "got: {body}");
     assert!(body.contains("1Password vault access"));
     // No secret references made it in.
     assert!(!body.contains("secret://"), "got: {body}");
@@ -677,7 +667,7 @@ fn gate_only_wrap_denies_without_terminal_or_yes() {
     write_config(
         &sb.config_path(),
         &format!(
-            r#"{{ $shim_dir: "{}", op: {{ $reason: "1Password vault access" }} }}"#,
+            "shim_dir = \"{}\"\n\n[wraps.op]\nreason = \"1Password vault access\"\n",
             shim_dir.display()
         ),
     );
@@ -714,7 +704,7 @@ fn resolving_env_bypasses_the_gate_for_a_wrapped_provider() {
     write_config(
         &sb.config_path(),
         &format!(
-            r#"{{ $shim_dir: "{}", op: {{ $reason: "1Password vault access" }} }}"#,
+            "shim_dir = \"{}\"\n\n[wraps.op]\nreason = \"1Password vault access\"\n",
             shim_dir.display()
         ),
     );
@@ -745,10 +735,7 @@ fn unwrap_removes_config_and_shim() {
     let config = sb.config_path();
     let shim_dir = sb.path().join("shims");
     fs::create_dir_all(&shim_dir).unwrap();
-    write_config(
-        &config,
-        &format!(r#"{{ $shim_dir: "{}" }}"#, shim_dir.display()),
-    );
+    write_config(&config, &format!("shim_dir = \"{}\"\n", shim_dir.display()));
     sb.run(&["wrap", "--env", "X=secret://op/x", "gh"]);
     assert!(shim_dir.join("gh").is_file());
 
@@ -761,7 +748,7 @@ fn unwrap_removes_config_and_shim() {
     assert!(!shim_dir.join("gh").exists());
     let body = fs::read_to_string(&config).unwrap();
     assert!(
-        !body.contains(r#""gh""#),
+        !body.contains("[wraps.gh]"),
         "gh should be gone from config: {body}"
     );
 }
@@ -774,11 +761,17 @@ fn wraps_list_shows_configured_wraps() {
     write_config(
         &sb.config_path(),
         &format!(
-            r#"{{
-                $shim_dir: "{}",
-                gh: {{ $reason: "GitHub", env: {{ GITHUB_TOKEN: "secret://op/gh" }} }},
-                aws: {{ env: {{ AWS_KEY: "secret://op/aws/k", AWS_SECRET: "secret://op/aws/s" }} }},
-            }}"#,
+            r#"
+                shim_dir = "{}"
+
+                [wraps.gh]
+                reason = "GitHub"
+                env.GITHUB_TOKEN = "secret://op/gh"
+
+                [wraps.aws]
+                env.AWS_KEY = "secret://op/aws/k"
+                env.AWS_SECRET = "secret://op/aws/s"
+            "#,
             shim_dir.display()
         ),
     );
@@ -808,10 +801,12 @@ fn doctor_flags_when_a_shim_is_shadowed_by_an_earlier_path_entry() {
     write_config(
         &sb.config_path(),
         &format!(
-            r#"{{
-                $shim_dir: "{}",
-                gh: {{ env: {{ GITHUB_TOKEN: "secret://op/gh" }} }},
-            }}"#,
+            r#"
+                shim_dir = "{}"
+
+                [wraps.gh]
+                env.GITHUB_TOKEN = "secret://op/gh"
+            "#,
             shim_dir.display(),
         ),
     );
@@ -848,10 +843,12 @@ fn doctor_is_happy_when_the_shim_is_first_on_path() {
     write_config(
         &sb.config_path(),
         &format!(
-            r#"{{
-                $shim_dir: "{}",
-                gh: {{ env: {{ GITHUB_TOKEN: "secret://op/gh" }} }},
-            }}"#,
+            r#"
+                shim_dir = "{}"
+
+                [wraps.gh]
+                env.GITHUB_TOKEN = "secret://op/gh"
+            "#,
             shim_dir.display(),
         ),
     );
@@ -875,7 +872,7 @@ fn check_passes_on_a_well_formed_config() {
     let sb = Sandbox::new();
     write_config(
         &sb.config_path(),
-        r#"{ gh: { env: { GITHUB_TOKEN: "secret://op/gh" } } }"#,
+        "[wraps.gh]\nenv.GITHUB_TOKEN = \"secret://op/gh\"\n",
     );
     let out = sb.run(&["check"]);
     assert!(
@@ -891,7 +888,7 @@ fn check_flags_unknown_provider_in_a_wrap() {
     let sb = Sandbox::new();
     write_config(
         &sb.config_path(),
-        r#"{ gh: { env: { X: "secret://made-up-provider/loc" } } }"#,
+        "[wraps.gh]\nenv.X = \"secret://made-up-provider/loc\"\n",
     );
     let out = sb.run(&["check"]);
     assert_eq!(out.status.code(), Some(1));
@@ -1095,7 +1092,7 @@ fn init_narrows_a_root_that_already_exists_too_permissively() {
     assert_eq!(mode, 0o700, "{} is {mode:o}", root.display());
 }
 
-/// Finding A8 covered `audit.log` **and** `auto-rules.json5`; only the first
+/// Finding A8 covered `audit.log` **and** `auto-rules.toml`; only the first
 /// was actually fixed. `rules::save_rules` still staged through `fs::write`,
 /// so the rename published the staging file's `0666 & !umask` — and under the
 /// `umask 000` that container and CI images routinely set, that is a
@@ -1143,7 +1140,7 @@ fn a_rules_file_the_daemon_writes_under_a_lax_umask_is_owner_only() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let rules_file = sb.root().join("auto-rules.json5");
+    let rules_file = sb.root().join("auto-rules.toml");
     assert!(
         rules_file.is_file(),
         "the daemon should have written {}",
@@ -1200,7 +1197,7 @@ fn a_wraps_file_ssh_add_creates_under_a_lax_umask_is_owner_only() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let config = root.join("wraps.json5");
+    let config = root.join("config.toml");
     // Exactly, not `mode & 0o022 == 0`: that passes on any 022 machine while
     // the file is still world-readable, which is the disclosure half of the
     // finding shipping under a green test.
@@ -1241,7 +1238,7 @@ fn the_config_secreq_edit_seeds_under_a_lax_umask_is_owner_only() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let config = root.join("wraps.json5");
+    let config = root.join("config.toml");
     assert!(
         config.is_file(),
         "`secreq edit` should have seeded {}",
@@ -1257,7 +1254,7 @@ fn the_config_secreq_edit_seeds_under_a_lax_umask_is_owner_only() {
 /// **0777** under `umask 000` and the `.wasm` inside it at 0666.
 ///
 /// A world-writable store does not get a stranger's module *executed* — the
-/// sha256 in `auto-rules.json5` pins the bytes, so a swap surfaces as a
+/// sha256 in `auto-rules.toml` pins the bytes, so a swap surfaces as a
 /// visible REFUSED rule. It gets the rule silenced, which for a `deny` rule
 /// is the whole of what that rule was for.
 ///
@@ -1520,7 +1517,7 @@ fn ssh_add_writes_identity_with_explicit_flags() {
 
     // The written config must re-parse and carry the identity exactly.
     let body = fs::read_to_string(&config).unwrap();
-    assert!(body.contains(r#""github""#), "got: {body}");
+    assert!(body.contains("[ssh.github]"), "got: {body}");
     assert!(
         body.contains(TEST_ED25519_PUB),
         "public_key missing: {body}"
@@ -1529,7 +1526,7 @@ fn ssh_add_writes_identity_with_explicit_flags() {
         body.contains("secret://op/Private/GitHub/private key"),
         "private_key ref missing: {body}"
     );
-    assert!(body.contains(r#""git""#), "reason missing: {body}");
+    assert!(body.contains(r#"reason = "git""#), "reason missing: {body}");
 
     // And `secreq check` is happy with the resulting config (it round-trips).
     let check = sb.run(&["check"]);
@@ -1700,7 +1697,7 @@ fn read_refuses_re_entrant_call_during_resolution() {
     let sb = Sandbox::new();
     write_config(
         &sb.config_path(),
-        r#"{ providers: { op: { retrieve: ["printf", "%s", "{locator}"] } } }"#,
+        "[providers.op]\nretrieve = [\"printf\", \"%s\", \"{locator}\"]\n",
     );
     // Simulate being spawned by the daemon mid-resolution: SECREQ_RESOLVING is
     // set. `read` must refuse rather than deadlock on a second daemon round.
@@ -1720,7 +1717,7 @@ fn read_rejects_an_undeclared_no_slash_reference_naming_both_readings() {
     // A provider that would echo the locator — proves we never reach it.
     write_config(
         &sb.config_path(),
-        r#"{ providers: { op: { retrieve: ["printf", "%s", "{locator}"] } } }"#,
+        "[providers.op]\nretrieve = [\"printf\", \"%s\", \"{locator}\"]\n",
     );
     // `noslash` has no `/`, so it is a declared secret's name — and nothing
     // declares it. The message has to offer the other reading too, because
@@ -1763,7 +1760,7 @@ fn read_is_denied_when_the_daemon_is_disabled() {
     let sb = Sandbox::new();
     write_config(
         &sb.config_path(),
-        r#"{ providers: { op: { retrieve: ["printf", "%s", "{locator}"] } } }"#,
+        "[providers.op]\nretrieve = [\"printf\", \"%s\", \"{locator}\"]\n",
     );
     // `Sandbox::cmd` sets SECREQ_NO_DAEMON=1, so consent fails closed: a well
     // formed ref parses and reaches the consent boundary, which denies. This
@@ -1808,18 +1805,18 @@ fn first_run_migrates_legacy_config_and_leaves_a_working_symlink() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    // Config moved to the new root...
+    // Config moved to the new root (0001) and was converted to TOML (0003).
     let moved = sb.config_path();
-    assert_eq!(
-        fs::read_to_string(&moved).unwrap(),
-        r#"{ gh: { $reason: "x", env: {} } }"#
-    );
-    // ...and the old path is a symlink that still resolves, which is what
-    // keeps an older secreq working after the migration.
-    assert!(legacy.symlink_metadata().unwrap().file_type().is_symlink());
-    assert_eq!(
-        fs::read_to_string(&legacy).unwrap(),
-        r#"{ gh: { $reason: "x", env: {} } }"#
+    let body = fs::read_to_string(&moved).unwrap();
+    assert!(body.contains("[wraps.gh]"), "got: {body}");
+    assert!(body.contains(r#"reason = "x""#), "got: {body}");
+
+    // 0001 left a symlink at the old path so an older secreq kept working;
+    // 0003 cleared it, because that older secreq cannot read TOML wherever it
+    // points. A dangling link would be worse than none.
+    assert!(
+        legacy.symlink_metadata().is_err(),
+        "the stale compat symlink should be gone, not dangling"
     );
 }
 
@@ -1836,10 +1833,9 @@ fn migration_is_idempotent_across_runs() {
             String::from_utf8_lossy(&out.stderr)
         );
     }
-    assert_eq!(
-        fs::read_to_string(sb.config_path()).unwrap(),
-        r#"{ gh: { $reason: "x", env: {} } }"#
-    );
+    let body = fs::read_to_string(sb.config_path()).unwrap();
+    assert!(body.contains("[wraps.gh]"), "got: {body}");
+    assert!(body.contains(r#"reason = "x""#), "got: {body}");
 }
 
 #[test]
@@ -1848,13 +1844,11 @@ fn migrate_restore_reverts_to_the_snapshot_and_reports_what_it_discarded() {
     let legacy = seed_legacy_config(sb.path(), r#"{ gh: { $reason: "original", env: {} } }"#);
     sb.run(&["wraps"]);
 
-    // Diverge from the snapshot, as a user would by adding a wrap.
+    // Diverge from the snapshot, as a user would by adding a wrap. The legacy
+    // path is what level 0 holds, so that is what the diff is about.
     let moved = sb.config_path();
-    fs::write(
-        &moved,
-        r#"{ terraform: { $reason: "added later", env: {} } }"#,
-    )
-    .unwrap();
+    fs::write(&moved, "[wraps.terraform]\nreason = \"added later\"\n").unwrap();
+    fs::write(&legacy, r#"{ gh: { $reason: "edited since", env: {} } }"#).unwrap();
 
     let out = sb.run(&["--yes", "migrate", "restore", "0"]);
     assert!(
@@ -1867,8 +1861,30 @@ fn migrate_restore_reverts_to_the_snapshot_and_reports_what_it_discarded() {
     // The loss must be itemized, not merely announced.
     assert!(stdout.contains("DISCARD"), "no discard warning: {stdout}");
     assert!(
-        stdout.contains("added later"),
+        stdout.contains("edited since"),
         "diff should name what's lost: {stdout}"
+    );
+
+    // `config.toml` is an artifact of 0003 that level 0 has no snapshot for,
+    // so the restore removes it — and had to say so above, which it did.
+    assert!(
+        stdout.contains("added later"),
+        "a file about to be removed must be itemized too: {stdout}"
+    );
+    assert!(!moved.exists(), "the forward artifact is cleared");
+
+    // Removed, but not lost: the rescue copy makes a mistaken restore
+    // recoverable, which is the whole promise of the pre-restore save.
+    let saved: Vec<_> = fs::read_dir(sb.root().join("migration-snapshots"))
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("current-"))
+        .collect();
+    assert_eq!(saved.len(), 1, "exactly one pre-restore save");
+    assert_eq!(
+        fs::read_to_string(saved[0].path().join("config.toml")).unwrap(),
+        "[wraps.terraform]\nreason = \"added later\"\n",
+        "the removed artifact is recoverable from the rescue copy"
     );
 
     // The level-0 layout is back: a real file at the legacy path.
@@ -1877,9 +1893,6 @@ fn migrate_restore_reverts_to_the_snapshot_and_reports_what_it_discarded() {
         fs::read_to_string(&legacy).unwrap(),
         r#"{ gh: { $reason: "original", env: {} } }"#
     );
-    // And the forward artifact is gone, so a re-migration can't find two real
-    // files that differ and refuse to guess.
-    assert!(!moved.exists(), "forward artifact should be cleaned up");
 }
 
 #[test]
@@ -1889,7 +1902,7 @@ fn migrate_restore_saves_the_current_config_before_overwriting_it() {
     sb.run(&["wraps"]);
     fs::write(
         sb.config_path(),
-        r#"{ terraform: { $reason: "precious", env: {} } }"#,
+        "[wraps.terraform]\nreason = \"precious\"\n",
     )
     .unwrap();
 
@@ -1902,9 +1915,13 @@ fn migrate_restore_saves_the_current_config_before_overwriting_it() {
         .filter(|e| e.file_name().to_string_lossy().starts_with("current-"))
         .collect();
     assert_eq!(saved.len(), 1, "exactly one pre-restore save");
+    // The rescue copy covers what the restore removes as well as what it
+    // overwrites — a `config.toml` dropped on the floor would be recoverable
+    // only for the files that happened to survive.
     assert_eq!(
-        fs::read_to_string(saved[0].path().join("wraps.json5")).unwrap(),
-        r#"{ terraform: { $reason: "precious", env: {} } }"#
+        fs::read_to_string(saved[0].path().join("config.toml")).unwrap(),
+        "[wraps.terraform]\nreason = \"precious\"\n",
+        "the rescue copy holds the artifact the restore is about to remove"
     );
 }
 
@@ -2141,15 +2158,11 @@ fn the_legacy_compat_dir_migration_0001_creates_is_owner_only() {
         String::from_utf8_lossy(&out.stderr)
     );
 
+    // 0001 creates this directory (and plants a compat symlink in it, which
+    // 0003 then clears once the format changes). The directory outlives the
+    // link, and its mode is what this test is about.
     let compat_dir = sb.path().join("legacy-config/secreq");
-    assert!(
-        compat_dir
-            .join("wraps.json5")
-            .symlink_metadata()
-            .is_ok_and(|m| m.file_type().is_symlink()),
-        "0001 should have planted a compat symlink in {}",
-        compat_dir.display()
-    );
+    assert!(compat_dir.is_dir(), "{} should exist", compat_dir.display());
     let mode = fs::metadata(&compat_dir).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o700, "{} is {mode:o}", compat_dir.display());
 }
@@ -2270,7 +2283,7 @@ fn x_reports_the_daemons_stderr_when_it_dies_before_binding() {
     let bin_dir = sb.path().join("realbin");
     let shim_dir = sb.path().join("shims");
     install_fake_gh(&bin_dir);
-    write_config(&root.join("wraps.json5"), &echo_provider_config(&shim_dir));
+    write_config(&root.join("config.toml"), &echo_provider_config(&shim_dir));
 
     let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
     // No --sq-yes: resolving the wrap's secret needs consent, which needs

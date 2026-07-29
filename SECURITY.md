@@ -43,7 +43,7 @@ Please include as much of the following as you can:
 - A description of the vulnerability and the **impact** (what an
   attacker gains — e.g. reads a secret without consent, bypasses the
   consent prompt, escapes the wasm rule sandbox).
-- Step-by-step **reproduction**, including the relevant `wraps.json5` /
+- Step-by-step **reproduction**, including the relevant `config.toml` /
   rule configuration and the OS.
 - The affected version or commit.
 - Any proof-of-concept — but **redact real secrets**. Use placeholder

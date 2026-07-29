@@ -126,6 +126,28 @@ impl Reference {
     }
 }
 
+/// On disk a reference is its `secret://provider/locator` string, so it
+/// round-trips through [`Reference::parse`] and [`std::fmt::Display`]. A
+/// malformed one is a deserialization error naming the offending value —
+/// which is how a bad `private_key` gets caught at load rather than at sign
+/// time.
+impl<'de> serde::Deserialize<'de> for Reference {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Reference, D::Error> {
+        let raw = String::deserialize(d)?;
+        Reference::parse(&raw).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "`{raw}` is not a `{SCHEME}provider/locator` reference"
+            ))
+        })
+    }
+}
+
+impl serde::Serialize for Reference {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
 impl std::fmt::Display for Reference {
     /// Reconstruct the `secret://provider/locator` string. Round-trips through
     /// [`Reference::parse`].

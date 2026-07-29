@@ -1,4 +1,4 @@
-# Authoring `wraps.json5`
+# Authoring `config.toml`
 
 > **You may not need this page.** `secreq wrap <binary>` asks for everything
 > a wrap needs and writes the entry for you. Unlike hand-editing, it
@@ -9,60 +9,53 @@
 
 ::term{id=wrap-gh}
 
-The config lives at `~/.secreq/wraps.json5` (or `$SECREQ_HOME/wraps.json5`).
-It's JSON5: comments, unquoted keys, trailing commas, single quotes. Point
-your editor at [`wraps.schema.json`](./wraps.schema.json) for completion:
+The config lives at `~/.secreq/config.toml` (or `$SECREQ_HOME/config.toml`).
+It's TOML. The `#:schema` line points your editor at the published schema for
+completion and inline validation:
 
-```json5
-{
-  $schema: './wraps.schema.json',
-  $shim_dir: '~/.secreq/shims', // set by `secreq init`
+```toml
+#:schema ./wraps.schema.json
+shim_dir = "~/.secreq/shims"   # set by `secreq init`
 
-  gh: {
-    $reason: 'GitHub API access',
-    env: {
-      GITHUB_TOKEN: 'secret://op/Personal/GitHub Token/credential',
-    },
-  },
+[wraps.gh]
+reason = "GitHub API access"
+env.GITHUB_TOKEN = "secret://op/Personal/GitHub Token/credential"
 
-  aws: {
-    $reason: 'AWS deployments',
-    env: {
-      AWS_ACCESS_KEY_ID: 'secret://op/Work/AWS/access_key_id',
-      AWS_SECRET_ACCESS_KEY: 'secret://op/Work/AWS/secret_access_key',
-    },
-  },
+[wraps.aws]
+reason = "AWS deployments"
+env.AWS_ACCESS_KEY_ID = "secret://op/Work/AWS/access_key_id"
+env.AWS_SECRET_ACCESS_KEY = "secret://op/Work/AWS/secret_access_key"
 
-  kubectl: {
-    env: { KUBECONFIG: 'secret://keychain/work/kubeconfig' },
-  },
-}
+[wraps.kubectl]
+env.KUBECONFIG = "secret://keychain/work/kubeconfig"
 ```
 
-Every top-level key that isn't `$`-prefixed is a **wrap**, named for the
-binary. `$`-prefixed keys are settings.
+Each entry under `[wraps.*]` is a **wrap**, named for the binary. Every
+other top-level key is a setting this file declares, so a mistyped one is
+an error rather than a wrap for a binary of that name.
 
 ## Settings
 
-| Key               | Meaning                                                                                                                                                                                                        |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `$shim_dir`       | Where `secreq wrap` drops PATH shims. `~/` is expanded. Set by `secreq init`.                                                                                                                                  |
-| `$wait_indicator` | Default `true`. Whether a blocked wrap prints a "waiting for approval" indicator to stderr: a spinner on a TTY, a timestamped line every 30s on a pipe. `SECREQ_NO_WAIT_INDICATOR` silences it per-invocation. |
-| `$editor`         | Editor id (`code`, `cursor`, `zed`, `nvim`) the rule editor's "Open in editor" button defaults to. Written when you pick one in the manager's Rules view.                                                      |
-| `$schema`         | Editor pointer; ignored at runtime.                                                                                                                                                                            |
-| `providers`       | Provider definitions. Optional; see [providers](./providers.md).                                                                                                                                               |
-| `secrets`         | Secrets declared once under a name, with an optional per-secret cache `ttl`. See [declared secrets](#declared-secrets).                                                                                        |
-| `ssh`             | Identities served by the consent-gated SSH agent. See [the SSH agent](./ssh-agent.md).                                                                                                                         |
+| Key              | Meaning                                                                                                                                                                                                        |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `shim_dir`       | Where `secreq wrap` drops PATH shims. `~/` is expanded. Set by `secreq init`.                                                                                                                                  |
+| `wait_indicator` | Default `true`. Whether a blocked wrap prints a "waiting for approval" indicator to stderr: a spinner on a TTY, a timestamped line every 30s on a pipe. `SECREQ_NO_WAIT_INDICATOR` silences it per-invocation. |
+| `editor`         | Editor id (`code`, `cursor`, `zed`, `nvim`) the rule editor's "Open in editor" button defaults to. Written when you pick one in the manager's Rules view.                                                      |
+| `providers`      | Provider definitions. Optional; see [providers](./providers.md).                                                                                                                                               |
+| `secrets`        | Secrets declared once under a name, with an optional per-secret cache `ttl`. See [declared secrets](#declared-secrets).                                                                                        |
+| `ssh`            | SSH identities for the agent. Optional; see [ssh-agent](./ssh-agent.md).                                                                                                                                       |
+| `wraps`          | The wraps themselves, keyed by binary name.                                                                                                                                                                    |
 
-Other `$`-prefixed keys are reserved. A per-wrap `$description` parses but
-does nothing yet.
+The schema pointer is the `#:schema` comment at the top of the file, not a
+key. TOML has no `$schema` convention, and a comment cannot collide with a
+setting.
 
 ## Wraps
 
-| Setting   | Type              | Meaning                                                                                                                                                     |
-| --------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `$reason` | string            | Rationale shown in the consent prompt.                                                                                                                      |
-| `env`     | object (optional) | Environment variables to inject. Each value is a `secret://provider/locator` reference or a `secret://<name>` naming a [declared secret](#declared-secrets). Bare locators aren't accepted here. Omit for a gate-only wrap. |
+| Setting  | Type              | Meaning                                                                                                                                                                                                                     |
+| -------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reason` | string            | Rationale shown in the consent prompt.                                                                                                                                                                                      |
+| `env`    | object (optional) | Environment variables to inject. Each value is a `secret://provider/locator` reference or a `secret://<name>` naming a [declared secret](#declared-secrets). Bare locators aren't accepted here. Omit for a gate-only wrap. |
 
 A reference is `secret://<provider>/<locator>`: the provider is a scheme
 name (built-in or declared in `providers`), and the locator is everything
@@ -96,10 +89,9 @@ requires consent, but nothing is resolved or injected. Use it for a tool
 that manages its own credentials and has no secret for secreq to pass.
 `op` is the canonical case:
 
-```json5
-op: {
-  $reason: "1Password vault access",
-}
+```toml
+[wraps.op]
+reason = "1Password vault access"
 ```
 
 ::shot{id=21-gate-only-pending}
@@ -126,29 +118,22 @@ A secret written inline in a wrap's `env` is a string, repeated in every
 wrap that needs it. Declaring it under `secrets` gives it a name to reference
 and a place for per-secret settings to live:
 
-```json5
-{
-  secrets: {
-    github_token: {
-      ref: 'secret://op/Personal/GitHub Token/credential',
-      ttl: '15m',
-    },
-  },
+```toml
+[secrets.github_token]
+ref = "secret://op/Personal/GitHub Token/credential"
+ttl = "15m"
 
-  gh: {
-    env: { GITHUB_TOKEN: 'secret://github_token' },
-  },
+[wraps.gh]
+env.GITHUB_TOKEN = "secret://github_token"
 
-  hub: {
-    env: { GH_TOKEN: 'secret://github_token' },
-  },
-}
+[wraps.hub]
+env.GH_TOKEN = "secret://github_token"
 ```
 
-| Setting | Type              | Meaning                                                                                                                            |
-| ------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Setting | Type              | Meaning                                                                                                                           |
+| ------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `ref`   | string            | The `secret://provider/locator` this name stands for. Always a provider reference — a declaration can't name another declaration. |
-| `ttl`   | string (optional) | How long the daemon may serve this secret from its cache. A count and a unit: `30s`, `15m`, `2h`, `1d`.                            |
+| `ttl`   | string (optional) | How long the daemon may serve this secret from its cache. A count and a unit: `30s`, `15m`, `2h`, `1d`.                           |
 
 A name contains no `/`. Two names for one `ref` are fine as long as they
 agree on the `ttl`; a file where they disagree fails to load, because one
@@ -167,10 +152,10 @@ every secret does unless you say otherwise.
 
 A `ttl` shortens it, for that secret only:
 
-```json5
-secrets: {
-  prod_deploy_key: { ref: 'secret://op/Work/Deploy/key', ttl: '5m' },
-}
+```toml
+[secrets.prod_deploy_key]
+ref = "secret://op/Work/Deploy/key"
+ttl = "5m"
 ```
 
 Five minutes after the value is fetched the daemon drops and scrubs it. The

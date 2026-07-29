@@ -2,7 +2,7 @@
 //!
 //! The center of gravity is [`wrap_run`] — the external-subcommand handler
 //! invoked when the user runs `secreq <BINARY> [args…]`. Everything else is
-//! admin verbs that read/write `~/.secreq/wraps.json5`.
+//! admin verbs that read/write `~/.secreq/config.toml`.
 //!
 //! One module per concern, so the gating path can be read without the
 //! 1Password item picker scrolling past:
@@ -13,7 +13,7 @@
 //! - [`ssh`]      — `ssh setup` / `add` / `validate`, and op discovery.
 //! - [`rules`]    — the CLI face of the daemon's auto-rules store.
 //! - [`daemon`]   — the daemon's lifecycle verbs and its log tail.
-//! - [`config`]   — authoring `wraps.json5`, and the one writer for it.
+//! - [`config`]   — authoring `config.toml`, and the one writer for it.
 //! - [`init`]     — the first-time setup wizard.
 //! - [`prompt`]   — the cliclack prompts the interactive flows share.
 //!
@@ -145,7 +145,7 @@ pub(crate) struct AskSpec<'a> {
     /// `secret://<name>` has already become provider + locator and carries the
     /// declaration's name and TTL alongside.
     pub refs: &'a [(String, crate::wraps::ResolvedRef)],
-    /// `$reason` carried onto each `SecretAsk`.
+    /// `reason` carried onto each `SecretAsk`.
     pub reason: Option<String>,
     /// Whether `ApproveRemember` may persist an approval (`true` for `x`).
     pub allow_remember: bool,

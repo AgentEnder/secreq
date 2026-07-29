@@ -27,7 +27,7 @@ pub struct AuditEntry {
     pub ts_unix: u64,
     /// Working directory of the `run`.
     pub cwd: String,
-    /// The wrap that ran (the binary name registered in `wraps.json5`).
+    /// The wrap that ran (the binary name registered in `config.toml`).
     pub wrap: String,
     /// The wrapped argv passed through after the binary — what the user
     /// actually typed. Empty for an admin path where args aren't

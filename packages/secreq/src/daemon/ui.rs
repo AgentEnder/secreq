@@ -1253,7 +1253,7 @@ fn audit_entry_matches(entry: &AuditEntry, query: &str) -> bool {
 // [`crate::rule_scaffold`]) and then offers a GitHub-style split-button
 // that opens the scaffold in the user's editor — primary action runs the
 // preferred editor, the caret picks a different detected one and makes it
-// the new default (persisted to `$editor`).
+// the new default (persisted to `editor`).
 
 /// A transient status line shown under the scaffold panel after an
 /// action. Info is the success path; Error surfaces a failed scaffold or
@@ -1272,7 +1272,7 @@ pub struct ScaffoldPanel {
     /// Editors detected on this machine, in catalog order. Empty after a
     /// probe that found none; `probed` distinguishes "not yet probed".
     editors: Vec<Editor>,
-    /// The persisted preferred-editor id (`$editor`), if set.
+    /// The persisted preferred-editor id (`editor`), if set.
     preferred: Option<String>,
     /// Whether detection + preference-load has run. Guards the one-time
     /// host probe.
@@ -1430,7 +1430,7 @@ fn render_scaffold_panel(ui: &mut egui::Ui, panel: &mut ScaffoldPanel) {
 
 /// The "Open in editor" split-button plus the effect of clicking it:
 /// launch the chosen editor on the scaffolded file, and (for a dropdown
-/// pick) persist the choice as the new `$editor` default.
+/// pick) persist the choice as the new `editor` default.
 fn render_open_in_editor(ui: &mut egui::Ui, panel: &mut ScaffoldPanel) {
     let th = Theme::of(ui.ctx());
     let Some(primary) = panel.primary().cloned() else {

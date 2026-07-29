@@ -166,7 +166,7 @@ impl From<RuleDecision> for StaticDecision {
 /// Written out rather than `schemars(with = "RuleWire")` because the derive
 /// would also stamp *this* type's doc comment over the definition's
 /// `description`, and this one is written for a contributor reading the sum
-/// type, not for someone editing `auto-rules.json5`.
+/// type, not for someone editing `auto-rules.toml`.
 #[cfg(feature = "schema")]
 impl schemars::JsonSchema for Rule {
     fn inline_schema() -> bool {
@@ -412,7 +412,7 @@ pub enum RuleDecision {
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct WasmRule {
     /// Path to the compiled `.wasm` module. Relative paths resolve against the
-    /// directory containing `auto-rules.json5`; the canonical home is
+    /// directory containing `auto-rules.toml`; the canonical home is
     /// `rules/<id>.wasm` under the secreq root.
     pub path: String,
     /// Hex SHA-256 of the module bytes, recorded at registration and verified
@@ -987,7 +987,7 @@ fn has_wildcards(s: &str) -> bool {
 }
 
 /// Persisted auto-approve / auto-deny rules for `secreq`
-/// (`~/.secreq/auto-rules.json5`, or `$SECREQ_HOME/auto-rules.json5`). Owned by
+/// (`~/.secreq/auto-rules.toml`, or `$SECREQ_HOME/auto-rules.toml`). Owned by
 /// the consent daemon; clients normally don't edit the file directly.
 //
 // Top-level wrapper around a rule list so we can add metadata fields
@@ -1191,7 +1191,7 @@ pub fn load_rules(path: &Path) -> Result<LoadedRules> {
 /// `.json5.tmp` staging name every writer of this destination shared,
 /// and a staging file created at `0666 & !umask` whose mode the rename
 /// then published. Under the `umask 000` that container and CI images
-/// routinely set, the second one left `auto-rules.json5`
+/// routinely set, the second one left `auto-rules.toml`
 /// **world-writable** — and this file is the list of commands that skip
 /// the consent prompt, so a stranger who can append to it can approve
 /// their own.
@@ -1205,7 +1205,7 @@ pub fn load_rules(path: &Path) -> Result<LoadedRules> {
 /// their editor), and migration 0001 already commits to exactly this
 /// policy for this exact filename: its
 /// `moved_config_keeps_the_mode_the_user_chose` migrates an
-/// `auto-rules.json5` at 0640 and asserts it survives. Forcing 0600 here
+/// `auto-rules.toml` at 0640 and asserts it survives. Forcing 0600 here
 /// would mean secreq preserves the user's mode across an upgrade and
 /// then clobbers it on their next rule edit.
 ///
@@ -2543,7 +2543,7 @@ mod tests {
     #[test]
     fn save_then_load_round_trips() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let rules = vec![mk_rule(
             "01",
             "r",
@@ -2578,7 +2578,7 @@ mod tests {
     #[test]
     fn a_rules_file_secreq_creates_is_owner_only() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
 
         save_rules(&path, &[]).expect("save");
 
@@ -2596,7 +2596,7 @@ mod tests {
     fn saving_keeps_a_mode_the_user_chose() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         save_rules(&path, &[]).expect("first save");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).expect("chmod");
 
@@ -2620,20 +2620,20 @@ mod tests {
         std::fs::create_dir(&root).expect("mkdir");
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o777)).expect("chmod");
 
-        save_rules(&root.join("auto-rules.json5"), &[]).expect("save");
+        save_rules(&root.join("auto-rules.toml"), &[]).expect("save");
 
         assert_eq!(mode_of(&root), 0o700, "{}", root.display());
     }
 
     /// The M5 shape in this file: the staging name was a fixed
-    /// `auto-rules.json5.tmp`, one inode every writer of this
+    /// `auto-rules.toml.tmp`, one inode every writer of this
     /// destination shared. Planting the old name is how a test can see
     /// that we no longer touch it — and the directory listing catches
     /// staging litter left beside the destination on the happy path.
     #[test]
     fn saving_does_not_reuse_the_old_fixed_staging_name() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let squatted = path.with_extension("json5.tmp");
         std::fs::write(&squatted, b"another writer's half-written payload").expect("plant");
 
@@ -2652,8 +2652,8 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "auto-rules.json5".to_owned(),
-                "auto-rules.json5.tmp".to_owned()
+                "auto-rules.json5.tmp".to_owned(),
+                "auto-rules.toml".to_owned()
             ],
             "a successful save leaves no staging file behind"
         );
@@ -2685,7 +2685,7 @@ mod tests {
         // (trailing commas, unquoted keys, comments) all work for the
         // hand-edit path.
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         std::fs::write(
             &path,
             r#"{
@@ -3293,7 +3293,7 @@ mod tests {
         // JSON5 — so the whole load fails and the daemon's existing
         // warn-and-continue-empty contract kicks in.
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         std::fs::write(
             &path,
             r#"{ rules: [ {
@@ -3313,7 +3313,7 @@ mod tests {
     /// Write a rules file + module bytes into a tempdir and load it.
     fn load_with_module(rule: Rule, module_file: &str, bytes: &[u8]) -> LoadedRules {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         std::fs::write(dir.path().join(module_file), bytes).expect("write module");
         save_rules(&path, std::slice::from_ref(&rule)).expect("save");
         load_rules(&path).expect("load")
@@ -3382,7 +3382,7 @@ mod tests {
         // deny rules — keep working while the bad module is loudly
         // reported. See the load_rules doc for the two-tier rationale.
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         std::fs::write(dir.path().join("mod.wasm"), APPROVE_IF).expect("write module");
         let mut tampered = mk_wasm_rule("01", "tampered", &[]);
         set_wasm(
@@ -3423,7 +3423,7 @@ mod tests {
     #[test]
     fn missing_module_file_is_a_per_rule_error_naming_rule_and_path() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let mut rule = mk_wasm_rule("01", "gone", &[]);
         set_wasm(
             &mut rule,
@@ -3470,7 +3470,7 @@ mod tests {
 
     // ── The on-disk format, pinned ────────────────────────────────────
     //
-    // `auto-rules.json5` is a file users have on disk today and
+    // `auto-rules.toml` is a file users have on disk today and
     // hand-edit. `docs/auto-rules.schema.json` is now derived from
     // [`RuleWire`], so `tests/schema_drift.rs` covers the *shape* — what
     // keys exist, which are required, what each one may hold.
@@ -3613,7 +3613,7 @@ mod tests {
         // first save produced has to be identical, or the daemon
         // rewrites the user's file differently on every mutation.
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         std::fs::write(
             &path,
             r#"{
@@ -3727,7 +3727,7 @@ mod tests {
         // skip it, so an operator's *deny* would stop covering what
         // they wrote without a word anywhere.
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         std::fs::write(
             &path,
             r#"{ rules: [ {
@@ -3754,7 +3754,7 @@ mod tests {
 
     /// A file whose one rule approves and carries a `deny_message`.
     fn stray_deny_message_file(dir: &Path) -> std::path::PathBuf {
-        let path = dir.join("auto-rules.json5");
+        let path = dir.join("auto-rules.toml");
         std::fs::write(
             &path,
             r#"{ rules: [ {
@@ -3868,7 +3868,7 @@ mod tests {
         // must pass after it. A legitimate deny message is part of the
         // format and nothing here may move it.
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         std::fs::write(
             &path,
             r#"{ rules: [ {

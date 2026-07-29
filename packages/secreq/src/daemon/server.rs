@@ -1631,7 +1631,7 @@ mod tests {
     /// persisted to disk. Before this fix, they hit the `other`
     /// arm in `handle_consent_window_connection`'s dispatch and
     /// were silently ignored — UI Save clicks vanished without
-    /// touching `auto-rules.json5`.
+    /// touching `auto-rules.toml`.
     #[test]
     fn streaming_add_rule_persists_to_disk() {
         use crate::rules::{Pattern, Rule, RuleDecision, RuleMatch};
@@ -1639,7 +1639,7 @@ mod tests {
         use std::sync::{Arc, Mutex};
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let state: SharedState = Arc::new(Mutex::new(super::super::state::State::with_rules_path(
             path.clone(),
         )));
@@ -1692,7 +1692,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let module_src = dir.path().join("uploaded.wasm");
         std::fs::write(&module_src, APPROVE_IF).expect("write module");
-        let rules_path = dir.path().join("auto-rules.json5");
+        let rules_path = dir.path().join("auto-rules.toml");
         let state: SharedState = Arc::new(Mutex::new(super::super::state::State::with_rules_path(
             rules_path,
         )));
@@ -1755,7 +1755,7 @@ mod tests {
         use std::sync::{Arc, Mutex};
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("auto-rules.json5");
+        let path = dir.path().join("auto-rules.toml");
         let state: SharedState = Arc::new(Mutex::new(super::super::state::State::with_rules_path(
             path.clone(),
         )));

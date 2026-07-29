@@ -1,6 +1,6 @@
 //! PATH shim management for `secreq wrap` / `unwrap`.
 //!
-//! A shim is a tiny POSIX shell script in the user's chosen `$shim_dir` that
+//! A shim is a tiny POSIX shell script in the user's chosen `shim_dir` that
 //! `exec`s `'<abs path to secreq>' x '<wrap_name>' "$@"`. Because it lives
 //! on `PATH`, every `execvp("gh", …)` — from interactive shells, from `npm`
 //! postinstalls, from IDE-spawned subprocesses, from anything — resolves to
@@ -33,7 +33,7 @@ pub const SENTINEL: &str = "secreq-managed-shim";
 pub fn install(shim_dir: &Path, wrap_name: &str) -> Result<PathBuf> {
     validate_wrap_name(wrap_name)?;
     let exe = secreq_exe()?;
-    // Before the shim, not only when we create the directory: a `$shim_dir`
+    // Before the shim, not only when we create the directory: a `shim_dir`
     // left 0777 by an older secreq is repaired by the next `wrap` or `doctor`
     // refresh rather than waiting for a brand-new name.
     ensure_shim_dir(shim_dir)?;
@@ -202,7 +202,7 @@ fn body(exe: &Path, wrap_name: &str) -> String {
 /// Owner-only, for a shim dir secreq creates itself.
 const SHIM_DIR_MODE: u32 = 0o700;
 
-/// Create `$shim_dir` if it is missing, and refuse to leave a group- or
+/// Create `shim_dir` if it is missing, and refuse to leave a group- or
 /// world-**writable** directory on the user's `PATH`.
 ///
 /// `init` prepends this directory to `PATH` in a shell rc file and never
@@ -219,7 +219,7 @@ const SHIM_DIR_MODE: u32 = 0o700;
 ///   but the user's own processes resolves `PATH`, so no other principal needs
 ///   to traverse it, and the shim *names* alone say which commands the user
 ///   wrapped — the same reason `paths::ensure_private_dir` exists.
-/// - **A directory the user already had** — `$shim_dir` may well be a shared
+/// - **A directory the user already had** — `shim_dir` may well be a shared
 ///   `~/.local/bin` — keeps its read and traverse bits. Narrowing that to 0700
 ///   would break every other tool that reads it, and read access was never the
 ///   finding. Only `g+w`/`o+w` come off, which cannot break a lookup.
@@ -507,7 +507,7 @@ mod tests {
     }
 
     /// Creating it right is only half of it: every install that predates this
-    /// left a 0777 directory behind, and a user-chosen `$shim_dir` may have
+    /// left a 0777 directory behind, and a user-chosen `shim_dir` may have
     /// been made by something else entirely.
     #[test]
     fn an_existing_world_writable_shim_dir_is_narrowed() {

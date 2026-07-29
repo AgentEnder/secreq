@@ -9,5 +9,5 @@ $ secreq wrap op
 │  gate the 1Password CLI itself
 │
 └  Wrapped `op` (gate-only — consent required, nothing injected).
-  config: ~/.secreq/wraps.json5
+  config: ~/.secreq/config.toml
   shim: ~/.secreq/shims/op

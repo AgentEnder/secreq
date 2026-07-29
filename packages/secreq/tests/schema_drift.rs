@@ -16,10 +16,11 @@
 //!   be one the schema refuses too. A published contract that rejects a file
 //!   secreq itself wrote is the failure this catches; `"argv": null` was that
 //!   failure, and the schema called it a type error.
-//! - **`wraps.json5`** — the parser is hand-written over `serde_json::Value`,
-//!   so its key names are `schemars(rename)` attributes rather than something
-//!   the compiler derives. One config using every key the schema declares is
-//!   fed to the parser, and one key the schema does not declare is fed to both.
+//! - **`config.toml`** — the config is read with serde derives, but its JSON
+//!   names are still `serde(rename)` / `schemars(rename)` attributes sitting
+//!   side by side, and nothing makes the two agree. One config using every key
+//!   the schema declares is fed to the parser, and one key the schema does not
+//!   declare is fed to both.
 //!
 //! Regenerate after any change to those types:
 //!
@@ -232,75 +233,59 @@ fn the_schema_refuses_the_rule_shapes_the_loader_refuses() {
 /// Deliberately maximal, legacy spellings included: `read` for `retrieve`,
 /// `write` for `store`, `retrieveBatch` for `retrieve_batch`, and `optional`
 /// for `required: false`.
-const MAXIMAL_WRAPS_CONFIG: &str = r#"{
-  "$schema": "https://secreq.dev/schema/wraps.schema.json",
-  "$editor": "code",
-  "$shim_dir": "~/.secreq/shims",
-  "$wait_indicator": false,
-  "gh": {
-    "$reason": "GitHub API access",
-    "$description": "ignored at runtime",
-    "env": {
-      "GITHUB_TOKEN": "secret://op/Personal/GitHub/token",
-      "GH_TOKEN": "secret://declared_with_ttl",
-      "GH_ALT": "secret://declared_without_ttl"
-    }
-  },
-  "op": {},
-  "secrets": {
-    "declared_with_ttl": {
-      "ref": "secret://op/Personal/GitHub/other",
-      "ttl": "15m"
-    },
-    "declared_without_ttl": {
-      "ref": "secret://op/Personal/GitHub/third"
-    }
-  },
-  "ssh": {
-    "github": {
-      "$reason": "git pushes",
-      "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1 me@mac",
-      "private_key": "secret://op/Private/gh/private key"
-    }
-  },
-  "providers": {
-    "modern": {
-      "retrieve": ["printf", "%s", "{locator}"],
-      "retrieve_batch": {
-        "command": ["op", "run", "--", "printenv"],
-        "env_value": "op://{locator}"
-      },
-      "store": {
-        "command": ["sh", "-c", "cat"],
-        "fields": {
-          "service": { "required": true },
-          "tag": { "optional": true, "default": "v1" },
-          "note": { "default": null }
-        },
-        "value": "stdin",
-        "locator": "{service}"
-      }
-    },
-    "legacy": {
-      "read": ["printf", "%s", "{locator}"],
-      "retrieveBatch": {
-        "command": ["op", "run", "--", "printenv"],
-        "env_value": "op://{locator}"
-      },
-      "write": {
-        "command": ["sh", "-c", "echo {value}"],
-        "fields": { "name": { "required": true } },
-        "value": "{value}",
-        "locator": "{name}"
-      }
-    },
-    "nulls_mean_absent": {
-      "retrieve": ["true"],
-      "store": null,
-      "retrieve_batch": null
-    }
-  }
-}"#;
+const MAXIMAL_WRAPS_CONFIG: &str = r#"
+editor = "code"
+shim_dir = "~/.secreq/shims"
+wait_indicator = false
+
+[wraps.gh]
+reason = "GitHub API access"
+env.GITHUB_TOKEN = "secret://op/Personal/GitHub/token"
+env.GH_TOKEN = "secret://declared_with_ttl"
+env.GH_ALT = "secret://declared_without_ttl"
+
+# A gate-only wrap: consent required, nothing injected.
+[wraps.op]
+
+# Both spellings of a declaration: with an explicit `ttl` and without.
+[secrets.declared_with_ttl]
+ref = "secret://op/Personal/GitHub/other"
+ttl = "15m"
+
+[secrets.declared_without_ttl]
+ref = "secret://op/Personal/GitHub/third"
+
+[ssh.github]
+reason = "git pushes"
+public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1 me@mac"
+private_key = "secret://op/Private/gh/private key"
+
+[providers.modern]
+retrieve = ["printf", "%s", "{locator}"]
+retrieve_batch = { command = ["op", "run", "--", "printenv"], env_value = "op://{locator}" }
+
+[providers.modern.store]
+command = ["sh", "-c", "cat"]
+value = "stdin"
+locator = "{service}"
+fields.service = { required = true }
+fields.tag = { optional = true, default = "v1" }
+
+[providers.legacy]
+read = ["printf", "%s", "{locator}"]
+retrieveBatch = { command = ["op", "run", "--", "printenv"], env_value = "op://{locator}" }
+
+[providers.legacy.write]
+command = ["sh", "-c", "echo {value}"]
+value = "{value}"
+locator = "{name}"
+fields.name = { required = true }
+
+# TOML has no null, so "an explicit null means absent" is not expressible —
+# and no longer needs to be. Omitting the key is the only spelling.
+[providers.omitted_means_absent]
+retrieve = ["true"]
+"#;
 
 /// The published schema and the hand-written parser must accept the same keys.
 ///
@@ -311,8 +296,12 @@ const MAXIMAL_WRAPS_CONFIG: &str = r#"{
 #[test]
 fn schema_covers_every_key_the_parser_accepts() {
     let (schemas, index) = wraps_schema();
+    // toml-lang/toml#1038: there is no TOML-native schema language, so a TOML
+    // document is validated by loading it into the JSON data model and handing
+    // that to an ordinary JSON Schema validator — the same thing Taplo does for
+    // the `#:schema` directive an editor follows.
     let document: Value =
-        serde_json::from_str(MAXIMAL_WRAPS_CONFIG).expect("the fixture must be JSON");
+        toml::from_str(MAXIMAL_WRAPS_CONFIG).expect("the fixture must be valid TOML");
 
     if let Err(err) = schemas.validate(&document, index) {
         panic!("docs/wraps.schema.json rejects a config secreq accepts:\n{err}");
