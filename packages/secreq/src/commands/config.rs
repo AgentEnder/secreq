@@ -429,7 +429,8 @@ fn parse_env_assignments(envs: &[String]) -> Result<BTreeMap<String, String>> {
         // the config in hand.
         if Reference::parse_form(v).is_none() {
             bail!(
-                "--env `{raw}`: value must be a `secret://provider/locator` reference                  or a declared secret's name (`secret://<name>`)"
+                "--env `{raw}`: value must be a `secret://provider/locator` reference \
+                 or a declared secret's name (`secret://<name>`)"
             );
         }
         out.insert(k.to_owned(), v.to_owned());
@@ -613,6 +614,42 @@ fn provider_to_json_value(p: &crate::manifest::Provider) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn env_assignment_errors_are_a_single_clean_sentence() {
+        // These strings reach a user's terminal verbatim, and nothing else
+        // asserts on them — which is how an edit that joined two source lines
+        // shipped ~18 literal spaces into the middle of this one. A run of
+        // whitespace is never intentional in a message, so check for it
+        // directly rather than pinning the exact wording.
+        let cases = [
+            "NOT_AN_ASSIGNMENT",
+            "=secret://op/x/y",
+            "GITHUB_TOKEN=not-a-reference",
+        ];
+        for raw in cases {
+            let err = parse_env_assignments(&[raw.to_owned()])
+                .unwrap_err()
+                .to_string();
+            assert!(
+                !err.contains("  "),
+                "`--env {raw}` error has a run of whitespace in it: {err:?}"
+            );
+            assert!(!err.contains('\n'), "`--env {raw}` error wraps: {err:?}");
+            assert!(err.contains(raw), "error must quote the offender: {err:?}");
+        }
+
+        // Both written forms of a reference are accepted here; an undeclared
+        // name is `write_config`'s round-trip to reject, with the config in
+        // hand and the message that names both readings.
+        let ok = parse_env_assignments(&[
+            "A=secret://op/Work/PG/url".to_owned(),
+            "B=secret://github_token".to_owned(),
+        ])
+        .expect("both reference forms are legal in --env");
+        assert_eq!(ok["A"], "secret://op/Work/PG/url");
+        assert_eq!(ok["B"], "secret://github_token");
+    }
 
     #[test]
     fn write_config_preserves_declared_secrets_and_the_names_that_reference_them() {

@@ -313,8 +313,16 @@ pub struct State {
     /// shares the fixed wrap `"run"`. So one global namespace answered for
     /// every session that ever ran: a value cached by a 9am deploy satisfied
     /// a nested ask in an unrelated 10am shell, silently, because both were
-    /// "run". The secret cache has no TTL and the daemon does not idle-exit
-    /// while the SSH agent is on, so the window was machine uptime.
+    /// "run". A cached value lives for the daemon by default, and the daemon
+    /// does not idle-exit while the SSH agent is on, so that window was
+    /// machine uptime.
+    ///
+    /// A declared `ttl` shortens the window for the secret that carries one
+    /// (see [`super::cache`]'s "Lifetime"), but it is not what closes this
+    /// hole and must not be read as a mitigation: the default is still the
+    /// daemon's lifetime, and a secret nobody wrote a `ttl` for — which is
+    /// most of them — has exactly the old window. What closes it is the
+    /// per-session authorization recorded here.
     ///
     /// The cache stays global — it is a *value* cache, and re-resolving costs
     /// a biometric, which is the property it exists for. This records the
