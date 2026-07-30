@@ -51,11 +51,12 @@ snapshots with `SECREQ_BLESS_SHOTS=layout`.
 
 **Forgetting the regen is a red build, not a silent mistake.** Every
 fixture lays its window out on the CPU (a plain `egui::Context`, no
-wgpu) and compares the shape stream — rects, circles, lines, and every
-text run with its position, baseline, size, colour and underline —
-against the `layout.json` committed in that fixture's folder. That runs
-on an ordinary `cargo test`, so a padding constant, a colour token or a
-reworded string fails by fixture name with the first shape that moved.
+wgpu) and compares the shape stream — rects, circles, lines, solid paths,
+untextured meshes, and every text run with its position, baseline, size,
+colour and underline — against the `layout.json` committed in that
+fixture's folder. That runs on an ordinary `cargo test`, so a padding
+constant, a colour token or a reworded string fails by fixture name with
+the first shape that moved.
 The regen command re-blesses those snapshots as it re-renders, so the
 two halves cannot drift apart.
 
@@ -261,7 +262,7 @@ Seven projects, and each one owns the targets whose sources it holds:
 | `secreq`          | `packages/secreq`      | `build` `check` `test`, `extract-docs-artifacts`, `bless-screenshots`, `record-transcripts` |
 | `secreq-webfonts` | `packages/webfonts`    | `build` — the woff2 cuts — and `check`                                                      |
 | `secreq-rule`     | `packages/secreq-rule` | the published SDK; `nx-release-publish`                                                     |
-| `docs-site`       | `docs-site`            | `build` `dev` `preview` `deploy` `typecheck-docs`                                           |
+| `docs-site`       | `docs-site`            | `build` `dev` `preview` `deploy` `test` `typecheck-docs`                                    |
 | `docs`            | `docs`                 | `vale` `audit`                                                                              |
 | `dev-docs`        | `dev-docs`             | nothing — it exists to be depended on                                                       |
 | `workspace`       | `.`                    | only what no other project owns (see below)                                                 |
@@ -313,6 +314,11 @@ Each project lints and formats its own tree — `lint` is clippy on the crates a
 oxlint on the JS, `format:check` is `cargo fmt` and/or oxfmt. The two Rust
 crates run **both** formatters, because they really do carry `.ts` fixtures and
 `project.json` alongside the Rust.
+
+`docs-site:test` runs Vitest + jsdom over
+`components/ui/**/*.test.{ts,tsx}`. Its Nx inputs include
+`{workspaceRoot}/dev-docs/ui-screenshots/**/layout.json`, so regenerating a
+captured window invalidates the reconstruction tests' cache.
 
 The `workspace` root project covers exactly what no other project owns —
 repo-root markdown and config, `.claude/`, `.github/`, `.vale/` — by excluding

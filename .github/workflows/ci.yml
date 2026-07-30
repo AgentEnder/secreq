@@ -92,8 +92,9 @@ jobs:
       #
       #   lint          clippy on the crates, oxlint on the JS
       #   format:check  cargo fmt and oxfmt
-      #   test          cargo test — the unit, integration and doc tests,
-      #                 including the schema-drift guard in
+      #   test          cargo test for the unit, integration and doc tests,
+      #                 plus Vitest + jsdom for the docs-site UI components.
+      #                 The Rust suite includes the schema-drift guard in
       #                 tests/schema_drift.rs and the CPU layout half of
       #                 tests/ui_screenshots.rs, which needs no GPU: without
       #                 $SECREQ_BLESS_SHOTS each fixture only lays its window

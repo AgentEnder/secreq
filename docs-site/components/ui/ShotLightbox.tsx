@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { SHOT_OPEN_EVENT, type ShotOpenDetail } from './shot-events';
+import { SHOT_OPEN_EVENT, type ShotOpenDetail, type ShotScene } from './shot-events';
 
 /**
  * The full-size viewer, rendered once for the whole app.
@@ -75,21 +75,21 @@ function withTransition(mutate: () => void): void {
 }
 
 interface Shot {
+  source: HTMLImageElement;
   src: string;
   alt: string;
   caption: string;
+  scene: ShotScene | null;
 }
 
 /**
  * What the viewer should morph out of, or back into.
  *
  * Normally the thumbnail is the render itself. Where a `<secreq-window>`
- * has rebuilt the window as DOM, the render is still the thing being
- * enlarged — it is the full-size picture of this exact window — but it is
- * hidden, and a `display: none` element captures nothing, so naming it for
- * the transition would open the viewer with no animation at all. The scene
- * standing in its place is what the reader can actually see, so that is
- * what grows into the dialog.
+ * has rebuilt the window as DOM, the render is hidden, and a `display: none`
+ * element captures nothing. The scene standing in its place is what the
+ * reader can actually see, so that is what grows into the dialog's fresh
+ * reconstruction.
  */
 function morphSource(render: HTMLImageElement): HTMLElement {
   if (render.offsetParent !== null) return render;
@@ -117,9 +117,11 @@ export function ShotLightbox() {
     const onOpen = (event: CustomEvent<ShotOpenDetail>) => {
       const { source, caption } = event.detail;
       const next: Shot = {
+        source,
         src: source.currentSrc || source.src,
         alt: source.alt,
         caption,
+        scene: event.detail.scene,
       };
 
       clearTransitionNames();
@@ -138,21 +140,14 @@ export function ShotLightbox() {
   const close = useCallback(() => {
     // Morph back to whichever thumbnail this came from, if it is still on
     // screen — after a client-side navigation it may not be.
-    const src = dialogRef.current?.querySelector('img')?.src;
-    const render = [...document.querySelectorAll<HTMLImageElement>('.shot-img')].find(
-      (candidate) =>
-        candidate.src === src &&
-        // Visible, or hidden behind the window that replaced it — either
-        // way there is something on screen to fall back into.
-        (candidate.offsetParent !== null || candidate.dataset.standing === 'true'),
-    );
+    const render = shot?.source.isConnected ? shot.source : undefined;
     const thumb = render && morphSource(render);
 
     withTransition(() => {
       if (thumb) thumb.style.viewTransitionName = VT_NAME;
       setShot(null);
     });
-  }, []);
+  }, [shot]);
 
   if (!mounted) return null;
 
@@ -172,11 +167,65 @@ export function ShotLightbox() {
     >
       {shot && (
         <figure style={{ margin: 0 }}>
-          <img src={shot.src} alt={shot.alt} />
+          {shot.scene ? (
+            <LightboxScene scene={shot.scene} alt={shot.alt} />
+          ) : (
+            <img src={shot.src} alt={shot.alt} />
+          )}
           {shot.caption && <figcaption dangerouslySetInnerHTML={{ __html: shot.caption }} />}
         </figure>
       )}
     </dialog>,
     document.body,
+  );
+}
+
+/**
+ * Own and scale a scene inside the dialog.
+ *
+ * The scene arrives as real DOM because it can originate in a custom element
+ * living inside raw markdown, outside React's tree. React owns only the stage;
+ * this effect places the fresh draw inside it and keeps the same `--sqw-scale`
+ * contract the inline window uses.
+ */
+function LightboxScene({ scene, alt }: { scene: ShotScene; alt: string }) {
+  const stageRef = useRef<HTMLDivElement>(null);
+  const [width, height] = scene.size;
+  // The committed render is rasterised at 2× the captured point size. Let
+  // the reconstruction grow to the same ceiling: capping it at `width`
+  // made a 500pt prompt shrink when its landing-page column was already
+  // wider than 500px. The viewport terms remain the real limits on a
+  // smaller screen.
+  const renderWidth = width * 2;
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    stage.replaceChildren(scene.element);
+    const rescale = () => {
+      const scale = stage.clientWidth / width;
+      // Child effects run before the parent calls `showModal()`. A closed
+      // dialog measures zero wide, and writing that transient measurement
+      // makes the scene disappear from the view-transition snapshot.
+      if (scale > 0) scene.element.style.setProperty('--sqw-scale', String(scale));
+    };
+    const resize = new ResizeObserver(rescale);
+    resize.observe(stage);
+    rescale();
+    return () => resize.disconnect();
+  }, [scene, width]);
+
+  return (
+    <div
+      ref={stageRef}
+      className="sqw-stage sqw-lightbox-stage"
+      role="group"
+      aria-label={alt}
+      style={{
+        aspectRatio: `${width} / ${height}`,
+        width: `min(${renderWidth}px, 96vw, ${(82 * width) / height}dvh)`,
+        maxWidth: '100%',
+      }}
+    />
   );
 }

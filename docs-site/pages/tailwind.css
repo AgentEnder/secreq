@@ -913,19 +913,30 @@ dialog.shot-lightbox::backdrop {
 :root[data-theme='light'] dialog.shot-lightbox::backdrop {
   background: rgb(220 224 230 / 0.8);
 }
+dialog.shot-lightbox img,
+dialog.shot-lightbox .sqw-stage.sqw-lightbox-stage {
+  max-width: 100%;
+  border-radius: var(--radius-sq-lg, 12px);
+  border: 1px solid var(--sq-hairline-strong);
+  box-shadow: var(--sq-shadow-lift);
+  background: var(--sq-panel);
+}
 dialog.shot-lightbox img {
   display: block;
-  max-width: 100%;
   /* Leaves room for the figcaption inside the figure's 94dvh budget, so
      the pair is centred as a unit instead of overflowing it. */
   min-height: 0;
   max-height: 82dvh;
   width: auto;
   height: auto;
-  border-radius: var(--radius-sq-lg, 12px);
-  border: 1px solid var(--sq-hairline-strong);
-  box-shadow: var(--sq-shadow-lift);
-  background: var(--sq-panel);
+}
+:root dialog.shot-lightbox .sqw-stage.sqw-lightbox-stage {
+  box-sizing: border-box;
+  overflow: hidden;
+  /* The inline reconstruction uses a drop-shadow. The dialog frame uses
+     the same box shadow as its PNG fallback, so carrying both would double
+     the halo. */
+  filter: none;
 }
 dialog.shot-lightbox figcaption {
   margin-top: 0.75rem;

@@ -38,11 +38,13 @@
 //!   `egui_kittest`'s `run()` does the same. A one-shot capture records the
 //!   unsettled frame.
 //!
-//! The whole prompt window is ~37 shapes of four kinds — `Rect`, `Circle`,
-//! `LineSegment`, `Text`. No meshes, textures, images, paths or béziers, which
-//! is why a faithful record is small enough to read in a diff. `Shape::Vec`
-//! nests, so the walk is recursive and carries each `ClippedShape`'s clip rect
-//! down to the leaves.
+//! Most of a prompt window is four small records — `Rect`, `Circle`,
+//! `LineSegment`, `Text`. Solid paths add their points and stroke, and the
+//! untextured meshes used for fades keep one indexed vertex list rather than
+//! repeating shared vertices per triangle. Textured meshes and callback paint
+//! remain opaque because their pixels or closure are not capture data.
+//! `Shape::Vec` nests, so the walk is recursive and carries each
+//! `ClippedShape`'s clip rect down to the leaves.
 //!
 //! Lives here rather than in `tests/common/` because that module is linked
 //! into all ten integration test binaries, and this one drags in egui plus the
@@ -51,6 +53,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use egui::epaint::{ColorMode, WHITE_UV};
 use egui::{Color32, Pos2, Rect, Shape, Stroke, Vec2};
 use serde_json::{json, Map, Value};
 
@@ -436,14 +439,56 @@ fn walk(shape: &Shape, clip: Rect, out: &mut Vec<Value>) {
             "underline": stroke(t.underline),
             "rows": text_rows(t),
         })),
-        // Nothing in these windows paints one of these today. Recording the
-        // kind rather than panicking keeps the first fixture that introduces
-        // (say) a mesh from failing as "unsupported" when what it actually
-        // needs is a reviewer deciding what about that mesh is worth pinning.
+        Shape::Path(path) => match &path.stroke.color {
+            ColorMode::Solid(color) => out.push(json!({
+                "k": "path",
+                "clip": rect(clip),
+                "points": path.points.iter().copied().map(pos).collect::<Vec<_>>(),
+                "closed": path.closed,
+                "fill": rgba(path.fill),
+                "stroke": [num(path.stroke.width), rgba(*color)],
+                "stroke_kind": format!("{:?}", path.stroke.kind),
+            })),
+            // A callback computes its colour at tessellation time. The
+            // closure cannot be serialized, so this is genuinely opaque in a
+            // way a solid path is not.
+            ColorMode::UV(_) => {
+                out.push(json!({ "k": "opaque", "shape": "path", "clip": rect(clip) }));
+            }
+        },
+        Shape::Mesh(mesh)
+            if mesh.texture_id == egui::TextureId::default()
+                && mesh.vertices.iter().all(|vertex| vertex.uv == WHITE_UV) =>
+        {
+            // `TextureId::default()` is the font atlas, not an absence of a
+            // texture. `WHITE_UV` addresses its reserved white pixel, which is
+            // how epaint represents a vertex whose colour needs no texture
+            // pixels to reproduce.
+            out.push(json!({
+                "k": "mesh",
+                "clip": rect(clip),
+                // Keep the indexed representation. Expanding every triangle
+                // would repeat the shared points (and their colours) several
+                // times, bloating both layout.json and its guard diffs.
+                "vertices": mesh.vertices.iter().map(|vertex| json!([
+                    num(vertex.pos.x),
+                    num(vertex.pos.y),
+                    rgba(vertex.color),
+                ])).collect::<Vec<_>>(),
+                "indices": mesh.indices,
+            }));
+        }
+        // A textured mesh is only geometry plus texture coordinates here;
+        // the capture has no pixels for the texture, so claiming it is
+        // redrawable would be false.
+        Shape::Mesh(_) => {
+            out.push(json!({ "k": "opaque", "shape": "mesh", "clip": rect(clip) }));
+        }
+        // These still have no consumer. Keep recording their kind so the
+        // first fixture to paint one makes the omission visible in the guard.
         other => out.push(json!({
-            "k": match other {
-                Shape::Path(_) => "path",
-                Shape::Mesh(_) => "mesh",
+            "k": "opaque",
+            "shape": match other {
                 Shape::Ellipse(_) => "ellipse",
                 Shape::QuadraticBezier(_) => "quadratic",
                 Shape::CubicBezier(_) => "cubic",
@@ -596,4 +641,142 @@ fn stroke(s: Stroke) -> Value {
 
 fn rgba(c: Color32) -> String {
     format!("#{:02x}{:02x}{:02x}{:02x}", c.r(), c.g(), c.b(), c.a())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paths_pin_the_geometry_the_browser_needs_to_redraw_them() {
+        let shape = Shape::convex_polygon(
+            vec![
+                Pos2::new(1.125, 2.0),
+                Pos2::new(7.0, 3.0),
+                Pos2::new(4.0, 9.0),
+            ],
+            Color32::from_rgba_premultiplied(20, 40, 60, 200),
+            Stroke::new(1.5_f32, Color32::from_rgb(90, 100, 110)),
+        );
+        let clip = Rect::from_min_max(Pos2::ZERO, Pos2::new(10.0, 12.0));
+        let mut captured = Vec::new();
+
+        walk(&shape, clip, &mut captured);
+
+        assert_eq!(
+            captured,
+            vec![json!({
+                "k": "path",
+                "clip": [0.0, 0.0, 10.0, 12.0],
+                "points": [[1.13, 2.0], [7.0, 3.0], [4.0, 9.0]],
+                "closed": true,
+                "fill": "#14283cc8",
+                "stroke": [1.5, "#5a646eff"],
+                "stroke_kind": "Middle",
+            })]
+        );
+    }
+
+    #[test]
+    fn meshes_pin_indexed_vertices_without_repeating_each_triangle() {
+        let mut mesh = egui::epaint::Mesh::default();
+        mesh.colored_vertex(Pos2::new(1.0, 2.0), Color32::TRANSPARENT);
+        mesh.colored_vertex(Pos2::new(5.0, 2.0), Color32::TRANSPARENT);
+        mesh.colored_vertex(Pos2::new(1.0, 7.0), Color32::from_rgb(70, 80, 90));
+        mesh.colored_vertex(Pos2::new(5.0, 7.0), Color32::from_rgb(70, 80, 90));
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(2, 1, 3);
+        let clip = Rect::from_min_max(Pos2::ZERO, Pos2::new(8.0, 9.0));
+        let mut captured = Vec::new();
+
+        walk(&Shape::mesh(mesh), clip, &mut captured);
+
+        assert_eq!(
+            captured,
+            vec![json!({
+                "k": "mesh",
+                "clip": [0.0, 0.0, 8.0, 9.0],
+                "vertices": [
+                    [1.0, 2.0, "#00000000"],
+                    [5.0, 2.0, "#00000000"],
+                    [1.0, 7.0, "#46505aff"],
+                    [5.0, 7.0, "#46505aff"],
+                ],
+                "indices": [0, 1, 2, 2, 1, 3],
+            })]
+        );
+    }
+
+    #[test]
+    fn meshes_on_another_texture_stay_opaque_even_with_white_uvs() {
+        let mut mesh = egui::epaint::Mesh::with_texture(egui::TextureId::Managed(1));
+        mesh.vertices.extend([
+            egui::epaint::Vertex::untextured(Pos2::new(1.0, 2.0), Color32::WHITE),
+            egui::epaint::Vertex::untextured(Pos2::new(5.0, 2.0), Color32::WHITE),
+            egui::epaint::Vertex::untextured(Pos2::new(1.0, 7.0), Color32::WHITE),
+        ]);
+        mesh.add_triangle(0, 1, 2);
+        let clip = Rect::from_min_max(Pos2::ZERO, Pos2::new(8.0, 9.0));
+        let mut captured = Vec::new();
+
+        walk(&Shape::mesh(mesh), clip, &mut captured);
+
+        assert_eq!(
+            captured,
+            vec![json!({
+                "k": "opaque",
+                "shape": "mesh",
+                "clip": [0.0, 0.0, 8.0, 9.0],
+            })]
+        );
+    }
+
+    #[test]
+    fn meshes_sampling_non_white_uvs_stay_opaque_on_the_default_texture() {
+        let mut mesh = egui::epaint::Mesh::default();
+        mesh.vertices.extend([
+            egui::epaint::Vertex::untextured(Pos2::new(1.0, 2.0), Color32::WHITE),
+            egui::epaint::Vertex {
+                pos: Pos2::new(5.0, 2.0),
+                uv: Pos2::new(0.5, 0.5),
+                color: Color32::WHITE,
+            },
+            egui::epaint::Vertex::untextured(Pos2::new(1.0, 7.0), Color32::WHITE),
+        ]);
+        mesh.add_triangle(0, 1, 2);
+        let clip = Rect::from_min_max(Pos2::ZERO, Pos2::new(8.0, 9.0));
+        let mut captured = Vec::new();
+
+        walk(&Shape::mesh(mesh), clip, &mut captured);
+
+        assert_eq!(
+            captured,
+            vec![json!({
+                "k": "opaque",
+                "shape": "mesh",
+                "clip": [0.0, 0.0, 8.0, 9.0],
+            })]
+        );
+    }
+
+    #[test]
+    fn callback_coloured_paths_stay_opaque() {
+        let path = egui::epaint::PathShape::line(
+            vec![Pos2::new(1.0, 2.0), Pos2::new(5.0, 7.0)],
+            egui::epaint::PathStroke::new_uv(1.0_f32, |_, _| Color32::WHITE),
+        );
+        let clip = Rect::from_min_max(Pos2::ZERO, Pos2::new(8.0, 9.0));
+        let mut captured = Vec::new();
+
+        walk(&Shape::Path(path), clip, &mut captured);
+
+        assert_eq!(
+            captured,
+            vec![json!({
+                "k": "opaque",
+                "shape": "path",
+                "clip": [0.0, 0.0, 8.0, 9.0],
+            })]
+        );
+    }
 }

@@ -3,7 +3,7 @@
   "caption": "The same request when the guest volunteers a caller chain. It renders dimmed under <b>GUEST SAYS</b> and marked <b>not verifiable</b> — recorded as a claim, never used to make the decision.",
   "variants": {
     "gnome-dark": {
-      "digest": "6bde99655236e06b47431168597bf313888278017f2e11349fc732ee67efcaa5",
+      "digest": "c67f1a5ae0a9a3857b7c89e0e3551de5a45f5da7dc72bffde2fdd1b0c1c07681",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#383838ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,510.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,500.0,321.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,327.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
@@ -208,7 +208,7 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"clip":[0.0,0.0,500.0,321.0],"k":"mesh"},
+        {"clip":[0.0,0.0,500.0,321.0],"indices":[0,1,2,2,1,3],"k":"mesh","vertices":[[-3.0,304.0,"#00000000"],[503.0,304.0,"#00000000"],[-3.0,324.0,"#00000000"],[503.0,324.0,"#00000000"]]},
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,321.0,500.0,422.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#303030ff","k":"rect","radius":[12,12,12,12],"rect":[18.0,325.0,482.0,391.0],"stroke":[1.0,"#14141414"],"stroke_kind":"Inside"},
         {
@@ -320,7 +320,7 @@
       "size": [500.0,510.0]
     },
     "gnome-light": {
-      "digest": "f01a5e1c5be82b198f671ad350254fe7802b26a6eb673586faf233468730db0e",
+      "digest": "69c07c7919157660c6ca6ae3a1558e51cb74417a1f9602f5b5306d1cf81536e6",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#fafafaff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,510.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,500.0,321.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,327.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
@@ -525,7 +525,7 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"clip":[0.0,0.0,500.0,321.0],"k":"mesh"},
+        {"clip":[0.0,0.0,500.0,321.0],"indices":[0,1,2,2,1,3],"k":"mesh","vertices":[[-3.0,304.0,"#00000000"],[503.0,304.0,"#00000000"],[-3.0,324.0,"#00000000"],[503.0,324.0,"#00000000"]]},
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,321.0,500.0,422.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#ffffffff","k":"rect","radius":[12,12,12,12],"rect":[18.0,325.0,482.0,391.0],"stroke":[1.0,"#00000017"],"stroke_kind":"Inside"},
         {
@@ -1267,7 +1267,7 @@
       "size": [500.0,510.0]
     },
     "windows-dark": {
-      "digest": "bf54fe3bc8d1280b3ce6ec8b39a7b32ebd312b8ea0e352a745d26f517ba0771d",
+      "digest": "15fe12cd7508321f55385a5903f4c2eac8e03630bac32732b40a5d38fb072879",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#2b2b2bff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,510.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,500.0,314.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,331.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
@@ -1472,7 +1472,7 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"clip":[0.0,0.0,500.0,314.0],"k":"mesh"},
+        {"clip":[0.0,0.0,500.0,314.0],"indices":[0,1,2,2,1,3],"k":"mesh","vertices":[[-3.0,297.0,"#00000000"],[503.0,297.0,"#00000000"],[-3.0,317.0,"#00000000"],[503.0,317.0,"#00000000"]]},
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,314.0,500.0,418.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#323232ff","k":"rect","radius":[4,4,4,4],"rect":[18.0,318.0,482.0,386.0],"stroke":[1.0,"#1f1f1fff"],"stroke_kind":"Inside"},
         {
@@ -1585,7 +1585,7 @@
       "size": [500.0,510.0]
     },
     "windows-light": {
-      "digest": "0e6080e6fc60f4326c65ca9093489d69a2abc5cd7194fd28ce4620b5805027a8",
+      "digest": "d3f5da28e2ee52406b1e226f8bb89714813ce688586968d945cfb9313f60140e",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#fbfbfbff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,510.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,500.0,314.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,500.0,331.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
@@ -1790,7 +1790,7 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"clip":[0.0,0.0,500.0,314.0],"k":"mesh"},
+        {"clip":[0.0,0.0,500.0,314.0],"indices":[0,1,2,2,1,3],"k":"mesh","vertices":[[-3.0,297.0,"#00000000"],[503.0,297.0,"#00000000"],[-3.0,317.0,"#00000000"],[503.0,317.0,"#00000000"]]},
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,314.0,500.0,418.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {"blur":0.0,"clip":[0.0,0.0,500.0,510.0],"fill":"#f6f6f6ff","k":"rect","radius":[4,4,4,4],"rect":[18.0,318.0,482.0,386.0],"stroke":[1.0,"#e5e5e5ff"],"stroke_kind":"Inside"},
         {

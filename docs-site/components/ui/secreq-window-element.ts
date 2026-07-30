@@ -1,3 +1,5 @@
+import type { ShotScene } from './shot-events';
+
 /**
  * `<secreq-window>` — a captured consent window, re-drawn as DOM.
  *
@@ -9,9 +11,8 @@
  * painted, in points, with every text run's position, baseline, size,
  * colour and underline. That file exists to fail CI when the UI moves
  * without a re-render. It is also, it turns out, a complete description
- * of the window: **four kinds of shape** (rect, circle, line, text), no
- * meshes, no textures, no paths. Everything needed to draw the window
- * again is in it.
+ * of the window: boxes, vectors, untextured meshes and positioned text.
+ * Everything needed to draw the window again is in it.
  *
  * So this element draws it again. The reader gets text they can select,
  * copy, search and hear read aloud, instead of a picture of text — and a
@@ -96,6 +97,25 @@ interface LineShape extends Clipped {
   stroke: Stroke;
 }
 
+interface PathShape extends Clipped {
+  k: 'path';
+  points: Point[];
+  closed: boolean;
+  fill: Rgba;
+  stroke: Stroke;
+  stroke_kind: 'Inside' | 'Outside' | 'Middle';
+}
+
+/** `[x, y, premultiplied colour]`. */
+type MeshVertex = [number, number, Rgba];
+
+interface MeshShape extends Clipped {
+  k: 'mesh';
+  vertices: MeshVertex[];
+  /** Three vertex indices per triangle. */
+  indices: number[];
+}
+
 interface TextRun {
   text: string;
   /** `[start, end]` of the run's advance, relative to its row. */
@@ -124,22 +144,26 @@ interface TextShape extends Clipped {
 }
 
 /**
- * A shape kind the capture records by name alone.
+ * A shape the capture cannot faithfully serialize.
  *
- * `ui_layout/mod.rs` deliberately does not pin the geometry of meshes,
- * paths and béziers — nothing in these windows painted one when the
- * capture was written, and recording the kind rather than panicking left
- * the decision about what is worth pinning to whoever introduces the
- * first. A handful of fixtures have since grown one (the audit tab's
- * chevrons, a couple of rule rows), and this element cannot draw what
- * the file does not describe. Those fixtures render with a small piece
- * missing; the rest are complete.
+ * Callback-coloured paths and textured meshes need data that does not exist
+ * in `layout.json` (a closure and texture pixels respectively). The ordinary
+ * solid paths and untextured meshes used by these windows are complete
+ * records and have their own types above.
  */
 interface OpaqueShape extends Clipped {
-  k: 'mesh' | 'path' | 'ellipse' | 'quadratic' | 'cubic' | 'callback' | 'other';
+  k: 'opaque';
+  shape: 'mesh' | 'path' | 'ellipse' | 'quadratic' | 'cubic' | 'callback' | 'other';
 }
 
-type WindowShape = RectShape | CircleShape | LineShape | TextShape | OpaqueShape;
+type WindowShape =
+  | RectShape
+  | CircleShape
+  | LineShape
+  | PathShape
+  | MeshShape
+  | TextShape
+  | OpaqueShape;
 
 /** One variant of one fixture, as the Vite plugin publishes it. */
 export interface WindowScene {
@@ -275,9 +299,9 @@ let clipSerial = 0;
 /**
  * Draw one captured window into a fresh element.
  *
- * Exported for the same reason the harness's fixtures are: this is the
- * one place that turns geometry into DOM, and a test that drew it a
- * second way would be testing itself.
+ * Exported so the DOM regression suite can feed this exact renderer committed
+ * layout variants. Reimplementing the draw in a test would only test the
+ * reimplementation.
  */
 export function buildScene(scene: WindowScene): HTMLElement {
   const [width, height] = scene.size;
@@ -313,12 +337,16 @@ export function buildScene(scene: WindowScene): HTMLElement {
       drawCircle(vectors(), shape);
     } else if (shape.k === 'line') {
       drawLine(vectors(), shape);
+    } else if (shape.k === 'path') {
+      drawPath(vectors(), shape);
+    } else if (shape.k === 'mesh') {
+      drawMesh(vectors(), shape);
     } else if (shape.k === 'text') {
       drawText(vectors(), shape);
     }
-    // Anything else is a shape the capture records by name only; see
-    // `OpaqueShape`. Nothing to draw, and nothing useful to say about it
-    // from here.
+    // `opaque` is a shape whose missing callback or texture pixels make a
+    // faithful redraw impossible. The screenshot remains the fallback for a
+    // fixture that ever contains one.
   }
 
   return root;
@@ -419,6 +447,212 @@ function drawLine(layer: SVGSVGElement, shape: LineShape) {
     shape.clip,
   );
   layer.appendChild(line);
+}
+
+function drawPath(layer: SVGSVGElement, shape: PathShape) {
+  if (shape.points.length === 0) return;
+  const path = document.createElementNS(SVG_NS, 'path');
+  path.setAttribute(
+    'd',
+    `${shape.points
+      .map(([x, y], index) => `${index === 0 ? 'M' : 'L'} ${x} ${y}`)
+      .join(' ')}${shape.closed ? ' Z' : ''}`,
+  );
+  path.setAttribute('fill', shape.fill.endsWith('00') ? 'none' : cssColor(shape.fill));
+  if (paints(shape.stroke)) {
+    path.setAttribute('stroke', cssColor(shape.stroke[1]));
+    path.setAttribute('stroke-width', String(shape.stroke[0]));
+    path.setAttribute('stroke-linecap', 'butt');
+    path.setAttribute('stroke-linejoin', 'miter');
+  }
+  const half = shape.stroke[0] / 2;
+  const xs = shape.points.map(([x]) => x);
+  const ys = shape.points.map(([, y]) => y);
+  clipTo(
+    layer,
+    path,
+    [
+      Math.min(...xs) - half,
+      Math.min(...ys) - half,
+      Math.max(...xs) + half,
+      Math.max(...ys) + half,
+    ],
+    shape.clip,
+  );
+  layer.appendChild(path);
+}
+
+/**
+ * Draw the meshes this UI emits.
+ *
+ * Every captured mesh today is an axis-aligned, four-vertex quad: either one
+ * solid colour or a two-stop fade. Keeping the indexed mesh in layout.json
+ * still pins the actual primitive, while recognizing that exact shape here
+ * gives SVG a native gradient it can scale cleanly in both the figure and the
+ * lightbox. Same-colour triangles cover a future non-quad icon without
+ * pretending SVG can reproduce arbitrary three-colour vertex interpolation.
+ */
+function drawMesh(layer: SVGSVGElement, shape: MeshShape) {
+  const quad = meshQuad(shape);
+  if (quad) {
+    const { left, top, right, bottom, colors } = quad;
+    if (colors.every((color) => color.endsWith('00'))) return;
+    const rect = document.createElementNS(SVG_NS, 'rect');
+    rect.setAttribute('x', String(left));
+    rect.setAttribute('y', String(top));
+    rect.setAttribute('width', String(right - left));
+    rect.setAttribute('height', String(bottom - top));
+
+    const [lt, rt, lb, rb] = colors;
+    if (lt === rt && lb === rb && lt !== lb) {
+      rect.setAttribute('fill', svgGradient(layer, lt, lb, false));
+    } else if (lt === lb && rt === rb && lt !== rt) {
+      rect.setAttribute('fill', svgGradient(layer, lt, rt, true));
+    } else if (colors.every((color) => color === lt)) {
+      rect.setAttribute('fill', cssColor(lt));
+    } else {
+      drawMeshTriangles(layer, shape);
+      return;
+    }
+    clipTo(layer, rect, [left, top, right, bottom], shape.clip);
+    layer.appendChild(rect);
+    return;
+  }
+
+  drawMeshTriangles(layer, shape);
+}
+
+function meshQuad(shape: MeshShape) {
+  if (shape.vertices.length !== 4 || shape.indices.length !== 6) return null;
+
+  const xs = [...new Set(shape.vertices.map(([x]) => x))].sort((a, b) => a - b);
+  const ys = [...new Set(shape.vertices.map(([, y]) => y))].sort((a, b) => a - b);
+  if (xs.length !== 2 || ys.length !== 2) return null;
+  const [left, right] = xs;
+  const [top, bottom] = ys;
+  const corner = (x: number, y: number) =>
+    shape.vertices.find((vertex) => vertex[0] === x && vertex[1] === y);
+  const lt = corner(left, top);
+  const rt = corner(right, top);
+  const lb = corner(left, bottom);
+  const rb = corner(right, bottom);
+  if (!lt || !rt || !lb || !rb) return null;
+
+  const triangles = [shape.indices.slice(0, 3), shape.indices.slice(3, 6)];
+  if (
+    new Set(shape.indices).size !== 4 ||
+    triangles.some(
+      (triangle) =>
+        new Set(triangle).size !== 3 ||
+        triangle.some((index) => !Number.isInteger(index) || !shape.vertices[index]),
+    )
+  )
+    return null;
+  const signatures = triangles.map((triangle) => [...triangle].sort((a, b) => a - b).join(','));
+  if (signatures[0] === signatures[1]) return null;
+  const shared = triangles[0].filter((index) => triangles[1].includes(index));
+  const sharesDiagonal = [
+    [shape.vertices.indexOf(lt), shape.vertices.indexOf(rb)],
+    [shape.vertices.indexOf(rt), shape.vertices.indexOf(lb)],
+  ].some(
+    (diagonal) =>
+      diagonal.length === shared.length && diagonal.every((index) => shared.includes(index)),
+  );
+  if (!sharesDiagonal) return null;
+
+  // Only a shared diagonal tiles all four corners. A shared outer edge leaves
+  // part of the quad unpainted and must stay on the exact-triangle path.
+  return {
+    left,
+    top,
+    right,
+    bottom,
+    colors: [lt[2], rt[2], lb[2], rb[2]] as const,
+  };
+}
+
+function svgGradient(layer: SVGSVGElement, from: Rgba, to: Rgba, horizontal: boolean): string {
+  let defs = layer.querySelector('defs');
+  if (!defs) {
+    defs = document.createElementNS(SVG_NS, 'defs');
+    layer.insertBefore(defs, layer.firstChild);
+  }
+  const id = `sqw-gradient-${(clipSerial += 1)}`;
+  const gradient = document.createElementNS(SVG_NS, 'linearGradient');
+  gradient.setAttribute('id', id);
+  gradient.setAttribute('x1', '0');
+  gradient.setAttribute('y1', '0');
+  gradient.setAttribute('x2', horizontal ? '1' : '0');
+  gradient.setAttribute('y2', horizontal ? '0' : '1');
+  for (const [offset, color] of [
+    ['0', from],
+    ['1', to],
+  ] as const) {
+    const stop = document.createElementNS(SVG_NS, 'stop');
+    stop.setAttribute('offset', offset);
+    stop.setAttribute('stop-color', cssColor(color));
+    gradient.appendChild(stop);
+  }
+  defs.appendChild(gradient);
+  return `url(#${id})`;
+}
+
+function drawMeshTriangles(layer: SVGSVGElement, shape: MeshShape) {
+  for (let at = 0; at + 2 < shape.indices.length; at += 3) {
+    const vertices = shape.indices
+      .slice(at, at + 3)
+      .map((index) => shape.vertices[index])
+      .filter((vertex): vertex is MeshVertex => Boolean(vertex));
+    if (vertices.length !== 3) continue;
+    const color = vertices[0][2];
+    if (!vertices.every((vertex) => vertex[2] === color) || color.endsWith('00')) continue;
+    const polygon = document.createElementNS(SVG_NS, 'polygon');
+    polygon.setAttribute('points', vertices.map(([x, y]) => `${x},${y}`).join(' '));
+    polygon.setAttribute('fill', cssColor(color));
+    const xs = vertices.map(([x]) => x);
+    const ys = vertices.map(([, y]) => y);
+    clipTo(
+      layer,
+      polygon,
+      [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)],
+      shape.clip,
+    );
+    layer.appendChild(polygon);
+  }
+}
+
+/**
+ * Whether every captured shape has an exact browser drawing.
+ *
+ * This is the gate between reconstruction and the PNG fallback. The capture
+ * deliberately pins arbitrary indexed meshes so their geometry cannot change
+ * silently, but SVG has no portable primitive for three-colour interpolation
+ * inside one triangle. The corpus uses only exact SVG cases: linear-gradient
+ * quads and solid-colour triangles. A future mesh outside those cases keeps
+ * its guarded data and leaves the screenshot standing rather than producing a
+ * subtly incomplete reconstruction.
+ */
+function canDrawScene(scene: WindowScene): boolean {
+  return scene.shapes.every((shape) => {
+    if (shape.k === 'opaque') return false;
+    if (shape.k === 'path') return !paints(shape.stroke) || shape.stroke_kind === 'Middle';
+    if (shape.k !== 'mesh') return true;
+
+    const quad = meshQuad(shape);
+    if (quad) {
+      const [lt, rt, lb, rb] = quad.colors;
+      if ((lt === rt && lb === rb) || (lt === lb && rt === rb)) return true;
+    }
+    for (let at = 0; at + 2 < shape.indices.length; at += 3) {
+      const vertices = shape.indices
+        .slice(at, at + 3)
+        .map((index) => shape.vertices[index])
+        .filter((vertex): vertex is MeshVertex => Boolean(vertex));
+      if (vertices.length !== 3) return false;
+      if (!vertices.every((vertex) => vertex[2] === vertices[0][2])) return false;
+    }
+    return shape.indices.length % 3 === 0;
+  });
 }
 
 /**
@@ -583,7 +817,22 @@ export class SecreqWindow extends HTMLElement {
     return ['shot', 'variant', 'press'];
   }
 
+  /**
+   * Build a separate copy for the app-level viewer.
+   *
+   * Returning a fresh scene matters: moving the thumbnail's nodes into the
+   * dialog would make the figure disappear, and cloning them would duplicate
+   * SVG clip/gradient ids. Rebuilding from the retained capture gives the
+   * lightbox its own scalable geometry and identifiers.
+   */
+  sceneForViewer(): ShotScene | null {
+    const scene = this.#geometry;
+    if (!scene || !canDrawScene(scene)) return null;
+    return { element: buildScene(scene), size: scene.size };
+  }
+
   connectedCallback() {
+    this.#observeStage();
     // The reader's desktop lives on `<html>`, where `+Head.tsx` puts it
     // before first paint and the OS picker and theme toggle move it
     // afterwards. Screenshots follow it through CSS; a scene has to be
@@ -652,6 +901,10 @@ export class SecreqWindow extends HTMLElement {
       return;
     }
     if (this.#run !== run || !this.isConnected) return;
+    // The screenshot is a more faithful fallback than a partial scene. This
+    // can only happen for callback-coloured paths or textured meshes; every
+    // ordinary captured primitive is redrawable.
+    if (!canDrawScene(scene)) return;
 
     this.#mount(buildScene(scene), scene.size);
     this.#drawn = wanted;
@@ -736,8 +989,6 @@ export class SecreqWindow extends HTMLElement {
       }
 
       this.#stage = stage;
-      this.#resize = new ResizeObserver(() => this.#rescale());
-      this.#resize.observe(stage);
     }
 
     this.#standIn();
@@ -746,6 +997,15 @@ export class SecreqWindow extends HTMLElement {
     this.#scene?.remove();
     this.#scene = scene;
     this.#stage.appendChild(scene);
+    this.#observeStage();
+    this.#rescale();
+  }
+
+  /** Observe a new stage, or one retained across a disconnect/reconnect. */
+  #observeStage() {
+    if (!this.#stage || this.#resize) return;
+    this.#resize = new ResizeObserver(() => this.#rescale());
+    this.#resize.observe(this.#stage);
     this.#rescale();
   }
 

@@ -117,11 +117,6 @@ function Path() {
  * Pagefind can index it and a screen reader can read it. It also weighs a
  * fraction of the renders it replaces, which matters most on the one page
  * that carries six of them.
- *
- * Three of these fixtures paint a `mesh` or `path` shape that the capture
- * does not pin, so they rebuild with a small icon missing — see
- * `secreq-window-element.ts`. Any one of them can go back to `<Shot />`
- * on its own if that ever reads as a defect rather than as nothing.
  */
 
 interface Capability {

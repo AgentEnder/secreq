@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "typedoc --options typedoc.json && vike dev",
     "extract-docs": "typedoc --options typedoc.json",
+    "test": "vitest run",
     "typecheck-docs": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/typecheck-docs.mts",
     "build": "typedoc --options typedoc.json && vike build && pnpm exec pagefind --site dist/client",
     "preview": "typedoc --options typedoc.json && vike build && pnpm exec pagefind --site dist/client && vike preview"
@@ -37,11 +38,13 @@
     "@types/react": "^19.2.9",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.2",
+    "jsdom": "^30.0.1",
     "pagefind": "^1.4.0",
     "secreq-rule": "workspace:*",
     "tailwindcss": "^4.1.18",
     "typescript": "^5.9.2",
-    "vite": "^7.3.1"
+    "vite": "^7.3.1",
+    "vitest": "^4.1.10"
   },
   "nx": {
     "name": "docs-site",
@@ -70,6 +73,14 @@
       "format": {
         "command": "oxfmt docs-site",
         "cache": false
+      },
+      "test": {
+        "command": "pnpm --dir docs-site test",
+        "inputs": [
+          "js",
+          "{workspaceRoot}/dev-docs/ui-screenshots/**/layout.json"
+        ],
+        "outputs": []
       },
       "build": {
         "dependsOn": [

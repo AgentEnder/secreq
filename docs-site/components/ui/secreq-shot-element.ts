@@ -14,7 +14,11 @@
  * listens once at the root, and neither knows how the other is built.
  */
 
-import { SHOT_OPEN_EVENT, type ShotOpenDetail } from './shot-events';
+import { SHOT_OPEN_EVENT, type ShotOpenDetail, type ShotScene } from './shot-events';
+
+interface SceneHost extends HTMLElement {
+  sceneForViewer(): ShotScene | null;
+}
 
 /**
  * How far the pointer may travel between press and release and still be a
@@ -68,12 +72,17 @@ export class SecreqShot extends HTMLElement {
 
     const image = this.#enlargeable();
     if (!image) return;
+    const sceneHost = this.closest<SceneHost>('secreq-window');
 
     this.dispatchEvent(
       new CustomEvent<ShotOpenDetail>(SHOT_OPEN_EVENT, {
         detail: {
           source: image,
           caption: this.querySelector('figcaption')?.innerHTML ?? '',
+          // The shot and window implementations load independently. The tag
+          // name can match before the window custom element has upgraded.
+          scene:
+            typeof sceneHost?.sceneForViewer === 'function' ? sceneHost.sceneForViewer() : null,
         },
         bubbles: true,
         composed: true,
