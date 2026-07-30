@@ -138,13 +138,11 @@ const ASSEMBLYSCRIPT_RANGE: &str = "^0.28.2";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SdkDep {
     /// An absolute path to a `secreq-rule` package on this machine,
-    /// written as npm's `file:` specifier. Preferred, and the only one
-    /// that resolves today.
+    /// written as npm's `file:` specifier. Preferred while developing
+    /// inside a checkout so a scaffold exercises the local SDK.
     Local(PathBuf),
-    /// The registry package at [`SDK_VERSION_RANGE`]. What a scaffold
-    /// falls back to when no checkout is in reach — and, until the SDK is
-    /// published, a dependency `npm install` cannot satisfy. Callers say
-    /// so rather than handing over a project that fails on install.
+    /// The published registry package at [`SDK_VERSION_RANGE`]. Used when
+    /// no checkout is in reach, which is the normal installed-CLI path.
     Published,
 }
 
@@ -168,8 +166,8 @@ impl SdkDep {
 /// looking for `packages/secreq-rule`.
 ///
 /// That finds the SDK for anyone running from — or standing in — a secreq
-/// checkout, which is everyone who can use it at all: an installed
-/// `secreq` has no SDK beside it and the package is not on npm yet.
+/// checkout. An installed `secreq` has no SDK beside it and uses the
+/// published package instead.
 pub fn locate_sdk() -> Option<PathBuf> {
     let starts = [std::env::current_exe().ok(), std::env::current_dir().ok()];
     starts.into_iter().flatten().find_map(|start| {
@@ -567,8 +565,7 @@ fn package_json(opts: &ProjectOpts) -> String {
 
 /// The generated `README.md`. The SDK line differs by [`SdkDep`]: a
 /// `file:` dependency is pinned to one machine and has to be re-pointed
-/// before the project is shared, and the registry one does not resolve
-/// yet.
+/// before the project is shared, while the registry dependency is portable.
 fn readme(opts: &ProjectOpts) -> String {
     let sdk_note = match &opts.sdk {
         SdkDep::Local(path) => format!(
@@ -578,10 +575,8 @@ fn readme(opts: &ProjectOpts) -> String {
             path = path.display(),
         ),
         SdkDep::Published => format!(
-            "`package.json` depends on `secreq-rule@{SDK_VERSION_RANGE}` from the registry.\n\
-             The SDK is not published yet, so `npm install` fails until it is —\n\
-             re-scaffold with `--sdk <checkout>/packages/secreq-rule` to depend on\n\
-             a local copy instead."
+            "`package.json` depends on the published \
+             `secreq-rule@{SDK_VERSION_RANGE}` package."
         ),
     };
     format!(
@@ -1007,9 +1002,7 @@ mod tests {
         );
     }
 
-    /// Without a local SDK the manifest names the registry package — the
-    /// half of [`SdkDep`] that does not resolve yet, which is why the
-    /// command warns about it.
+    /// Without a local SDK the manifest names the portable registry package.
     #[test]
     fn the_published_fallback_names_the_registry_package() {
         let opts = ProjectOpts {
@@ -1020,6 +1013,11 @@ mod tests {
         let pkg: serde_json::Value =
             serde_json::from_str(&package_json(&opts)).expect("valid JSON");
         assert_eq!(pkg["devDependencies"]["secreq-rule"], SDK_VERSION_RANGE);
+
+        let guide = readme(&opts);
+        assert!(guide.contains(&format!("published `secreq-rule@{SDK_VERSION_RANGE}`")));
+        assert!(!guide.contains("not published"));
+        assert!(!guide.contains("npm install` fails"));
     }
 
     /// `--from` replaces `assembly/` wholesale and leaves the manifest and
