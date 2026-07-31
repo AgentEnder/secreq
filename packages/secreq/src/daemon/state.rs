@@ -153,7 +153,6 @@ pub struct QueueSnapshot {
 
 #[derive(Debug, Clone)]
 pub struct QueueRow {
-    pub request_id: String,
     pub key: DedupeKey,
     pub representative: Ask,
     pub waiter_count: usize,
@@ -161,7 +160,6 @@ pub struct QueueRow {
     /// Awaiting a decision, or already approved with resolution in
     /// flight. Resolving rows render read-only (no Approve/Deny).
     pub status: RowStatus,
-    pub resolving_since: Option<Instant>,
 }
 
 /// An approved ask whose secrets are being resolved off the queue. We
@@ -291,7 +289,10 @@ pub struct State {
     badge: SubscriberGroup<()>,
     /// Linked HTTP SSE subscribers. Separate from desktop windows because an
     /// HTTP client has no child pid, focus state, or spawn lifecycle.
-    link: SubscriberGroup<()>,
+    link: LinkSubscriberGroup,
+    /// Replay protection shared with the LAN listener. Keeping it in state
+    /// lets every terminal transition retire a request's nonce bucket.
+    link_nonces: Arc<crate::link::nonce::NonceStore>,
     /// One-shot top-level resolve failure included in the next linked
     /// snapshot only. The full chain remains in `WaiterReply`.
     link_error: Option<super::proto::LinkResolveError>,
@@ -398,7 +399,8 @@ impl Default for State {
             consent: SubscriberGroup::new("consent window"),
             manager: SubscriberGroup::new("manager window"),
             badge: SubscriberGroup::new("badge window"),
-            link: SubscriberGroup::new("linked SSE client"),
+            link: LinkSubscriberGroup::new(),
+            link_nonces: Arc::new(crate::link::nonce::NonceStore::default()),
             link_error: None,
             consent_restart_pending: false,
             // Queue starts empty; record the moment so the auto-hide
@@ -619,6 +621,71 @@ impl<T: SubscriberExtra> SubscriberGroup<T> {
     /// has been dropped (child exited / crashed).
     fn broadcast(&mut self, msg: super::proto::DaemonMsg) {
         self.subscribers.retain(|s| s.tx.send(msg.clone()).is_ok());
+    }
+}
+
+struct LinkSubscriber {
+    id: u64,
+    tx: mpsc::SyncSender<super::proto::DaemonMsg>,
+}
+
+/// Bounded snapshot fan-out for LAN event streams.
+///
+/// A browser that stops reading must not turn state changes into unbounded
+/// memory growth. Each subscriber therefore has room for only a small bounded
+/// number of pending snapshots; while it is full, intermediate snapshots are
+/// discarded. The stream is a
+/// snapshot protocol rather than a delta protocol, so the next successful
+/// send brings the client fully current.
+struct LinkSubscriberGroup {
+    subscribers: Vec<LinkSubscriber>,
+    next_id: u64,
+}
+
+impl LinkSubscriberGroup {
+    fn new() -> LinkSubscriberGroup {
+        LinkSubscriberGroup {
+            subscribers: Vec::new(),
+            next_id: 1,
+        }
+    }
+
+    fn attach(&mut self, tx: mpsc::SyncSender<super::proto::DaemonMsg>) -> u64 {
+        let id = self.next_id;
+        self.next_id = id.wrapping_add(1);
+        self.subscribers.push(LinkSubscriber { id, tx });
+        super::log::log_at(
+            "state",
+            format_args!(
+                "linked SSE client attached (id={id}, subscribers={})",
+                self.subscribers.len()
+            ),
+        );
+        id
+    }
+
+    fn detach(&mut self, id: u64) {
+        let before = self.subscribers.len();
+        self.subscribers.retain(|subscriber| subscriber.id != id);
+        super::log::log_at(
+            "state",
+            format_args!(
+                "linked SSE client detached (id={id}, subscribers {before}→{})",
+                self.subscribers.len()
+            ),
+        );
+    }
+
+    fn count(&self) -> usize {
+        self.subscribers.len()
+    }
+
+    fn broadcast(&mut self, msg: super::proto::DaemonMsg) {
+        self.subscribers
+            .retain(|subscriber| match subscriber.tx.try_send(msg.clone()) {
+                Ok(()) | Err(mpsc::TrySendError::Full(_)) => true,
+                Err(mpsc::TrySendError::Disconnected(_)) => false,
+            });
     }
 }
 
@@ -878,9 +945,9 @@ impl State {
     /// snapshot that opens the stream.
     pub fn attach_link_events(
         &mut self,
-        sender: mpsc::Sender<super::proto::DaemonMsg>,
+        sender: mpsc::SyncSender<super::proto::DaemonMsg>,
     ) -> (u64, super::proto::WireSnapshot) {
-        let id = self.link.attach(sender, ());
+        let id = self.link.attach(sender);
         (id, self.snapshot_for_wire())
     }
 
@@ -892,6 +959,22 @@ impl State {
     /// Number of live linked-device event streams. Used by idle-exit.
     pub fn link_subscriber_count(&self) -> usize {
         self.link.count()
+    }
+
+    /// Replay store shared with the linked HTTP decision handler.
+    pub(crate) fn link_nonce_store(&self) -> Arc<crate::link::nonce::NonceStore> {
+        Arc::clone(&self.link_nonces)
+    }
+
+    /// Whether a signed decision still names the exact live ask it displayed.
+    /// The handler calls this before allocating nonce state; `resolve_remote`
+    /// repeats the check while landing the decision to close the race with a
+    /// local click or withdrawal.
+    pub fn link_request_matches(&self, request_id: &str, ask_hash_hex: &str) -> bool {
+        self.queue.values().any(|entry| {
+            entry.request_id == request_id
+                && crate::link::canonical::canonical_hash(&entry.representative) == ask_hash_hex
+        })
     }
 
     /// Should the daemon ensure a pending-badge child is running? True
@@ -1404,6 +1487,9 @@ impl State {
             self.maybe_immediate_auto_hide();
             return;
         };
+        // The ask is terminal regardless of who decided it. Drop any replay
+        // state a raced or earlier linked request allocated for this id.
+        let _ = self.link_nonces.retire(&entry.request_id);
 
         // Two independent conditions, and both are load-bearing.
         //
@@ -1622,7 +1708,9 @@ impl State {
         // populated entry stays (coalesced siblings are still waiting),
         // just with a smaller waiter count.
         if entry.waiters.is_empty() {
-            self.queue.remove(key);
+            if let Some(entry) = self.queue.remove(key) {
+                let _ = self.link_nonces.retire(&entry.request_id);
+            }
         }
 
         self.broadcast_consent_update();
@@ -1635,22 +1723,18 @@ impl State {
             .queue
             .values()
             .map(|e| QueueRow {
-                request_id: e.request_id.clone(),
                 key: e.key.clone(),
                 representative: e.representative.clone(),
                 waiter_count: e.waiter_count(),
                 first_seen: e.first_seen,
                 status: RowStatus::Awaiting,
-                resolving_since: None,
             })
             .chain(self.pending.values().map(|p| QueueRow {
-                request_id: p.request_id.clone(),
                 key: p.representative.dedupe_key.clone(),
                 representative: p.representative.clone(),
                 waiter_count: 0,
                 first_seen: p.since,
                 status: RowStatus::Resolving,
-                resolving_since: Some(p.since),
             }))
             .collect();
         entries.sort_by_key(|r| r.first_seen);
@@ -3916,6 +4000,47 @@ mod tests {
                 rx.recv().is_err(),
                 "withdrawing drops the waiter's sender, unblocking its recv"
             );
+        });
+    }
+
+    #[test]
+    fn local_resolution_retires_link_nonce_state() {
+        let shared = Arc::new(Mutex::new(State::new()));
+        let ask = ask_with_secret("gh", &["gh", "pr", "view"], "GITHUB_TOKEN");
+        let (tx, _rx) = mpsc::channel();
+        shared.lock().unwrap().submit_ask(ask.clone(), tx);
+        let request_id = shared.lock().unwrap().snapshot_for_wire().queue[0]
+            .request_id
+            .clone();
+        let nonces = shared.lock().unwrap().link_nonce_store();
+        nonces.accept(&request_id, "nonce").unwrap();
+
+        shared
+            .lock()
+            .unwrap()
+            .resolve(&ask.dedupe_key, Decision::Deny, None, None, &shared);
+
+        nonces
+            .accept(&request_id, "nonce")
+            .expect("local resolution retired the request bucket");
+    }
+
+    #[test]
+    fn withdrawing_the_last_waiter_retires_link_nonce_state() {
+        crate::audit::with_temp_log(|| {
+            let mut state = State::new();
+            let ask = ask_with_secret("gh", &["gh", "pr", "view"], "GITHUB_TOKEN");
+            let (tx, _rx) = mpsc::channel();
+            let (_result, waiter_id) = state.submit_ask(ask.clone(), tx);
+            let request_id = state.snapshot_for_wire().queue[0].request_id.clone();
+            let nonces = state.link_nonce_store();
+            nonces.accept(&request_id, "nonce").unwrap();
+
+            state.withdraw_waiter(&ask.dedupe_key, waiter_id);
+
+            nonces
+                .accept(&request_id, "nonce")
+                .expect("withdrawal retired the request bucket");
         });
     }
 
@@ -6517,7 +6642,7 @@ mod tests {
     #[test]
     fn resolving_since_is_published_only_while_resolution_is_in_flight() {
         let state: SharedState = Arc::new(Mutex::new(State::new()));
-        let (events_tx, events_rx) = mpsc::channel();
+        let (events_tx, events_rx) = mpsc::sync_channel(8);
         state.lock().unwrap().attach_link_events(events_tx);
 
         let mut ask = ask_with_secret("deploy", &["deploy"], "TOKEN");
@@ -6585,7 +6710,7 @@ mod tests {
         std::fs::write(&stderr_path, SENTINEL).unwrap();
 
         let state: SharedState = Arc::new(Mutex::new(State::new()));
-        let (events_tx, events_rx) = mpsc::channel();
+        let (events_tx, events_rx) = mpsc::sync_channel(8);
         state.lock().unwrap().attach_link_events(events_tx);
         let mut ask = ask_with_secret("deploy", &["deploy"], "TOKEN");
         wrap_of(&mut ask).providers = [(

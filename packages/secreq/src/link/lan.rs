@@ -1,13 +1,14 @@
 //! Plain-HTTP listener for devices linked over the local network.
 
-use std::io::{Cursor, Read};
+use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
+use tiny_http::{Method, Request, Response, Server, StatusCode};
 
 use super::nonce::NonceStore;
 use super::pair::{PairError, PairRequest, Pairing};
@@ -15,11 +16,14 @@ use super::sig::SignedDecision;
 
 const MAX_PAIR_BODY_BYTES: u64 = 16 * 1024;
 const MAX_DECISION_BODY_BYTES: u64 = 16 * 1024;
-const SSE_CHUNK_FLUSH_BYTES: usize = 8 * 1024 + 1;
+const MAX_PENDING_SNAPSHOTS: usize = 8;
+/// Hard cap on unauthenticated long-lived SSE connections from the LAN.
+pub const MAX_LINK_SUBSCRIBERS: usize = 8;
+const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 
 struct Runtime {
     pairing: Arc<Pairing>,
-    state: Option<crate::daemon::state::SharedState>,
+    state: crate::daemon::state::SharedState,
     registry_path: PathBuf,
     nonces: Arc<NonceStore>,
 }
@@ -77,34 +81,23 @@ impl Drop for Listener {
 /// A port of zero asks the operating system to choose an unused port. Each
 /// parsed HTTP request is handled on its own thread, matching the daemon's
 /// existing thread-per-connection model.
-pub fn start(bind_addr: SocketAddr, pairing: Arc<Pairing>) -> Result<Listener> {
-    let registry_path = pairing.registry_path().to_owned();
-    start_runtime(
-        bind_addr,
-        Arc::new(Runtime {
-            pairing,
-            state: None,
-            registry_path,
-            nonces: Arc::new(NonceStore::default()),
-        }),
-    )
-}
-
-/// Start the listener with live daemon state, enabling `/events` and
-/// `/decision` in addition to pairing.
-pub fn start_synced(
+pub fn start(
     bind_addr: SocketAddr,
     pairing: Arc<Pairing>,
     state: crate::daemon::state::SharedState,
 ) -> Result<Listener> {
     let registry_path = pairing.registry_path().to_owned();
+    let nonces = state
+        .lock()
+        .map_err(|_| anyhow::anyhow!("daemon state unavailable"))?
+        .link_nonce_store();
     start_runtime(
         bind_addr,
         Arc::new(Runtime {
             pairing,
-            state: Some(state),
+            state,
             registry_path,
-            nonces: Arc::new(NonceStore::default()),
+            nonces,
         }),
     )
 }
@@ -160,16 +153,10 @@ fn handle_request(request: Request, runtime: &Runtime) -> std::io::Result<()> {
         return handle_pair(request, &runtime.pairing);
     }
     if request.method() == &Method::Get && request.url() == "/events" {
-        return match &runtime.state {
-            Some(state) => handle_events(request, Arc::clone(state)),
-            None => request.respond(Response::empty(StatusCode(404))),
-        };
+        return handle_events(request, Arc::clone(&runtime.state));
     }
     if request.method() == &Method::Post && request.url() == "/decision" {
-        return match &runtime.state {
-            Some(state) => handle_decision(request, runtime, state),
-            None => request.respond(Response::empty(StatusCode(404))),
-        };
+        return handle_decision(request, runtime, &runtime.state);
     }
 
     request.respond(Response::empty(StatusCode(404)))
@@ -179,63 +166,54 @@ fn handle_events(
     request: Request,
     state: crate::daemon::state::SharedState,
 ) -> std::io::Result<()> {
-    let (tx, rx) = mpsc::channel();
-    let (subscriber_id, initial) = state
-        .lock()
-        .map_err(|_| std::io::Error::other("daemon state unavailable"))?
-        .attach_link_events(tx);
-    let reader = SseReader::new(state, subscriber_id, rx, initial)?;
-    let headers = vec![
-        Header::from_bytes("Content-Type", "text/event-stream; charset=utf-8")
-            .expect("static SSE content-type header"),
-        Header::from_bytes("Cache-Control", "no-cache").expect("static cache header"),
-        Header::from_bytes("X-Accel-Buffering", "no").expect("static buffering header"),
-    ];
-    request.respond(Response::new(StatusCode(200), headers, reader, None, None))
-}
+    let (tx, rx) = mpsc::sync_channel(MAX_PENDING_SNAPSHOTS);
+    let (subscriber_id, initial) = {
+        let mut state = state
+            .lock()
+            .map_err(|_| std::io::Error::other("daemon state unavailable"))?;
+        if state.link_subscriber_count() >= MAX_LINK_SUBSCRIBERS {
+            drop(state);
+            return request.respond(Response::empty(StatusCode(503)));
+        }
+        state.attach_link_events(tx)
+    };
+    let _subscription = LinkSubscription {
+        state,
+        subscriber_id,
+    };
 
-struct SseReader {
-    state: crate::daemon::state::SharedState,
-    subscriber_id: u64,
-    rx: mpsc::Receiver<crate::daemon::proto::DaemonMsg>,
-    frame: Cursor<Vec<u8>>,
-}
+    // `tiny_http`'s response body buffers small chunked writes without a
+    // flush hook, which is hostile to both SSE latency and heartbeat-based
+    // liveness. Its raw writer lets us own the HTTP framing and flush every
+    // snapshot or comment immediately.
+    let mut writer = request.into_writer();
+    writer.write_all(
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache\r\nX-Accel-Buffering: no\r\nConnection: close\r\n\r\n",
+    )?;
+    write_sse_snapshot(&mut writer, &initial)?;
 
-impl SseReader {
-    fn new(
-        state: crate::daemon::state::SharedState,
-        subscriber_id: u64,
-        rx: mpsc::Receiver<crate::daemon::proto::DaemonMsg>,
-        initial: crate::daemon::proto::WireSnapshot,
-    ) -> std::io::Result<SseReader> {
-        Ok(SseReader {
-            state,
-            subscriber_id,
-            rx,
-            frame: Cursor::new(sse_frame(&initial)?),
-        })
-    }
-}
-
-impl Read for SseReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        loop {
-            let read = self.frame.read(buf)?;
-            if read != 0 {
-                return Ok(read);
+    loop {
+        match rx.recv_timeout(SSE_HEARTBEAT_INTERVAL) {
+            Ok(crate::daemon::proto::DaemonMsg::ConsentUpdate { snapshot }) => {
+                write_sse_snapshot(&mut writer, &snapshot)?;
             }
-            match self.rx.recv() {
-                Ok(crate::daemon::proto::DaemonMsg::ConsentUpdate { snapshot }) => {
-                    self.frame = Cursor::new(sse_frame(&snapshot)?);
-                }
-                Ok(crate::daemon::proto::DaemonMsg::ConsentExitPlease) | Err(_) => return Ok(0),
-                Ok(_) => {}
+            Ok(crate::daemon::proto::DaemonMsg::ConsentExitPlease)
+            | Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                writer.write_all(b": keep-alive\n\n")?;
+                writer.flush()?;
             }
+            Ok(_) => {}
         }
     }
 }
 
-impl Drop for SseReader {
+struct LinkSubscription {
+    state: crate::daemon::state::SharedState,
+    subscriber_id: u64,
+}
+
+impl Drop for LinkSubscription {
     fn drop(&mut self) {
         if let Ok(mut state) = self.state.lock() {
             state.detach_link_events(self.subscriber_id);
@@ -243,22 +221,13 @@ impl Drop for SseReader {
     }
 }
 
-fn sse_frame(snapshot: &crate::daemon::proto::WireSnapshot) -> std::io::Result<Vec<u8>> {
+fn write_sse_snapshot(
+    writer: &mut dyn Write,
+    snapshot: &crate::daemon::proto::WireSnapshot,
+) -> std::io::Result<()> {
     let json = serde_json::to_string(snapshot).map_err(std::io::Error::other)?;
-    let mut frame = format!("data: {json}\n\n").into_bytes();
-    // `tiny_http`'s chunked encoder buffers 8 KiB and exposes no flush hook.
-    // A smaller long-lived body would therefore leave both headers and the
-    // first event buffered until the connection ended. An SSE comment is
-    // semantically inert, so pad each state frame just past that boundary:
-    // every update forces the prior encoder buffer onto the socket and the
-    // browser dispatches the `data` event at the blank line before padding.
-    if frame.len() < SSE_CHUNK_FLUSH_BYTES {
-        frame.extend_from_slice(b":");
-        let padding = SSE_CHUNK_FLUSH_BYTES.saturating_sub(frame.len() + 2);
-        frame.resize(frame.len() + padding, b' ');
-        frame.extend_from_slice(b"\n\n");
-    }
-    Ok(frame)
+    writeln!(writer, "data: {json}\n")?;
+    writer.flush()
 }
 
 fn handle_decision(
@@ -290,6 +259,18 @@ fn handle_decision(
         return request.respond(Response::empty(StatusCode(403)));
     };
 
+    let live = state
+        .lock()
+        .map_err(|_| std::io::Error::other("daemon state unavailable"))?
+        .link_request_matches(&payload.request_id, &payload.ask_hash_hex);
+    if !live {
+        return request.respond(Response::empty(StatusCode(409)));
+    }
+
+    // Burn only after proving the signed request still names a live ask.
+    // `resolve_remote` repeats that proof under its own lock acquisition;
+    // if a local decision wins between the two, the error path below retires
+    // the just-created bucket.
     if runtime
         .nonces
         .accept(&payload.request_id, &payload.nonce)
@@ -298,21 +279,23 @@ fn handle_decision(
         return request.respond(Response::empty(StatusCode(409)));
     }
 
-    let resolved = state
-        .lock()
-        .map_err(|_| std::io::Error::other("daemon state unavailable"))?
-        .resolve_remote(
+    let resolved = if let Ok(mut guard) = state.lock() {
+        guard.resolve_remote(
             &payload.request_id,
             &payload.ask_hash_hex,
             &payload.decision,
             device.nickname,
             state,
-        );
+        )
+    } else {
+        let _ = runtime.nonces.retire(&payload.request_id);
+        return Err(std::io::Error::other("daemon state unavailable"));
+    };
+    // Success is terminal too; State also retires while removing the queue
+    // entry so local decisions and withdrawals share the same guarantee.
+    let _ = runtime.nonces.retire(&payload.request_id);
     match resolved {
-        Ok(()) => {
-            let _ = runtime.nonces.retire(&payload.request_id);
-            request.respond(Response::empty(StatusCode(204)))
-        }
+        Ok(()) => request.respond(Response::empty(StatusCode(204))),
         Err(_) => request.respond(Response::empty(StatusCode(409))),
     }
 }

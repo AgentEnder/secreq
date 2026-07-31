@@ -13,9 +13,11 @@ use secreq::link::sig::SignedDecision;
 
 fn start_listener(registry_path: &std::path::Path) -> (secreq::link::lan::Listener, Arc<Pairing>) {
     let pairing = Arc::new(Pairing::new(registry_path));
+    let state = Arc::new(Mutex::new(secreq::daemon::state::State::new()));
     let listener = secreq::link::lan::start(
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         Arc::clone(&pairing),
+        state,
     )
     .expect("start LAN listener");
     (listener, pairing)
@@ -26,7 +28,7 @@ fn start_synced_listener(
     state: secreq::daemon::state::SharedState,
 ) -> (secreq::link::lan::Listener, Arc<Pairing>) {
     let pairing = Arc::new(Pairing::new(registry_path));
-    let listener = secreq::link::lan::start_synced(
+    let listener = secreq::link::lan::start(
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         Arc::clone(&pairing),
         state,
@@ -343,13 +345,31 @@ fn a_burned_nonce_cannot_be_replayed() {
     let (state, _rx, request_id, ask_hash) = queued_state();
     let (listener, _pairing) = start_synced_listener(&path, Arc::clone(&state));
 
-    let stale = signed_decision(&key, &request_id, &"0".repeat(64), "deny", "same");
-    let first = post_decision(listener.local_addr(), &stale);
-    assert!(first.starts_with("HTTP/1.1 409 "), "{first:?}");
+    let decision = signed_decision(&key, &request_id, &ask_hash, "deny", "same");
+    let first = post_decision(listener.local_addr(), &decision);
+    assert!(first.starts_with("HTTP/1.1 204 "), "{first:?}");
     let replay = signed_decision(&key, &request_id, &ask_hash, "deny", "same");
     let second = post_decision(listener.local_addr(), &replay);
     assert!(second.starts_with("HTTP/1.1 409 "), "{second:?}");
-    assert_eq!(state.lock().unwrap().snapshot().entries.len(), 1);
+    assert!(state.lock().unwrap().snapshot().entries.is_empty());
+}
+
+#[test]
+fn a_stale_hash_does_not_allocate_or_burn_nonce_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("devices.json");
+    let key = SigningKey::random(&mut rand::thread_rng());
+    secreq::link::devices::save(&path, &[device(&key, "phone")]).unwrap();
+    let (state, _rx, request_id, ask_hash) = queued_state();
+    let (listener, _pairing) = start_synced_listener(&path, Arc::clone(&state));
+
+    let stale = signed_decision(&key, &request_id, &"0".repeat(64), "deny", "same");
+    let refused = post_decision(listener.local_addr(), &stale);
+    assert!(refused.starts_with("HTTP/1.1 409 "), "{refused:?}");
+
+    let live = signed_decision(&key, &request_id, &ask_hash, "deny", "same");
+    let accepted = post_decision(listener.local_addr(), &live);
+    assert!(accepted.starts_with("HTTP/1.1 204 "), "{accepted:?}");
 }
 
 #[test]
@@ -416,12 +436,46 @@ fn events_streams_a_snapshot_and_drops_the_subscriber_after_disconnect() {
     assert_eq!(state.lock().unwrap().link_subscriber_count(), 1);
 
     drop(client);
-    state.lock().unwrap().show_window();
     for _ in 0..50 {
         if state.lock().unwrap().link_subscriber_count() == 0 {
             return;
         }
-        std::thread::sleep(Duration::from_millis(10));
+        std::thread::sleep(Duration::from_millis(100));
     }
-    panic!("dropped SSE connection remained subscribed after a write");
+    panic!("heartbeat did not reap a dropped SSE connection");
+}
+
+#[test]
+fn events_refuses_connections_above_the_subscriber_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("devices.json");
+    let state = Arc::new(Mutex::new(secreq::daemon::state::State::new()));
+    let (listener, _pairing) = start_synced_listener(&path, Arc::clone(&state));
+    let mut clients = Vec::new();
+
+    for _ in 0..secreq::link::lan::MAX_LINK_SUBSCRIBERS {
+        let mut client = TcpStream::connect(listener.local_addr()).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        client
+            .write_all(b"GET /events HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        let mut response = [0_u8; 512];
+        let count = client.read(&mut response).expect("initial SSE response");
+        assert!(String::from_utf8_lossy(&response[..count]).starts_with("HTTP/1.1 200 "));
+        clients.push(client);
+    }
+    assert_eq!(
+        state.lock().unwrap().link_subscriber_count(),
+        secreq::link::lan::MAX_LINK_SUBSCRIBERS
+    );
+
+    let refused = send(
+        listener.local_addr(),
+        b"GET /events HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    );
+    assert!(refused.starts_with("HTTP/1.1 503 "), "{refused:?}");
+
+    drop(clients);
 }

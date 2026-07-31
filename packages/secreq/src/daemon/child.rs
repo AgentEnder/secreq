@@ -522,7 +522,6 @@ impl eframe::App for ChildApp {
                         .queue
                         .iter()
                         .map(|r| QueueRow {
-                            request_id: r.request_id.clone(),
                             key: r.key.clone(),
                             representative: r.representative.clone(),
                             waiter_count: r.waiter_count,
@@ -530,7 +529,6 @@ impl eframe::App for ChildApp {
                                 .checked_sub(Duration::from_secs(r.first_seen_secs_ago))
                                 .unwrap_or(now),
                             status: r.status,
-                            resolving_since: r.resolving_since.map(|_| now),
                         })
                         .collect(),
                 };

@@ -2013,7 +2013,6 @@ mod tests {
             subject_digest: None,
         };
         QueueRow {
-            request_id: "test-request".to_owned(),
             key: key.clone(),
             representative: Ask {
                 command: vec!["ssh-sign github".to_owned()],
@@ -2034,7 +2033,6 @@ mod tests {
             waiter_count: 1,
             first_seen: std::time::Instant::now(),
             status: RowStatus::Awaiting,
-            resolving_since: None,
         }
     }
 
@@ -2048,7 +2046,6 @@ mod tests {
             subject_digest: None,
         };
         QueueRow {
-            request_id: "test-request".to_owned(),
             key: key.clone(),
             representative: Ask {
                 command: vec!["npm".to_owned(), "publish".to_owned()],
@@ -2067,7 +2064,6 @@ mod tests {
             waiter_count: 1,
             first_seen: std::time::Instant::now(),
             status: RowStatus::Awaiting,
-            resolving_since: None,
         }
     }
 
