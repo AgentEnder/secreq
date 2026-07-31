@@ -22,6 +22,12 @@ function fixture(id: string): WindowScene {
   return layout.variants['macos-dark'];
 }
 
+function fixtureVariant(id: string, variant: string): WindowScene {
+  const path = join(process.cwd(), '..', 'dev-docs', 'ui-screenshots', id, 'layout.json');
+  const layout = JSON.parse(readFileSync(path, 'utf8')) as LayoutFile;
+  return layout.variants[variant];
+}
+
 describe('buildScene', () => {
   it('draws the committed rules paths', () => {
     const scene = buildScene(fixture('09-rules-tab-list'));
@@ -35,6 +41,16 @@ describe('buildScene', () => {
 
     expect(scene.querySelectorAll('linearGradient')).toHaveLength(1);
     expect(scene.querySelector('rect[fill^="url("]')).not.toBeNull();
+  });
+
+  it('keeps the light prompt fade hue while its transparent stop reaches zero opacity', () => {
+    const scene = buildScene(fixtureVariant('28-prompt-many-secrets', 'macos-light'));
+    const stops = [...scene.querySelectorAll('linearGradient stop')];
+
+    expect(stops).toHaveLength(2);
+    expect(stops[0].getAttribute('stop-opacity')).toBe('0');
+    expect(stops[0].getAttribute('stop-color')).toBe(stops[1].getAttribute('stop-color'));
+    expect(stops[1].getAttribute('stop-opacity')).toBe(String(128 / 255));
   });
 
   it('recognises an equivalent fan-triangulated fade quad', () => {
@@ -82,6 +98,51 @@ describe('buildScene', () => {
 });
 
 describe('<secreq-window> lifecycle', () => {
+  it('returns no viewer scene before geometry lands, then builds a fresh copy', async () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    Object.defineProperty(document, 'fonts', {
+      configurable: true,
+      value: { load: vi.fn().mockResolvedValue([]) },
+    });
+    let resolveGeometry: ((scene: WindowScene) => void) | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockReturnValue(
+        new Promise((resolve) => {
+          resolveGeometry = (scene) =>
+            resolve({
+              ok: true,
+              json: vi.fn().mockResolvedValue(scene),
+            });
+        }),
+      ),
+    );
+
+    const host = document.createElement('secreq-window') as HTMLElement & {
+      sceneForViewer(): { element: HTMLElement; size: [number, number] } | null;
+    };
+    host.setAttribute('shot', 'viewer-copy-test');
+    host.setAttribute('variant', 'macos-dark');
+    host.innerHTML =
+      '<button class="shot-zoom"><img class="shot-img" src="/ui/viewer-copy-test.png" ' +
+      'data-fallback="true"></button>';
+    document.body.appendChild(host);
+
+    expect(host.sceneForViewer()).toBeNull();
+    resolveGeometry?.({ size: [10, 10], shapes: [] } as WindowScene);
+    await vi.waitFor(() => expect(host.querySelector('.sqw-scene')).not.toBeNull());
+
+    const viewer = host.sceneForViewer();
+    expect(viewer?.element).not.toBe(host.querySelector('.sqw-scene'));
+    expect(host.querySelector('.sqw-scene')).not.toBeNull();
+  });
+
   it('observes its existing stage again after reconnecting', async () => {
     const observers: Array<{ disconnect: ReturnType<typeof vi.fn> }> = [];
     vi.stubGlobal(

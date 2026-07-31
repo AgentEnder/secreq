@@ -548,16 +548,11 @@ function meshQuad(shape: MeshShape) {
     )
   )
     return null;
-  const signatures = triangles.map((triangle) => [...triangle].sort((a, b) => a - b).join(','));
-  if (signatures[0] === signatures[1]) return null;
   const shared = triangles[0].filter((index) => triangles[1].includes(index));
   const sharesDiagonal = [
     [shape.vertices.indexOf(lt), shape.vertices.indexOf(rb)],
     [shape.vertices.indexOf(rt), shape.vertices.indexOf(lb)],
-  ].some(
-    (diagonal) =>
-      diagonal.length === shared.length && diagonal.every((index) => shared.includes(index)),
-  );
+  ].some((diagonal) => diagonal.every((index) => shared.includes(index)));
   if (!sharesDiagonal) return null;
 
   // Only a shared diagonal tiles all four corners. A shared outer edge leaves
@@ -589,12 +584,28 @@ function svgGradient(layer: SVGSVGElement, from: Rgba, to: Rgba, horizontal: boo
     ['1', to],
   ] as const) {
     const stop = document.createElementNS(SVG_NS, 'stop');
+    const alpha = Number.parseInt(color.slice(7, 9), 16);
+    // SVG interpolates stop colour and opacity independently. A transparent
+    // stop therefore has to keep the neighbouring hue: the literal
+    // `transparent` is transparent black and produces a dark smear halfway
+    // through a light epaint alpha fade.
+    const hue = alpha === 0 ? (color === from ? to : from) : color;
     stop.setAttribute('offset', offset);
-    stop.setAttribute('stop-color', cssColor(color));
+    stop.setAttribute('stop-color', opaqueCssColor(hue));
+    stop.setAttribute('stop-opacity', String(alpha / 255));
     gradient.appendChild(stop);
   }
   defs.appendChild(gradient);
   return `url(#${id})`;
+}
+
+/** Straight, opaque CSS colour for an epaint premultiplied RGBA value. */
+function opaqueCssColor(color: Rgba): string {
+  const alpha = Number.parseInt(color.slice(7, 9), 16);
+  if (alpha === 0) return color.slice(0, 7);
+  const straight = (at: number) =>
+    Math.min(255, Math.round((Number.parseInt(color.slice(at, at + 2), 16) * 255) / alpha));
+  return `rgb(${straight(1)}, ${straight(3)}, ${straight(5)})`;
 }
 
 function drawMeshTriangles(layer: SVGSVGElement, shape: MeshShape) {

@@ -63,6 +63,33 @@ describe('<ShotLightbox>', () => {
     expect(stage?.getAttribute('aria-label')).toBe('Audit manager window');
     expect(stage?.style.maxWidth).toBe('100%');
     expect(element.style.getPropertyValue('--sqw-scale')).not.toBe('0');
+    expect(stage?.firstElementChild).toBe(element);
+    expect(document.querySelector('dialog img')).toBeNull();
+  });
+
+  it('keeps the viewer open when a text-selection drag ends on the dialog margin', async () => {
+    const source = document.createElement('img');
+    source.src = '/ui/manager.png';
+    document.body.appendChild(source);
+    const element = document.createElement('div');
+
+    await act(async () => {
+      document.dispatchEvent(
+        new CustomEvent<ShotOpenDetail>(SHOT_OPEN_EVENT, {
+          detail: { source, caption: '', scene: { element, size: [900, 600] } },
+        }),
+      );
+    });
+
+    const dialog = document.querySelector('dialog');
+    dialog?.dispatchEvent(
+      new MouseEvent('pointerdown', { bubbles: true, clientX: 20, clientY: 20 }),
+    );
+    await act(async () => {
+      dialog?.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 80, clientY: 20 }));
+    });
+
+    expect(document.querySelector('dialog figure')).not.toBeNull();
   });
 
   it('morphs back to the exact source when two figures share a render', async () => {
@@ -81,6 +108,8 @@ describe('<ShotLightbox>', () => {
         }),
       );
     });
+    expect(document.querySelector('dialog img')).not.toBeNull();
+    expect(document.querySelector('.sqw-lightbox-stage')).toBeNull();
     await act(async () => {
       document
         .querySelector('dialog')

@@ -14,7 +14,7 @@
  * listens once at the root, and neither knows how the other is built.
  */
 
-import { SHOT_OPEN_EVENT, type ShotOpenDetail, type ShotScene } from './shot-events';
+import { DRAG_SLOP_PX, SHOT_OPEN_EVENT, type ShotOpenDetail, type ShotScene } from './shot-events';
 
 interface SceneHost extends HTMLElement {
   sceneForViewer(): ShotScene | null;
@@ -25,8 +25,6 @@ interface SceneHost extends HTMLElement {
  * click. A drag across a line of the window's text covers far more than
  * this; a deliberate click covers a pixel or two of hand jitter.
  */
-const DRAG_SLOP_PX = 4;
-
 export class SecreqShot extends HTMLElement {
   /** Where the pointer went down, when it went down on this figure. */
   #pressedAt: { x: number; y: number } | null = null;

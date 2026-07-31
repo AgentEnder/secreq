@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { SHOT_OPEN_EVENT, type ShotOpenDetail, type ShotScene } from './shot-events';
+import { DRAG_SLOP_PX, SHOT_OPEN_EVENT, type ShotOpenDetail, type ShotScene } from './shot-events';
 
 /**
  * The full-size viewer, rendered once for the whole app.
@@ -99,6 +99,7 @@ function morphSource(render: HTMLImageElement): HTMLElement {
 export function ShotLightbox() {
   const [shot, setShot] = useState<Shot | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const pressedAt = useRef<{ x: number; y: number } | null>(null);
   const [mounted, setMounted] = useState(false);
 
   // Portals need a DOM target, which does not exist during pre-render.
@@ -155,8 +156,18 @@ export function ShotLightbox() {
     <dialog
       ref={dialogRef}
       className="shot-lightbox"
+      onPointerDown={(event) => {
+        pressedAt.current = { x: event.clientX, y: event.clientY };
+      }}
       // Anything outside the figure is backdrop.
       onClick={(event) => {
+        const pressed = pressedAt.current;
+        pressedAt.current = null;
+        if (
+          pressed &&
+          Math.hypot(event.clientX - pressed.x, event.clientY - pressed.y) > DRAG_SLOP_PX
+        )
+          return;
         if (!(event.target as HTMLElement).closest('figure')) close();
       }}
       // Escape: take it over so closing always runs the same path.
