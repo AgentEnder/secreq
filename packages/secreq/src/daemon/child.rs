@@ -121,6 +121,7 @@ pub fn run(kind: WindowKind, always_on_top: bool) -> Result<i32> {
     let snapshot: Arc<Mutex<WireSnapshot>> = Arc::new(Mutex::new(WireSnapshot {
         queue: Vec::new(),
         viewer_mode: false,
+        link_error: None,
         rules: Vec::new(),
         refusals: crate::rules::RuleRefusals::default(),
     }));

@@ -75,6 +75,15 @@ const STEP_TIMEOUT: Duration = Duration::from_secs(20);
 /// cliclack redraw is a single burst, so this only has to outlast a write.
 const SETTLE: Duration = Duration::from_millis(120);
 
+#[test]
+fn pairing_qr_limit_matches_the_recording_pty_width() {
+    assert_eq!(
+        secreq::link::qr::TRANSCRIPT_PTY_WIDTH,
+        usize::from(COLS),
+        "the pairing QR guard must move with the transcript pty"
+    );
+}
+
 // ── The recording model ───────────────────────────────────────────────────
 
 /// One styled run of characters on a line: the text, plus the attributes
@@ -1022,6 +1031,7 @@ fn serve_stub(
                 respond.recv().expect("recorder never answered the ask");
                 DaemonMsg::Decision {
                     decision,
+                    deciding_device: None,
                     // Answer exactly what was asked for, rather than a
                     // hardcoded name: the reply then stays correct if the
                     // fixture's wrap ever declares a different variable.

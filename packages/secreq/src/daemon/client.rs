@@ -60,6 +60,9 @@ const RESTART_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct ConsentOutcome {
     pub decision: Decision,
     pub secrets: HashMap<String, String>,
+    /// Linked device that made the decision; absent for local and automatic
+    /// paths.
+    pub deciding_device: Option<String>,
     pub rule_id: Option<String>,
     pub rule_name: Option<String>,
     pub reason: Option<String>,
@@ -82,6 +85,7 @@ impl ConsentOutcome {
         ConsentOutcome {
             decision: Decision::Deny,
             secrets: HashMap::new(),
+            deciding_device: None,
             rule_id: None,
             rule_name: None,
             reason: None,
@@ -122,6 +126,7 @@ pub fn request_consent(ask: Ask, show_indicator: bool) -> Result<ConsentOutcome>
         DaemonMsg::Decision {
             decision,
             secrets,
+            deciding_device,
             rule_id,
             rule_name,
             reason,
@@ -130,6 +135,7 @@ pub fn request_consent(ask: Ask, show_indicator: bool) -> Result<ConsentOutcome>
         } => Ok(ConsentOutcome {
             decision,
             secrets,
+            deciding_device,
             rule_id,
             rule_name,
             reason,

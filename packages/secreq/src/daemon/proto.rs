@@ -1023,6 +1023,10 @@ pub enum DaemonMsg {
     Decision {
         decision: Decision,
         secrets: HashMap<String, String>,
+        /// Nickname of the linked device that made this decision. `None` for
+        /// the local prompt and every automatic decision path.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        deciding_device: Option<String>,
         #[serde(default)]
         rule_id: Option<String>,
         #[serde(default)]
@@ -1175,6 +1179,7 @@ impl std::fmt::Debug for DaemonMsg {
             DaemonMsg::Decision {
                 decision,
                 secrets,
+                deciding_device,
                 rule_id,
                 rule_name,
                 reason,
@@ -1184,6 +1189,7 @@ impl std::fmt::Debug for DaemonMsg {
                 .debug_struct("Decision")
                 .field("decision", decision)
                 .field("secrets", &RedactedNames(secrets))
+                .field("deciding_device", deciding_device)
                 .field("rule_id", rule_id)
                 .field("rule_name", rule_name)
                 .field("reason", reason)
@@ -1230,6 +1236,11 @@ impl std::fmt::Debug for RedactedNames<'_> {
 pub struct WireSnapshot {
     pub queue: Vec<WireQueueRow>,
     pub viewer_mode: bool,
+    /// A just-failed linked-device resolution. Published for one snapshot
+    /// transition, then cleared. The message is always the top-level error;
+    /// provider stderr in the source chain never crosses the LAN transport.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_error: Option<LinkResolveError>,
     /// Current auto-rules ruleset. Pushed alongside queue snapshots so
     /// the Rules tab in the consent window stays in sync without an
     /// explicit `ListRules` round-trip on every state change.
@@ -1261,6 +1272,13 @@ pub enum RowStatus {
 /// offset for "N s ago" labels (re-elapsed against its own clock).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WireQueueRow {
+    /// Daemon-lifetime identity signed by linked devices. Unlike the dedupe
+    /// key it changes when an equivalent ask is submitted later.
+    #[serde(default)]
+    pub request_id: String,
+    /// Hash of exactly the display-facing fields in `representative`.
+    #[serde(default)]
+    pub ask_hash_hex: String,
     pub key: DedupeKey,
     pub representative: Ask,
     pub waiter_count: usize,
@@ -1270,6 +1288,17 @@ pub struct WireQueueRow {
     /// snapshot treats unknown rows as the common Awaiting case.
     #[serde(default)]
     pub status: RowStatus,
+    /// Unix milliseconds when provider resolution began. Absent while the
+    /// row is queued; clients own elapsed-time thresholds and rendering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolving_since: Option<u64>,
+}
+
+/// A resolution failure safe to publish on the cleartext LAN transport.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkResolveError {
+    pub request_id: String,
+    pub message: String,
 }
 
 #[cfg(test)]
@@ -1367,6 +1396,7 @@ mod debug_redaction_tests {
             DaemonMsg::Decision {
                 decision: Decision::Approve,
                 secrets,
+                deciding_device: None,
                 rule_id: None,
                 rule_name: None,
                 reason: None,

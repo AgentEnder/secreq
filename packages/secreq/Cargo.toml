@@ -84,6 +84,11 @@ ssh-key = { version = "0.6", features = ["ed25519", "rsa", "ecdsa", "p256"] }
 # Already in the tree via `ssh-key`'s `p256` feature, so the direct dependency
 # costs nothing extra to build.
 p256 = { version = "0.13", features = ["ecdsa"] }
+# Constant-time comparison for `secreq link` enrollment tokens. Token guesses
+# arrive over the LAN, so equality must not expose how much of a candidate
+# matched. Already in the tree through the P-256 crypto stack, so taking it
+# directly costs nothing extra to build.
+subtle = "2.6"
 ssh-encoding = "0.2"
 # Needed only to honor the SSH_AGENT_RSA_SHA2_256/512 SIGN_REQUEST flags:
 # ssh-key 0.6's public Signer impl for RSA hardcodes SHA-512, so we drop to
@@ -130,6 +135,11 @@ console = "0.15"
 # and chunked-encoding edge cases are exactly the class of bug a security tool
 # should not be writing from scratch for four endpoints.
 tiny_http = "0.12"
+
+# Renders the `secreq link` pairing QR as Unicode half-blocks in the terminal.
+# No image output, no external `qrencode` binary — the QR has to appear in the
+# recorded CLI transcript, which is text.
+qrcode = { version = "0.14", default-features = false }
 
 # Derives `docs/wraps.schema.json` and `docs/auto-rules.schema.json` from the
 # types that read those files, so a field cannot reach disk without reaching

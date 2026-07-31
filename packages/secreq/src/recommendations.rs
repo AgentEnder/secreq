@@ -537,6 +537,7 @@ mod tests {
             callers_truncated: Some(false),
             secrets: secrets.iter().map(|s| (*s).to_owned()).collect(),
             decision: decision.to_owned(),
+            deciding_device: None,
             reason: None,
             rule_id: None,
             approvers: Default::default(),

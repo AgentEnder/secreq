@@ -298,7 +298,8 @@ pub fn read(refs: &[String], config_path: Option<&Path>) -> Result<i32> {
     let _ = audit::append(
         &AuditEntry::new("read", &command, &chain, &seen, outcome.decision)
             .with_reason(outcome.reason.clone())
-            .with_rule_id(outcome.rule_id.clone()),
+            .with_rule_id(outcome.rule_id.clone())
+            .with_deciding_device(outcome.deciding_device.clone()),
     );
 
     if !outcome.decision.approved() {

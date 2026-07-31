@@ -114,7 +114,8 @@ pub fn wrap_run(
             &AuditEntry::new(binary, args, &chain, &env_names, outcome.decision)
                 .with_reason(outcome.reason.clone())
                 .with_rule_id(outcome.rule_id.clone())
-                .with_approvers(outcome.approvers.clone()),
+                .with_approvers(outcome.approvers.clone())
+                .with_deciding_device(outcome.deciding_device.clone()),
         );
         if !outcome.decision.approved() {
             // Auto-deny: surface the rule's configured message (or a
@@ -366,7 +367,8 @@ pub fn run(
             &AuditEntry::new("run", command, &chain, &names, outcome.decision)
                 .with_reason(outcome.reason.clone())
                 .with_rule_id(outcome.rule_id.clone())
-                .with_approvers(outcome.approvers.clone()),
+                .with_approvers(outcome.approvers.clone())
+                .with_deciding_device(outcome.deciding_device.clone()),
         );
         if !outcome.decision.approved() {
             // Mirror `wrap_run`'s deny messaging.
