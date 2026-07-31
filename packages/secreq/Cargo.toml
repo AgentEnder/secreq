@@ -131,6 +131,11 @@ console = "0.15"
 # should not be writing from scratch for four endpoints.
 tiny_http = "0.12"
 
+# Renders the `secreq link` pairing QR as Unicode half-blocks in the terminal.
+# No image output, no external `qrencode` binary — the QR has to appear in the
+# recorded CLI transcript, which is text.
+qrcode = { version = "0.14", default-features = false }
+
 # Derives `docs/wraps.schema.json` and `docs/auto-rules.schema.json` from the
 # types that read those files, so a field cannot reach disk without reaching
 # the published schema. See `src/schema.rs`.
