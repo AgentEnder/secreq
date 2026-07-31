@@ -30,11 +30,13 @@ use super::{prompt, resolve_config_path, which_on_path};
 pub struct WrapArgs {
     pub binary: String,
     pub reason: Option<String>,
-    pub envs: Vec<String>, // each: "ENV_NAME=secret://provider/locator"
+    pub secrets: Vec<String>, // each: a top-level [secrets.<NAME>] key
+    pub envs: Vec<String>,    // each: "ENV_NAME=secret://provider/locator"
 }
 
 /// `secreq wrap <BINARY>` — add (or update) a wrap entry and install the
-/// shim. Interactive when `envs` is empty; non-interactive otherwise.
+/// shim. Interactive when both injection flag lists are empty; non-interactive
+/// otherwise.
 pub fn wrap(args: WrapArgs, config_path: Option<&Path>) -> Result<i32> {
     let config_path = resolve_config_path(config_path)?;
     let mut config = if config_path.is_file() {
@@ -62,33 +64,35 @@ pub fn wrap(args: WrapArgs, config_path: Option<&Path>) -> Result<i32> {
     // Interactive flow gets a banner; non-interactive (flags supplied, or
     // no terminal to prompt on) stays quiet so it composes cleanly with
     // scripts.
-    let interactive = args.envs.is_empty() && std::io::stdin().is_terminal();
+    let interactive =
+        args.secrets.is_empty() && args.envs.is_empty() && std::io::stdin().is_terminal();
     if interactive {
         crate::term::soft_reset();
         cliclack::intro(format!("Wrap `{}`", args.binary))?;
     }
 
-    // Build the env map. Three paths:
-    //  - `--env` flags supplied → parse them (non-interactive).
+    // Build both injection forms. Three paths:
+    //  - `--secret` / `--env` flags supplied → parse them (non-interactive).
     //  - interactive terminal   → ask gate-only vs inject-secrets.
     //  - no flags, no terminal  → gate-only. There's nothing to inject and
-    //    nothing to prompt on, so absence of `--env` means "just gate it".
-    // An empty env map is a *gate-only* wrap: consent is still required,
-    // but nothing is resolved or injected. Used to gate tools like `op`.
-    let env: BTreeMap<String, String> = if !args.envs.is_empty() {
-        parse_env_assignments(&args.envs)?
-    } else if interactive {
-        if prompt::wrap_is_gate_only()? {
-            BTreeMap::new()
+    //    nothing to prompt on, so absence of either flag means "just gate it".
+    // Empty injection forms make a *gate-only* wrap: consent is still
+    // required, but nothing is resolved or injected. Used for tools like `op`.
+    let (env_secrets, env): (Vec<String>, BTreeMap<String, String>) =
+        if !args.secrets.is_empty() || !args.envs.is_empty() {
+            (args.secrets.clone(), parse_env_assignments(&args.envs)?)
+        } else if interactive {
+            if prompt::wrap_is_gate_only()? {
+                (Vec::new(), BTreeMap::new())
+            } else {
+                // Suggest declarations and references already present in the
+                // config, computed before the new wrap is inserted.
+                let known = config.known_secret_refs();
+                prompt::interactive_wrap_envs(&config.providers, &known)?
+            }
         } else {
-            // Suggest secrets already referenced by other wraps — computed
-            // before the new wrap is inserted, so it only offers prior work.
-            let known = config.known_secret_refs();
-            prompt::interactive_wrap_envs(&config.providers, &known)?
-        }
-    } else {
-        BTreeMap::new()
-    };
+            (Vec::new(), BTreeMap::new())
+        };
 
     let reason = args.reason.or_else(|| {
         if interactive {
@@ -102,10 +106,11 @@ pub fn wrap(args: WrapArgs, config_path: Option<&Path>) -> Result<i32> {
     let wrap = Wrap {
         name: args.binary.clone(),
         reason,
+        env_secrets,
         env,
     };
-    // An empty env means we created a gate-only wrap.
-    let gate_only = wrap.env.is_empty();
+    // No injection through either form means we created a gate-only wrap.
+    let gate_only = wrap.is_gate_only();
 
     // Only this wrap is written. The built-ins merged in above were for the
     // picker's benefit and never reach the file, because nothing asks to write
@@ -200,23 +205,20 @@ pub fn wraps_list(config_path: Option<&Path>) -> Result<i32> {
             format!(" — {reason}")
         };
         println!("{}{}", wrap.name, reason_suffix);
-        for (name, ref_str) in &wrap.env {
+        for (name, resolved) in config.wrap_refs(wrap)? {
             // Render the provider (and the declaration it came from) but
             // never the value.
-            let summary = match config.resolve_ref(ref_str) {
-                Ok(resolved) => match &resolved.declared_as {
-                    Some(declared) => format!(
-                        "{name} ({declared} → {}, ttl {})",
-                        resolved.reference.provider,
-                        resolved.ttl.label()
-                    ),
-                    None => format!(
-                        "{name} ({}, ttl {})",
-                        resolved.reference.provider,
-                        resolved.ttl.label()
-                    ),
-                },
-                Err(_) => format!("{name} (unresolvable reference)"),
+            let summary = match &resolved.declared_as {
+                Some(declared) => format!(
+                    "{name} ({declared} → {}, ttl {})",
+                    resolved.reference.provider,
+                    resolved.ttl.label()
+                ),
+                None => format!(
+                    "{name} ({}, ttl {})",
+                    resolved.reference.provider,
+                    resolved.ttl.label()
+                ),
             };
             println!("    {summary}");
         }
@@ -267,21 +269,20 @@ pub fn check(config_path: Option<&Path>) -> Result<i32> {
     let mut problems = 0;
     println!("Config: {}", config_path.display());
 
-    // Every env entry must reference a known provider.
+    // Every injected entry, through either form, must reference a known
+    // provider.
     for wrap in config.wraps.values() {
-        for (env_name, ref_str) in &wrap.env {
-            let reference = match config.resolve_ref(ref_str) {
-                Ok(resolved) => resolved.reference,
-                Err(err) => {
-                    println!("  ✗ {}.env.{}: {err:#}", wrap.name, env_name);
-                    problems += 1;
-                    continue;
-                }
-            };
+        for (env_name, resolved) in config.wrap_refs(wrap)? {
+            let reference = resolved.reference;
             if !config.providers.contains_key(&reference.provider) {
+                let source = if wrap.env_secrets.contains(&env_name) {
+                    "env_secrets"
+                } else {
+                    "env"
+                };
                 println!(
-                    "  ✗ {}.env.{}: unknown provider scheme `{}`",
-                    wrap.name, env_name, reference.provider
+                    "  ✗ {}.{}.{}: unknown provider scheme `{}`",
+                    wrap.name, source, env_name, reference.provider
                 );
                 problems += 1;
             }
@@ -385,12 +386,15 @@ pub fn doctor(config_path: Option<&Path>) -> Result<i32> {
     }
 
     // 3. Provider CLIs.
-    let used: std::collections::BTreeSet<String> = config
-        .wraps
-        .values()
-        .flat_map(|w| w.env.values())
-        .filter_map(|v| config.resolve_ref(v).ok().map(|r| r.reference.provider))
-        .collect();
+    let mut used = std::collections::BTreeSet::new();
+    for wrap in config.wraps.values() {
+        used.extend(
+            config
+                .wrap_refs(wrap)?
+                .into_iter()
+                .map(|(_, resolved)| resolved.reference.provider),
+        );
+    }
 
     println!("\nProvider CLIs (used by a wrap):");
     if used.is_empty() {
@@ -659,6 +663,7 @@ GITHUB_TOKEN = \"secret://github_token\"
             &[ConfigEdit::UpsertWrap(Wrap {
                 name: "aws".to_owned(),
                 reason: None,
+                env_secrets: Vec::new(),
                 env: std::iter::once(("AWS_KEY".to_owned(), "secret://op/Work/AWS/k".to_owned()))
                     .collect(),
             })],
@@ -704,12 +709,14 @@ GITHUB_TOKEN = \"secret://github_token\"
                 ConfigEdit::UpsertWrap(Wrap {
                     name: "gh".to_owned(),
                     reason: None,
+                    env_secrets: Vec::new(),
                     env: std::iter::once(("GH_TOKEN".to_owned(), "secret://op/x/y".to_owned()))
                         .collect(),
                 }),
                 ConfigEdit::UpsertWrap(Wrap {
                     name: "op".to_owned(),
                     reason: None,
+                    env_secrets: Vec::new(),
                     env: BTreeMap::new(),
                 }),
             ],
@@ -761,6 +768,7 @@ GITHUB_TOKEN = \"secret://op/Personal/GitHub/token\"
             &[ConfigEdit::UpsertWrap(Wrap {
                 name: "aws".to_owned(),
                 reason: None,
+                env_secrets: Vec::new(),
                 env: std::iter::once(("AWS_KEY".to_owned(), "secret://op/Work/AWS/k".to_owned()))
                     .collect(),
             })],
@@ -817,6 +825,7 @@ GITHUB_TOKEN = \"secret://op/Personal/GitHub/token\"
             &[ConfigEdit::UpsertWrap(Wrap {
                 name: "gh".to_owned(),
                 reason: Some("GitHub API access".to_owned()),
+                env_secrets: Vec::new(),
                 env: std::iter::once(("GH_TOKEN".to_owned(), "secret://op/x/y".to_owned()))
                     .collect(),
             })],
@@ -883,6 +892,7 @@ private_key = \"secret://op/Private/GitHub/private key\"
             &[ConfigEdit::UpsertWrap(Wrap {
                 name: "gh".to_owned(),
                 reason: None,
+                env_secrets: Vec::new(),
                 env: BTreeMap::new(),
             })],
         )
@@ -930,6 +940,7 @@ private_key = \"secret://op/Private/GitHub/private key\"
             &[ConfigEdit::UpsertWrap(Wrap {
                 name: "gh".to_owned(),
                 reason: Some("new".to_owned()),
+                env_secrets: Vec::new(),
                 env: BTreeMap::new(),
             })],
         )

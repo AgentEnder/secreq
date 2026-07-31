@@ -198,7 +198,7 @@
     },
     "Wrap": {
       "additionalProperties": false,
-      "description": "One per-binary wrap. `env` is optional: a wrap with no env entries is *gate-only* — consent is required before the binary runs, but nothing is injected (used to gate tools like `op` that have no secret to pass). Everything else is metadata.",
+      "description": "One per-binary wrap. `env_secrets` and `env` are optional: a wrap with neither is *gate-only* — consent is required before the binary runs, but nothing is injected (used to gate tools like `op` that have no secret to pass). Everything else is metadata.",
       "properties": {
         "env": {
           "additionalProperties": {
@@ -206,8 +206,15 @@
             "pattern": "^secret://[^/]+(/.+)?$",
             "type": "string"
           },
-          "description": "Environment variables to inject. Each value is a `secret://provider/locator` reference; resolution happens at invocation time. Omit (or leave empty) for a gate-only wrap.",
+          "description": "Environment variables to inject. Each value is a `secret://provider/locator` reference; resolution happens at invocation time. Use this form to inject a declaration under a different name or to carry an inline reference. Omit (along with `env_secrets`) for a gate-only wrap.",
           "type": "object"
+        },
+        "env_secrets": {
+          "description": "Secret declaration names to inject as environment variables under those same names. Each entry must name a top-level `[secrets.<name>]`; use `env` when the environment variable needs a different name or the reference is inline.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "reason": {
           "description": "Rationale shown in the consent prompt when this wrap is invoked.",

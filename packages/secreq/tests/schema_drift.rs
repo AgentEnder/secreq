@@ -240,7 +240,8 @@ wait_indicator = false
 
 [wraps.gh]
 reason = "GitHub API access"
-env.GITHUB_TOKEN = "secret://op/Personal/GitHub/token"
+env_secrets = ["GITHUB_TOKEN"]
+env.INLINE_TOKEN = "secret://op/Personal/GitHub/token"
 env.GH_TOKEN = "secret://declared_with_ttl"
 env.GH_ALT = "secret://declared_without_ttl"
 
@@ -248,6 +249,9 @@ env.GH_ALT = "secret://declared_without_ttl"
 [wraps.op]
 
 # Both spellings of a declaration: with an explicit `ttl` and without.
+[secrets.GITHUB_TOKEN]
+ref = "secret://op/Personal/GitHub/token"
+
 [secrets.declared_with_ttl]
 ref = "secret://op/Personal/GitHub/other"
 ttl = "15m"

@@ -74,8 +74,11 @@ enum Command {
     Wrap {
         /// The binary name to wrap, e.g. `gh`.
         binary: String,
-        /// `--env NAME=secret://provider/locator`. Repeatable. If none given,
-        /// runs the interactive flow.
+        /// Inject a declared secret under its own name. Repeatable.
+        #[arg(long = "secret", value_name = "NAME")]
+        secrets: Vec<String>,
+        /// `--env NAME=secret://provider/locator`. Repeatable. When neither
+        /// `--env` nor `--secret` is given, runs the interactive flow.
         #[arg(long = "env", value_name = "NAME=REF")]
         envs: Vec<String>,
         /// Reason to show in the consent prompt.
@@ -784,12 +787,14 @@ pub fn run() -> i32 {
         Some(Command::Init { shim_dir }) => commands::init(config, shim_dir),
         Some(Command::Wrap {
             binary,
+            secrets,
             envs,
             reason,
         }) => commands::wrap(
             WrapArgs {
                 binary,
                 reason,
+                secrets,
                 envs,
             },
             config,

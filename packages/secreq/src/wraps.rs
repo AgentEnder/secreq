@@ -7,13 +7,13 @@
 //! ```toml
 //! shim_dir = "~/.secreq/shims"       # set by `secreq init`
 //!
-//! [secrets.github_token]             # declare once, reference by name
+//! [secrets.GITHUB_TOKEN]             # declare once, inject by name
 //! ref = "secret://op/Personal/GitHub Token/credential"
 //! ttl = "15m"
 //!
 //! [wraps.gh]
 //! reason = "GitHub API access"
-//! env.GITHUB_TOKEN = "secret://github_token"
+//! env_secrets = ["GITHUB_TOKEN"]
 //!
 //! [wraps.aws]
 //! reason = "AWS deployments"
@@ -29,7 +29,7 @@
 //! unrecognised one is an error — where the root used to be an open namespace
 //! in which a mistyped `providers` silently became a wrap.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -297,10 +297,10 @@ pub struct SshIdentity {
     pub private_key: Reference,
 }
 
-/// One per-binary wrap. `env` is optional: a wrap with no env entries is
-/// *gate-only* — consent is required before the binary runs, but nothing is
-/// injected (used to gate tools like `op` that have no secret to pass).
-/// Everything else is metadata.
+/// One per-binary wrap. `env_secrets` and `env` are optional: a wrap with
+/// neither is *gate-only* — consent is required before the binary runs, but
+/// nothing is injected (used to gate tools like `op` that have no secret to
+/// pass). Everything else is metadata.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -314,9 +314,17 @@ pub struct Wrap {
     /// Rationale shown in the consent prompt when this wrap is invoked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Secret declaration names to inject as environment variables under
+    /// those same names. Each entry must name a top-level `[secrets.<name>]`;
+    /// use `env` when the environment variable needs a different name or the
+    /// reference is inline.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_secrets: Vec<String>,
     /// Environment variables to inject. Each value is a
     /// `secret://provider/locator` reference; resolution happens at invocation
-    /// time. Omit (or leave empty) for a gate-only wrap.
+    /// time. Use this form to inject a declaration under a different name or
+    /// to carry an inline reference. Omit (along with `env_secrets`) for a
+    /// gate-only wrap.
     //
     // Resolution is deferred to run-time so an unreachable provider doesn't
     // break config loading.
@@ -326,6 +334,22 @@ pub struct Wrap {
         schemars(default, with = "crate::schema::SecretRefMap")
     )]
     pub env: BTreeMap<String, String>,
+}
+
+impl Wrap {
+    /// Whether this wrap gates the command without injecting anything.
+    pub fn is_gate_only(&self) -> bool {
+        self.env_secrets.is_empty() && self.env.is_empty()
+    }
+
+    /// Every environment variable this wrap injects, in resolution order.
+    pub fn env_names(&self) -> Vec<String> {
+        self.env_secrets
+            .iter()
+            .cloned()
+            .chain(self.env.keys().cloned())
+            .collect()
+    }
 }
 
 impl WrapsConfig {
@@ -392,6 +416,35 @@ impl WrapsConfig {
         }
 
         for wrap in self.wraps.values() {
+            let mut seen = BTreeSet::new();
+            for name in &wrap.env_secrets {
+                let location = format!("wraps.{}.env_secrets", wrap.name);
+                if Reference::looks_like_ref(name) || name.contains('/') {
+                    bail!(
+                        "{source}: `{location}` entry `{name}` must be a declaration name, not a \
+                         `secret://…` reference or provider/locator"
+                    );
+                }
+                if !seen.insert(name) {
+                    bail!("{source}: `{location}` contains duplicate declaration name `{name}`");
+                }
+                if !self.secrets.contains_key(name) {
+                    let suggestion = self
+                        .closest_secret_name(name)
+                        .map(|closest| format!("; did you mean `[secrets.{closest}]`?"))
+                        .unwrap_or_default();
+                    bail!(
+                        "{source}: `{location}` entry `{name}` is not a declared secret{suggestion}"
+                    );
+                }
+                if wrap.env.contains_key(name) {
+                    bail!(
+                        "{source}: `wraps.{}` injects `{name}` through both `env_secrets` and `env`; \
+                         remove one instead of relying on precedence",
+                        wrap.name
+                    );
+                }
+            }
             for (env_name, raw) in &wrap.env {
                 self.resolve_ref(raw)
                     .with_context(|| format!("{source}: `wraps.{}.env.{env_name}`", wrap.name))?;
@@ -464,9 +517,18 @@ impl WrapsConfig {
         })
     }
 
-    /// Every `(env name, resolved reference)` pair for one wrap, in `env` order.
+    /// Every `(env name, resolved reference)` pair for one wrap, with
+    /// `env_secrets` in declaration order followed by `env` in map order.
+    /// This is the union consumed by both daemon and client-side resolution,
+    /// so same-provider entries across the two forms still batch together.
     pub fn wrap_refs(&self, wrap: &Wrap) -> Result<Vec<(String, ResolvedRef)>> {
-        let mut refs = Vec::with_capacity(wrap.env.len());
+        let mut refs = Vec::with_capacity(wrap.env_secrets.len() + wrap.env.len());
+        for name in &wrap.env_secrets {
+            let resolved = self
+                .resolve_form(RefForm::Named(name.clone()))
+                .with_context(|| format!("wrap `{}`.env_secrets: `{name}`", wrap.name))?;
+            refs.push((name.clone(), resolved));
+        }
         for (env_name, raw) in &wrap.env {
             let resolved = self
                 .resolve_ref(raw)
@@ -474,6 +536,14 @@ impl WrapsConfig {
             refs.push((env_name.clone(), resolved));
         }
         Ok(refs)
+    }
+
+    /// The declared secret key with the smallest edit distance from `name`.
+    fn closest_secret_name(&self, name: &str) -> Option<&str> {
+        self.secrets
+            .keys()
+            .min_by_key(|candidate| edit_distance(name, candidate))
+            .map(String::as_str)
     }
 
     /// Load from `path`.
@@ -510,17 +580,18 @@ impl WrapsConfig {
         self.wraps.get(name)
     }
 
-    /// The distinct `secret://provider/locator` references already used across
-    /// every wrap's `env` map, sorted. Reuse is common — the same token often
-    /// backs several wrapped binaries — so the interactive `secreq wrap`
-    /// authoring flow offers these as pickable suggestions instead of making
-    /// the user retype (or misremember) a locator they've already wired up.
+    /// The distinct declared and inline references available for reuse,
+    /// sorted. Every declaration is included as `secret://<name>`, along with
+    /// the references already used across wraps. Reuse is common, so the
+    /// interactive `secreq wrap` flow offers these instead of making the user
+    /// retype (or misremember) a locator already in the config.
     ///
     /// Only values that actually look like a `secret://` reference are
     /// collected; a stray non-reference `env` value (there shouldn't be one,
     /// but the type doesn't forbid it) is skipped rather than suggested.
     pub fn known_secret_refs(&self) -> Vec<String> {
         let mut refs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        refs.extend(self.secrets.keys().map(|name| format!("secret://{name}")));
         for wrap in self.wraps.values() {
             for value in wrap.env.values() {
                 if Reference::looks_like_ref(value) {
@@ -541,6 +612,37 @@ impl WrapsConfig {
         }
         self.providers = merged;
     }
+}
+
+/// Character-level Levenshtein distance for declaration-name suggestions.
+fn edit_distance(left: &str, right: &str) -> usize {
+    let right_chars: Vec<char> = right.chars().collect();
+    let mut previous: Vec<usize> = (0..=right_chars.len()).collect();
+    let mut current = Vec::with_capacity(previous.len());
+    for (left_idx, left_char) in left.chars().enumerate() {
+        current.clear();
+        current.push(left_idx + 1);
+        for (right_idx, right_char) in right_chars.iter().enumerate() {
+            let insertion = current
+                .last()
+                .copied()
+                .unwrap_or(usize::MAX)
+                .saturating_add(1);
+            let deletion = previous
+                .get(right_idx + 1)
+                .copied()
+                .unwrap_or(usize::MAX)
+                .saturating_add(1);
+            let substitution = previous
+                .get(right_idx)
+                .copied()
+                .unwrap_or(usize::MAX)
+                .saturating_add(usize::from(left_char != *right_char));
+            current.push(insertion.min(deletion).min(substitution));
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous.last().copied().unwrap_or_default()
 }
 
 /// Expand a leading `~/` in a path string.
@@ -842,6 +944,107 @@ mod tests {
     }
 
     #[test]
+    fn env_secrets_injects_declarations_under_their_own_names() {
+        let c = WrapsConfig::parse(
+            r#"
+            [secrets.GITHUB_TOKEN]
+            ref = "secret://op/Personal/GitHub/token"
+
+            [secrets.GH_HOST]
+            ref = "secret://op/Personal/GitHub/host"
+
+            [wraps.gh]
+            env_secrets = ["GITHUB_TOKEN"]
+            env.GH_HOST = "secret://GH_HOST"
+            "#,
+            "config.toml",
+        )
+        .expect("env_secrets declarations and explicit env refs must compose");
+
+        let refs = c.wrap_refs(c.wrap("gh").unwrap()).unwrap();
+        assert_eq!(
+            refs.iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["GITHUB_TOKEN", "GH_HOST"]
+        );
+        assert_eq!(refs[0].1.declared_as.as_deref(), Some("GITHUB_TOKEN"));
+        assert_eq!(refs[1].1.declared_as.as_deref(), Some("GH_HOST"));
+    }
+
+    #[test]
+    fn env_secrets_rejects_references_and_provider_locators() {
+        for entry in [
+            "secret://GITHUB_TOKEN",
+            "secret://op/Personal/GitHub/token",
+            "op/Personal/GitHub/token",
+        ] {
+            let err = WrapsConfig::parse(
+                &format!(
+                    r#"
+                    [secrets.GITHUB_TOKEN]
+                    ref = "secret://op/Personal/GitHub/token"
+
+                    [wraps.gh]
+                    env_secrets = ["{entry}"]
+                    "#
+                ),
+                "config.toml",
+            )
+            .unwrap_err();
+            let text = format!("{err:#}");
+            assert!(text.contains("wraps.gh.env_secrets"), "{entry}: {text}");
+            assert!(text.contains(entry), "{entry}: {text}");
+            assert!(text.contains("declaration name"), "{entry}: {text}");
+        }
+    }
+
+    #[test]
+    fn env_secrets_unknown_name_suggests_the_closest_declaration() {
+        let err = WrapsConfig::parse(
+            r#"
+            [secrets.GITHUB_TOKEN]
+            ref = "secret://op/Personal/GitHub/token"
+
+            [secrets.AWS_PROFILE]
+            ref = "secret://op/Work/AWS/profile"
+
+            [wraps.gh]
+            env_secrets = ["GITHUB_TOKN"]
+            "#,
+            "config.toml",
+        )
+        .unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("wraps.gh.env_secrets"), "{text}");
+        assert!(text.contains("GITHUB_TOKN"), "{text}");
+        assert!(text.contains("secrets.GITHUB_TOKEN"), "{text}");
+    }
+
+    #[test]
+    fn env_secrets_and_env_may_not_claim_the_same_variable() {
+        let err = WrapsConfig::parse(
+            r#"
+            [secrets.GITHUB_TOKEN]
+            ref = "secret://op/Personal/GitHub/token"
+
+            [wraps.gh]
+            env_secrets = ["GITHUB_TOKEN"]
+            env.GITHUB_TOKEN = "secret://op/Other/token"
+            "#,
+            "config.toml",
+        )
+        .unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("wraps.gh"), "{text}");
+        assert!(text.contains("GITHUB_TOKEN"), "{text}");
+        assert!(
+            text.contains("env_secrets") && text.contains("env"),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn one_declaration_serves_many_wraps() {
         // The reuse half of the feature: declare once, reference from
         // several wraps, and every one of them gets the same reference and
@@ -1074,6 +1277,24 @@ mod tests {
                 "secret://op/other/thing".to_owned(),
                 "secret://tok".to_owned(),
             ]
+        );
+    }
+
+    #[test]
+    fn known_secret_refs_offers_unused_declarations() {
+        let c = WrapsConfig::parse(
+            r#"
+            [secrets.GITHUB_TOKEN]
+            ref = "secret://op/x/y"
+
+            [wraps.gh]
+            "#,
+            "t",
+        )
+        .unwrap();
+        assert_eq!(
+            c.known_secret_refs(),
+            vec!["secret://GITHUB_TOKEN".to_owned()]
         );
     }
 

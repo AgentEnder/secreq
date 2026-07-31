@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result};
 
 use crate::manifest::Provider;
-use crate::reference::Reference;
+use crate::reference::{RefForm, Reference};
 
 /// Prompt for a value with a default. cliclack's `default_input` pre-fills
 /// the line; an empty submission accepts the default unchanged.
@@ -183,18 +183,19 @@ fn prompt_env_var_name() -> Result<String> {
 /// suggestion.
 const DEFINE_NEW_REF: &str = "\0new";
 
-/// Drive the interactive `secreq wrap` env-collection loop: for each env
-/// var, either reuse a `secret://` reference already wired up elsewhere
-/// (`known_refs`) or define a new one (pick a provider, supply a locator);
-/// loop until the user signals they're done.
+/// Drive the interactive `secreq wrap` env-collection loop. A selected
+/// declaration is offered under its own name (`env_secrets`) before falling
+/// back to the explicit env-name form; an inline reference always asks for an
+/// env name. New references still go through provider + locator collection.
 pub(super) fn interactive_wrap_envs(
     providers: &BTreeMap<String, Provider>,
     known_refs: &[String],
-) -> Result<BTreeMap<String, String>> {
+) -> Result<(Vec<String>, BTreeMap<String, String>)> {
     if providers.is_empty() {
         anyhow::bail!("no providers available; declare some in your config first");
     }
 
+    let mut env_secrets = Vec::new();
     let mut env = BTreeMap::new();
     loop {
         // Offer reuse first: the same token often backs several wrapped
@@ -203,8 +204,7 @@ pub(super) fn interactive_wrap_envs(
         let reused = if known_refs.is_empty() {
             None
         } else {
-            let mut sel =
-                cliclack::select::<String>("Reuse a secret already used by another wrap?");
+            let mut sel = cliclack::select::<String>("Use a declared or previously used secret?");
             for r in known_refs {
                 sel = sel.item(r.clone(), r.as_str(), "");
             }
@@ -220,8 +220,26 @@ pub(super) fn interactive_wrap_envs(
         };
 
         if let Some(ref_str) = reused {
-            let env_name = prompt_env_var_name()?;
-            env.insert(env_name, ref_str);
+            let declaration = match Reference::parse_form(&ref_str) {
+                Some(RefForm::Named(name)) => Some(name),
+                _ => None,
+            };
+            if let Some(name) = declaration {
+                let own_name =
+                    cliclack::confirm(format!("Inject under the declaration's own name `{name}`?"))
+                        .initial_value(true)
+                        .interact()
+                        .context("interactive confirm failed")?;
+                if own_name {
+                    env_secrets.push(name);
+                } else {
+                    let env_name = prompt_env_var_name()?;
+                    env.insert(env_name, ref_str);
+                }
+            } else {
+                let env_name = prompt_env_var_name()?;
+                env.insert(env_name, ref_str);
+            }
         } else {
             // cliclack `select<T>` returns the value associated with the
             // chosen item (not an index) — passing the provider name as the
@@ -283,7 +301,7 @@ pub(super) fn interactive_wrap_envs(
             .interact()
             .context("interactive confirm failed")?;
         if !again {
-            return Ok(env);
+            return Ok((env_secrets, env));
         }
     }
 }

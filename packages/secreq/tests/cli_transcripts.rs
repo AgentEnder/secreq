@@ -894,6 +894,30 @@ fn wrap_sandbox() -> (Sandbox, std::path::PathBuf) {
     (sb, bin_dir)
 }
 
+/// A current-format config with one declaration ready for the interactive
+/// wrap flow to inject under its own name.
+fn declared_secret_wrap_sandbox() -> (Sandbox, std::path::PathBuf) {
+    let (sb, bin_dir) = recording_sandbox();
+    std::fs::write(
+        recording_root().join("config.toml"),
+        format!(
+            r#"shim_dir = "{}"
+
+[secrets.GITHUB_TOKEN]
+ref = "secret://op/Personal/GitHub/credential"
+"#,
+            shim_dir().display()
+        ),
+    )
+    .expect("seed recording config");
+    std::fs::write(
+        recording_root().join(".migration-state"),
+        r#"{"migration_level":3}"#,
+    )
+    .expect("mark recording config current");
+    (sb, bin_dir)
+}
+
 /// A fresh recording environment with no secreq config at all — a machine
 /// that has installed the binary and nothing more.
 fn recording_sandbox() -> (Sandbox, std::path::PathBuf) {
@@ -1291,6 +1315,32 @@ fn wrap_interactive_inject_secrets() {
          you go — the locator is resolved against your store before the wrap \
          is written, so a typo fails here rather than the first time you run \
          <code>gh</code>.",
+    ));
+}
+
+/// Selecting a declaration offers the typo-proof form: inject it under the
+/// declaration's own name without asking the user to type that name again.
+#[test]
+#[ignore = "records a docs transcript; run with --ignored"]
+fn wrap_interactive_injects_a_declaration_under_its_own_name() {
+    let (sb, bin_dir) = declared_secret_wrap_sandbox();
+    let mut rec = Recorder::new(spawn_recording(&sb, &bin_dir, &["wrap", "gh"]));
+
+    rec.expect("What should this wrap do?").enter();
+    rec.expect("Use a declared or previously used secret?")
+        .select_item("secret://GITHUB_TOKEN");
+    rec.expect("Inject under the declaration's own name")
+        .enter();
+    rec.expect("Add another env var?").enter();
+    rec.expect("Reason (shown in consent prompt)")
+        .type_line("GitHub API access");
+
+    rec.finish(Transcript::new(
+        "wrap-declared-secret",
+        "secreq wrap gh",
+        "A declared secret can be injected under its own name without typing \
+         the environment variable again. The resulting wrap records \
+         <code>env_secrets = [\"GITHUB_TOKEN\"]</code>.",
     ));
 }
 
