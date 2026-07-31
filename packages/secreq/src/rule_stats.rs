@@ -63,6 +63,9 @@ pub struct RowCounts {
     /// Scoped-agent rows are historical traffic, but never enter the live
     /// rules evaluator and therefore are not in the outcomes denominator.
     pub scoped_agent: usize,
+    /// Other audit events that did not enter the rules evaluator, currently
+    /// `store` decisions. They are history, not replayable asks.
+    pub not_evaluated: usize,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -148,8 +151,10 @@ pub struct Verification {
     pub eligible: usize,
     pub agree: usize,
     pub deleted_rule: usize,
+    pub disabled_rule: usize,
     pub pre_creation: usize,
     pub scoped_agent: usize,
+    pub legacy_ssh_without_rule_id: usize,
     pub missing_rule_id: usize,
     pub disagreements: usize,
     pub failures: Vec<VerificationFailure>,
@@ -253,6 +258,11 @@ pub fn replay_audit(
             if options.verify {
                 verification.scoped_agent += 1;
             }
+            return Ok(());
+        }
+
+        if !entry.rules_were_evaluated() {
+            rows.not_evaluated += 1;
             return Ok(());
         }
 
@@ -515,7 +525,11 @@ fn verify_row(
         return;
     };
     let Some(rule_id) = entry.rule_id.as_deref() else {
-        verification.missing_rule_id += 1;
+        if entry.wrap.starts_with("ssh:") {
+            verification.legacy_ssh_without_rule_id += 1;
+        } else {
+            verification.missing_rule_id += 1;
+        }
         return;
     };
     let Some(rule) = rules_by_id.get(rule_id) else {
@@ -524,6 +538,10 @@ fn verify_row(
     };
     if entry.ts_unix < rule.created_at_unix {
         verification.pre_creation += 1;
+        return;
+    }
+    if !rule.enabled {
+        verification.disabled_rule += 1;
         return;
     }
     verification.eligible += 1;
@@ -919,6 +937,101 @@ mod tests {
             .collect()
         );
         assert!(!json.to_string().contains("fingerprint"));
+    }
+
+    #[test]
+    fn verify_classifies_history_for_a_disabled_rule_without_comparing_it() {
+        let mut rule = declarative("paused", "gh", RuleDecision::Approve, &["GITHUB_TOKEN"]);
+        rule.enabled = false;
+        let loaded = LoadedRules {
+            rules: vec![rule],
+            ..LoadedRules::default()
+        };
+        let entry = row(
+            20,
+            "gh",
+            &["api", "/user"],
+            &["GITHUB_TOKEN"],
+            "approve+auto",
+            Some("paused"),
+        );
+        let mut log = tempfile::NamedTempFile::new().expect("audit fixture");
+        writeln!(
+            log,
+            "{}",
+            serde_json::to_string(&entry).expect("serialize row")
+        )
+        .expect("write row");
+
+        let report = replay_audit(
+            log.path(),
+            &loaded,
+            Vec::new(),
+            &ReplayOptions {
+                verify: true,
+                ..ReplayOptions::default()
+            },
+        )
+        .expect("replay fixture");
+
+        assert_eq!(report.verification.eligible, 0);
+        assert_eq!(report.verification.disagreements, 0);
+        assert_eq!(report.verification.disabled_rule, 1);
+    }
+
+    #[test]
+    fn store_history_is_not_replayed_as_an_ask() {
+        let loaded = LoadedRules::default();
+        let entry = row(
+            20,
+            "store",
+            &["npm", "publish"],
+            &["NPM_TOKEN"],
+            "approve",
+            None,
+        );
+        let mut log = tempfile::NamedTempFile::new().expect("audit fixture");
+        writeln!(
+            log,
+            "{}",
+            serde_json::to_string(&entry).expect("serialize row")
+        )
+        .expect("write row");
+
+        let report = replay_audit(log.path(), &loaded, Vec::new(), &ReplayOptions::default())
+            .expect("replay fixture");
+
+        assert_eq!(report.rows.replayed, 0);
+        assert_eq!(report.rows.not_evaluated, 1);
+        assert_eq!(report.outcomes.prompt.count, 0);
+    }
+
+    #[test]
+    fn legacy_ssh_auto_rows_without_attribution_are_classified_explicitly() {
+        let loaded = LoadedRules::default();
+        let entry = row(20, "ssh:github", &[], &[], "approve+auto", None);
+        let mut log = tempfile::NamedTempFile::new().expect("audit fixture");
+        writeln!(
+            log,
+            "{}",
+            serde_json::to_string(&entry).expect("serialize row")
+        )
+        .expect("write row");
+
+        let report = replay_audit(
+            log.path(),
+            &loaded,
+            Vec::new(),
+            &ReplayOptions {
+                verify: true,
+                ..ReplayOptions::default()
+            },
+        )
+        .expect("replay fixture");
+
+        assert_eq!(report.verification.eligible, 0);
+        assert_eq!(report.verification.legacy_ssh_without_rule_id, 1);
+        assert_eq!(report.verification.missing_rule_id, 0);
     }
 
     #[test]

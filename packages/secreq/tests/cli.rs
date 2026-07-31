@@ -2569,6 +2569,8 @@ fn rules_stats_json_replays_an_alternate_concatenated_audit_and_verifies() {
         concat!(
             r#"{"ts_unix":20,"cwd":"/work","wrap":"gh","args":["api","/user"],"callers":[],"secrets":["GITHUB_TOKEN"],"decision":"approve+auto","rule_id":"approve-gh"}"#,
             r#"{"ts_unix":21,"cwd":"/work","wrap":"read","args":["read","resolved-value-marker"],"callers":[],"secrets":["DECLARED_SUBJECT"],"decision":"approve+remember"}"#,
+            r#"{"ts_unix":22,"cwd":"/work","wrap":"store","args":["store-value-marker"],"callers":[],"secrets":["NPM_TOKEN"],"decision":"approve"}"#,
+            r#"{"ts_unix":23,"cwd":"","wrap":"agent:sandbox","args":[],"callers":[],"secrets":["secret://op/item/token"],"decision":"approve+agent-session"}"#,
             "\n"
         ),
     )
@@ -2590,12 +2592,99 @@ fn rules_stats_json_replays_an_alternate_concatenated_audit_and_verifies() {
     );
     let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["rows"]["decoded"], 4);
     assert_eq!(report["rows"]["replayed"], 2);
+    assert_eq!(report["rows"]["not_evaluated"], 1);
+    assert_eq!(report["rows"]["scoped_agent"], 1);
     assert_eq!(report["outcomes"]["auto_approve"]["count"], 1);
     assert_eq!(report["outcomes"]["prompt"]["count"], 1);
     assert_eq!(report["verification"]["eligible"], 1);
     assert_eq!(report["verification"]["agree"], 1);
     assert!(!String::from_utf8_lossy(&out.stdout).contains("resolved-value-marker"));
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("store-value-marker"));
+}
+
+#[test]
+fn rules_stats_verify_classifies_disabled_history_instead_of_drift() {
+    let sb = Sandbox::new();
+    sb.stamp_migrations();
+    sb.write_config(
+        r#"
+            [wraps.gh.env]
+            GITHUB_TOKEN = "secret://op/GitHub/token"
+
+            [wraps.npm.env]
+            NPM_TOKEN = "secret://op/npm/token"
+        "#,
+    );
+    fs::write(
+        sb.root().join("auto-rules.toml"),
+        r#"{
+          rules: [
+            {
+              id: "active",
+              name: "active",
+              enabled: true,
+              decide: "approve",
+              match: { wrap: "gh" },
+              trained_secrets: ["GITHUB_TOKEN"],
+              created_at_unix: 10
+            },
+            {
+              id: "paused",
+              name: "paused",
+              enabled: false,
+              decide: "approve",
+              match: { wrap: "npm" },
+              trained_secrets: ["NPM_TOKEN"],
+              created_at_unix: 10
+            }
+          ]
+        }"#,
+    )
+    .unwrap();
+    let audit = sb.path().join("disabled-rule-audit.log");
+    fs::write(
+        &audit,
+        concat!(
+            r#"{"ts_unix":20,"cwd":"/work","wrap":"gh","args":["api"],"callers":[],"secrets":["GITHUB_TOKEN"],"decision":"approve+auto","rule_id":"active"}"#,
+            "\n",
+            r#"{"ts_unix":21,"cwd":"/work","wrap":"npm","args":["publish"],"callers":[],"secrets":["NPM_TOKEN"],"decision":"approve+auto","rule_id":"paused"}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+
+    let json = sb.run(&[
+        "rules",
+        "stats",
+        "--audit",
+        audit.to_str().unwrap(),
+        "--json",
+        "--verify",
+    ]);
+    assert!(
+        json.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&json.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(report["verification"]["eligible"], 1);
+    assert_eq!(report["verification"]["agree"], 1);
+    assert_eq!(report["verification"]["disabled_rule"], 1);
+    assert_eq!(report["verification"]["disagreements"], 0);
+
+    let human = sb.run(&[
+        "rules",
+        "stats",
+        "--audit",
+        audit.to_str().unwrap(),
+        "--verify",
+    ]);
+    assert!(human.status.success());
+    let stdout = String::from_utf8_lossy(&human.stdout);
+    assert!(stdout.contains("1 disabled"), "stdout: {stdout}");
+    assert!(!stdout.contains("MISMATCH"), "stdout: {stdout}");
 }
 
 #[test]

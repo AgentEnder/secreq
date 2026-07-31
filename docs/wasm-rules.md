@@ -374,8 +374,11 @@ patterns. `--verify` compares eligible historical `approve+auto` and
 `deny+auto` rows with their current replay. It exits non-zero for drift,
 refused/tampered rules, invalid live scope, malformed audit records, or runtime
 wasm failures. Ordinary uncovered prompts remain informational. Deleted-rule,
-pre-creation, and scoped-agent history is classified separately and is not an
-evaluator failure.
+disabled-rule, pre-creation, and scoped-agent history is classified separately
+and is not an evaluator failure. Older SSH rows that predate rule attribution
+are reported separately from malformed rows with a missing rule id. `store`
+and scoped-agent records never entered the rules evaluator, so they are not in
+the replay outcome denominator.
 
 A healthy wasm rule shows:
 

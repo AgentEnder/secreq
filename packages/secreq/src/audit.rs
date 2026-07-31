@@ -325,6 +325,18 @@ impl AuditCaller {
 }
 
 impl AuditEntry {
+    /// Whether this audit event corresponds to an ask that entered the
+    /// production rules evaluator.
+    ///
+    /// `store` records the user's decision to persist unresolved references;
+    /// it never constructs an [`crate::daemon::state::Ask`]. Scoped-agent
+    /// traffic has its own scope gate and likewise never consults auto-rules.
+    /// Keeping this distinction on the audit model prevents history consumers
+    /// from inventing evaluator inputs for either path.
+    pub fn rules_were_evaluated(&self) -> bool {
+        self.wrap != "store" && !self.wrap.starts_with("agent:")
+    }
+
     /// Exact command vector used by rule evaluation. New rows carry it
     /// verbatim; old rows use the one compatibility decoder shared by every
     /// history consumer.
@@ -763,17 +775,24 @@ mod tests {
             truncated: false,
         };
         let cases = [
-            ("gh", vec!["api", "/user"], "gh api /user"),
-            ("run", vec!["npm", "publish"], "npm publish"),
-            ("read", vec!["read", "github_token"], "read github_token"),
+            ("gh", vec!["api", "/user"], "gh api /user", true),
+            ("run", vec!["npm", "publish"], "npm publish", true),
+            (
+                "read",
+                vec!["read", "github_token"],
+                "read github_token",
+                true,
+            ),
+            ("store", vec!["npm", "publish"], "npm publish", false),
         ];
-        for (wrap, args, expected) in cases {
+        for (wrap, args, expected, rules_were_evaluated) in cases {
             let args: Vec<String> = args.into_iter().map(str::to_owned).collect();
             let entry = AuditEntry::new(wrap, &args, &chain, &[], Decision::Approve);
             assert_eq!(
                 crate::rules::joined_argv(entry.command.as_deref().expect("new command field")),
                 expected
             );
+            assert_eq!(entry.rules_were_evaluated(), rules_were_evaluated);
         }
         let ssh = AuditEntry::ssh_sign(
             "work",
@@ -787,6 +806,16 @@ mod tests {
             crate::rules::joined_argv(ssh.command.as_deref().expect("ssh command field")),
             "ssh-sign work"
         );
+        assert!(ssh.rules_were_evaluated());
+
+        let agent = AuditEntry::agent_resolve(
+            "sandbox",
+            "secret://op/item/token",
+            Decision::Approve,
+            None,
+            ScopeDeclarant::NotRead,
+        );
+        assert!(!agent.rules_were_evaluated());
     }
 
     #[test]

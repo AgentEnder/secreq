@@ -438,10 +438,17 @@ fn handle_sign(
     // 3. Decide whether to sign: approval-cache hit (skip the prompt) or
     //    interactive consent. The lock is held only for the cache check and
     //    the queue submission, never across the (blocking) consent wait.
-    let decision = match decide_sign(state, identity, &anchor, &chain, &cwd, data) {
-        Some(d) if d.approved() => d,
+    let outcome = match decide_sign(state, identity, &anchor, &chain, &cwd, data) {
+        Some(outcome) if outcome.decision.approved() => outcome,
         Some(deny) => {
-            audit_sign(identity, &chain, &anchor, &cwd, deny);
+            audit_sign(
+                identity,
+                &chain,
+                &anchor,
+                &cwd,
+                deny.decision,
+                deny.rule_id.as_deref(),
+            );
             super::log::log_at(
                 "ssh-agent",
                 format_args!(
@@ -469,7 +476,7 @@ fn handle_sign(
     //    "Approve all keys 30m" grants every key on this anchor. Under agent
     //    forwarding that anchor is the `ssh` client, so the grant expires with
     //    the SSH session as well as with the clock.
-    if let Some(scope) = grant_scope_for(decision, &identity.key_id) {
+    if let Some(scope) = grant_scope_for(outcome.decision, &identity.key_id) {
         let expires_at = now_unix_secs().saturating_add(SSH_SESSION_GRANT_TTL_SECS);
         state
             .lock()
@@ -494,13 +501,20 @@ fn handle_sign(
             // carries the decision that authorized it (`ApproveCached` on a
             // cache hit, or whatever the user chose). The signature bytes are
             // never recorded; the row holds only the key id + fingerprint.
-            audit_sign(identity, &chain, &anchor, &cwd, decision);
+            audit_sign(
+                identity,
+                &chain,
+                &anchor,
+                &cwd,
+                outcome.decision,
+                outcome.rule_id.as_deref(),
+            );
             super::log::log_at(
                 "ssh-agent",
                 format_args!(
                     "← SIGN_REQUEST for {:?} ({}); signed {} byte challenge",
                     identity.key_id,
-                    decision.as_str(),
+                    outcome.decision.as_str(),
                     data.len()
                 ),
             );
@@ -519,10 +533,18 @@ fn handle_sign(
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct SignDecision {
+    decision: Decision,
+    /// Present only when an auto-rule made the decision. This must travel to
+    /// the audit row so replay can verify SSH history like every other ask.
+    rule_id: Option<String>,
+}
+
 /// Decide whether to sign for `identity` from `anchor`. Returns the approval
-/// flavour (`ApproveCached` on a cache hit, or whatever the user chose) or
-/// `Deny` on refusal; `None` means the consent machinery was unreachable
-/// (caller fails closed).
+/// flavour (`ApproveCached` on a cache hit, or whatever the user chose) plus
+/// auto-rule attribution, or `Deny` on refusal; `None` means the consent
+/// machinery was unreachable (caller fails closed).
 ///
 /// **Lock discipline:** the state mutex is taken only for the cache check
 /// and the queue submission. The blocking wait on the user's decision parks
@@ -536,7 +558,7 @@ fn decide_sign(
     chain: &crate::provenance::CallerChain,
     cwd: &str,
     data: &[u8],
-) -> Option<Decision> {
+) -> Option<SignDecision> {
     // Grant check — lock held only for the lookup. A live session grant needs
     // no UI, so this path is unaffected by whether a display is available; it
     // works headless.
@@ -546,7 +568,10 @@ fn decide_sign(
             // The audit row for a grant hit is written at the sign outcome
             // (with `decision = ApproveCached`), alongside the approve/deny
             // rows — one audit-write site, fed the decision this returns.
-            return Some(Decision::ApproveCached);
+            return Some(SignDecision {
+                decision: Decision::ApproveCached,
+                rule_id: None,
+            });
         }
     }
 
@@ -561,7 +586,7 @@ fn decide_sign(
         let mut guard = state.lock().expect("state mutex");
         guard.reload_rules_if_changed();
         if let Some(hit) = guard.evaluate_rules_for_ask(&ask) {
-            return Some(match hit.decide {
+            let decision = match hit.decide {
                 crate::rules::RuleDecision::Approve => Decision::ApproveAuto,
                 crate::rules::RuleDecision::Deny => {
                     // Surface the auto-deny to any attached consent window,
@@ -570,6 +595,10 @@ fn decide_sign(
                         .broadcast_auto_deny_toast(hit.rule_name.clone(), hit.deny_message.clone());
                     Decision::DenyAuto
                 }
+            };
+            return Some(SignDecision {
+                decision,
+                rule_id: Some(hit.rule_id),
             });
         }
     }
@@ -586,6 +615,10 @@ fn decide_sign(
         data,
         super::client::graphical_environment_available(),
     )
+    .map(|decision| SignDecision {
+        decision,
+        rule_id: None,
+    })
 }
 
 /// The consent-miss half of [`decide_sign`], split out so the headless
@@ -846,8 +879,9 @@ fn resolve_and_sign(
 /// audit rows" (see `CLAUDE.md`): there is no wrap client on the SSH path
 /// to do it, so the daemon records the sign itself. The row carries the
 /// identity key id, the public-key SHA256 fingerprint, the decision, and
-/// the caller chain — and **never** the private key or the signature bytes
-/// (see [`crate::audit::AuditEntry::ssh_sign`]).
+/// the caller chain, and the firing rule id for auto decisions — and **never**
+/// the private key or the signature bytes (see
+/// [`crate::audit::AuditEntry::ssh_sign`]).
 ///
 /// An audit-write failure is non-fatal to the sign — we log it and move on,
 /// mirroring the wrap client, which treats `audit::append` errors as
@@ -865,6 +899,7 @@ fn audit_sign(
     anchor: &SignAnchor,
     cwd: &str,
     decision: Decision,
+    rule_id: Option<&str>,
 ) {
     let entry = crate::audit::AuditEntry::ssh_sign(
         &identity.key_id,
@@ -873,7 +908,8 @@ fn audit_sign(
         anchor,
         cwd,
         decision,
-    );
+    )
+    .with_rule_id(rule_id.map(str::to_owned));
     if let Err(err) = crate::audit::append(&entry) {
         super::log::log_at(
             "ssh-agent",
@@ -1237,8 +1273,16 @@ mod tests {
                 &forwarded,
                 "/repos/acme",
                 Decision::Approve,
+                None,
             );
-            audit_sign(&identity, &chain, &local, "/repos/acme", Decision::Approve);
+            audit_sign(
+                &identity,
+                &chain,
+                &local,
+                "/repos/acme",
+                Decision::Approve,
+                None,
+            );
             crate::audit::read_history(None).expect("read audit history")
         });
 
@@ -1272,6 +1316,28 @@ mod tests {
             "the two rows agree on everything the chain can say, which is the \
              whole reason the anchor has to be recorded separately"
         );
+    }
+
+    #[test]
+    fn an_auto_ruled_sign_audits_the_rule_id() {
+        let identity = test_identity("github");
+        let chain = whole_chain(Vec::new());
+        let anchor = test_anchor(4242, 1);
+
+        let rows = crate::audit::with_temp_log(|| {
+            audit_sign(
+                &identity,
+                &chain,
+                &anchor,
+                "/repos/acme",
+                Decision::ApproveAuto,
+                Some("rule-01"),
+            );
+            crate::audit::read_history(None).expect("read audit history")
+        });
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].rule_id.as_deref(), Some("rule-01"));
     }
 
     /// The grant the forwarded anchor produces must not match a later sign
@@ -1371,7 +1437,10 @@ mod tests {
 
         assert_eq!(
             decision,
-            Some(Decision::ApproveAuto),
+            Some(SignDecision {
+                decision: Decision::ApproveAuto,
+                rule_id: Some("01".to_owned()),
+            }),
             "a matching ssh:<key_id> approve rule must auto-approve the sign"
         );
         assert!(
@@ -1409,7 +1478,13 @@ mod tests {
             b"challenge",
         );
 
-        assert_eq!(decision, Some(Decision::DenyAuto));
+        assert_eq!(
+            decision,
+            Some(SignDecision {
+                decision: Decision::DenyAuto,
+                rule_id: Some("01".to_owned()),
+            })
+        );
         assert!(
             state
                 .lock()

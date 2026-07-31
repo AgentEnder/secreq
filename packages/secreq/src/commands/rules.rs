@@ -81,8 +81,12 @@ fn print_stats_report(report: &crate::rule_stats::StatsReport, rules_path: &Path
         rules_path.display()
     );
     println!(
-        "rows replayed: {} ({} filtered, {} scoped-agent, {} malformed)",
-        report.rows.replayed, report.rows.filtered, report.rows.scoped_agent, report.rows.malformed
+        "rows replayed: {} ({} filtered, {} scoped-agent, {} not evaluated, {} malformed)",
+        report.rows.replayed,
+        report.rows.filtered,
+        report.rows.scoped_agent,
+        report.rows.not_evaluated,
+        report.rows.malformed
     );
     println!("\nsimulated outcome");
     println!(
@@ -156,10 +160,12 @@ fn print_stats_report(report: &crate::rule_stats::StatsReport, rules_path: &Path
             println!("  ERROR: no eligible historical auto decisions were verified");
         }
         println!(
-            "  classified: {} deleted/replaced, {} pre-creation, {} scoped-agent, {} missing rule id",
+            "  classified: {} deleted/replaced, {} disabled, {} pre-creation, {} scoped-agent, {} legacy SSH without rule id, {} missing rule id",
             report.verification.deleted_rule,
+            report.verification.disabled_rule,
             report.verification.pre_creation,
             report.verification.scoped_agent,
+            report.verification.legacy_ssh_without_rule_id,
             report.verification.missing_rule_id
         );
         for failure in &report.verification.failures {
