@@ -881,6 +881,23 @@ fn join_cmd(cmd: &[std::ffi::OsString]) -> String {
         .join(" ")
 }
 
+/// Read one live process command before survivor-value redaction.
+pub(crate) fn process_command(process: &sysinfo::Process) -> String {
+    let command = join_cmd(process.cmd());
+    if command.is_empty() {
+        process.name().to_string_lossy().into_owned()
+    } else {
+        command
+    }
+}
+
+/// Apply the caller-tree display sanitization after survivor-value redaction.
+/// A process controls both `comm` and argv, so neither may inject terminal
+/// control bytes into an awareness message.
+pub(crate) fn command_for_display(command: &str) -> String {
+    sanitize_display(command)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
