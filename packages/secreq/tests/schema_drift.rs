@@ -333,23 +333,19 @@ fn schema_and_parser_refuse_the_same_unknown_key() {
 }
 
 #[test]
-fn schema_and_parser_refuse_a_non_env_name_in_env_secrets() {
+fn schema_and_parser_refuse_invalid_env_secrets_lists() {
     let (schemas, index) = wraps_schema();
-    let document = json!({
-        "secrets": {
-            "github token": { "ref": "secret://op/Personal/GitHub/token" }
-        },
-        "wraps": {
-            "gh": { "env_secrets": ["github token"] }
-        }
-    });
-
-    assert!(
-        schemas.validate(&document, index).is_err(),
-        "docs/wraps.schema.json accepts an env_secrets entry that cannot name an env var"
-    );
-    assert!(
-        WrapsConfig::parse(
+    let cases = [
+        (
+            "a name that cannot be an env var",
+            json!({
+                "secrets": {
+                    "github token": { "ref": "secret://op/Personal/GitHub/token" }
+                },
+                "wraps": {
+                    "gh": { "env_secrets": ["github token"] }
+                }
+            }),
             r#"
             [secrets."github token"]
             ref = "secret://op/Personal/GitHub/token"
@@ -357,9 +353,35 @@ fn schema_and_parser_refuse_a_non_env_name_in_env_secrets() {
             [wraps.gh]
             env_secrets = ["github token"]
             "#,
-            "invalid-env-secret-name",
-        )
-        .is_err(),
-        "the parser was expected to refuse the same invalid env name"
-    );
+        ),
+        (
+            "a duplicate declaration name",
+            json!({
+                "secrets": {
+                    "GITHUB_TOKEN": { "ref": "secret://op/Personal/GitHub/token" }
+                },
+                "wraps": {
+                    "gh": { "env_secrets": ["GITHUB_TOKEN", "GITHUB_TOKEN"] }
+                }
+            }),
+            r#"
+            [secrets.GITHUB_TOKEN]
+            ref = "secret://op/Personal/GitHub/token"
+
+            [wraps.gh]
+            env_secrets = ["GITHUB_TOKEN", "GITHUB_TOKEN"]
+            "#,
+        ),
+    ];
+
+    for (label, document, config) in cases {
+        assert!(
+            schemas.validate(&document, index).is_err(),
+            "docs/wraps.schema.json accepts {label}"
+        );
+        assert!(
+            WrapsConfig::parse(config, label).is_err(),
+            "the parser was expected to refuse {label}"
+        );
+    }
 }

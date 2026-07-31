@@ -338,6 +338,7 @@ pub struct Wrap {
 }
 
 /// JSON Schema pattern for names that can safely become environment variables.
+#[cfg(feature = "schema")]
 pub(crate) const ENV_VAR_NAME_PATTERN: &str = r"^[A-Za-z_][A-Za-z0-9_]*$";
 
 /// Whether `name` has the portable shell environment-variable shape.

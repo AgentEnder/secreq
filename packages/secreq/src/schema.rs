@@ -183,6 +183,7 @@ impl schemars::JsonSchema for EnvSecretNames {
     fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
             "type": "array",
+            "uniqueItems": true,
             "items": {
                 "type": "string",
                 "pattern": ENV_VAR_NAME_PATTERN

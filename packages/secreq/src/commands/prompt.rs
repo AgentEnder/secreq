@@ -192,17 +192,21 @@ enum EnvSecretClaim {
     ConflictsWithEnv,
 }
 
+fn should_offer_own_name(name: &str) -> bool {
+    is_env_var_name(name)
+}
+
 fn claim_env_secret(
     env_secrets: &mut Vec<String>,
     env: &BTreeMap<String, String>,
-    name: String,
+    name: &str,
 ) -> EnvSecretClaim {
-    if env.contains_key(&name) {
+    if env.contains_key(name) {
         EnvSecretClaim::ConflictsWithEnv
-    } else if env_secrets.contains(&name) {
+    } else if env_secrets.iter().any(|claimed| claimed == name) {
         EnvSecretClaim::AlreadyClaimed
     } else {
-        env_secrets.push(name);
+        env_secrets.push(name.to_owned());
         EnvSecretClaim::Added
     }
 }
@@ -255,20 +259,32 @@ pub(super) fn interactive_wrap_envs(
                 _ => None,
             };
             if let Some(name) = declaration {
-                let own_name =
+                let own_name = if should_offer_own_name(&name) {
                     cliclack::confirm(format!("Inject under the declaration's own name `{name}`?"))
                         .initial_value(true)
                         .interact()
-                        .context("interactive confirm failed")?;
+                        .context("interactive confirm failed")?
+                } else {
+                    cliclack::log::warning(crate::term::wrap_log_text(&format!(
+                        "`{name}` cannot be an environment variable; choose a valid name."
+                    )))?;
+                    false
+                };
                 if own_name {
-                    if claim_env_secret(&mut env_secrets, &env, name)
-                        == EnvSecretClaim::ConflictsWithEnv
-                    {
-                        cliclack::log::warning(
-                            "That name is already assigned; choose a different env var.",
-                        )?;
-                        let env_name = prompt_env_var_name(&env_secrets, &env)?;
-                        env.insert(env_name, ref_str);
+                    match claim_env_secret(&mut env_secrets, &env, &name) {
+                        EnvSecretClaim::Added => {}
+                        EnvSecretClaim::AlreadyClaimed => {
+                            cliclack::log::warning(format!(
+                                "`{name}` is already injected by this wrap."
+                            ))?;
+                        }
+                        EnvSecretClaim::ConflictsWithEnv => {
+                            cliclack::log::warning(format!(
+                                "`{name}` is already assigned; choose a different env var."
+                            ))?;
+                            let env_name = prompt_env_var_name(&env_secrets, &env)?;
+                            env.insert(env_name, ref_str);
+                        }
                     }
                 } else {
                     let env_name = prompt_env_var_name(&env_secrets, &env)?;
@@ -354,10 +370,16 @@ mod tests {
         let env = BTreeMap::new();
 
         assert_eq!(
-            claim_env_secret(&mut env_secrets, &env, "GITHUB_TOKEN".to_owned()),
+            claim_env_secret(&mut env_secrets, &env, "GITHUB_TOKEN"),
             EnvSecretClaim::AlreadyClaimed
         );
         assert_eq!(env_secrets, ["GITHUB_TOKEN"]);
+    }
+
+    #[test]
+    fn a_non_env_declaration_name_is_not_offered_for_own_name_injection() {
+        assert!(should_offer_own_name("GITHUB_TOKEN"));
+        assert!(!should_offer_own_name("GITHUB-TOKEN"));
     }
 
     #[test]
@@ -369,7 +391,7 @@ mod tests {
         )]);
 
         assert_eq!(
-            claim_env_secret(&mut env_secrets, &env, "GITHUB_TOKEN".to_owned()),
+            claim_env_secret(&mut env_secrets, &env, "GITHUB_TOKEN"),
             EnvSecretClaim::ConflictsWithEnv
         );
         assert!(env_secrets.is_empty());

@@ -910,11 +910,6 @@ ref = "secret://op/Personal/GitHub/credential"
         ),
     )
     .expect("seed recording config");
-    std::fs::write(
-        recording_root().join(".migration-state"),
-        r#"{"migration_level":3}"#,
-    )
-    .expect("mark recording config current");
     (sb, bin_dir)
 }
 

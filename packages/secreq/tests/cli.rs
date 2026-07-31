@@ -680,6 +680,28 @@ fn wrap_secret_records_a_declaration_name_and_check_accepts_it() {
 }
 
 #[test]
+fn wrap_secret_rejects_invalid_flag_shapes_before_editing_config() {
+    for invalid in ["secret://GITHUB_TOKEN", "GITHUB-TOKEN"] {
+        let sb = Sandbox::new();
+        let config = sb.config_path();
+        let shim_dir = sb.path().join("shims");
+        fs::create_dir_all(&shim_dir).unwrap();
+        write_config(&config, &format!("shim_dir = \"{}\"\n", shim_dir.display()));
+
+        let out = sb.run(&["wrap", "--secret", invalid, "gh"]);
+        assert_eq!(out.status.code(), Some(1), "{invalid}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("--secret"), "{invalid}: {stderr}");
+        assert!(stderr.contains(invalid), "{invalid}: {stderr}");
+        assert!(!stderr.contains("internal:"), "{invalid}: {stderr}");
+        assert!(
+            !fs::read_to_string(&config).unwrap().contains("env_secrets"),
+            "{invalid}: invalid flags must not edit config"
+        );
+    }
+}
+
+#[test]
 fn wrap_with_no_env_creates_a_gate_only_wrap() {
     // `secreq wrap op` with no `--env` and no terminal (the test harness
     // has no TTY) creates a gate-only wrap: consent is required, nothing

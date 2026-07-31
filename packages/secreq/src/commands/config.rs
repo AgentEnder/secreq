@@ -20,7 +20,7 @@ use crate::path_setup;
 use crate::provider;
 use crate::reference::Reference;
 use crate::shim;
-use crate::wraps::{Wrap, WrapsConfig};
+use crate::wraps::{is_env_var_name, Wrap, WrapsConfig};
 
 use super::binaries::first_on_path;
 use super::{prompt, resolve_config_path, which_on_path};
@@ -80,7 +80,10 @@ pub fn wrap(args: WrapArgs, config_path: Option<&Path>) -> Result<i32> {
     // required, but nothing is resolved or injected. Used for tools like `op`.
     let (env_secrets, env): (Vec<String>, BTreeMap<String, String>) =
         if !args.secrets.is_empty() || !args.envs.is_empty() {
-            (args.secrets.clone(), parse_env_assignments(&args.envs)?)
+            (
+                parse_secret_names(&args.secrets)?,
+                parse_env_assignments(&args.envs)?,
+            )
         } else if interactive {
             if prompt::wrap_is_gate_only()? {
                 (Vec::new(), BTreeMap::new())
@@ -445,6 +448,18 @@ fn parse_env_assignments(envs: &[String]) -> Result<BTreeMap<String, String>> {
         out.insert(k.to_owned(), v.to_owned());
     }
     Ok(out)
+}
+
+fn parse_secret_names(names: &[String]) -> Result<Vec<String>> {
+    for name in names {
+        if Reference::looks_like_ref(name) {
+            bail!("--secret `{name}` must be a declaration name, not a `secret://…` reference");
+        }
+        if !is_env_var_name(name) {
+            bail!("--secret `{name}` must match `[A-Za-z_][A-Za-z0-9_]*`");
+        }
+    }
+    Ok(names.to_vec())
 }
 
 /// Serialize a `WrapsConfig` to JSON-pretty (the parser accepts JSON5, so
