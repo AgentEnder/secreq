@@ -3,7 +3,7 @@
   "caption": "A match pattern that is not a valid glob cannot be saved. secreq refuses the same patterns here that it refuses when it reads the rules back, so a rule that saves is a rule that runs — and on a <b>deny</b>, where a pattern it cannot evaluate would send every ask to this window, the form says so before you save it.",
   "variants": {
     "gnome-dark": {
-      "digest": "cb24c13f003f345859cd31accf584c508efa29fcccf91bb5bcb36358c35a7ba6",
+      "digest": "a803af66cd80e45324199e70a6879586c4c422d9920691f301d2b4a836197eda",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#383838ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#303030ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -355,7 +355,7 @@
         {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#303030ff","k":"rect","radius":[6,6,6,6],"rect":[35.0,794.0,865.0,827.94],"stroke":[1.0,"#45454aff"],"stroke_kind":"Inside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[878.59,106.0,880.0,500.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[878.59,106.0,880.0,299.09],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
-        {"clip":[0.0,0.0,900.0,600.0],"k":"mesh"},
+        {"clip":[0.0,0.0,900.0,600.0],"indices":[0,1,2,2,1,3],"k":"mesh","vertices":[[17.0,483.0,"#00000000"],[883.0,483.0,"#00000000"],[17.0,503.0,"#00000000"],[883.0,503.0,"#00000000"]]},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#1a1a1a1a","k":"rect","radius":[0,0,0,0],"rect":[20.0,500.0,880.0,501.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2e16122e","k":"rect","radius":[6,6,6,6],"rect":[20.0,510.0,257.72,539.0],"stroke":[1.0,"#ff7b63ff"],"stroke_kind":"Inside"},
         {
@@ -406,7 +406,7 @@
       "size": [900.0,600.0]
     },
     "gnome-light": {
-      "digest": "d36369ab01fe4ddfbedc649924d668bc2a08b147fd7aa4e75667e0b9fa61308d",
+      "digest": "5df328814dec0d827d01fd92e6cab7f5511821a46c427e6a631965e09c7fe068",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fafafaff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f0f0f0ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -758,7 +758,7 @@
         {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#ffffffff","k":"rect","radius":[6,6,6,6],"rect":[35.0,794.0,865.0,827.94],"stroke":[1.0,"#eaeaecff"],"stroke_kind":"Inside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[878.59,106.0,880.0,500.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[878.59,106.0,880.0,299.09],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
-        {"clip":[0.0,0.0,900.0,600.0],"k":"mesh"},
+        {"clip":[0.0,0.0,900.0,600.0],"indices":[0,1,2,2,1,3],"k":"mesh","vertices":[[17.0,483.0,"#00000000"],[883.0,483.0,"#00000000"],[17.0,503.0,"#00000000"],[883.0,503.0,"#00000000"]]},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#0000001c","k":"rect","radius":[0,0,0,0],"rect":[20.0,500.0,880.0,501.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2305072e","k":"rect","radius":[6,6,6,6],"rect":[20.0,510.0,257.72,539.0],"stroke":[1.0,"#c01c28ff"],"stroke_kind":"Inside"},
         {
@@ -809,7 +809,7 @@
       "size": [900.0,600.0]
     },
     "macos-dark": {
-      "digest": "e29ba2bc790fd75f59863b6d382e667e99506e82ddf238cd80591bbe9e80d11a",
+      "digest": "20ef4a10b0ad880e6fef7efdcd4de8578cf33428b46934c07c24229aac6568fb",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2dff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2dff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -1161,7 +1161,7 @@
         {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#232325ff","k":"rect","radius":[6,6,6,6],"rect":[35.0,794.0,865.0,827.94],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[878.59,106.0,880.0,500.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[878.59,106.0,880.0,299.09],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
-        {"clip":[0.0,0.0,900.0,600.0],"k":"mesh"},
+        {"clip":[0.0,0.0,900.0,600.0],"indices":[0,1,2,2,1,3],"k":"mesh","vertices":[[17.0,483.0,"#00000000"],[883.0,483.0,"#00000000"],[17.0,503.0,"#00000000"],[883.0,503.0,"#00000000"]]},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#3c3c40ff","k":"rect","radius":[0,0,0,0],"rect":[20.0,500.0,880.0,501.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2814112e","k":"rect","radius":[6,6,6,6],"rect":[20.0,510.0,257.72,539.0],"stroke":[1.0,"#e0705fff"],"stroke_kind":"Inside"},
         {
@@ -1212,7 +1212,7 @@
       "size": [900.0,600.0]
     },
     "macos-light": {
-      "digest": "068dcc8bc571cda34e71d62ee93b41d584115fa01c3df9f1bd732f6472ad2137",
+      "digest": "7b806b6bca58a689459284828a188b49e045ce56a380951a3ddfff795cd7e3cd",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f5f5f7ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f5f5f7ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -1564,7 +1564,7 @@
         {"blur":0.0,"clip":[0.0,103.0,900.0,503.0],"fill":"#ececefff","k":"rect","radius":[6,6,6,6],"rect":[35.0,794.0,865.0,827.94],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[878.59,106.0,880.0,500.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[878.59,106.0,880.0,299.09],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
-        {"clip":[0.0,0.0,900.0,600.0],"k":"mesh"},
+        {"clip":[0.0,0.0,900.0,600.0],"indices":[0,1,2,2,1,3],"k":"mesh","vertices":[[17.0,483.0,"#00000000"],[883.0,483.0,"#00000000"],[17.0,503.0,"#00000000"],[883.0,503.0,"#00000000"]]},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#d2d2d7ff","k":"rect","radius":[0,0,0,0],"rect":[20.0,500.0,880.0,501.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#230a082e","k":"rect","radius":[6,6,6,6],"rect":[20.0,510.0,257.72,539.0],"stroke":[1.0,"#c4392eff"],"stroke_kind":"Inside"},
         {
@@ -1615,7 +1615,7 @@
       "size": [900.0,600.0]
     },
     "windows-dark": {
-      "digest": "84c7a431d05ac09c9d4a9ab78412ad98acc66d609008bff692e260460059e127",
+      "digest": "31820867e69eee64f0af93facc59a82ffacfc368af32e9b2a9e2a0cffe05003a",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2bff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2bff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,58.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -1978,7 +1978,7 @@
         {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#323232ff","k":"rect","radius":[4,4,4,4],"rect":[35.0,806.0,865.0,839.94],"stroke":[1.0,"#454545ff"],"stroke_kind":"Inside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[4,4,4,4],"rect":[878.59,118.0,880.0,500.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[4,4,4,4],"rect":[878.59,118.0,880.0,299.51],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
-        {"clip":[0.0,0.0,900.0,600.0],"k":"mesh"},
+        {"clip":[0.0,0.0,900.0,600.0],"indices":[0,1,2,2,1,3],"k":"mesh","vertices":[[17.0,483.0,"#00000000"],[883.0,483.0,"#00000000"],[17.0,503.0,"#00000000"],[883.0,503.0,"#00000000"]]},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#383838ff","k":"rect","radius":[0,0,0,0],"rect":[20.0,500.0,880.0,501.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2e1c1e2e","k":"rect","radius":[6,6,6,6],"rect":[20.0,510.0,257.72,539.0],"stroke":[1.0,"#ff99a4ff"],"stroke_kind":"Inside"},
         {
@@ -2029,7 +2029,7 @@
       "size": [900.0,600.0]
     },
     "windows-light": {
-      "digest": "a57f78450055f0df41cc784024418528dbbf91a20c1d5ee96fa431e31c84465d",
+      "digest": "43b83d6f9ca1818923925b81ecb90e8c0c2e735813b01358a60028483b6a9780",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fbfbfbff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fbfbfbff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,58.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -2392,7 +2392,7 @@
         {"blur":0.0,"clip":[0.0,115.0,900.0,503.0],"fill":"#f6f6f6ff","k":"rect","radius":[4,4,4,4],"rect":[35.0,806.0,865.0,839.94],"stroke":[1.0,"#d1d1d1ff"],"stroke_kind":"Inside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[4,4,4,4],"rect":[878.59,118.0,880.0,500.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[4,4,4,4],"rect":[878.59,118.0,880.0,299.51],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
-        {"clip":[0.0,0.0,900.0,600.0],"k":"mesh"},
+        {"clip":[0.0,0.0,900.0,600.0],"indices":[0,1,2,2,1,3],"k":"mesh","vertices":[[17.0,483.0,"#00000000"],[883.0,483.0,"#00000000"],[17.0,503.0,"#00000000"],[883.0,503.0,"#00000000"]]},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#e5e5e5ff","k":"rect","radius":[0,0,0,0],"rect":[20.0,500.0,880.0,501.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2308052e","k":"rect","radius":[6,6,6,6],"rect":[20.0,510.0,257.72,539.0],"stroke":[1.0,"#c42b1cff"],"stroke_kind":"Inside"},
         {

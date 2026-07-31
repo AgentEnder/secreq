@@ -14,15 +14,17 @@
  * listens once at the root, and neither knows how the other is built.
  */
 
-import { SHOT_OPEN_EVENT, type ShotOpenDetail } from './shot-events';
+import { DRAG_SLOP_PX, SHOT_OPEN_EVENT, type ShotOpenDetail, type ShotScene } from './shot-events';
+
+interface SceneHost extends HTMLElement {
+  sceneForViewer(): ShotScene | null;
+}
 
 /**
  * How far the pointer may travel between press and release and still be a
  * click. A drag across a line of the window's text covers far more than
  * this; a deliberate click covers a pixel or two of hand jitter.
  */
-const DRAG_SLOP_PX = 4;
-
 export class SecreqShot extends HTMLElement {
   /** Where the pointer went down, when it went down on this figure. */
   #pressedAt: { x: number; y: number } | null = null;
@@ -68,12 +70,17 @@ export class SecreqShot extends HTMLElement {
 
     const image = this.#enlargeable();
     if (!image) return;
+    const sceneHost = this.closest<SceneHost>('secreq-window');
 
     this.dispatchEvent(
       new CustomEvent<ShotOpenDetail>(SHOT_OPEN_EVENT, {
         detail: {
           source: image,
           caption: this.querySelector('figcaption')?.innerHTML ?? '',
+          // The shot and window implementations load independently. The tag
+          // name can match before the window custom element has upgraded.
+          scene:
+            typeof sceneHost?.sceneForViewer === 'function' ? sceneHost.sceneForViewer() : null,
         },
         bubbles: true,
         composed: true,

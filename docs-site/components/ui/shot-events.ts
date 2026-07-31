@@ -8,13 +8,24 @@
  * actually need to agree on.
  */
 
-/** Everything the viewer needs to show a screenshot. */
+/** A fresh reconstruction the viewer can size independently of the thumbnail. */
+export interface ShotScene {
+  element: HTMLElement;
+  size: [number, number];
+}
+
+/** Everything the viewer needs to show a figure. */
 export interface ShotOpenDetail {
   source: HTMLImageElement;
   caption: string;
+  /** Present when `<secreq-window>` has complete captured geometry. */
+  scene: ShotScene | null;
 }
 
 export const SHOT_OPEN_EVENT = 'secreq:shot-open';
+
+/** Maximum pointer travel that still counts as activation rather than text selection. */
+export const DRAG_SLOP_PX = 4;
 
 declare global {
   interface DocumentEventMap {

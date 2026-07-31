@@ -3,7 +3,7 @@
   "caption": "This rule changed outside the open window, so secreq rejected the stale edit instead of replacing newer policy. Reload the Rules view before trying again.",
   "variants": {
     "gnome-dark": {
-      "digest": "96b85a6a78ae85f5628b59f9d1e13ef5f7c7fc0462efa1317f2cbb6f58d582b5",
+      "digest": "de0cc61f68a943b00d85ec7737c3d7fc7261a195ed9970bd8d602a6212349420",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#383838ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#303030ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -271,7 +271,7 @@
           "underline": [0.0,"#00000000"]
         },
         {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#45454aff","k":"rect","radius":[6,6,6,6],"rect":[33.0,376.0,47.0,390.0],"stroke":[1.0,"#45454aff"],"stroke_kind":"Inside"},
-        {"clip":[0.0,317.0,900.0,589.0],"k":"path"},
+        {"clip":[0.0,317.0,900.0,589.0],"closed":false,"fill":"#00000000","k":"path","points":[[36.0,383.0],[40.0,387.0],[44.0,379.0]],"stroke":[1.0,"#b4b4b4ff"],"stroke_kind":"Middle"},
         {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#2e16122e","k":"rect","radius":[6,6,6,6],"rect":[59.0,374.0,108.13,398.0],"stroke":[1.0,"#ff7b63ff"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,317.0,900.0,589.0],
@@ -405,7 +405,7 @@
       "size": [900.0,600.0]
     },
     "gnome-light": {
-      "digest": "ccc43d6a7e2bb185efe61d63ebc9e18a0de6d792380cea4867747116d657531e",
+      "digest": "78541a4d347c8a1c91e822a1b4e801ef6283e054350321425f3e4c789f7f1192",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fafafaff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f0f0f0ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -673,7 +673,7 @@
           "underline": [0.0,"#00000000"]
         },
         {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#eaeaecff","k":"rect","radius":[6,6,6,6],"rect":[33.0,376.0,47.0,390.0],"stroke":[1.0,"#eaeaecff"],"stroke_kind":"Inside"},
-        {"clip":[0.0,317.0,900.0,589.0],"k":"path"},
+        {"clip":[0.0,317.0,900.0,589.0],"closed":false,"fill":"#00000000","k":"path","points":[[36.0,383.0],[40.0,387.0],[44.0,379.0]],"stroke":[1.0,"#3c3c3cff"],"stroke_kind":"Middle"},
         {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#2305072e","k":"rect","radius":[6,6,6,6],"rect":[59.0,374.0,108.13,398.0],"stroke":[1.0,"#c01c28ff"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,317.0,900.0,589.0],
@@ -807,7 +807,7 @@
       "size": [900.0,600.0]
     },
     "macos-dark": {
-      "digest": "1f34265086b125ee83cdb1b37a604a8b1c9f31a617b8e31da9721dc1bd7b0c0c",
+      "digest": "2596a0c7c7a6bc738765d676b928a2402918bc53c0b45c9f5789c5ac1df74769",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2dff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2dff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -1075,7 +1075,7 @@
           "underline": [0.0,"#00000000"]
         },
         {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#48484cff","k":"rect","radius":[6,6,6,6],"rect":[33.0,376.0,47.0,390.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
-        {"clip":[0.0,317.0,900.0,589.0],"k":"path"},
+        {"clip":[0.0,317.0,900.0,589.0],"closed":false,"fill":"#00000000","k":"path","points":[[36.0,383.0],[40.0,387.0],[44.0,379.0]],"stroke":[1.0,"#b4b4b4ff"],"stroke_kind":"Middle"},
         {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#2814112e","k":"rect","radius":[6,6,6,6],"rect":[59.0,374.0,108.13,398.0],"stroke":[1.0,"#e0705fff"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,317.0,900.0,589.0],
@@ -1209,7 +1209,7 @@
       "size": [900.0,600.0]
     },
     "macos-light": {
-      "digest": "0555fefecf7777a7326ad7506ed6feb7991fac59afe49735f490e4413a738a54",
+      "digest": "011fee1eaa9be4361dd5a96db3441a5e7d728ccefade44c2fbbf64fb3e2eeb0f",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f5f5f7ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f5f5f7ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -1477,7 +1477,7 @@
           "underline": [0.0,"#00000000"]
         },
         {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#ffffffff","k":"rect","radius":[6,6,6,6],"rect":[33.0,376.0,47.0,390.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
-        {"clip":[0.0,317.0,900.0,589.0],"k":"path"},
+        {"clip":[0.0,317.0,900.0,589.0],"closed":false,"fill":"#00000000","k":"path","points":[[36.0,383.0],[40.0,387.0],[44.0,379.0]],"stroke":[1.0,"#3c3c3cff"],"stroke_kind":"Middle"},
         {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#230a082e","k":"rect","radius":[6,6,6,6],"rect":[59.0,374.0,108.13,398.0],"stroke":[1.0,"#c4392eff"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,317.0,900.0,589.0],
@@ -1611,7 +1611,7 @@
       "size": [900.0,600.0]
     },
     "windows-dark": {
-      "digest": "41ce18a072f13e2de8a8b8d82a99430150353776d885cde2dfd6392e0d647c6d",
+      "digest": "ed0194a467f454f73f9a4ebc85e0df3c0f76c592cc6a7b66bd86a3d6681d0cfd",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2bff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2bff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,58.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -1904,7 +1904,7 @@
           "underline": [0.0,"#00000000"]
         },
         {"blur":0.0,"clip":[0.0,329.0,900.0,589.0],"fill":"#383838ff","k":"rect","radius":[4,4,4,4],"rect":[33.0,388.0,47.0,402.0],"stroke":[1.0,"#454545ff"],"stroke_kind":"Inside"},
-        {"clip":[0.0,329.0,900.0,589.0],"k":"path"},
+        {"clip":[0.0,329.0,900.0,589.0],"closed":false,"fill":"#00000000","k":"path","points":[[36.0,395.0],[40.0,399.0],[44.0,391.0]],"stroke":[1.0,"#b4b4b4ff"],"stroke_kind":"Middle"},
         {"blur":0.0,"clip":[0.0,329.0,900.0,589.0],"fill":"#2e1c1e2e","k":"rect","radius":[6,6,6,6],"rect":[59.0,386.0,108.13,410.0],"stroke":[1.0,"#ff99a4ff"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,329.0,900.0,589.0],
@@ -2038,7 +2038,7 @@
       "size": [900.0,600.0]
     },
     "windows-light": {
-      "digest": "174e79510e23889131ea8ede8ccf5bd084f2b6f6a7ad1e5c2281af29a880cc2c",
+      "digest": "8586c007da534e8c671f8fb6a37a03b3ee4c812a4fc708c9c55b5c2b3aaea334",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fbfbfbff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fbfbfbff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,58.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -2331,7 +2331,7 @@
           "underline": [0.0,"#00000000"]
         },
         {"blur":0.0,"clip":[0.0,329.0,900.0,589.0],"fill":"#ffffffff","k":"rect","radius":[4,4,4,4],"rect":[33.0,388.0,47.0,402.0],"stroke":[1.0,"#d1d1d1ff"],"stroke_kind":"Inside"},
-        {"clip":[0.0,329.0,900.0,589.0],"k":"path"},
+        {"clip":[0.0,329.0,900.0,589.0],"closed":false,"fill":"#00000000","k":"path","points":[[36.0,395.0],[40.0,399.0],[44.0,391.0]],"stroke":[1.0,"#3c3c3cff"],"stroke_kind":"Middle"},
         {"blur":0.0,"clip":[0.0,329.0,900.0,589.0],"fill":"#2308052e","k":"rect","radius":[6,6,6,6],"rect":[59.0,386.0,108.13,410.0],"stroke":[1.0,"#c42b1cff"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,329.0,900.0,589.0],

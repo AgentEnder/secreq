@@ -64,7 +64,7 @@ denies. The buttons carry the same letters as underlined mnemonics. Those
 shortcuts are live only while a decision is pending and the reason field is
 not focused.
 
-::shot{id=51-pending-denial-reason}
+::shot{id=54-pending-denial-reason}
 
 For an ordinary wrap, Approve also **remembers**, scoped to the process that
 asked. That scoping, and why it has no TTL, is in

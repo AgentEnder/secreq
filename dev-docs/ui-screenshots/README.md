@@ -121,9 +121,9 @@ raw encoder output is roughly three times larger for identical pixels.
 Every fixture also lays its window out **on the CPU** (a plain
 `egui::Context`, no wgpu) and pins the resulting shape stream under
 `variants` in `<id>/layout.json`, one entry per cell of the chrome
-matrix. Rects, circles, lines, and every text run with its position,
-baseline, size, colour, and underline: the whole window as data, one line
-per painted shape.
+matrix. Rects, circles, lines, solid paths, untextured meshes, and every
+text run with its position, baseline, size, colour, and underline: the
+whole window as data, one line per painted shape.
 
 That comparison is what an ordinary `cargo test` runs. It needs no GPU
 and no display, so CI enforces it on both runners:
