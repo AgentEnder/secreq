@@ -895,6 +895,73 @@ fn check_flags_unknown_provider_in_a_wrap() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("unknown provider scheme"));
 }
 
+#[test]
+fn check_flags_a_registered_rule_invalidated_by_a_config_edit() {
+    let sb = Sandbox::new();
+    sb.write_config("[wraps.gh.env]\nGITHUB_TOKEN = \"secret://op/gh\"\n");
+    fs::write(
+        sb.root().join("auto-rules.toml"),
+        r#"{
+          "rules": [{
+            "id": "scope01",
+            "name": "GitHub reads",
+            "enabled": true,
+            "decide": "approve",
+            "match": { "wrap": "gh" },
+            "trained_secrets": ["GITHUB_TOKNE"],
+            "created_at_unix": 0
+          }]
+        }"#,
+    )
+    .unwrap();
+
+    let out = sb.run(&["check"]);
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("GITHUB_TOKNE"), "{stdout}");
+    assert!(stdout.contains("did you mean 'GITHUB_TOKEN'?"), "{stdout}");
+}
+
+#[test]
+fn check_does_not_accept_a_named_secret_in_place_of_its_env_key() {
+    let sb = Sandbox::new();
+    sb.write_config(
+        r#"
+        [secrets.ZAI_TOKEN]
+        ref = "secret://op/Work/zai"
+
+        [wraps.claude.env]
+        ANTHROPIC_AUTH_TOKEN = "secret://ZAI_TOKEN"
+        "#,
+    );
+    fs::write(
+        sb.root().join("auto-rules.toml"),
+        r#"{
+          "rules": [{
+            "id": "scope02",
+            "name": "Claude reads",
+            "enabled": true,
+            "decide": "approve",
+            "match": { "wrap": "claude" },
+            "trained_secrets": ["ZAI_TOKEN"],
+            "created_at_unix": 0
+          }]
+        }"#,
+    )
+    .unwrap();
+
+    let out = sb.run(&["check"]);
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(
+            "'ZAI_TOKEN' is a named secret, but asks declare the env key \
+             — did you mean 'ANTHROPIC_AUTH_TOKEN'?"
+        ),
+        "{stdout}"
+    );
+}
+
 // ── init (auto-PATH setup) ────────────────────────────────────────────────
 
 #[test]
@@ -1111,6 +1178,7 @@ fn init_narrows_a_root_that_already_exists_too_permissively() {
 #[test]
 fn a_rules_file_the_daemon_writes_under_a_lax_umask_is_owner_only() {
     let sb = Sandbox::new();
+    sb.write_config("[wraps.gh.env]\nGITHUB_TOKEN = \"secret://op/test/token\"\n");
     // `daemon` is service-gated and refuses a fresh, unstamped root.
     sb.stamp_migrations();
     let module =
@@ -1265,6 +1333,7 @@ fn the_config_secreq_edit_seeds_under_a_lax_umask_is_owner_only() {
 #[test]
 fn a_wasm_module_the_daemon_stores_under_a_lax_umask_is_owner_only() {
     let sb = Sandbox::new();
+    sb.write_config("[wraps.gh.env]\nGITHUB_TOKEN = \"secret://op/test/token\"\n");
     // `daemon` is service-gated and refuses a fresh, unstamped root.
     sb.stamp_migrations();
     let module =
@@ -1310,6 +1379,28 @@ fn a_wasm_module_the_daemon_stores_under_a_lax_umask_is_owner_only() {
     let stored = &modules[0];
     let mode = fs::metadata(stored).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600, "{} is {mode:o}", stored.display());
+}
+
+#[test]
+fn add_wasm_rejects_a_disjoint_explicit_grant_before_registration() {
+    let sb = Sandbox::new();
+    sb.write_config("[wraps.npm.env]\nNPM_TOKEN = \"secret://op/test/token\"\n");
+    let module = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../secreq-rule/examples/npm-publish-guard/rule.wasm");
+
+    let out = sb.run(&[
+        "rules",
+        "add-wasm",
+        module.to_str().unwrap(),
+        "--secret",
+        "AWS_TOKEN",
+    ]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("disjoint"), "{stderr}");
+    assert!(stderr.contains("AWS_TOKEN"), "{stderr}");
+    assert!(stderr.contains("NPM_TOKEN"), "{stderr}");
+    assert!(!sb.root().join("auto-rules.toml").exists());
 }
 
 // ── ssh setup ─────────────────────────────────────────────────────────────

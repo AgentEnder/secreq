@@ -6,10 +6,15 @@ secreq daemon runs it before the consent prompt.
 
 ## Writing a rule
 
-A rule is a single AssemblyScript file exporting `decide`:
+A rule is a single AssemblyScript file exporting `decide` and, normally,
+`subjects`:
 
 ```ts
 import { RuleCtx, Decision, approve, pass, deny } from 'secreq-rule';
+
+export function subjects(): string[] {
+  return ['GITHUB_TOKEN'];
+}
 
 export function decide(ctx: RuleCtx): Decision {
   if (ctx.wrap == 'gh' && ctx.joinedArgv.startsWith('gh repo delete')) {
@@ -25,6 +30,12 @@ export function decide(ctx: RuleCtx): Decision {
 `RuleCtx` mirrors the daemon's evaluation context (`EvalCtx` in
 `src/rules.rs`): `wrap`, `joinedArgv`, `callers` (`{name, command}[]`,
 nearest-first), `cwd`, and `secrets`.
+
+`subjects()` is the module author's request for what the rule may decide, not
+its grant. `secreq rules add-wasm` validates every name against the configured
+env keys, `ssh:<key_id>` identities, and `wrap:<name>` gate-only wraps, then
+asks the operator to confirm. The confirmed intersection is stored separately
+as `trained_secrets`; an empty declaration is rejected.
 
 ## Compiling
 
@@ -44,10 +55,13 @@ a rule can only inspect the ctx it is handed and return a decision.
 Kept in lock-step with `src/wasm_rules.rs`:
 
 - module exports `memory`, `alloc(len: i32) -> usize`, and
-  `decide(ptr: usize, len: i32) -> u64`;
+  `decide(ptr: usize, len: i32) -> u64`, plus optional
+  `subjects() -> u64`;
 - host JSON-encodes the ctx (UTF-8), copies it into `alloc(len)`, calls
   `decide`, and unpacks the returned `(ptr << 32) | len` to read UTF-8
   decision JSON: `"approve"`, `"pass"`, or `{"deny": "reason"}`.
+- `subjects()` uses the same packed pointer/length convention and points at a
+  UTF-8 JSON string array.
 
 You never deal with this directly — `secreq-rule-build` generates the glue.
 

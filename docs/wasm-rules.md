@@ -173,7 +173,8 @@ engine. A rule package is four things — `assembly/rule.ts`, its as-pect
 spec, the runner config, and a `package.json` pulling `assemblyscript`,
 `@as-pect/cli` and `secreq-rule`. Both scaffolds above write all of it.
 
-You write `assembly/rule.ts`, exporting `decide(ctx)`. The worked
+You write `assembly/rule.ts`, exporting `decide(ctx)` and, normally,
+`subjects()`. The worked
 example at
 [`packages/secreq-rule/examples/npm-publish-guard/`](../packages/secreq-rule/examples/npm-publish-guard/)
 is a complete, runnable package for this policy: approve `npm publish`
@@ -184,6 +185,10 @@ appears anywhere in the caller chain, pass on everything else:
 import { RuleCtx, Decision, approve, pass, deny } from 'secreq-rule';
 
 const PUBLISH_ROOT = '/home/me/oss/';
+
+export function subjects(): string[] {
+  return ['NPM_TOKEN'];
+}
 
 export function decide(ctx: RuleCtx): Decision {
   if (ctx.wrap != 'npm') return pass();
@@ -259,7 +264,8 @@ test suite is your safety net, not secreq's.
 npx secreq-rule-build assembly/rule.ts -o rule.wasm
 ```
 
-`secreq-rule-build` generates the ABI entry around your `decide`,
+`secreq-rule-build` generates the ABI entry around your `decide` and optional
+`subjects`,
 compiles with AssemblyScript's `stub` runtime (no GC), and produces a
 core wasm module (typically 10–20 KB) whose only import is
 `env.abort`. If you hand-implement the ABI instead of exporting
@@ -273,19 +279,26 @@ things, misses an ABI export, or fails instantiation registers
 nothing:
 
 ```sh
-secreq rules add-wasm rule.wasm --name "npm publish guard" --secret NPM_TOKEN
+secreq rules add-wasm rule.wasm --name "npm publish guard"
 ```
 
 ```
+module declares: NPM_TOKEN
+◆  Register with these subjects?
 registered wasm rule 'npm publish guard' (3f8a21c09b4d5e6f70a1b2c3)
 module stored:  rules/3f8a21c09b4d5e6f70a1b2c3.wasm
 sha256:         9c0e0f6c…
 trained on:     NPM_TOKEN
 ```
 
-- `--secret NAME` (repeatable) sets the **trained-secrets snapshot**:
-  the only env vars the rule may decide. An ask requesting anything
-  else skips the rule before your code runs.
+- `subjects(): string[]` declares the subjects the module understands.
+  This is a request, not a grant: registration prints it and the operator
+  confirms the effective **trained-secrets snapshot**. Use
+  `--accept-declared` for a headless registration.
+- `--secret NAME` (repeatable) narrows that request. Registration stores the
+  intersection and hard-errors when the two sets are disjoint. A module with
+  no `subjects()` export can still be registered with explicit `--secret`
+  flags.
 - `--name` labels the rule in the UI and audit log (defaults to the
   module's file name, minus the `.wasm` extension).
 - The module is **copied** into the canonical store
@@ -293,10 +306,15 @@ trained on:     NPM_TOKEN
   vetted bytes. Your original file is no longer consulted; edits to it
   do nothing until you register a new build.
 
-Omitting `--secret` entirely is refused, because an unscoped rule is
-consulted for every ask across every wrap and an `approve()` from it
-releases secrets it was never trained on. If you want that (a global deny
-policy is the honest case), opt in with `--all-secrets`.
+Every declared and trained subject is validated against `config.toml`. Valid
+subjects are wrap env keys such as `NPM_TOKEN`, SSH identities such as
+`ssh:deploy`, and gate-only wraps such as `wrap:op`. A name under
+`[secrets]` is a value definition, not a matching subject: asks carry the env
+key that binds it. An empty declaration is always an error. The explicit
+`--all-secrets` escape hatch remains available for intentionally unscoped
+rules.
+
+::term{id=add-wasm-declared}
 
 ## Inspect, pause, delete
 
@@ -314,13 +332,15 @@ A healthy wasm rule shows:
 ```
 wasm module:    rules/3f8a21c09b4d5e6f70a1b2c3.wasm
 wasm sha256:    9c0e0f6c…
+declared:       NPM_TOKEN
 wasm status:    ok (module loaded and hash-verified)
 ```
 
-If the stored module has been deleted, replaced, or corrupted, the
-rule is **refused** at load: `rules list` marks the row with
-`[REFUSED: sha256 mismatch]` (or `module missing` / `module
-rejected`), and `rules show` prints the full reason.
+If the stored module has been deleted, replaced, or corrupted, the rule is
+**refused** at load: `rules list` marks the row with
+`[REFUSED: sha256 mismatch]` (or `module missing`). If a hand-edited update
+changes the declaration without updating its confirmed snapshot, the marker is
+`[REFUSED: declaration changed]`. `rules show` prints the full reason.
 
 ::shot{id=39-rules-wasm-refused}
 
@@ -334,16 +354,17 @@ your policy.
 There is no in-place module update. To ship a new build:
 
 ```sh
-secreq rules add-wasm rule.wasm --name "npm publish guard v2" --secret NPM_TOKEN
+secreq rules add-wasm rule.wasm --name "npm publish guard v2" --accept-declared
 secreq rules rm "npm publish guard"       # then retire the old rule
 ```
 
 (Registering first means the policy is never gone in between.)
 Alternatively, stop the daemon (`secreq daemon stop`), hand-edit
-`~/.secreq/auto-rules.toml` (replace the module file and update the
-rule's `sha256` to `shasum -a 256 <new.wasm>`), and let the next ask
-respawn the daemon. The daemon owns rule writes while it runs;
-hand-edits belong to a stopped daemon.
+`~/.secreq/auto-rules.toml` (replace the module file and update both the
+rule's `sha256` and confirmed `declared_secrets` snapshot), and let the next
+ask respawn the daemon. A declaration mismatch is refused until it is
+re-confirmed. The daemon owns rule writes while it runs; hand-edits belong to
+a stopped daemon.
 
 ## Operational notes
 

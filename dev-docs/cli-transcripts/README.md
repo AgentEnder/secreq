@@ -43,6 +43,7 @@ fixture's `layout.json` holds it beside the renders.)
 | `init` | `init_first_time_setup` | First-time setup: choosing a shim dir, and the PATH block shown in full before it touches a dotfile. |
 | `wrap-gh` | `wrap_interactive_inject_secrets` | `secreq wrap gh` with no flags: provider picker, env var name, locator, and the resolvability check that runs before the wrap is written. |
 | `wrap-gate-only` | `wrap_interactive_gate_only` | The gate-only branch of `secreq wrap`: consent required, nothing injected. |
+| `add-wasm-declared` | `add_wasm_confirms_declared_subjects` | `rules add-wasm` showing a module-authored subject request and waiting for the operator's grant. |
 | `ssh-setup` | `ssh_setup_guided` | `secreq ssh setup` wiring SSH clients at the agent socket, showing the managed block and the file first. |
 | `run-gh` | `run_gh_blocking_on_consent` | A wrapped `gh repo list` actually blocking on consent: the wait indicator while the window is up, then the real command running with the token injected. The only fixture here that is not a configuration flow, and the only one with `gui` markers. |
 

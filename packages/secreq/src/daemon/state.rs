@@ -1947,16 +1947,17 @@ impl State {
     /// Order is chosen so a failure at any step registers nothing and
     /// leaves no file behind:
     ///
-    /// 1. Refuse an empty `trained_secrets` snapshot unless
+    /// 1. Vet the bytes in the wasm sandbox and read the optional declaration
+    ///    *before* anything touches disk. An empty declaration is refused.
+    /// 2. Intersect an operator-supplied scope with the declaration, refusing
+    ///    a disjoint pair.
+    /// 3. Refuse an empty `trained_secrets` snapshot unless
     ///    `allow_all_secrets` — an empty snapshot disables the
     ///    trained-secrets guard, letting the module decide every ask
     ///    across every wrap.
-    /// 2. Vet the bytes in the wasm sandbox
-    ///    ([`crate::wasm_rules::RuleModule::from_binary`] — the
-    ///    registration-time checks) *before* anything touches disk.
-    /// 3. Copy the module into the canonical store
+    /// 4. Copy the module into the canonical store
     ///    ([`crate::paths::rule_wasm_path`]) and record its sha256.
-    /// 4. Admit the rule via [`State::admit_rule`] — which re-reads
+    /// 5. Admit the rule via [`State::admit_rule`] — which re-reads
     ///    and re-verifies the stored file end-to-end, persists (with
     ///    in-memory rollback on failure), and broadcasts like every
     ///    other rule mutation. If that fails, the stored file is
@@ -1965,9 +1966,37 @@ impl State {
         &mut self,
         name: &str,
         module_bytes: &[u8],
-        trained_secrets: std::collections::BTreeSet<String>,
+        mut trained_secrets: std::collections::BTreeSet<String>,
         allow_all_secrets: bool,
     ) -> Result<Rule> {
+        let module = crate::wasm_rules::RuleModule::from_binary(module_bytes)
+            .with_context(|| format!("vetting wasm module for rule `{name}`"))?;
+        let declared_secrets = module
+            .declared_subjects()
+            .with_context(|| format!("reading subjects declared by wasm rule `{name}`"))?;
+        if declared_secrets
+            .as_ref()
+            .is_some_and(std::collections::BTreeSet::is_empty)
+        {
+            anyhow::bail!(
+                "refusing to register wasm rule `{name}`: its `subjects()` declaration is \
+                 empty. An empty declaration is never an implicit all-secrets grant"
+            );
+        }
+        if let Some(declared) = &declared_secrets {
+            if !trained_secrets.is_empty() {
+                let requested = trained_secrets;
+                trained_secrets = requested.intersection(declared).cloned().collect();
+                if trained_secrets.is_empty() {
+                    anyhow::bail!(
+                        "refusing to register wasm rule `{name}`: requested --secret set [{}] \
+                         is disjoint from the module-declared set [{}]",
+                        requested.iter().cloned().collect::<Vec<_>>().join(", "),
+                        declared.iter().cloned().collect::<Vec<_>>().join(", "),
+                    );
+                }
+            }
+        }
         if trained_secrets.is_empty() && !allow_all_secrets {
             anyhow::bail!(
                 "refusing to register wasm rule `{name}` with an empty trained-secrets \
@@ -1977,8 +2006,6 @@ impl State {
                  unlimited blast radius explicitly"
             );
         }
-        crate::wasm_rules::RuleModule::from_binary(module_bytes)
-            .with_context(|| format!("vetting wasm module for rule `{name}`"))?;
 
         // Mint an id that collides with neither an existing rule nor a
         // leftover file in the store (both effectively impossible for
@@ -2052,6 +2079,7 @@ impl State {
             body: crate::rules::RuleBody::Wasm(crate::rules::WasmRule {
                 path: recorded_path,
                 sha256: rules::sha256_hex(module_bytes),
+                declared_secrets,
             }),
         };
         // `admit_rule`, not `add_rule`: the empty-snapshot opt-in was
@@ -4613,6 +4641,7 @@ mod tests {
             body: RuleBody::Wasm(crate::rules::WasmRule {
                 path: format!("{id}.wasm"),
                 sha256: crate::rules::sha256_hex(APPROVE_IF),
+                declared_secrets: None,
             }),
         }
     }
@@ -4720,6 +4749,25 @@ mod tests {
 
     const APPROVE_IF_BYTES: &[u8] =
         include_bytes!("../../tests/fixtures/wasm_rules/approve_if.wasm");
+
+    fn module_declaring(json: &str) -> Vec<u8> {
+        let declaration_len = json.len();
+        let wat_json = json.replace('"', "\\\"");
+        wat::parse_str(format!(
+            r#"
+            (module
+              (memory (export "memory") 1)
+              (func (export "alloc") (param i32) (result i32) i32.const 1024)
+              (func (export "decide") (param i32 i32) (result i64)
+                i64.const 549755813894)
+              (func (export "subjects") (result i64)
+                i64.const {declaration_len})
+              (data (i32.const 0) "{wat_json}")
+              (data (i32.const 128) "\"pass\""))
+            "#
+        ))
+        .expect("assemble declaring module")
+    }
 
     /// The canonical wasm store under the `#[cfg(test)]` fallback
     /// secreq root is shared by every test in this process, so tests
@@ -4935,6 +4983,80 @@ mod tests {
         assert!(rule.trained_secrets.is_empty());
         // Clean up the store entry this test just created.
         state.delete_rule(&rule.id).expect("delete");
+    }
+
+    #[test]
+    fn add_wasm_rule_rejects_an_empty_module_declaration() {
+        let _store = store_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut state = State::with_rules_path(dir.path().join("auto-rules.toml"));
+        let err = format!(
+            "{:#}",
+            state
+                .add_wasm_rule(
+                    "empty declaration",
+                    &module_declaring("[]"),
+                    trained_github(),
+                    false,
+                )
+                .expect_err("must refuse")
+        );
+        assert!(err.contains("declaration is empty"), "{err}");
+        assert!(state.rules_snapshot().is_empty());
+    }
+
+    #[test]
+    fn add_wasm_rule_intersects_the_operator_grant_with_the_declaration() {
+        let _store = store_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rules_path = dir.path().join("auto-rules.toml");
+        let mut state = State::with_rules_path(rules_path.clone());
+        let requested = ["AWS_TOKEN".to_owned(), "GITHUB_TOKEN".to_owned()]
+            .into_iter()
+            .collect();
+        let module = module_declaring("[\"GITHUB_TOKEN\"]");
+
+        let rule = state
+            .add_wasm_rule("scoped", &module, requested, false)
+            .expect("register intersection");
+        assert_eq!(rule.trained_secrets, trained_github());
+        assert_eq!(
+            rule.wasm().unwrap().declared_secrets,
+            Some(trained_github())
+        );
+        let saved: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(rules_path).expect("read persisted rules"),
+        )
+        .expect("parse persisted rules");
+        assert_eq!(
+            saved["rules"][0]["declared_secrets"],
+            serde_json::json!(["GITHUB_TOKEN"])
+        );
+        assert_eq!(
+            saved["rules"][0]["trained_secrets"],
+            serde_json::json!(["GITHUB_TOKEN"])
+        );
+        state.delete_rule(&rule.id).expect("delete");
+    }
+
+    #[test]
+    fn add_wasm_rule_names_both_disjoint_sets() {
+        let _store = store_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut state = State::with_rules_path(dir.path().join("auto-rules.toml"));
+        let requested = ["AWS_TOKEN".to_owned()].into_iter().collect();
+        let module = module_declaring("[\"GITHUB_TOKEN\"]");
+
+        let err = format!(
+            "{:#}",
+            state
+                .add_wasm_rule("dead rule", &module, requested, false)
+                .expect_err("must refuse disjoint sets")
+        );
+        assert!(err.contains("disjoint"), "{err}");
+        assert!(err.contains("AWS_TOKEN"), "{err}");
+        assert!(err.contains("GITHUB_TOKEN"), "{err}");
+        assert!(state.rules_snapshot().is_empty());
     }
 
     #[test]

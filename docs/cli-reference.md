@@ -372,8 +372,9 @@ Register a compiled wasm rule module (built with the `secreq-rule` SDK). The dae
 | Flag | Meaning |
 | --- | --- |
 | `--name <NAME>` | Rule name shown in the UI and audit log. Defaults to the module's file stem |
-| `--secret <NAME>…` | Env-var name the rule is allowed to decide (the trained-secrets guard). Repeatable. The rule never fires for an ask requesting any name outside this set |
-| `--all-secrets` | Register with NO trained-secrets snapshot: the module will be consulted for every ask across every wrap. Dangerous; required explicitly when no --secret is given |
+| `--secret <NAME>…` | Subject the rule is allowed to decide: an env key, `ssh:<key_id>`, or `wrap:<name>`. Repeatable; when the module declares subjects, this narrows them by intersection |
+| `--accept-declared` | Grant the nonempty subjects declared by the module without an interactive confirmation. Intended for CI/headless registration |
+| `--all-secrets` | Register with NO trained-secrets snapshot: the module will be consulted for every ask across every wrap. Dangerous; the explicit escape hatch for a module with no subject declaration |
 
 ## `secreq x`
 

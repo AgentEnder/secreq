@@ -5,6 +5,8 @@
 //! from their commands so the wasm module-status line — the part that tells
 //! an operator a rule can never fire — is unit-testable without a daemon.
 
+use std::collections::BTreeSet;
+use std::io::IsTerminal;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -112,6 +114,13 @@ fn rule_show_text(rule: &crate::rules::Rule, refusals: &crate::rules::RuleRefusa
             let _ = writeln!(out, "decide:         wasm (module decides per ask)");
             let _ = writeln!(out, "wasm module:    {}", w.path);
             let _ = writeln!(out, "wasm sha256:    {}", w.sha256);
+            if let Some(declared) = &w.declared_secrets {
+                let _ = writeln!(
+                    out,
+                    "declared:       {}",
+                    declared.iter().cloned().collect::<Vec<_>>().join(", ")
+                );
+            }
             // Integrity as of the daemon's last rules load: a refused
             // module (sha256 mismatch, missing file, sandbox rejection)
             // can never fire, and the full reason names files and hashes
@@ -176,30 +185,70 @@ pub fn rules_add_wasm(
     name: Option<&str>,
     secrets: &[String],
     all_secrets: bool,
+    accept_declared: bool,
+    config_path: Option<&Path>,
 ) -> Result<i32> {
-    // Finding B: an empty trained-secrets snapshot disables the
-    // trained-secrets guard entirely — refuse unless explicitly opted
-    // in, before anything touches the daemon.
-    if secrets.is_empty() && !all_secrets {
+    let module_path = file
+        .canonicalize()
+        .with_context(|| format!("wasm module not readable: {}", file.display()))?;
+    let module_bytes = std::fs::read(&module_path)
+        .with_context(|| format!("read wasm module: {}", module_path.display()))?;
+    let module = crate::wasm_rules::RuleModule::from_binary(&module_bytes)
+        .context("vet wasm module before registration")?;
+    let declared = module
+        .declared_subjects()
+        .context("read module subjects declaration")?;
+    let requested: BTreeSet<String> = secrets.iter().cloned().collect();
+    let trained = registration_grant(declared.as_ref(), &requested, all_secrets)?;
+
+    let config = super::load_config_or_default(config_path)?;
+    let validation_set: BTreeSet<String> = declared
+        .iter()
+        .flat_map(|subjects| subjects.iter())
+        .chain(trained.iter())
+        .cloned()
+        .collect();
+    let scope_errors = crate::rules::subject_validation_errors(&config, &validation_set);
+    if !scope_errors.is_empty() {
         anyhow::bail!(
-            "no --secret given: a wasm rule with an empty trained-secrets snapshot \
-             is consulted for EVERY ask across EVERY wrap, and an Approve from it \
-             auto-approves secrets it was never trained on.\n\
-             Pass --secret NAME for each env var the rule may decide (repeatable), \
-             or --all-secrets to accept that blast radius explicitly."
+            "invalid wasm rule subjects:\n  {}",
+            scope_errors.join("\n  ")
         );
+    }
+
+    if secrets.is_empty() && !all_secrets {
+        let declared = declared
+            .as_ref()
+            .context("internal: registration grant lost the module declaration")?;
+        println!(
+            "module declares: {}",
+            declared.iter().cloned().collect::<Vec<_>>().join(", ")
+        );
+        if !accept_declared {
+            if !std::io::stdin().is_terminal() {
+                anyhow::bail!(
+                    "confirmation requires a terminal; pass --accept-declared to grant \
+                     the module's declared subjects non-interactively"
+                );
+            }
+            let confirmed = cliclack::confirm("Register with these subjects?")
+                .initial_value(false)
+                .interact()
+                .context("interactive confirmation failed")?;
+            if !confirmed {
+                println!("wasm rule was not registered");
+                return Ok(0);
+            }
+        }
     }
     if all_secrets {
         eprintln!(
             "WARNING: registering with --all-secrets. This rule has no trained-secrets \
              guard: its module will be consulted for every ask across every wrap, and \
-             an Approve auto-approves secrets it has never seen. Prefer --secret NAME \
-             to scope it."
+             an Approve auto-approves secrets it has never seen. Prefer the module's \
+             declared subjects or --secret NAME to scope it."
         );
     }
-    let module_path = file
-        .canonicalize()
-        .with_context(|| format!("wasm module not readable: {}", file.display()))?;
     let name = match name {
         Some(n) => n.to_owned(),
         None => module_path.file_stem().map_or_else(
@@ -207,7 +256,6 @@ pub fn rules_add_wasm(
             |s| s.to_string_lossy().into_owned(),
         ),
     };
-    let trained: std::collections::BTreeSet<String> = secrets.iter().cloned().collect();
     let rule = daemon_client::add_wasm_rule(&name, &module_path, trained, all_secrets)
         .context("could not register the wasm rule via the daemon")?;
     let wasm = rule
@@ -223,6 +271,43 @@ pub fn rules_add_wasm(
         println!("trained on:     {}", names.join(", "));
     }
     Ok(0)
+}
+
+/// Resolve the operator's flags and the module author's request into the
+/// effective grant persisted as `trained_secrets`.
+fn registration_grant(
+    declared: Option<&BTreeSet<String>>,
+    requested: &BTreeSet<String>,
+    all_secrets: bool,
+) -> Result<BTreeSet<String>> {
+    if declared.is_some_and(BTreeSet::is_empty) {
+        anyhow::bail!(
+            "the module's `subjects()` declaration is empty; an empty declaration \
+             is an error, never an implicit --all-secrets"
+        );
+    }
+    if all_secrets {
+        return Ok(BTreeSet::new());
+    }
+    if requested.is_empty() {
+        return declared.cloned().with_context(|| {
+            "no --secret given and the module does not export `subjects()`; \
+             add a declaration, pass --secret NAME, or explicitly use --all-secrets"
+        });
+    }
+    let Some(declared) = declared else {
+        return Ok(requested.clone());
+    };
+    let effective: BTreeSet<String> = requested.intersection(declared).cloned().collect();
+    if effective.is_empty() {
+        anyhow::bail!(
+            "--secret set [{}] is disjoint from the module-declared set [{}]; \
+             registering it would create a rule no ask can reach",
+            requested.iter().cloned().collect::<Vec<_>>().join(", "),
+            declared.iter().cloned().collect::<Vec<_>>().join(", "),
+        );
+    }
+    Ok(effective)
 }
 
 /// `secreq rules new-wasm <dir>` — scaffold a buildable wasm-rule project.
@@ -294,7 +379,7 @@ pub fn rules_new_wasm(
     println!("  npm install");
     println!("  npm run build");
     println!(
-        "  secreq rules add-wasm rule.wasm --name \"{}\" --secret <NAME>",
+        "  secreq rules add-wasm rule.wasm --name \"{}\" --accept-declared",
         opts.name
     );
     Ok(0)
@@ -411,6 +496,7 @@ mod tests {
             body: crate::rules::RuleBody::Wasm(crate::rules::WasmRule {
                 path: "rules/wasm01.wasm".to_owned(),
                 sha256: "ab".repeat(32),
+                declared_secrets: None,
             }),
         }
     }
@@ -538,29 +624,49 @@ mod tests {
     }
 
     #[test]
-    fn rules_add_wasm_refuses_an_empty_snapshot_without_opt_in() {
-        // Finding B, CLI side: no --secret and no --all-secrets must
-        // fail with the blast-radius explanation *before* touching the
-        // file or the daemon (the path here doesn't even exist).
+    fn registration_rejects_an_empty_declaration() {
+        let declared = BTreeSet::new();
+        let requested = ["GITHUB_TOKEN".to_owned()].into_iter().collect();
         let err = format!(
             "{:#}",
-            rules_add_wasm(Path::new("/nonexistent/rule.wasm"), None, &[], false)
-                .expect_err("must refuse")
+            registration_grant(Some(&declared), &requested, false).expect_err("must refuse")
         );
-        assert!(err.contains("--secret"), "{err}");
-        assert!(err.contains("--all-secrets"), "{err}");
+        assert!(err.contains("declaration is empty"), "{err}");
     }
 
     #[test]
-    fn rules_add_wasm_with_opt_in_proceeds_to_the_module_file() {
-        // With --all-secrets the snapshot guard passes and the next
-        // failure is the unreadable module — proving the opt-in path
-        // is reachable without a daemon in this test.
+    fn registration_intersects_explicit_and_declared_subjects() {
+        let declared = ["GITHUB_TOKEN".to_owned(), "NPM_TOKEN".to_owned()]
+            .into_iter()
+            .collect();
+        let requested = ["AWS_TOKEN".to_owned(), "GITHUB_TOKEN".to_owned()]
+            .into_iter()
+            .collect();
+        assert_eq!(
+            registration_grant(Some(&declared), &requested, false).unwrap(),
+            ["GITHUB_TOKEN".to_owned()].into_iter().collect()
+        );
+    }
+
+    #[test]
+    fn registration_uses_the_declaration_when_no_explicit_scope_was_given() {
+        let declared = ["GITHUB_TOKEN".to_owned()].into_iter().collect();
+        assert_eq!(
+            registration_grant(Some(&declared), &BTreeSet::new(), false).unwrap(),
+            declared
+        );
+    }
+
+    #[test]
+    fn registration_rejects_disjoint_subjects_and_names_both_sets() {
+        let declared = ["GITHUB_TOKEN".to_owned()].into_iter().collect();
+        let requested = ["AWS_TOKEN".to_owned()].into_iter().collect();
         let err = format!(
             "{:#}",
-            rules_add_wasm(Path::new("/nonexistent/rule.wasm"), None, &[], true)
-                .expect_err("must fail on the missing file")
+            registration_grant(Some(&declared), &requested, false).expect_err("must refuse")
         );
-        assert!(err.contains("not readable"), "{err}");
+        assert!(err.contains("disjoint"), "{err}");
+        assert!(err.contains("AWS_TOKEN"), "{err}");
+        assert!(err.contains("GITHUB_TOKEN"), "{err}");
     }
 }

@@ -491,14 +491,18 @@ enum RulesAction {
         /// module's file stem.
         #[arg(long)]
         name: Option<String>,
-        /// Env-var name the rule is allowed to decide (the
-        /// trained-secrets guard). Repeatable. The rule never fires
-        /// for an ask requesting any name outside this set.
+        /// Subject the rule is allowed to decide: an env key,
+        /// `ssh:<key_id>`, or `wrap:<name>`. Repeatable; when the module
+        /// declares subjects, this narrows them by intersection.
         #[arg(long = "secret", value_name = "NAME")]
         secret: Vec<String>,
-        /// Register with NO trained-secrets snapshot: the module will
-        /// be consulted for every ask across every wrap. Dangerous;
-        /// required explicitly when no --secret is given.
+        /// Grant the nonempty subjects declared by the module without an
+        /// interactive confirmation. Intended for CI/headless registration.
+        #[arg(long, conflicts_with_all = ["secret", "all_secrets"])]
+        accept_declared: bool,
+        /// Register with NO trained-secrets snapshot: the module will be
+        /// consulted for every ask across every wrap. Dangerous; the explicit
+        /// escape hatch for a module with no subject declaration.
         #[arg(long, conflicts_with = "secret")]
         all_secrets: bool,
     },
@@ -872,8 +876,16 @@ pub fn run() -> i32 {
                 file,
                 name,
                 secret,
+                accept_declared,
                 all_secrets,
-            }) => commands::rules_add_wasm(&file, name.as_deref(), &secret, all_secrets),
+            }) => commands::rules_add_wasm(
+                &file,
+                name.as_deref(),
+                &secret,
+                all_secrets,
+                accept_declared,
+                config,
+            ),
         },
         Some(Command::ConsentWindow { always_on_top }) => {
             crate::daemon::child::run(crate::daemon::child::WindowKind::Prompt, always_on_top)

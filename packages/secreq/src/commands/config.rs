@@ -288,6 +288,60 @@ pub fn check(config_path: Option<&Path>) -> Result<i32> {
         }
     }
 
+    let rules_path = crate::paths::rules_path()?;
+    let loaded_rules = crate::rules::load_rules(&rules_path)?;
+    if !loaded_rules.rules.is_empty() {
+        println!("Auto-rules: {}", rules_path.display());
+    }
+    for rule in &loaded_rules.rules {
+        let mut scoped_subjects = rule.trained_secrets.clone();
+        if let Some(wasm) = rule.wasm() {
+            if let Some(declared) = &wasm.declared_secrets {
+                if declared.is_empty() {
+                    println!(
+                        "  ✗ rule '{}' ({}): module declaration is empty",
+                        rule.name, rule.id
+                    );
+                    problems += 1;
+                }
+                scoped_subjects.extend(declared.iter().cloned());
+                let outside: Vec<_> = rule.trained_secrets.difference(declared).cloned().collect();
+                if !outside.is_empty() {
+                    println!(
+                        "  ✗ rule '{}' ({}): trained subjects [{}] were not declared by \
+                         the module",
+                        rule.name,
+                        rule.id,
+                        outside.join(", ")
+                    );
+                    problems += 1;
+                }
+            }
+        }
+        for error in crate::rules::subject_validation_errors(&config, &scoped_subjects) {
+            println!("  ✗ rule '{}' ({}): {error}", rule.name, rule.id);
+            problems += 1;
+        }
+        let can_approve = match &rule.body {
+            crate::rules::RuleBody::Wasm(_) => true,
+            crate::rules::RuleBody::Declarative { decide, .. } => {
+                decide.decision() == crate::rules::RuleDecision::Approve
+            }
+        };
+        if can_approve && rule.trained_secrets.is_empty() {
+            println!(
+                "  ⚠ rule '{}' ({}): approval scope is unbounded (--all-secrets)",
+                rule.name, rule.id
+            );
+        }
+    }
+    for refusal in &loaded_rules.refusals.wasm {
+        if refusal.category == crate::rules::WasmRefusalCategory::DeclarationMismatch {
+            println!("  ✗ rule {}: {}", refusal.rule_id, refusal.reason);
+            problems += 1;
+        }
+    }
+
     if problems == 0 {
         println!(
             "✓ config OK: {} wrap(s), {} provider(s)",
