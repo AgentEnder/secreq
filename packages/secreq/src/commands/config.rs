@@ -25,6 +25,30 @@ use crate::wraps::{is_env_var_name, Wrap, WrapsConfig};
 use super::binaries::first_on_path;
 use super::{prompt, resolve_config_path, which_on_path};
 
+fn rule_scope_refusals_at(
+    rules_path: &Path,
+    config: &WrapsConfig,
+) -> Result<Vec<crate::rules::WrapScopeRefusal>> {
+    let loaded = crate::rules::load_rules(rules_path)
+        .with_context(|| format!("check auto-rule scopes in {}", rules_path.display()))?;
+    Ok(crate::rules::wrap_scope_refusals(&loaded.rules, config))
+}
+
+fn rules_scoped_to_at(rules_path: &Path, wrap: &str) -> Result<Vec<String>> {
+    let loaded = crate::rules::load_rules(rules_path)
+        .with_context(|| format!("check auto-rule scopes in {}", rules_path.display()))?;
+    Ok(loaded
+        .rules
+        .iter()
+        .filter(|rule| {
+            rule.wraps
+                .as_ref()
+                .is_some_and(|wraps| wraps.contains(wrap))
+        })
+        .map(|rule| format!("{} ({})", rule.name, rule.id))
+        .collect())
+}
+
 /// Args for `secreq wrap`.
 #[derive(Debug, Clone, Default)]
 pub struct WrapArgs {
@@ -166,6 +190,11 @@ pub fn unwrap_cmd(binary: &str, config_path: Option<&Path>) -> Result<i32> {
     }
     let config = WrapsConfig::load(&config_path)?;
     let removed = config.wrap(binary).is_some();
+    let affected_rules = if removed {
+        Some(rules_scoped_to_at(&crate::paths::rules_path()?, binary))
+    } else {
+        None
+    };
     let shim_removed = if let Some(shim_dir) = &config.shim_dir {
         shim::remove(shim_dir, binary)?
     } else {
@@ -185,6 +214,20 @@ pub fn unwrap_cmd(binary: &str, config_path: Option<&Path>) -> Result<i32> {
         (true, false) => println!("Removed config entry for `{binary}` (no shim was present)."),
         (false, true) => println!("Removed shim for `{binary}` (no config entry was present)."),
         (false, false) => println!("Nothing to remove for `{binary}`."),
+    }
+    match affected_rules {
+        Some(Ok(affected_rules)) if !affected_rules.is_empty() => {
+            println!(
+                "⚠ {} auto-rule(s) now have an unknown wrap scope and will be refused: {}",
+                affected_rules.len(),
+                affected_rules.join(", ")
+            );
+            println!("  Update or delete those rules before relying on them.");
+        }
+        Some(Err(err)) => {
+            println!("⚠ could not inspect auto-rule wrap scopes after unwrap: {err:#}");
+        }
+        _ => {}
     }
     Ok(0)
 }
@@ -227,6 +270,7 @@ pub fn wraps_list(config_path: Option<&Path>) -> Result<i32> {
             println!("    {summary}");
         }
     }
+
     Ok(0)
 }
 
@@ -291,6 +335,20 @@ pub fn check(config_path: Option<&Path>) -> Result<i32> {
                 );
                 problems += 1;
             }
+        }
+    }
+
+    let rules_path = crate::paths::rules_path()?;
+    match rule_scope_refusals_at(&rules_path, &config) {
+        Ok(refusals) => {
+            for refusal in refusals {
+                println!("  ✗ auto-rule wrap scope: {}", refusal.reason);
+                problems += 1;
+            }
+        }
+        Err(err) => {
+            println!("  ✗ auto-rules: {err:#}");
+            problems += 1;
         }
     }
 
@@ -633,6 +691,41 @@ fn remove_entry(doc: &mut toml_edit::DocumentMut, section: &str, name: &str) {
 mod tests {
     use super::*;
     use crate::wraps::CacheTtl;
+
+    #[test]
+    fn check_and_unwrap_helpers_report_rules_with_dangling_scopes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rules_path = dir.path().join("auto-rules.toml");
+        std::fs::write(
+            &rules_path,
+            r#"{
+                "rules": [{
+                    "id": "01",
+                    "name": "gh guard",
+                    "enabled": true,
+                    "wraps": ["gh"],
+                    "decide": "deny",
+                    "match": { "wrap": "gh" },
+                    "trained_secrets": [],
+                    "created_at_unix": 0
+                }]
+            }"#,
+        )
+        .expect("rules");
+        let config_without_gh = WrapsConfig::default();
+
+        let refusals =
+            rule_scope_refusals_at(&rules_path, &config_without_gh).expect("scope check");
+        assert_eq!(refusals.len(), 1);
+        assert_eq!(refusals[0].label(), "unknown wrap scope");
+        assert!(
+            rules_scoped_to_at(&rules_path, "gh")
+                .expect("unwrap check")
+                .iter()
+                .any(|rule| rule.contains("gh guard")),
+            "unwrap must name each rule it leaves dangling"
+        );
+    }
 
     #[test]
     fn env_assignment_errors_are_a_single_clean_sentence() {

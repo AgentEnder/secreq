@@ -99,7 +99,7 @@
         },
         "trained_secrets": {
           "default": [],
-          "description": "Snapshot of env-var names the rule was created against. The rule will NOT fire if the ask requests anything outside this set — the trained-secrets guard, applied to declarative and wasm rules alike (a wasm module is never even run for an out-of-snapshot ask). An empty array disables the guard, which is legitimate for a hand-edited rule.",
+          "description": "Snapshot of env-var names the rule was created against. Declarative approvals require every requested name to be in this set. Wasm rules run when at least one requested name overlaps and can approve only overlapping names. Denies are never trained-scoped. An empty array is unbounded and requires explicit opt-in when registering wasm.",
           "items": {
             "type": "string"
           },
@@ -115,6 +115,18 @@
               "type": "null"
             }
           ]
+        },
+        "wraps": {
+          "description": "Optional consultation gate by ask wrap, applied before either rule kind is evaluated. Omitted or null means every wrap. When present, the rule is skipped unless the ask's wrap is listed; for wasm rules this happens before the module is instantiated. This composes with `trained_secrets` as an AND gate. A declarative rule's `match.wrap` is separate: `wraps` decides whether the rule is consulted at all, while `match.wrap` remains one clause in the rule's static match.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": [
+            "array",
+            "null"
+          ],
+          "uniqueItems": true
         }
       },
       "required": [

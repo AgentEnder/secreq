@@ -758,12 +758,14 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
         ClientMsg::AddWasmRule {
             name,
             module_path,
+            wraps,
             trained_secrets,
             allow_all_secrets,
         } => match read_wasm_module_bytes(&module_path) {
             Ok(bytes) => {
                 let mut guard = state.lock().expect("state mutex");
-                match guard.add_wasm_rule(&name, &bytes, trained_secrets, allow_all_secrets) {
+                match guard.add_wasm_rule(&name, &bytes, wraps, trained_secrets, allow_all_secrets)
+                {
                     Ok(rule) => DaemonMsg::RuleAdded {
                         rule: Box::new(rule),
                     },
@@ -1692,6 +1694,7 @@ mod tests {
             id: "abc123".to_owned(),
             name: "test rule".to_owned(),
             enabled: true,
+            wraps: None,
             trained_secrets: BTreeSet::new(),
             created_at_unix: 0,
             body: crate::rules::RuleBody::Declarative {
@@ -1737,6 +1740,7 @@ mod tests {
         let module_src = dir.path().join("uploaded.wasm");
         std::fs::write(&module_src, APPROVE_IF).expect("write module");
         let rules_path = dir.path().join("auto-rules.toml");
+        std::fs::write(dir.path().join("config.toml"), "[wraps.gh]\n").expect("write config");
         let state: SharedState = Arc::new(Mutex::new(super::super::state::State::with_rules_path(
             rules_path,
         )));
@@ -1746,6 +1750,7 @@ mod tests {
             ClientMsg::AddWasmRule {
                 name: "greedy".to_owned(),
                 module_path: module_src.to_string_lossy().into_owned(),
+                wraps: None,
                 trained_secrets: Default::default(),
                 allow_all_secrets: false,
             },
@@ -1761,10 +1766,12 @@ mod tests {
         // With a trained snapshot: registered, and visible via ListRules.
         let trained: std::collections::BTreeSet<String> =
             ["GITHUB_TOKEN".to_owned()].into_iter().collect();
+        let wraps = ["gh".to_owned()].into_iter().collect();
         let reply = handle_message(
             ClientMsg::AddWasmRule {
                 name: "cursor gh reads".to_owned(),
                 module_path: module_src.to_string_lossy().into_owned(),
+                wraps: Some(wraps),
                 trained_secrets: trained.clone(),
                 allow_all_secrets: false,
             },
@@ -1774,6 +1781,11 @@ mod tests {
             DaemonMsg::RuleAdded { rule } => *rule,
             other => panic!("expected RuleAdded, got {other:?}"),
         };
+        assert_eq!(
+            rule.wraps,
+            Some(["gh".to_owned()].into_iter().collect()),
+            "the repeatable CLI scope must survive the IPC registration path"
+        );
         assert_eq!(rule.trained_secrets, trained);
         assert_eq!(
             rule.wasm().expect("wasm").sha256,
@@ -1808,6 +1820,7 @@ mod tests {
             id: "to-delete".to_owned(),
             name: "to delete".to_owned(),
             enabled: true,
+            wraps: None,
             trained_secrets: BTreeSet::new(),
             created_at_unix: 0,
             body: crate::rules::RuleBody::Declarative {

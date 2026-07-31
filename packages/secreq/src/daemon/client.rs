@@ -258,6 +258,7 @@ pub fn list_rules() -> Result<crate::rules::RuleListing> {
 pub fn add_wasm_rule(
     name: &str,
     module_path: &std::path::Path,
+    wraps: Option<std::collections::BTreeSet<String>>,
     trained_secrets: std::collections::BTreeSet<String>,
     allow_all_secrets: bool,
 ) -> Result<crate::rules::Rule> {
@@ -269,6 +270,7 @@ pub fn add_wasm_rule(
     let msg = ClientMsg::AddWasmRule {
         name: name.to_owned(),
         module_path: module_path.to_string_lossy().into_owned(),
+        wraps,
         trained_secrets,
         allow_all_secrets,
     };

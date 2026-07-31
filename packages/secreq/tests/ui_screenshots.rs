@@ -2854,6 +2854,7 @@ fn sample_rule(id: &str, name: &str, decide: RuleDecision, argv: Option<&str>) -
         id: id.to_owned(),
         name: name.to_owned(),
         enabled: true,
+        wraps: None,
         trained_secrets: ["GITHUB_TOKEN".to_owned()].into_iter().collect(),
         created_at_unix: 0,
         body: RuleBody::Declarative {
@@ -2969,6 +2970,7 @@ fn rules_tab_wasm_refused() {
         id: id.to_owned(),
         name: name.to_owned(),
         enabled: true,
+        wraps: None,
         trained_secrets: ["NPM_TOKEN".to_owned()].into_iter().collect(),
         created_at_unix: 0,
         body: RuleBody::Wasm(WasmRule {
@@ -3000,6 +3002,7 @@ fn rules_tab_wasm_refused() {
                 .to_owned(),
         }],
         patterns: Vec::new(),
+        scopes: Vec::new(),
     };
 
     let audit = (0..6)
@@ -3064,6 +3067,7 @@ fn rules_tab_pattern_refused() {
     let refusals = RuleRefusals {
         wasm: Vec::new(),
         patterns: secreq::rules::pattern_refusals(&rules),
+        scopes: Vec::new(),
     };
     assert_eq!(refusals.patterns.len(), 2, "both globs must be refused");
 
@@ -3115,6 +3119,61 @@ fn rules_form_bad_glob() {
              rules back, so a rule that saves is a rule that runs — and on a \
              <b>deny</b>, where a pattern it cannot evaluate would send every ask \
              to this window, the form says so before you save it.",
+        ),
+        Vec::new(),
+        ManagerExtras {
+            window_state: Some(Box::new(move |ws| ws.open_edit_rule_form(&rule))),
+            ..ManagerExtras::default()
+        },
+    );
+}
+
+#[test]
+fn rules_tab_wrap_scope() {
+    let mut rule = sample_rule(
+        "8e5a2c4d65b7",
+        "GitHub API guard",
+        RuleDecision::Deny,
+        Some("gh api *"),
+    );
+    rule.wraps = Some(["gh".to_owned()].into_iter().collect());
+    render_manager_fixture(
+        Shot::new("51-rules-wrap-scope").caption(
+            "A rule's consultation scope is separate from its match. The scope chip \
+             says which asks may consult it at all; the summary keeps the declarative \
+             match wrap visible beside that gate.",
+        ),
+        Vec::new(),
+        ManagerExtras {
+            rules: vec![rule],
+            window_state: Some(Box::new(
+                secreq::daemon::manager_ui::ManagerWindowState::focus_rules_view,
+            )),
+            ..ManagerExtras::default()
+        },
+    );
+}
+
+#[test]
+fn rules_form_wrap_scope_conflict() {
+    let mut rule = sample_rule(
+        "9f6b3d5e76c8",
+        "GitHub API guard",
+        RuleDecision::Deny,
+        Some("aws secretsmanager *"),
+    );
+    rule.wraps = Some(["gh".to_owned()].into_iter().collect());
+    let RuleBody::Declarative { r#match, .. } = &mut rule.body else {
+        unreachable!("sample rule is declarative");
+    };
+    r#match.wrap = "aws".to_owned();
+
+    render_manager_fixture(
+        Shot::new("52-rules-form-wrap-scope-conflict").caption(
+            "The declarative editor keeps consultation scope read-only and refuses a \
+             match wrap outside it. Without this warning, saving <code>match wrap: \
+             aws</code> behind <code>scope: gh</code> would create a rule no ask can \
+             ever reach.",
         ),
         Vec::new(),
         ManagerExtras {

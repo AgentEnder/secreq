@@ -222,9 +222,15 @@ pub enum ClientMsg {
     /// flags). An empty set disables the guard — unlimited blast
     /// radius — so it requires the explicit `allow_all_secrets` opt-in
     /// or the daemon refuses the registration.
+    ///
+    /// `wraps` is the optional consultation allowlist sourced from repeatable
+    /// `--wrap` flags. `None` preserves the unscoped behavior; a present set
+    /// is stored on the rule and checked before module instantiation.
     AddWasmRule {
         name: String,
         module_path: String,
+        #[serde(default)]
+        wraps: Option<BTreeSet<String>>,
         trained_secrets: BTreeSet<String>,
         #[serde(default)]
         allow_all_secrets: bool,

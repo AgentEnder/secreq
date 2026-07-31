@@ -98,6 +98,7 @@ fn declarative_rule(r#match: RuleMatch, decide: StaticDecision) -> Rule {
         id: "0a1b2c3d4e5f".to_owned(),
         name: "a rule".to_owned(),
         enabled: true,
+        wraps: None,
         trained_secrets: ["GITHUB_TOKEN".to_owned()].into_iter().collect(),
         created_at_unix: 1_700_000_000,
         body: RuleBody::Declarative { r#match, decide },
@@ -148,6 +149,7 @@ fn every_rule_secreq_writes_validates_against_the_published_schema() {
                 id: "0a1b2c3d4e5f".to_owned(),
                 name: "npm publish guard".to_owned(),
                 enabled: false,
+                wraps: None,
                 trained_secrets: ["NPM_TOKEN".to_owned()].into_iter().collect(),
                 created_at_unix: 0,
                 body: RuleBody::Wasm(WasmRule {
@@ -165,6 +167,49 @@ fn every_rule_secreq_writes_validates_against_the_published_schema() {
             panic!("docs/auto-rules.schema.json rejects a rule secreq writes ({label}):\n{err}");
         }
     }
+}
+
+#[test]
+fn rule_wrap_scope_is_accepted_by_both_loader_and_published_schema() {
+    let scoped = json!({
+        "id": "0a1b2c3d4e5f",
+        "name": "gh guard",
+        "enabled": true,
+        "wraps": ["gh"],
+        "trained_secrets": ["GITHUB_TOKEN"],
+        "wasm": {
+            "path": "rules/0a1b2c3d4e5f.wasm",
+            "sha256": "b".repeat(64),
+        },
+        "created_at_unix": 1_700_000_000,
+    });
+
+    let rule: Rule = serde_json::from_value(scoped.clone()).expect("loader accepts wraps");
+    assert_eq!(
+        rule.wraps,
+        Some(["gh".to_owned()].into_iter().collect()),
+        "the loader must retain the field rather than merely ignore it"
+    );
+    let (schemas, index) = auto_rules_schema();
+    let file = json!({ "rules": [scoped] });
+    if let Err(err) = schemas.validate(&file, index) {
+        panic!("docs/auto-rules.schema.json rejects a rule-level wraps scope:\n{err}");
+    }
+
+    let empty = json!({ "rules": [{
+        "id": "0a1b2c3d4e5f",
+        "name": "dead scope",
+        "enabled": true,
+        "wraps": [],
+        "trained_secrets": [],
+        "decide": "deny",
+        "match": { "wrap": "gh" },
+        "created_at_unix": 1_700_000_000,
+    }] });
+    assert!(
+        schemas.validate(&empty, index).is_err(),
+        "the published schema must reject a permanently dead empty allowlist"
+    );
 }
 
 /// A rule the loader refuses must not be one the schema calls valid.

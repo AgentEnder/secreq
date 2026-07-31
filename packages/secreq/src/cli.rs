@@ -428,12 +428,13 @@ impl From<SshMethod> for ssh_setup::Method {
 
 #[derive(Subcommand)]
 enum RulesAction {
-    /// One-line listing of every rule with its decide direction and
-    /// enabled state. Default action for `secreq rules`.
+    /// One-line listing of every rule with its decide direction, enabled
+    /// state, declarative wrap match, and consultation wrap scope. Default
+    /// action for `secreq rules`.
     List,
-    /// Show one rule in full (every match field, trained_secrets,
-    /// deny_message, created_at). `target` matches by id, falling
-    /// back to exact name.
+    /// Show one rule in full (consultation wrap scope, every match field,
+    /// trained_secrets, deny_message, created_at). `target` matches by id,
+    /// falling back to exact name.
     Show {
         /// The rule's id, or its exact name.
         target: String,
@@ -499,9 +500,15 @@ enum RulesAction {
         /// for an ask requesting any name outside this set.
         #[arg(long = "secret", value_name = "NAME")]
         secret: Vec<String>,
+        /// Wrap name for which the rule may be consulted. Repeatable.
+        /// Omit to allow every wrap. This gate is applied before the
+        /// wasm module is instantiated.
+        #[arg(long = "wrap", value_name = "NAME")]
+        wrap: Vec<String>,
         /// Register with NO trained-secrets snapshot: the module will
-        /// be consulted for every ask across every wrap. Dangerous;
-        /// required explicitly when no --secret is given.
+        /// be consulted for every ask in its wrap scope (or across
+        /// every wrap when no --wrap is given). Dangerous; required
+        /// explicitly when no --secret is given.
         #[arg(long, conflicts_with = "secret")]
         all_secrets: bool,
     },
@@ -877,8 +884,16 @@ pub fn run() -> i32 {
                 file,
                 name,
                 secret,
+                wrap,
                 all_secrets,
-            }) => commands::rules_add_wasm(&file, name.as_deref(), &secret, all_secrets),
+            }) => commands::rules_add_wasm(
+                &file,
+                name.as_deref(),
+                &secret,
+                &wrap,
+                all_secrets,
+                cli.config.as_deref(),
+            ),
         },
         Some(Command::ConsentWindow { always_on_top }) => {
             crate::daemon::child::run(crate::daemon::child::WindowKind::Prompt, always_on_top)
@@ -955,7 +970,32 @@ pub fn run() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::CommandFactory;
+    use clap::{CommandFactory, Parser};
+
+    #[test]
+    fn add_wasm_accepts_repeatable_wrap_scope() {
+        let cli = Cli::try_parse_from([
+            "secreq",
+            "rules",
+            "add-wasm",
+            "guard.wasm",
+            "--secret",
+            "GITHUB_TOKEN",
+            "--wrap",
+            "gh",
+            "--wrap",
+            "git-switchboard",
+        ])
+        .expect("parse");
+        let Some(Command::Rules {
+            action: Some(RulesAction::AddWasm { wrap, secret, .. }),
+        }) = cli.command
+        else {
+            panic!("add-wasm command");
+        };
+        assert_eq!(wrap, ["gh", "git-switchboard"]);
+        assert_eq!(secret, ["GITHUB_TOKEN"]);
+    }
 
     /// The long `--version` string must carry both the crate semver and the
     /// compile-time build id. Released binaries are verified against this in

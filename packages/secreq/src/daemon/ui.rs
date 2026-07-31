@@ -106,6 +106,10 @@ pub(crate) struct RuleDraft {
     ancestor: String,
     cwd: String,
     deny_message: String,
+    /// Rule-level consultation scope. The current declarative editor does not
+    /// expose this field, but it must preserve a hand-authored scope when an
+    /// existing rule is edited.
+    wraps: Option<std::collections::BTreeSet<String>>,
     /// Snapshot of the secret-set this rule was originally trained on.
     /// Seeded from the audit-row "create rule from this" affordance
     /// (slice 5); empty for blank-form creation, which disables the
@@ -221,6 +225,7 @@ impl RuleDraft {
             ancestor,
             cwd: entry.cwd.clone(),
             deny_message: entry.reason.clone().unwrap_or_default(),
+            wraps: None,
             trained_secrets,
             save_attempted: false,
         }
@@ -249,6 +254,7 @@ impl RuleDraft {
             ancestor: s.ancestor.clone(),
             cwd: s.cwd.clone().unwrap_or_default(),
             deny_message: s.deny_message.clone().unwrap_or_default(),
+            wraps: None,
             trained_secrets: s.trained_secrets.clone(),
             save_attempted: false,
         }
@@ -275,6 +281,7 @@ impl RuleDraft {
             ancestor: pattern_str(r#match.ancestor.as_ref()),
             cwd: pattern_str(r#match.cwd.as_ref()),
             deny_message: decide.deny_message().unwrap_or_default().to_owned(),
+            wraps: rule.wraps.clone(),
             trained_secrets: rule.trained_secrets.clone(),
             save_attempted: false,
         }
@@ -318,6 +325,15 @@ impl RuleDraft {
         }
         if self.wrap.trim().is_empty() {
             out.push(FormProblem::required("wrap is required"));
+        }
+        if let Some(wraps) = &self.wraps {
+            let match_wrap = self.wrap.trim();
+            if !match_wrap.is_empty() && !wraps.contains(match_wrap) {
+                out.push(FormProblem::required(&format!(
+                    "match wrap `{match_wrap}` is outside wrap scope [{}]",
+                    wraps.iter().cloned().collect::<Vec<_>>().join(", ")
+                )));
+            }
         }
         let typing = if self.save_attempted { None } else { focus };
         for (field, raw) in [
@@ -388,6 +404,7 @@ impl RuleDraft {
             id,
             name: name.to_owned(),
             enabled: self.enabled,
+            wraps: self.wraps,
             trained_secrets: self.trained_secrets,
             created_at_unix: created_at,
             // The form authors declarative rules only; wasm rules are
@@ -2054,37 +2071,60 @@ fn render_rules_row(
                     .color(usage_color)
                     .size(10.0),
             );
-            if !rule.trained_secrets.is_empty() {
-                let trained = rule
-                    .trained_secrets
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ");
+            ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new(format!("trained: {trained}"))
-                        .color(th.faint)
-                        .size(10.0),
+                    egui::RichText::new(format!(
+                        "scope: {}",
+                        wrap_scope_label(rule.wraps.as_ref())
+                    ))
+                    .color(th.faint)
+                    .size(10.0),
                 )
                 .on_hover_text(
-                    "This rule fires only for asks whose requested env-var set \
-                     is a subset of the names listed here. Editing the wrap to add \
-                     new env vars will quietly block the rule until you save it again \
-                     with the updated set.",
+                    "Consultation scope is read-only in this editor. The evaluator \
+                     skips the rule unless the ask's wrap is listed here; re-register \
+                     a wasm rule or hand-edit auto-rules.toml to change it.",
                 );
-            }
+                if !rule.trained_secrets.is_empty() {
+                    ui.add_space(8.0);
+                    let trained = rule
+                        .trained_secrets
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    ui.label(
+                        egui::RichText::new(format!("trained: {trained}"))
+                            .color(th.faint)
+                            .size(10.0),
+                    )
+                    .on_hover_text(
+                        "Declarative approvals require the ask's requested env-var set \
+                         to be a subset of these names. Wasm rules run when at least one \
+                         requested name overlaps, and can approve only overlapping names.",
+                    );
+                }
+            });
         });
+}
+
+fn wrap_scope_label(wraps: Option<&std::collections::BTreeSet<String>>) -> String {
+    wraps.map_or_else(
+        || "all".to_owned(),
+        |wraps| wraps.iter().cloned().collect::<Vec<_>>().join(", "),
+    )
 }
 
 /// One-line summary of the rule's match clause for the list view.
 /// Skips empty match fields; collapses to "wrap: gh" when nothing
 /// else is constrained. A wasm rule summarizes as its module path.
 fn rule_summary_line(rule: &Rule) -> String {
+    let scope = format!("scope: {}", wrap_scope_label(rule.wraps.as_ref()));
     let m = match &rule.body {
-        RuleBody::Wasm(wasm) => return format!("wasm: '{}'", wasm.path),
+        RuleBody::Wasm(wasm) => return format!("{scope} · wasm: '{}'", wasm.path),
         RuleBody::Declarative { r#match, .. } => r#match,
     };
-    let mut parts = vec![format!("wrap: {}", m.wrap)];
+    let mut parts = vec![scope, format!("match wrap: {}", m.wrap)];
     if let Some(p) = &m.argv {
         parts.push(format!("argv: '{}'", p.as_str()));
     }
@@ -2268,11 +2308,14 @@ fn render_pattern_problem(ui: &mut egui::Ui, problem: Option<&FormProblem>) {
 
 /// The scrollable middle of the rule form. Renders three section
 /// cards: Basics (name + decide), Match (wrap + patterns), Outcome
-/// (enabled + deny_message + trained-on chip). Kept as its own
+/// (enabled + deny_message + read-only scope/training chips). Kept as its own
 /// function so the parent can compose it with a pinned action bar.
 fn render_rule_form_body(ui: &mut egui::Ui, draft: &mut RuleDraft, problems: &[FormProblem]) {
     let th = Theme::of(ui.ctx());
     let problem_for = |field: PatternField| problems.iter().find(|p| p.field == Some(field));
+    let scope_problem = problems
+        .iter()
+        .find(|problem| problem.summary.contains("outside wrap scope"));
     // ── Section 1: Basics ──────────────────────────────────
     render_form_section_card(ui, "Basics", |ui| {
         render_form_field(ui, "Name", None, |ui| {
@@ -2303,12 +2346,14 @@ fn render_rule_form_body(ui: &mut egui::Ui, draft: &mut RuleDraft, problems: &[F
             "Wrap",
             Some("Exact match against the wrap (binary) name."),
             |ui| {
-                ui.add(
+                let response = ui.add(
                     egui::TextEdit::singleline(&mut draft.wrap)
                         .hint_text("e.g. gh")
                         .font(egui::FontId::monospace(12.5))
                         .desired_width(f32::INFINITY),
-                )
+                );
+                render_pattern_problem(ui, scope_problem);
+                response
             },
         );
         ui.add_space(8.0);
@@ -2409,6 +2454,21 @@ fn render_rule_form_body(ui: &mut egui::Ui, draft: &mut RuleDraft, problems: &[F
         if !draft.trained_secrets.is_empty() {
             ui.add_space(10.0);
             render_trained_secrets_chip(ui, &draft.trained_secrets);
+        }
+        if let Some(wraps) = &draft.wraps {
+            ui.add_space(10.0);
+            ui.label(
+                egui::RichText::new(format!(
+                    "consultation scope: {}",
+                    wrap_scope_label(Some(wraps))
+                ))
+                .color(th.faint)
+                .size(10.0),
+            )
+            .on_hover_text(
+                "Read-only in this declarative editor. The match Wrap above must be \
+                 one of these names or the rule can never be consulted.",
+            );
         }
     });
 }
@@ -4671,6 +4731,7 @@ mod tests {
             id: id.to_owned(),
             name: name.to_owned(),
             enabled: true,
+            wraps: None,
             trained_secrets: std::collections::BTreeSet::new(),
             created_at_unix: 0,
             body: RuleBody::Declarative {
@@ -4683,6 +4744,48 @@ mod tests {
                 decide: RuleDecision::Approve.into(),
             },
         }
+    }
+
+    #[test]
+    fn declarative_editor_preserves_a_hand_authored_wrap_scope() {
+        let mut rule = rule_named("01", "scoped");
+        rule.wraps = Some(["gh".to_owned()].into_iter().collect());
+
+        let edited = RuleDraft::from_rule(&rule)
+            .into_rule()
+            .expect("unchanged draft saves");
+
+        assert_eq!(edited.wraps, rule.wraps);
+    }
+
+    #[test]
+    fn declarative_editor_refuses_a_match_outside_its_read_only_wrap_scope() {
+        let mut rule = rule_named("01", "scoped");
+        rule.wraps = Some(["gh".to_owned()].into_iter().collect());
+        let mut draft = RuleDraft::from_rule(&rule);
+        draft.wrap = "aws".to_owned();
+
+        let problems = draft.problems(None);
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.summary.contains("outside wrap scope [gh]")),
+            "{problems:?}"
+        );
+        assert!(
+            draft.into_rule().is_err(),
+            "the form must not save a rule whose consultation gate and match can never intersect"
+        );
+    }
+
+    #[test]
+    fn rule_summary_names_consultation_scope_separately_from_match_wrap() {
+        let mut rule = rule_named("01", "scoped");
+        rule.wraps = Some(["gh".to_owned()].into_iter().collect());
+
+        let summary = rule_summary_line(&rule);
+        assert!(summary.contains("scope: gh"), "{summary}");
+        assert!(summary.contains("match wrap: gh"), "{summary}");
     }
 
     #[test]

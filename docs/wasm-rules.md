@@ -46,7 +46,8 @@ hold whatever the module contains.
 | Bounded memory                     | 64 MiB of guest memory, and 64 KiB for the decision it returns.                                                                                                          |
 | No state between asks              | Every evaluation instantiates the module fresh.                                                                                                                          |
 | Only the bytes you registered      | Registration records the module's SHA-256 and re-verifies it on every rules load. A file that changed is refused, and `rules list`, `rules show` and the manager say so. |
-| Only the secrets you trained it on | Each rule carries the secret names it was registered with, checked before the module runs. An ask naming anything outside that set skips the rule entirely.              |
+| Only the wraps you scoped it to    | A rule-level wrap allowlist is checked before evaluation. An out-of-scope wasm module is not instantiated.                                                               |
+| Only the secrets you trained it on | A module is consulted only when the ask overlaps its trained names, and an approval blesses only the requested names inside that snapshot.                               |
 
 Two behaviors matter when you write one.
 
@@ -273,19 +274,27 @@ things, misses an ABI export, or fails instantiation registers
 nothing:
 
 ```sh
-secreq rules add-wasm rule.wasm --name "npm publish guard" --secret NPM_TOKEN
+secreq rules add-wasm rule.wasm --name "npm publish guard" --wrap npm --secret NPM_TOKEN
 ```
 
 ```
 registered wasm rule 'npm publish guard' (3f8a21c09b4d5e6f70a1b2c3)
 module stored:  rules/3f8a21c09b4d5e6f70a1b2c3.wasm
 sha256:         9c0e0f6c…
+wrap scope:     npm
 trained on:     NPM_TOKEN
 ```
 
+- `--wrap NAME` (repeatable) sets the rule's **consultation scope**.
+  The rule is skipped for every other wrap, before a wasm module is
+  instantiated. Omit it to retain the unscoped behavior. A name may be
+  `run`, `read`, a key under `[wraps]`, or `ssh:<name>` backed by
+  `[ssh.<name>]`; anything else is an error at registration.
 - `--secret NAME` (repeatable) sets the **trained-secrets snapshot**:
-  the only env vars the rule may decide. An ask requesting anything
-  else skips the rule before your code runs.
+  the only env vars the rule may decide. The module is skipped unless
+  the ask requests at least one of them, and an approval blesses only
+  requested names in the snapshot. Wrap and secret scopes are
+  independent AND gates: both must overlap the ask.
 - `--name` labels the rule in the UI and audit log (defaults to the
   module's file name, minus the `.wasm` extension).
 - The module is **copied** into the canonical store
@@ -293,10 +302,16 @@ trained on:     NPM_TOKEN
   vetted bytes. Your original file is no longer consulted; edits to it
   do nothing until you register a new build.
 
-Omitting `--secret` entirely is refused, because an unscoped rule is
-consulted for every ask across every wrap and an `approve()` from it
-releases secrets it was never trained on. If you want that (a global deny
-policy is the honest case), opt in with `--all-secrets`.
+Omitting `--secret` entirely is refused, because the module would be
+consulted for every ask in its wrap scope (or across every wrap when no
+`--wrap` is set) and an `approve()` from it releases secrets it was never
+trained on. If you want that (a deny-only policy is the honest case), opt
+in with `--all-secrets`.
+
+The persisted `wraps` field is a consultation gate shared by declarative
+and wasm rules. It does not replace a declarative rule's `match.wrap`:
+`wraps` decides whether secreq consults the rule at all, while
+`match.wrap` remains a clause evaluated after consultation.
 
 ## Inspect, pause, delete
 
@@ -312,6 +327,8 @@ secreq rules rm <id>         # delete (also removes the stored module file)
 A healthy wasm rule shows:
 
 ```
+wrap scope:     npm
+decide:         wasm (module decides per ask)
 wasm module:    rules/3f8a21c09b4d5e6f70a1b2c3.wasm
 wasm sha256:    9c0e0f6c…
 wasm status:    ok (module loaded and hash-verified)
@@ -334,7 +351,7 @@ your policy.
 There is no in-place module update. To ship a new build:
 
 ```sh
-secreq rules add-wasm rule.wasm --name "npm publish guard v2" --secret NPM_TOKEN
+secreq rules add-wasm rule.wasm --name "npm publish guard v2" --wrap npm --secret NPM_TOKEN
 secreq rules rm "npm publish guard"       # then retire the old rule
 ```
 

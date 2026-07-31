@@ -298,12 +298,18 @@ pub struct State {
     /// enabled rule that mysteriously never fires. Kept in sync by
     /// every path that rebuilds or mutates `rule_modules`.
     wasm_refusals: Vec<rules::WasmRefusal>,
+    /// Empty or dangling rule-level wrap allowlists, computed against the
+    /// sibling `config.toml`. Cached so the evaluator does no config I/O per
+    /// ask; refreshed when either the rules or config mtime changes.
+    scope_refusals: Vec<rules::WrapScopeRefusal>,
     /// The file's `mtime` at the moment we loaded it. The freshness
     /// check compares this against the live `mtime`; an advance means
     /// the user hand-edited the file, so we shut down so the next ask
     /// respawns a fresh daemon. UI-write paths refresh this in-place
     /// so they never trigger the shutdown.
     rules_loaded_at: Option<SystemTime>,
+    /// `config.toml` mtime used for `scope_refusals`.
+    scope_config_loaded_at: Option<SystemTime>,
     /// Monotonic source of [`WaiterId`]s. Independent of the subscriber
     /// counters so the id spaces stay grep-distinguishable.
     waiter_next_id: u64,
@@ -357,7 +363,9 @@ impl Default for State {
             rules: Vec::new(),
             rule_modules: rules::RuleModules::new(),
             wasm_refusals: Vec::new(),
+            scope_refusals: Vec::new(),
             rules_loaded_at: None,
+            scope_config_loaded_at: None,
             waiter_next_id: 1,
             run_session_releases: HashMap::new(),
         }
@@ -569,10 +577,9 @@ impl<T: SubscriberExtra> SubscriberGroup<T> {
 }
 
 /// Surface every per-rule refusal from a rules load in the daemon log.
-/// Loud by design, and for the same reason on both halves: a rule that
-/// silently stops firing — because its module hash moved, or because its
-/// glob has a typo — is indistinguishable from a rule that decided not
-/// to match.
+/// Loud by design: a rule that silently stops firing — because its module
+/// hash moved, its glob has a typo, or its wrap scope is dangling — is
+/// indistinguishable from a rule that decided not to match.
 fn log_rule_refusals(refusals: &rules::RuleRefusals) {
     for refusal in &refusals.wasm {
         super::log::log_at(
@@ -589,6 +596,16 @@ fn log_rule_refusals(refusals: &rules::RuleRefusals) {
             "state",
             format_args!(
                 "WARN: refusing pattern ({}): {}",
+                refusal.label(),
+                refusal.reason
+            ),
+        );
+    }
+    for refusal in &refusals.scopes {
+        super::log::log_at(
+            "state",
+            format_args!(
+                "WARN: refusing rule wrap scope ({}): {}",
                 refusal.label(),
                 refusal.reason
             ),
@@ -616,7 +633,9 @@ impl State {
                 state.rules = loaded.rules;
                 state.rule_modules = loaded.modules;
                 state.wasm_refusals = loaded.refusals.wasm;
+                state.scope_refusals = loaded.refusals.scopes;
                 state.rules_loaded_at = loaded.mtime;
+                state.scope_config_loaded_at = loaded.scope_config_mtime;
             }
             Err(err) => {
                 super::log::log_at(
@@ -629,6 +648,8 @@ impl State {
                 // Stamp current mtime so we don't re-warn every ask
                 // while the file remains broken.
                 state.rules_loaded_at = rules::file_mtime(&rules_path);
+                state.scope_config_loaded_at =
+                    rules::file_mtime(&rules::wrap_scope_config_path(&rules_path));
             }
         }
         state.rules_path = Some(rules_path);
@@ -1540,15 +1561,15 @@ impl State {
     /// render a refused rule as refused instead of as a normal enabled
     /// rule that never fires.
     ///
-    /// The wasm half is the stored one — it depends on bytes on disk,
-    /// which can move under a rule that did not, so it is recorded when
-    /// the module is read. The pattern half is recomputed from
-    /// `self.rules` on every call: it is a pure function of the rule
-    /// text, so a cached copy could only ever be a way to be wrong.
+    /// Wasm and scope refusals are cached because they depend on files
+    /// outside the rule text (module bytes and `config.toml`). Pattern
+    /// refusals are recomputed from `self.rules` on every call because
+    /// they are a pure function of the rule text.
     pub fn refusals_snapshot(&self) -> rules::RuleRefusals {
         rules::RuleRefusals {
             wasm: self.wasm_refusals.clone(),
             patterns: rules::pattern_refusals(&self.rules),
+            scopes: self.scope_refusals.clone(),
         }
     }
 
@@ -1576,14 +1597,20 @@ impl State {
             return;
         };
         let live_mtime = rules::file_mtime(&path);
-        if live_mtime == self.rules_loaded_at {
+        let live_scope_config_mtime = rules::file_mtime(&rules::wrap_scope_config_path(&path));
+        if live_mtime == self.rules_loaded_at
+            && live_scope_config_mtime == self.scope_config_loaded_at
+        {
             return;
         }
         super::log::log_at(
             "state",
             format_args!(
-                "auto-rules file changed on disk ({:?} -> {:?}); reloading",
-                self.rules_loaded_at, live_mtime,
+                "auto-rules inputs changed on disk (rules {:?} -> {:?}, config {:?} -> {:?}); reloading",
+                self.rules_loaded_at,
+                live_mtime,
+                self.scope_config_loaded_at,
+                live_scope_config_mtime,
             ),
         );
         match rules::load_rules(&path) {
@@ -1592,7 +1619,9 @@ impl State {
                 self.rules = loaded.rules;
                 self.rule_modules = loaded.modules;
                 self.wasm_refusals = loaded.refusals.wasm;
+                self.scope_refusals = loaded.refusals.scopes;
                 self.rules_loaded_at = loaded.mtime;
+                self.scope_config_loaded_at = loaded.scope_config_mtime;
                 // Push the new ruleset to any attached consent window so
                 // the Rules tab UI reflects the edit immediately.
                 self.broadcast_consent_update();
@@ -1608,6 +1637,7 @@ impl State {
                 // Still bump our remembered mtime so we don't re-warn
                 // every request while the file remains broken.
                 self.rules_loaded_at = live_mtime;
+                self.scope_config_loaded_at = live_scope_config_mtime;
             }
         }
     }
@@ -1695,7 +1725,9 @@ impl State {
             cwd,
             secrets: &requested,
         };
-        let evaluation = rules::evaluate(&self.rules, &self.rule_modules, &ctx);
+        let refusals = self.refusals_snapshot();
+        let evaluation =
+            rules::evaluate_with_refusals(&self.rules, &self.rule_modules, &refusals, &ctx);
         // A mandated prompt reaches the daemon as `hit: None`, the same shape
         // as "nothing matched", so without this line the difference between
         // "no rule had an opinion" and "a rule insisted on a human" would be
@@ -1742,6 +1774,7 @@ impl State {
     /// It also refuses a glob the loader will refuse — see
     /// [`State::refuse_broken_patterns`].
     pub fn add_rule(&mut self, rule: Rule) -> Result<()> {
+        self.refuse_broken_wrap_scope(&rule.name, rule.wraps.as_ref())?;
         Self::refuse_broken_patterns(&rule)?;
         if rule.is_wasm() && rule.trained_secrets.is_empty() {
             anyhow::bail!(
@@ -1754,6 +1787,42 @@ impl State {
             );
         }
         self.admit_rule(rule)
+    }
+
+    /// Refuse a consultation allowlist that the loader would badge as dead.
+    ///
+    /// This guard sits on all three admission doors (`AddRule`, `UpdateRule`,
+    /// and `AddWasmRule`). Existing broken rules remain disableable and
+    /// deleteable, matching the pattern-refusal placement.
+    fn refuse_broken_wrap_scope(
+        &self,
+        rule_name: &str,
+        wraps: Option<&std::collections::BTreeSet<String>>,
+    ) -> Result<()> {
+        let Some(wraps) = wraps else {
+            return Ok(());
+        };
+        if wraps.is_empty() {
+            anyhow::bail!(
+                "refusing rule `{rule_name}` with an empty `wraps` allowlist: it matches no ask"
+            );
+        }
+        let config = match &self.rules_path {
+            Some(path) => rules::load_wrap_scope_config(path)?,
+            None => crate::wraps::WrapsConfig::default(),
+        };
+        let unknown: Vec<&str> = wraps
+            .iter()
+            .filter(|wrap| !rules::is_known_wrap_scope(&config, wrap))
+            .map(String::as_str)
+            .collect();
+        if !unknown.is_empty() {
+            anyhow::bail!(
+                "refusing rule `{rule_name}` with unknown wrap scope(s): {}",
+                unknown.join(", ")
+            );
+        }
+        Ok(())
     }
 
     /// Refuse a rule carrying a pattern `glob::Pattern` will not
@@ -1826,6 +1895,7 @@ impl State {
     /// existence lookup would matter, so a refused edit leaves the
     /// stored rule exactly as it was.
     pub fn update_rule(&mut self, rule: Rule) -> Result<()> {
+        self.refuse_broken_wrap_scope(&rule.name, rule.wraps.as_ref())?;
         Self::refuse_broken_patterns(&rule)?;
         if !self.rules.iter().any(|r| r.id == rule.id) {
             anyhow::bail!("no rule with id `{}`", rule.id);
@@ -1958,7 +2028,8 @@ impl State {
     /// 1. Refuse an empty `trained_secrets` snapshot unless
     ///    `allow_all_secrets` — an empty snapshot disables the
     ///    trained-secrets guard, letting the module decide every ask
-    ///    across every wrap.
+    ///    inside its optional `wraps` consultation scope (or across every
+    ///    wrap when that scope is absent).
     /// 2. Vet the bytes in the wasm sandbox
     ///    ([`crate::wasm_rules::RuleModule::from_binary`] — the
     ///    registration-time checks) *before* anything touches disk.
@@ -1973,14 +2044,16 @@ impl State {
         &mut self,
         name: &str,
         module_bytes: &[u8],
+        wraps: Option<std::collections::BTreeSet<String>>,
         trained_secrets: std::collections::BTreeSet<String>,
         allow_all_secrets: bool,
     ) -> Result<Rule> {
+        self.refuse_broken_wrap_scope(name, wraps.as_ref())?;
         if trained_secrets.is_empty() && !allow_all_secrets {
             anyhow::bail!(
                 "refusing to register wasm rule `{name}` with an empty trained-secrets \
-                 snapshot: the module would be consulted for every ask across every \
-                 wrap, and an Approve from it would auto-approve secrets it was never \
+                 snapshot: the module would be consulted for every ask in its wrap \
+                 scope, and an Approve from it would auto-approve secrets it was never \
                  trained on. Name the secrets it may decide, or opt in to the \
                  unlimited blast radius explicitly"
             );
@@ -2055,6 +2128,7 @@ impl State {
             id,
             name: name.to_owned(),
             enabled: true,
+            wraps,
             trained_secrets,
             created_at_unix: rules::now_unix(),
             body: crate::rules::RuleBody::Wasm(crate::rules::WasmRule {
@@ -2131,6 +2205,10 @@ impl State {
         };
         rules::save_rules(&path, &self.rules)?;
         self.rules_loaded_at = rules::file_mtime(&path);
+        let (scope_refusals, scope_config_mtime) =
+            rules::wrap_scope_refusals_for_path(&self.rules, &path);
+        self.scope_refusals = scope_refusals;
+        self.scope_config_loaded_at = scope_config_mtime;
         Ok(())
     }
 }
@@ -3396,6 +3474,7 @@ mod tests {
             id: id.to_owned(),
             name: id.to_owned(),
             enabled: true,
+            wraps: None,
             trained_secrets: ["GITHUB_TOKEN".to_owned()].into_iter().collect(),
             created_at_unix: 0,
             body: RuleBody::Declarative {
@@ -4643,6 +4722,7 @@ mod tests {
             id: id.to_owned(),
             name: "wasm approve".to_owned(),
             enabled: true,
+            wraps: None,
             trained_secrets: ["GITHUB_TOKEN".to_owned()].into_iter().collect(),
             created_at_unix: 0,
             body: RuleBody::Wasm(crate::rules::WasmRule {
@@ -4707,6 +4787,66 @@ mod tests {
         let err = format!("{:#}", state.add_rule(rule).expect_err("must refuse"));
         assert!(err.contains("sha256 mismatch"), "{err}");
         assert!(state.rules.is_empty(), "refused rule must not be admitted");
+    }
+
+    #[test]
+    fn wrap_scope_admission_rechecks_add_update_and_add_wasm() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.toml");
+        std::fs::write(dir.path().join("config.toml"), "[wraps.gh]\n").expect("config");
+        let mut state = State::with_rules_path(path);
+
+        let mut unknown = mk_rule("unknown", "gh", RuleDecision::Deny, None);
+        unknown.wraps = Some(["gih".to_owned()].into_iter().collect());
+        let err = format!("{:#}", state.add_rule(unknown).expect_err("must refuse"));
+        assert!(err.contains("unknown wrap scope"), "{err}");
+
+        let mut good = mk_rule("good", "gh", RuleDecision::Deny, None);
+        good.wraps = Some(["gh".to_owned()].into_iter().collect());
+        state.add_rule(good.clone()).expect("known scope");
+        let mut empty = good.clone();
+        empty.wraps = Some(Default::default());
+        let err = format!(
+            "{:#}",
+            state
+                .update_rule(empty)
+                .expect_err("empty update must refuse")
+        );
+        assert!(err.contains("empty `wraps`"), "{err}");
+        assert_eq!(state.rules_snapshot(), vec![good]);
+
+        let err = format!(
+            "{:#}",
+            state
+                .add_wasm_rule(
+                    "unknown wasm",
+                    APPROVE_IF_BYTES,
+                    Some(["ssh:missing".to_owned()].into_iter().collect()),
+                    trained_github(),
+                    false,
+                )
+                .expect_err("raw AddWasmRule must recheck scope")
+        );
+        assert!(err.contains("unknown wrap scope"), "{err}");
+    }
+
+    #[test]
+    fn loaded_unknown_scope_is_badged_and_cannot_fail_open_a_deny() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.toml");
+        std::fs::write(dir.path().join("config.toml"), "[wraps.gh]\n").expect("config");
+        let mut deny = mk_rule("deny", "gh", RuleDecision::Deny, None);
+        deny.wraps = Some(["gih".to_owned()].into_iter().collect());
+        let approve = mk_rule("approve", "gh", RuleDecision::Approve, None);
+        crate::rules::save_rules(&path, &[deny, approve]).expect("save");
+
+        let state = State::with_rules_path(path);
+        assert_eq!(state.refusals_snapshot().scopes.len(), 1);
+        let ask = ask_with_secret("gh", &["gh", "api", "/user"], "GITHUB_TOKEN");
+        assert!(
+            state.evaluate_rules_for_ask(&ask).is_none(),
+            "the refused deny must mandate a prompt instead of letting approve fire"
+        );
     }
 
     // There is no `add_rule_rejects_an_invalid_shape` any more: a rule
@@ -4796,10 +4936,17 @@ mod tests {
         // and in a fresh one loading the persisted file.
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("auto-rules.toml");
+        std::fs::write(dir.path().join("config.toml"), "[wraps.gh]\n").expect("config");
         let mut state = State::with_rules_path(path.clone());
 
         let rule = state
-            .add_wasm_rule("cursor gh reads", APPROVE_IF_BYTES, trained_github(), false)
+            .add_wasm_rule(
+                "cursor gh reads",
+                APPROVE_IF_BYTES,
+                Some(["gh".to_owned()].into_iter().collect()),
+                trained_github(),
+                false,
+            )
             .expect("register");
 
         // The module was copied into the canonical store, byte-exact.
@@ -4823,6 +4970,10 @@ mod tests {
         // …and in a fresh daemon loading the persisted rules file.
         let reloaded = State::with_rules_path(path);
         assert_eq!(reloaded.rules_snapshot(), vec![rule.clone()]);
+        assert_eq!(
+            reloaded.rules_snapshot()[0].wraps,
+            Some(["gh".to_owned()].into_iter().collect())
+        );
         assert!(reloaded.refusals_snapshot().is_empty());
         let hit = reloaded
             .evaluate_rules_for_ask(&cursor_ask())
@@ -4847,7 +4998,7 @@ mod tests {
         let err = format!(
             "{:#}",
             state
-                .add_wasm_rule("smuggler", &bad, trained_github(), false)
+                .add_wasm_rule("smuggler", &bad, None, trained_github(), false)
                 .expect_err("must refuse")
         );
         assert!(err.contains("vetting wasm module"), "{err}");
@@ -4892,7 +5043,13 @@ mod tests {
             .expect("widen store dir");
 
         let rule = state
-            .add_wasm_rule("owner only", APPROVE_IF_BYTES, trained_github(), false)
+            .add_wasm_rule(
+                "owner only",
+                APPROVE_IF_BYTES,
+                None,
+                trained_github(),
+                false,
+            )
             .expect("register");
 
         let mode = std::fs::metadata(&store_dir)
@@ -4932,7 +5089,7 @@ mod tests {
         let before = store_listing();
 
         let rule = state
-            .add_wasm_rule("no litter", APPROVE_IF_BYTES, trained_github(), false)
+            .add_wasm_rule("no litter", APPROVE_IF_BYTES, None, trained_github(), false)
             .expect("register");
 
         let added: Vec<String> = store_listing().difference(&before).cloned().collect();
@@ -4957,7 +5114,7 @@ mod tests {
         let err = format!(
             "{:#}",
             state
-                .add_wasm_rule("greedy", APPROVE_IF_BYTES, Default::default(), false)
+                .add_wasm_rule("greedy", APPROVE_IF_BYTES, None, Default::default(), false,)
                 .expect_err("must refuse")
         );
         assert!(err.contains("trained-secrets"), "{err}");
@@ -4965,7 +5122,7 @@ mod tests {
 
         // The explicit opt-in registers with the guard disabled.
         let rule = state
-            .add_wasm_rule("greedy", APPROVE_IF_BYTES, Default::default(), true)
+            .add_wasm_rule("greedy", APPROVE_IF_BYTES, None, Default::default(), true)
             .expect("opt-in registers");
         assert!(rule.trained_secrets.is_empty());
         // Clean up the store entry this test just created.
@@ -4983,7 +5140,7 @@ mod tests {
         let path = dir.path().join("auto-rules.toml");
         let mut state = State::with_rules_path(path.clone());
         let rule = state
-            .add_wasm_rule("tamper me", APPROVE_IF_BYTES, trained_github(), false)
+            .add_wasm_rule("tamper me", APPROVE_IF_BYTES, None, trained_github(), false)
             .expect("register");
         let store = crate::paths::rule_wasm_path(&rule.id).expect("store path");
         std::fs::write(&store, b"not the registered module").expect("tamper");
@@ -5189,7 +5346,7 @@ mod tests {
 
         let store_before = store_listing();
         state
-            .add_wasm_rule("doomed", APPROVE_IF_BYTES, trained_github(), false)
+            .add_wasm_rule("doomed", APPROVE_IF_BYTES, None, trained_github(), false)
             .expect_err("persist must fail");
         assert!(state.rules_snapshot().is_empty());
         assert!(
@@ -5260,7 +5417,7 @@ mod tests {
         let path = dir.path().join("auto-rules.toml");
         let mut state = State::with_rules_path(path.clone());
         let rule = state
-            .add_wasm_rule("heal me", APPROVE_IF_BYTES, trained_github(), false)
+            .add_wasm_rule("heal me", APPROVE_IF_BYTES, None, trained_github(), false)
             .expect("register");
         let store = crate::paths::rule_wasm_path(&rule.id).expect("store path");
         std::fs::write(&store, ALWAYS_PASS).expect("swap module");
@@ -5359,6 +5516,30 @@ mod tests {
                 .shutdown_flag()
                 .load(std::sync::atomic::Ordering::SeqCst),
             "reload must not flip the shutdown flag — the old design did and that broke `secreq view`"
+        );
+    }
+
+    #[test]
+    fn removing_a_configured_wrap_refreshes_scope_refusals() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.toml");
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(&config_path, "[wraps.gh]\n").expect("config");
+        let mut rule = mk_rule("01", "gh", RuleDecision::Deny, None);
+        rule.wraps = Some(["gh".to_owned()].into_iter().collect());
+        crate::rules::save_rules(&path, std::slice::from_ref(&rule)).expect("rules");
+        let mut state = State::with_rules_path(path);
+        assert!(state.refusals_snapshot().scopes.is_empty());
+
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(&config_path, "[wraps.aws]\n").expect("remove gh");
+        state.reload_rules_if_changed();
+
+        assert_eq!(state.refusals_snapshot().scopes.len(), 1);
+        let ask = ask_with_secret("gh", &["gh", "api", "/user"], "GITHUB_TOKEN");
+        assert!(
+            state.evaluate_rules_for_ask(&ask).is_none(),
+            "a dangling deny scope must mandate the prompt after config reload"
         );
     }
 
@@ -5615,6 +5796,7 @@ mod tests {
             id: "01".to_owned(),
             name: "npm publish guard".to_owned(),
             enabled: true,
+            wraps: None,
             trained_secrets: ["NPM_TOKEN".to_owned()].into_iter().collect(),
             created_at_unix: 0,
             body: RuleBody::Declarative {
@@ -5646,6 +5828,7 @@ mod tests {
             id: "01".to_owned(),
             name: "op reads".to_owned(),
             enabled: true,
+            wraps: None,
             trained_secrets: ["wrap:op".to_owned()].into_iter().collect(),
             created_at_unix: 0,
             body: RuleBody::Declarative {
@@ -5685,6 +5868,7 @@ mod tests {
             id: "01".to_owned(),
             name: "approve everything".to_owned(),
             enabled: true,
+            wraps: None,
             trained_secrets: Default::default(),
             created_at_unix: 0,
             body: RuleBody::Declarative {
