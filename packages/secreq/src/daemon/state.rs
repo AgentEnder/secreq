@@ -1672,12 +1672,12 @@ impl State {
         // such field to put a synthetic entry in anyway — which is the shape
         // this reasoning always wanted.
         //
-        // A **gate-only wrap** has no `env` entries, so it declares no
-        // secrets either — it exists to put consent in front of a binary that
-        // holds its own credentials (`op` is the shipped example). That ask
-        // hits the same vacuous-`.all()` hole the SSH subject was minted to
-        // close, and the fix landed only on the SSH branch. Name the wrap
-        // itself, so `--secret wrap:op` scopes a rule to it and a rule
+        // A **gate-only wrap** has no `env_secrets` or `env` entries, so it
+        // declares no secrets either — it exists to put consent in front of a
+        // binary that holds its own credentials (`op` is the shipped example).
+        // That ask hits the same vacuous-`.all()` hole the SSH subject was
+        // minted to close, and the fix landed only on the SSH branch. Name the
+        // wrap itself, so `--secret wrap:op` scopes a rule to it and a rule
         // trained on anything else stops being consulted.
         let subject = ssh.map(|s| format!("ssh:{}", s.key_id)).or_else(|| {
             secrets
@@ -5600,11 +5600,11 @@ mod tests {
         }
     }
 
-    /// A **gate-only wrap** (no `env` entries) declares no secrets, so the
-    /// trained-secrets guard used to run `.all()` over an empty list, come
-    /// back vacuously true, and consult every rule. The shipped example is
-    /// `op`: a rule the user scoped to `NPM_TOKEN` would silently authorize
-    /// arbitrary 1Password vault reads.
+    /// A **gate-only wrap** (no `env_secrets` or `env` entries) declares no
+    /// secrets, so the trained-secrets guard used to run `.all()` over an
+    /// empty list, come back vacuously true, and consult every rule. The
+    /// shipped example is `op`: a rule the user scoped to `NPM_TOKEN` would
+    /// silently authorize arbitrary 1Password vault reads.
     #[test]
     fn trained_secrets_guard_blocks_a_gate_only_ask() {
         let mut gate_only = ask_with_secret("op", &["op", "item", "get", "x"], "IGNORED");

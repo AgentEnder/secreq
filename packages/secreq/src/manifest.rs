@@ -62,9 +62,9 @@ pub struct Provider {
     #[serde(default, alias = "write", skip_serializing_if = "Option::is_none")]
     pub store: Option<StoreCapability>,
     /// Batched retrieve: one command invocation resolves many secrets at once
-    /// (e.g. `op run -- printenv`). Used automatically when a wrap's `env`
-    /// references the same provider for two or more entries, cutting biometric
-    /// prompts from N to 1.
+    /// (e.g. `op run -- printenv`). Used automatically when a wrap's
+    /// `env_secrets` and `env` together reference the same provider for two or
+    /// more entries, cutting biometric prompts from N to 1.
     #[serde(
         default,
         alias = "retrieveBatch",
@@ -75,11 +75,11 @@ pub struct Provider {
 }
 
 /// Batched-retrieve: one command invocation resolves many secrets at once
-/// (e.g. `op run -- printenv`). Used automatically when a wrap's `env`
-/// references the same provider for two or more entries, cutting biometric
-/// prompts from N to 1. Protocol: per requested (name, locator), set env var
-/// `name` to `env_value` with `{locator}` substituted; spawn `command`; parse
-/// stdout as `KEY=VALUE` lines.
+/// (e.g. `op run -- printenv`). Used automatically when a wrap's `env_secrets`
+/// and `env` together reference the same provider for two or more entries,
+/// cutting biometric prompts from N to 1. Protocol: per requested (name,
+/// locator), set env var `name` to `env_value` with `{locator}` substituted;
+/// spawn `command`; parse stdout as `KEY=VALUE` lines.
 //
 // Limitation: line-based output can't carry multi-line values intact. If any
 // value contains a newline, the resolver falls back to per-secret retrieve

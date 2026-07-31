@@ -5,12 +5,13 @@
 //! multi-step flows (init, wrap) look like one operation rather than a
 //! stream of bare lines.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 
 use crate::manifest::Provider;
-use crate::reference::Reference;
+use crate::reference::{RefForm, Reference};
+use crate::wraps::is_env_var_name;
 
 /// Prompt for a value with a default. cliclack's `default_input` pre-fills
 /// the line; an empty submission accepts the default unchanged.
@@ -158,23 +159,56 @@ fn locator_resolves(provider: &crate::manifest::Provider, locator: &str) -> Resu
 /// Prompt for an environment variable name, validating the shell-identifier
 /// shape. Shared by the "reuse an existing secret" and "define a new one"
 /// branches of [`interactive_wrap_envs`].
-fn prompt_env_var_name() -> Result<String> {
+fn prompt_env_var_name(env_secrets: &[String], env: &BTreeMap<String, String>) -> Result<String> {
+    let claimed: BTreeSet<String> = env_secrets
+        .iter()
+        .cloned()
+        .chain(env.keys().cloned())
+        .collect();
     cliclack::input("Environment variable name")
         .placeholder("e.g. GITHUB_TOKEN")
-        .validate(|s: &String| {
-            if !s.is_empty()
-                && s.chars()
-                    .next()
-                    .is_some_and(|c| c == '_' || c.is_ascii_alphabetic())
-                && s.chars().all(|c| c == '_' || c.is_ascii_alphanumeric())
-            {
-                Ok(())
-            } else {
-                Err("env var names must match `[A-Za-z_][A-Za-z0-9_]*`")
-            }
-        })
+        .validate(move |s: &String| validate_env_var_name(s, &claimed))
         .interact()
         .context("interactive input failed")
+}
+
+fn validate_env_var_name(
+    name: &str,
+    claimed: &BTreeSet<String>,
+) -> std::result::Result<(), &'static str> {
+    if !is_env_var_name(name) {
+        Err("env var names must match `[A-Za-z_][A-Za-z0-9_]*`")
+    } else if claimed.contains(name) {
+        Err("that env var is already assigned in this wrap")
+    } else {
+        Ok(())
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum EnvSecretClaim {
+    Added,
+    AlreadyClaimed,
+    ConflictsWithEnv,
+}
+
+fn should_offer_own_name(name: &str) -> bool {
+    is_env_var_name(name)
+}
+
+fn claim_env_secret(
+    env_secrets: &mut Vec<String>,
+    env: &BTreeMap<String, String>,
+    name: &str,
+) -> EnvSecretClaim {
+    if env.contains_key(name) {
+        EnvSecretClaim::ConflictsWithEnv
+    } else if env_secrets.iter().any(|claimed| claimed == name) {
+        EnvSecretClaim::AlreadyClaimed
+    } else {
+        env_secrets.push(name.to_owned());
+        EnvSecretClaim::Added
+    }
 }
 
 /// The sentinel value returned by the reuse picker when the user wants to
@@ -183,18 +217,19 @@ fn prompt_env_var_name() -> Result<String> {
 /// suggestion.
 const DEFINE_NEW_REF: &str = "\0new";
 
-/// Drive the interactive `secreq wrap` env-collection loop: for each env
-/// var, either reuse a `secret://` reference already wired up elsewhere
-/// (`known_refs`) or define a new one (pick a provider, supply a locator);
-/// loop until the user signals they're done.
+/// Drive the interactive `secreq wrap` env-collection loop. A selected
+/// declaration is offered under its own name (`env_secrets`) before falling
+/// back to the explicit env-name form; an inline reference always asks for an
+/// env name. New references still go through provider + locator collection.
 pub(super) fn interactive_wrap_envs(
     providers: &BTreeMap<String, Provider>,
     known_refs: &[String],
-) -> Result<BTreeMap<String, String>> {
+) -> Result<(Vec<String>, BTreeMap<String, String>)> {
     if providers.is_empty() {
         anyhow::bail!("no providers available; declare some in your config first");
     }
 
+    let mut env_secrets = Vec::new();
     let mut env = BTreeMap::new();
     loop {
         // Offer reuse first: the same token often backs several wrapped
@@ -203,8 +238,7 @@ pub(super) fn interactive_wrap_envs(
         let reused = if known_refs.is_empty() {
             None
         } else {
-            let mut sel =
-                cliclack::select::<String>("Reuse a secret already used by another wrap?");
+            let mut sel = cliclack::select::<String>("Use a declared or previously used secret?");
             for r in known_refs {
                 sel = sel.item(r.clone(), r.as_str(), "");
             }
@@ -220,8 +254,46 @@ pub(super) fn interactive_wrap_envs(
         };
 
         if let Some(ref_str) = reused {
-            let env_name = prompt_env_var_name()?;
-            env.insert(env_name, ref_str);
+            let declaration = match Reference::parse_form(&ref_str) {
+                Some(RefForm::Named(name)) => Some(name),
+                _ => None,
+            };
+            if let Some(name) = declaration {
+                let own_name = if should_offer_own_name(&name) {
+                    cliclack::confirm(format!("Inject under the declaration's own name `{name}`?"))
+                        .initial_value(true)
+                        .interact()
+                        .context("interactive confirm failed")?
+                } else {
+                    cliclack::log::warning(crate::term::wrap_log_text(&format!(
+                        "`{name}` cannot be an environment variable; choose a valid name."
+                    )))?;
+                    false
+                };
+                if own_name {
+                    match claim_env_secret(&mut env_secrets, &env, &name) {
+                        EnvSecretClaim::Added => {}
+                        EnvSecretClaim::AlreadyClaimed => {
+                            cliclack::log::warning(format!(
+                                "`{name}` is already injected by this wrap."
+                            ))?;
+                        }
+                        EnvSecretClaim::ConflictsWithEnv => {
+                            cliclack::log::warning(format!(
+                                "`{name}` is already assigned; choose a different env var."
+                            ))?;
+                            let env_name = prompt_env_var_name(&env_secrets, &env)?;
+                            env.insert(env_name, ref_str);
+                        }
+                    }
+                } else {
+                    let env_name = prompt_env_var_name(&env_secrets, &env)?;
+                    env.insert(env_name, ref_str);
+                }
+            } else {
+                let env_name = prompt_env_var_name(&env_secrets, &env)?;
+                env.insert(env_name, ref_str);
+            }
         } else {
             // cliclack `select<T>` returns the value associated with the
             // chosen item (not an index) — passing the provider name as the
@@ -239,7 +311,7 @@ pub(super) fn interactive_wrap_envs(
                 .interact()
                 .context("interactive provider selection failed")?;
 
-            let env_name = prompt_env_var_name()?;
+            let env_name = prompt_env_var_name(&env_secrets, &env)?;
 
             // The provider was chosen from `providers`, so the lookup holds.
             let provider_def = &providers[&provider];
@@ -283,7 +355,55 @@ pub(super) fn interactive_wrap_envs(
             .interact()
             .context("interactive confirm failed")?;
         if !again {
-            return Ok(env);
+            return Ok((env_secrets, env));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claiming_the_same_env_secret_twice_is_idempotent() {
+        let mut env_secrets = vec!["GITHUB_TOKEN".to_owned()];
+        let env = BTreeMap::new();
+
+        assert_eq!(
+            claim_env_secret(&mut env_secrets, &env, "GITHUB_TOKEN"),
+            EnvSecretClaim::AlreadyClaimed
+        );
+        assert_eq!(env_secrets, ["GITHUB_TOKEN"]);
+    }
+
+    #[test]
+    fn a_non_env_declaration_name_is_not_offered_for_own_name_injection() {
+        assert!(should_offer_own_name("GITHUB_TOKEN"));
+        assert!(!should_offer_own_name("GITHUB-TOKEN"));
+    }
+
+    #[test]
+    fn an_explicit_env_claim_blocks_an_own_name_claim() {
+        let mut env_secrets = Vec::new();
+        let env = BTreeMap::from([(
+            "GITHUB_TOKEN".to_owned(),
+            "secret://op/Other/token".to_owned(),
+        )]);
+
+        assert_eq!(
+            claim_env_secret(&mut env_secrets, &env, "GITHUB_TOKEN"),
+            EnvSecretClaim::ConflictsWithEnv
+        );
+        assert!(env_secrets.is_empty());
+    }
+
+    #[test]
+    fn env_name_validation_rejects_names_claimed_by_either_form() {
+        let claimed = BTreeSet::from(["GITHUB_TOKEN".to_owned(), "GH_HOST".to_owned()]);
+
+        assert!(validate_env_var_name("NEW_NAME", &claimed).is_ok());
+        assert!(validate_env_var_name("github token", &claimed).is_err());
+        assert!(validate_env_var_name("GITHUB_TOKEN", &claimed).is_err());
+        assert!(validate_env_var_name("GH_HOST", &claimed).is_err());
     }
 }

@@ -72,11 +72,12 @@ pub fn wrap_run(
     // secreq*, so a satisfied entry drops out of the ask entirely, and a
     // wrap whose entries are ALL satisfied runs without any consent (the
     // wrap-and-run mirror of `run`'s "nothing to resolve" fast path).
-    // Deliberately not applied to gate-only wraps (empty `env`): those
-    // exist to gate the binary itself, not to inject.
-    let had_env_entries = !wrap.env.is_empty();
+    // Deliberately not applied to gate-only wraps (empty `env_secrets` and
+    // `env`): those exist to gate the binary itself, not to inject.
+    let had_env_entries = !wrap.is_gate_only();
+    wrap.env_secrets.retain(|name| !parent_env_satisfies(name));
     wrap.env.retain(|name, _| !parent_env_satisfies(name));
-    if had_env_entries && wrap.env.is_empty() {
+    if had_env_entries && wrap.is_gate_only() {
         return passthrough_unwrapped(binary, args, config.shim_dir.as_deref());
     }
 
@@ -103,12 +104,12 @@ pub fn wrap_run(
     // resolve client-side).
     let resolved: Vec<(String, SecretValue)> = if opts.assume_yes {
         let decision = Decision::Approve;
-        let env_names: Vec<String> = wrap.env.keys().cloned().collect();
+        let env_names = wrap.env_names();
         let _ = audit::append(&AuditEntry::new(binary, args, &chain, &env_names, decision));
         resolve_wrap_env(&config, &wrap)?
     } else {
         let outcome = obtain_wrap_consent(&wrap, callers, args, &opts)?;
-        let env_names: Vec<String> = wrap.env.keys().cloned().collect();
+        let env_names = wrap.env_names();
         let _ = audit::append(
             &AuditEntry::new(binary, args, &chain, &env_names, outcome.decision)
                 .with_reason(outcome.reason.clone())
@@ -569,13 +570,13 @@ fn obtain_wrap_consent(
     let mut command = vec![wrap.name.clone()];
     command.extend(args.iter().cloned());
 
-    // Parse the wrap's env into references. Bare-locator wraps (no
-    // `secret://...` prefix) never made it through `wraps::parse`, so we can
-    // assume `Reference::parse` succeeds — but if it doesn't, surface the
-    // malformed ref early instead of sending a junk ask the daemon would
-    // reject at resolution time.
+    // Parse the wrap's `env_secrets` and `env` union into references.
+    // Bare-locator wraps (no `secret://...` prefix) never made it through
+    // `wraps::parse`, so we can assume `Reference::parse` succeeds — but if it
+    // doesn't, surface the malformed ref early instead of sending a junk ask
+    // the daemon would reject at resolution time.
     let config = load_config_or_default(None)?;
-    let refs = parse_wrap_refs(&config, wrap)?;
+    let refs = config.wrap_refs(wrap)?;
 
     let ask = build_ask(
         AskSpec {
@@ -597,17 +598,12 @@ fn obtain_wrap_consent(
         .context("daemon consent request failed")
 }
 
-/// Parse a wrap's `env` map into `(name, Reference)` pairs, surfacing a
-/// malformed `secret://` ref with the wrap-specific error message.
-fn parse_wrap_refs(config: &WrapsConfig, wrap: &Wrap) -> Result<Vec<(String, ResolvedRef)>> {
-    config.wrap_refs(wrap)
-}
-
-/// Resolve every env entry for the wrap through its provider. Reuses the
-/// resolve grouping/batching machinery by building a one-shot manifest with
-/// the wrap's env as eager secrets.
+/// Resolve every `env_secrets` and `env` entry for the wrap through its
+/// provider. Reuses the resolve grouping/batching machinery by building a
+/// one-shot manifest with the wrap's complete injection union as eager
+/// secrets.
 fn resolve_wrap_env(config: &WrapsConfig, wrap: &Wrap) -> Result<Vec<(String, SecretValue)>> {
-    let refs = parse_wrap_refs(config, wrap)?;
+    let refs = config.wrap_refs(wrap)?;
     resolve_refs_client_side(config, &refs, wrap.reason.as_deref())
 }
 
@@ -683,6 +679,44 @@ mod tests {
             .find(|(n, _)| n == "DATABASE_URL")
             .map(|(_, v)| v.expose());
         assert_eq!(db, Some("db-secret"));
+    }
+
+    #[test]
+    fn env_secrets_and_env_share_one_provider_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let counter = dir.path().join("batch-count");
+        let config = WrapsConfig::parse(
+            &format!(
+                r#"
+                [secrets.FIRST]
+                ref = "secret://fake/first"
+
+                [wraps.demo]
+                env_secrets = ["FIRST"]
+                env.SECOND = "secret://fake/second"
+
+                [providers.fake]
+                retrieve = ["false"]
+                retrieve_batch = {{ command = ["sh", "-c", "echo x >> '{}'; printenv"], env_value = "batched-{{locator}}" }}
+                "#,
+                counter.display()
+            ),
+            "config.toml",
+        )
+        .unwrap();
+
+        let resolved = resolve_wrap_env(&config, config.wrap("demo").unwrap()).unwrap();
+        let values: BTreeMap<_, _> = resolved
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.expose()))
+            .collect();
+        assert_eq!(values["FIRST"], "batched-first");
+        assert_eq!(values["SECOND"], "batched-second");
+        assert_eq!(
+            std::fs::read_to_string(counter).unwrap().lines().count(),
+            1,
+            "the union must use one batch invocation"
+        );
     }
 
     #[test]

@@ -360,6 +360,48 @@ fn run_without_a_survivor_emits_no_survivor_line_or_audit_record() {
     }
 }
 
+#[test]
+fn wrap_run_injects_an_env_secret_under_its_declaration_name() {
+    let sb = Sandbox::new();
+    let bin_dir = sb.path().join("realbin");
+    let shim_dir = sb.path().join("shims");
+    install_fake_gh(&bin_dir);
+    write_config(
+        &sb.config_path(),
+        &format!(
+            r#"
+            shim_dir = "{}"
+
+            [secrets.GITHUB_TOKEN]
+            ref = "secret://fake/the-token-value"
+
+            [wraps.gh]
+            env_secrets = ["GITHUB_TOKEN"]
+
+            [providers.fake]
+            retrieve = ["printf", "%s", "{{locator}}"]
+            "#,
+            shim_dir.display()
+        ),
+    );
+    let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
+
+    let out = sb
+        .cmd(&["x", "--sq-yes", "--sq-raw", "gh"])
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("GITHUB_TOKEN=the-token-value"),
+        "the declaration name must also be the injected env name"
+    );
+}
+
 /// Run `secreq x` with the fake-`gh` sandbox wired up: fake binary on PATH,
 /// echo provider config in place, daemon disabled.
 fn run_x(sb: &Sandbox, bin_dir: &Path, args: &[&str]) -> std::process::Output {
@@ -841,6 +883,92 @@ fn wrap_records_config_and_drops_shim() {
 }
 
 #[test]
+fn wrap_secret_records_a_declaration_name_and_check_accepts_it() {
+    let sb = Sandbox::new();
+    let config = sb.config_path();
+    let shim_dir = sb.path().join("shims");
+    fs::create_dir_all(&shim_dir).unwrap();
+    write_config(
+        &config,
+        &format!(
+            r#"
+            shim_dir = "{}"
+
+            [secrets.GITHUB_TOKEN]
+            ref = "secret://op/Personal/GitHub/token"
+            "#,
+            shim_dir.display()
+        ),
+    );
+
+    let out = sb.run(&["wrap", "--secret", "GITHUB_TOKEN", "gh"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let body = fs::read_to_string(&config).unwrap();
+    assert!(body.contains("env_secrets = [\"GITHUB_TOKEN\"]"), "{body}");
+
+    let check = sb.run(&["check"]);
+    assert!(
+        check.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+}
+
+#[test]
+fn wrap_secret_rejects_invalid_flag_shapes_before_editing_config() {
+    for invalid in ["secret://GITHUB_TOKEN", "GITHUB-TOKEN"] {
+        let sb = Sandbox::new();
+        let config = sb.config_path();
+        let shim_dir = sb.path().join("shims");
+        fs::create_dir_all(&shim_dir).unwrap();
+        write_config(&config, &format!("shim_dir = \"{}\"\n", shim_dir.display()));
+
+        let out = sb.run(&["wrap", "--secret", invalid, "gh"]);
+        assert_eq!(out.status.code(), Some(1), "{invalid}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("--secret"), "{invalid}: {stderr}");
+        assert!(stderr.contains(invalid), "{invalid}: {stderr}");
+        assert!(!stderr.contains("internal:"), "{invalid}: {stderr}");
+        assert!(
+            !fs::read_to_string(&config).unwrap().contains("env_secrets"),
+            "{invalid}: invalid flags must not edit config"
+        );
+    }
+
+    let sb = Sandbox::new();
+    let config = sb.config_path();
+    let shim_dir = sb.path().join("shims");
+    fs::create_dir_all(&shim_dir).unwrap();
+    write_config(
+        &config,
+        &format!(
+            r#"
+            shim_dir = "{}"
+
+            [secrets.GITHUB_TOKEN]
+            ref = "secret://op/Personal/GitHub/token"
+            "#,
+            shim_dir.display()
+        ),
+    );
+
+    let out = sb.run(&["wrap", "--secret", "GITHUB_TOKN", "gh"]);
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("--secret `GITHUB_TOKN`"), "{stderr}");
+    assert!(stderr.contains("[secrets.GITHUB_TOKEN]"), "{stderr}");
+    assert!(!stderr.contains("internal:"), "{stderr}");
+    assert!(
+        !fs::read_to_string(&config).unwrap().contains("env_secrets"),
+        "an undeclared name must fail before editing config"
+    );
+}
+
+#[test]
 fn wrap_with_no_env_creates_a_gate_only_wrap() {
     // `secreq wrap op` with no `--env` and no terminal (the test harness
     // has no TTY) creates a gate-only wrap: consent is required, nothing
@@ -1123,6 +1251,95 @@ fn check_passes_on_a_well_formed_config() {
 }
 
 #[test]
+fn check_accepts_env_secrets_only_and_mixed_wraps() {
+    let sb = Sandbox::new();
+    write_config(
+        &sb.config_path(),
+        r#"
+        [secrets.GITHUB_TOKEN]
+        ref = "secret://op/Personal/GitHub/token"
+
+        [secrets.AWS_PROFILE]
+        ref = "secret://op/Work/AWS/profile"
+
+        [wraps.gh]
+        env_secrets = ["GITHUB_TOKEN"]
+
+        [wraps.aws]
+        env_secrets = ["AWS_PROFILE"]
+        env.AWS_REGION = "secret://op/Work/AWS/region"
+
+        [wraps.op]
+        "#,
+    );
+
+    let out = sb.run(&["check"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("config OK"));
+}
+
+#[test]
+fn check_rejects_invalid_env_secrets_entries() {
+    let cases = [
+        (
+            "collision",
+            r#"
+            [secrets.GITHUB_TOKEN]
+            ref = "secret://op/x"
+            [wraps.gh]
+            env_secrets = ["GITHUB_TOKEN"]
+            env.GITHUB_TOKEN = "secret://op/y"
+            "#,
+            "both `env_secrets` and `env`",
+        ),
+        (
+            "unknown",
+            r#"
+            [secrets.GITHUB_TOKEN]
+            ref = "secret://op/x"
+            [wraps.gh]
+            env_secrets = ["GITHUB_TOKN"]
+            "#,
+            "secrets.GITHUB_TOKEN",
+        ),
+        (
+            "inline reference",
+            r#"
+            [secrets.GITHUB_TOKEN]
+            ref = "secret://op/x"
+            [wraps.gh]
+            env_secrets = ["secret://GITHUB_TOKEN"]
+            "#,
+            "declaration name",
+        ),
+        (
+            "not an env var name",
+            r#"
+            [secrets."github token"]
+            ref = "secret://op/x"
+            [wraps.gh]
+            env_secrets = ["github token"]
+            "#,
+            "[A-Za-z_][A-Za-z0-9_]*",
+        ),
+    ];
+
+    for (label, config, expected) in cases {
+        let sb = Sandbox::new();
+        write_config(&sb.config_path(), config);
+        let out = sb.run(&["check"]);
+        assert_eq!(out.status.code(), Some(1), "{label}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("wraps.gh"), "{label}: {stderr}");
+        assert!(stderr.contains(expected), "{label}: {stderr}");
+    }
+}
+
+#[test]
 fn check_flags_unknown_provider_in_a_wrap() {
     let sb = Sandbox::new();
     write_config(
@@ -1131,7 +1348,28 @@ fn check_flags_unknown_provider_in_a_wrap() {
     );
     let out = sb.run(&["check"]);
     assert_eq!(out.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&out.stdout).contains("unknown provider scheme"));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("wraps.gh.env.X"), "{stdout}");
+    assert!(stdout.contains("unknown provider scheme"), "{stdout}");
+
+    let sb = Sandbox::new();
+    write_config(
+        &sb.config_path(),
+        r#"
+        [secrets.GITHUB_TOKEN]
+        ref = "secret://made-up-provider/loc"
+        [wraps.gh]
+        env_secrets = ["GITHUB_TOKEN"]
+        "#,
+    );
+    let out = sb.run(&["check"]);
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(r#"wraps.gh.env_secrets["GITHUB_TOKEN"]"#),
+        "{stdout}"
+    );
+    assert!(stdout.contains("unknown provider scheme"), "{stdout}");
 }
 
 // ── init (auto-PATH setup) ────────────────────────────────────────────────

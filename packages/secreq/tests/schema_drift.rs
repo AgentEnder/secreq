@@ -235,7 +235,8 @@ wait_indicator = false
 
 [wraps.gh]
 reason = "GitHub API access"
-env.GITHUB_TOKEN = "secret://op/Personal/GitHub/token"
+env_secrets = ["GITHUB_TOKEN"]
+env.INLINE_TOKEN = "secret://op/Personal/GitHub/token"
 env.GH_TOKEN = "secret://declared_with_ttl"
 env.GH_ALT = "secret://declared_without_ttl"
 
@@ -243,6 +244,9 @@ env.GH_ALT = "secret://declared_without_ttl"
 [wraps.op]
 
 # Both spellings of a declaration: with an explicit `ttl` and without.
+[secrets.GITHUB_TOKEN]
+ref = "secret://op/Personal/GitHub/token"
+
 [secrets.declared_with_ttl]
 ref = "secret://op/Personal/GitHub/other"
 ttl = "15m"
@@ -317,4 +321,58 @@ fn schema_and_parser_refuse_the_same_unknown_key() {
         WrapsConfig::parse(text, "unknown-key").is_err(),
         "the parser was expected to refuse an unknown wrap key"
     );
+}
+
+#[test]
+fn schema_and_parser_refuse_invalid_env_secrets_lists() {
+    let (schemas, index) = wraps_schema();
+    let cases = [
+        (
+            "a name that cannot be an env var",
+            json!({
+                "secrets": {
+                    "github token": { "ref": "secret://op/Personal/GitHub/token" }
+                },
+                "wraps": {
+                    "gh": { "env_secrets": ["github token"] }
+                }
+            }),
+            r#"
+            [secrets."github token"]
+            ref = "secret://op/Personal/GitHub/token"
+
+            [wraps.gh]
+            env_secrets = ["github token"]
+            "#,
+        ),
+        (
+            "a duplicate declaration name",
+            json!({
+                "secrets": {
+                    "GITHUB_TOKEN": { "ref": "secret://op/Personal/GitHub/token" }
+                },
+                "wraps": {
+                    "gh": { "env_secrets": ["GITHUB_TOKEN", "GITHUB_TOKEN"] }
+                }
+            }),
+            r#"
+            [secrets.GITHUB_TOKEN]
+            ref = "secret://op/Personal/GitHub/token"
+
+            [wraps.gh]
+            env_secrets = ["GITHUB_TOKEN", "GITHUB_TOKEN"]
+            "#,
+        ),
+    ];
+
+    for (label, document, config) in cases {
+        assert!(
+            schemas.validate(&document, index).is_err(),
+            "docs/wraps.schema.json accepts {label}"
+        );
+        assert!(
+            WrapsConfig::parse(config, label).is_err(),
+            "the parser was expected to refuse {label}"
+        );
+    }
 }

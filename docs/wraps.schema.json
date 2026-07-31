@@ -5,7 +5,7 @@
   "definitions": {
     "BatchRetrieve": {
       "additionalProperties": false,
-      "description": "Batched-retrieve: one command invocation resolves many secrets at once (e.g. `op run -- printenv`). Used automatically when a wrap's `env` references the same provider for two or more entries, cutting biometric prompts from N to 1. Protocol: per requested (name, locator), set env var `name` to `env_value` with `{locator}` substituted; spawn `command`; parse stdout as `KEY=VALUE` lines.",
+      "description": "Batched-retrieve: one command invocation resolves many secrets at once (e.g. `op run -- printenv`). Used automatically when a wrap's `env_secrets` and `env` together reference the same provider for two or more entries, cutting biometric prompts from N to 1. Protocol: per requested (name, locator), set env var `name` to `env_value` with `{locator}` substituted; spawn `command`; parse stdout as `KEY=VALUE` lines.",
       "properties": {
         "command": {
           "description": "argv to execute. The synthetic env entries are added to the child's environment; no placeholder substitution happens on `command` itself.",
@@ -93,7 +93,7 @@
               "type": "null"
             }
           ],
-          "description": "Batched retrieve: one command invocation resolves many secrets at once (e.g. `op run -- printenv`). Used automatically when a wrap's `env` references the same provider for two or more entries, cutting biometric prompts from N to 1."
+          "description": "Batched retrieve: one command invocation resolves many secrets at once (e.g. `op run -- printenv`). Used automatically when a wrap's `env_secrets` and `env` together reference the same provider for two or more entries, cutting biometric prompts from N to 1."
         },
         "store": {
           "anyOf": [
@@ -198,7 +198,7 @@
     },
     "Wrap": {
       "additionalProperties": false,
-      "description": "One per-binary wrap. `env` is optional: a wrap with no env entries is *gate-only* — consent is required before the binary runs, but nothing is injected (used to gate tools like `op` that have no secret to pass). Everything else is metadata.",
+      "description": "One per-binary wrap. `env_secrets` and `env` are optional: a wrap with neither is *gate-only* — consent is required before the binary runs, but nothing is injected (used to gate tools like `op` that have no secret to pass). Everything else is metadata.",
       "properties": {
         "env": {
           "additionalProperties": {
@@ -206,8 +206,17 @@
             "pattern": "^secret://[^/]+(/.+)?$",
             "type": "string"
           },
-          "description": "Environment variables to inject. Each value is a `secret://provider/locator` reference; resolution happens at invocation time. Omit (or leave empty) for a gate-only wrap.",
+          "description": "Environment variables to inject. Each value is a `secret://provider/locator` reference; resolution happens at invocation time. Use this form to inject a declaration under a different name or to carry an inline reference. Omit (along with `env_secrets`) for a gate-only wrap.",
           "type": "object"
+        },
+        "env_secrets": {
+          "description": "Secret declaration names to inject as environment variables under those same names. Each entry must name a top-level `[secrets.<name>]`; it must also match `[A-Za-z_][A-Za-z0-9_]*`. Use `env` when the environment variable needs a different name or the reference is inline.",
+          "items": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
         },
         "reason": {
           "description": "Rationale shown in the consent prompt when this wrap is invoked.",
@@ -259,7 +268,7 @@
       "additionalProperties": {
         "$ref": "#/definitions/Wrap"
       },
-      "description": "Per-binary wrap configuration, keyed by the binary name the shim is installed under. A wrap with no `env` is *gate-only*: consent is required before the binary runs, but nothing is injected.",
+      "description": "Per-binary wrap configuration, keyed by the binary name the shim is installed under. A wrap with neither `env_secrets` nor `env` is *gate-only*: consent is required before the binary runs, but nothing is injected.",
       "type": "object"
     }
   },

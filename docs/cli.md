@@ -61,11 +61,11 @@ before the wrap name is rejected with a hint to use the `--sq-` form.
    (skipping the shim dir, so it can't recurse) and exec it with no
    injection. This is what makes it safe to shim a binary before you've
    decided what it needs.
-3. **Drop `env` entries the environment already satisfies.** A variable
-   already set to a non-empty, non-`secret://` value needs no injection;
-   the child inherits it. If _every_ entry is satisfied, the run passes
-   through with no prompt at all, because secreq is releasing nothing.
-   Gate-only wraps are exempt; with no `env` to satisfy, they always gate.
+3. **Drop `env_secrets` and `env` entries the environment already
+   satisfies.** A variable already set to a non-empty, non-`secret://` value
+   needs no injection; the child inherits it. If _every_ entry is satisfied,
+   the run passes through with no prompt at all, because secreq is releasing
+   nothing. Gate-only wraps have neither form, so they always gate.
 4. Walk the parent process tree, then hand off to the consent daemon
    (auto-spawning it if no socket is live). A cache hit replies
    immediately; otherwise you get the [prompt](./consent-window.md).

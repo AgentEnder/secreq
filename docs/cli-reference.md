@@ -48,7 +48,8 @@ Add (or update) a wrap for a binary; installs the PATH shim
 
 | Flag | Meaning |
 | --- | --- |
-| `--env <NAME=REF>…` | `--env NAME=secret://provider/locator`. Repeatable. If none given, runs the interactive flow |
+| `--secret <NAME>…` | Inject a declared secret under its own name. Repeatable |
+| `--env <NAME=REF>…` | `--env NAME=secret://provider/locator`. Repeatable. When neither `--env` nor `--secret` is given, runs the interactive flow |
 | `--reason <REASON>` | Reason to show in the consent prompt |
 
 ## `secreq unwrap`

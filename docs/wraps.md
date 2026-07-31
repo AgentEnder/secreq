@@ -17,9 +17,12 @@ completion and inline validation:
 #:schema ./wraps.schema.json
 shim_dir = "~/.secreq/shims"   # set by `secreq init`
 
+[secrets.GITHUB_TOKEN]
+ref = "secret://op/Personal/GitHub Token/credential"
+
 [wraps.gh]
 reason = "GitHub API access"
-env.GITHUB_TOKEN = "secret://op/Personal/GitHub Token/credential"
+env_secrets = ["GITHUB_TOKEN"]
 
 [wraps.aws]
 reason = "AWS deployments"
@@ -52,10 +55,11 @@ setting.
 
 ## Wraps
 
-| Setting  | Type              | Meaning                                                                                                                                                                                                                     |
-| -------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `reason` | string            | Rationale shown in the consent prompt.                                                                                                                                                                                      |
-| `env`    | object (optional) | Environment variables to inject. Each value is a `secret://provider/locator` reference or a `secret://<name>` naming a [declared secret](#declared-secrets). Bare locators aren't accepted here. Omit for a gate-only wrap. |
+| Setting       | Type              | Meaning                                                                                                                                                                                                                     |
+| ------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reason`      | string            | Rationale shown in the consent prompt.                                                                                                                                                                                      |
+| `env_secrets` | array (optional)  | [Declared secret](#declared-secrets) names to inject under those same environment-variable names. Names must match `[A-Za-z_][A-Za-z0-9_]*`; references and provider locators aren't accepted.                              |
+| `env`         | object (optional) | Environment variables to inject. Each value is a `secret://provider/locator` reference or a `secret://<name>` naming a declared secret. Use this form for a different env name or an inline reference. Bare locators aren't accepted here. |
 
 A reference is `secret://<provider>/<locator>`: the provider is a scheme
 name (built-in or declared in `providers`), and the locator is everything
@@ -72,9 +76,10 @@ the quotes and the whitespace, then tells you what it read.
 
 ### Already-satisfied env vars
 
-An `env` entry whose variable is **already set** in the calling environment
-to a non-empty value that isn't a `secret://…` marker, is skipped entirely. Nothing is resolved, and the child inherits what was already
-there.
+An `env_secrets` or `env` entry whose variable is **already set** in the
+calling environment to a non-empty value that isn't a `secret://…` marker,
+is skipped entirely. Nothing is resolved, and the child inherits what was
+already there.
 
 If every entry is satisfied this way the run needs no consent at all and
 passes straight through, because secreq is releasing nothing. A partially
@@ -84,10 +89,10 @@ shell where you exported the token yourself, a nested `secreq run`.
 
 ### Gate-only wraps
 
-A wrap with no `env` is a **gate-only wrap**: invoking the binary still
-requires consent, but nothing is resolved or injected. Use it for a tool
-that manages its own credentials and has no secret for secreq to pass.
-`op` is the canonical case:
+A wrap with neither `env_secrets` nor `env` is a **gate-only wrap**: invoking
+the binary still requires consent, but nothing is resolved or injected. Use
+it for a tool that manages its own credentials and has no secret for secreq
+to pass. `op` is the canonical case:
 
 ```toml
 [wraps.op]
@@ -119,15 +124,15 @@ wrap that needs it. Declaring it under `secrets` gives it a name to reference
 and a place for per-secret settings to live:
 
 ```toml
-[secrets.github_token]
+[secrets.GITHUB_TOKEN]
 ref = "secret://op/Personal/GitHub Token/credential"
 ttl = "15m"
 
 [wraps.gh]
-env.GITHUB_TOKEN = "secret://github_token"
+env_secrets = ["GITHUB_TOKEN"]
 
 [wraps.hub]
-env.GH_TOKEN = "secret://github_token"
+env.GH_TOKEN = "secret://GITHUB_TOKEN"
 ```
 
 | Setting | Type              | Meaning                                                                                                                           |
@@ -140,8 +145,13 @@ agree on the `ttl`; a file where they disagree fails to load, because one
 reference is one cached value and so has one lifetime.
 
 Changing a declaration's `ref` changes it for every wrap that references
-the name, which is the point. `secreq check` reports a `secret://<name>`
-that names nothing declared.
+the name, which is the point. `env_secrets` removes the repeated env key and
+reference when the two names agree; `env` remains the explicit renaming form.
+`secreq wrap gh --secret GITHUB_TOKEN` writes the first form. `secreq check`
+reports an unknown declaration, a reference in `env_secrets`, or a name
+claimed by both forms.
+
+::term{id=wrap-declared-secret}
 
 ### How long a value stays cached
 

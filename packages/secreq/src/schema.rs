@@ -47,7 +47,7 @@ use serde_json::{json, Value};
 
 use crate::manifest::Provider;
 use crate::rules::RulesFile;
-use crate::wraps::{SecretDecl, SshIdentity, Wrap};
+use crate::wraps::{SecretDecl, SshIdentity, Wrap, ENV_VAR_NAME_PATTERN};
 
 // An `$id` is what a user's editor fetches from the Taplo `#:schema`
 // directive, so it has to be the URL the file is actually served from.
@@ -137,6 +137,35 @@ impl schemars::JsonSchema for SecretRefMap {
                 "type": "string",
                 "pattern": r"^secret://[^/]+(/.+)?$",
                 "description": "A `secret://provider/locator` reference, or `secret://<name>` naming an entry in the top-level `secrets` block."
+            }
+        })
+    }
+}
+
+/// A wrap's `env_secrets` list: declaration names that are also valid
+/// environment-variable names.
+///
+/// A named type so [`Wrap`]'s list items carry the portable env-name pattern
+/// that `Vec<String>` alone would not. Never constructed; it exists only as a
+/// `schemars(with = …)` target.
+pub struct EnvSecretNames;
+
+impl schemars::JsonSchema for EnvSecretNames {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "EnvSecretNames".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+                "type": "string",
+                "pattern": ENV_VAR_NAME_PATTERN
             }
         })
     }
@@ -263,7 +292,7 @@ pub fn wraps_schema() -> Value {
             },
             "wraps": {
                 "type": "object",
-                "description": "Per-binary wrap configuration, keyed by the binary name the shim is installed under. A wrap with no `env` is *gate-only*: consent is required before the binary runs, but nothing is injected.",
+                "description": "Per-binary wrap configuration, keyed by the binary name the shim is installed under. A wrap with neither `env_secrets` nor `env` is *gate-only*: consent is required before the binary runs, but nothing is injected.",
                 "additionalProperties": wrap
             },
             "providers": {
