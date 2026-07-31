@@ -1,13 +1,15 @@
 //! Append-only audit log (§8, §11).
 //!
-//! Every grant decision is recorded as one JSON line: when, where, what command,
-//! the caller chain, the secret **names** released, and the decision. Secret
-//! **values never appear** here — only names, per the threat model (§11).
+//! Every grant decision is recorded with when, where, what command, the caller
+//! chain, the secret **names** released, and the decision. Execution also
+//! records a separate event when processes remain in the observed child scope.
+//! Secret **values never appear** here, per the threat model (§11).
 
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -186,6 +188,27 @@ pub struct AuditCaller {
     /// `#[serde(default)]` so rows written before this decode as `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exe: Option<String>,
+}
+
+/// One process still running in the child session or process group after the
+/// wrapped command itself exited.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuditSurvivor {
+    pub pid: u32,
+    pub command: String,
+}
+
+/// The audit event emitted when child execution leaves background processes
+/// behind. Kept separate from [`AuditEntry`]: a survivor observation is not a
+/// second consent decision and must not be learned from as one by auto-rules.
+#[derive(Debug, Serialize)]
+struct SurvivorAuditEntry<'a> {
+    ts_unix: u64,
+    event: &'static str,
+    cwd: String,
+    command: &'a [String],
+    survivors: &'a [AuditSurvivor],
+    reach: &'static str,
 }
 
 /// Everything the daemon still holds about an ask whose client died before
@@ -533,14 +556,34 @@ impl AuditEntry {
 /// Append an entry to the audit log, creating the state dir if needed. Audit
 /// failures are non-fatal to the user's command but are surfaced to the caller.
 pub fn append(entry: &AuditEntry) -> Result<()> {
+    append_record(entry)
+}
+
+/// Append the processes observed after a wrapped command exited.
+///
+/// This records exactly the bounded observation `exec` made: members of the
+/// child session or process group. A process that left that scope (for example
+/// with `setsid`) is deliberately outside the record's reach.
+pub fn append_survivors(command: &[String], cwd: &Path, survivors: &[AuditSurvivor]) -> Result<()> {
+    append_record(&SurvivorAuditEntry {
+        ts_unix: now_unix(),
+        event: "background_survivors",
+        cwd: cwd.display().to_string(),
+        command,
+        survivors,
+        reach: "child_session_or_process_group",
+    })
+}
+
+fn append_record(entry: &impl Serialize) -> Result<()> {
     let path = crate::paths::audit_log_path()?;
     if let Some(parent) = path.parent() {
         crate::paths::ensure_private_dir(parent)
             .with_context(|| format!("failed to create state dir {}", parent.display()))?;
     }
     let line = serde_json::to_string(entry).context("failed to serialize audit entry")?;
-    // Owner-only: the row holds no value, but it does hold every wrapped
-    // command's argv, cwd, caller chain and secret names.
+    // Owner-only: the row holds no secret value, but it can hold wrapped argv,
+    // cwd, caller provenance, secret names, and observed survivor commands.
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)

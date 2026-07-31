@@ -20,7 +20,7 @@ use common::Sandbox;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Write a config with a single wrap using a fake "echo" provider whose
 /// retrieve template prints the locator back. Useful for non-biometric
@@ -61,6 +61,89 @@ fn install_fake_gh(bin_dir: &Path) {
     let mut perms = fs::metadata(&path).unwrap().permissions();
     perms.set_mode(0o755);
     fs::set_permissions(&path, perms).unwrap();
+}
+
+fn install_survivor(bin_dir: &Path) -> PathBuf {
+    fs::create_dir_all(bin_dir).unwrap();
+    let path = bin_dir.join("secreq-test-survivor");
+    fs::write(
+        &path,
+        "#!/bin/sh\n\
+         trap 'printf hup > \"$2\"; exit 97' HUP\n\
+         printf '%s' \"$$\" > \"$1\"\n\
+         while :; do sleep 1; done\n",
+    )
+    .unwrap();
+    let mut perms = fs::metadata(&path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&path, perms).unwrap();
+    path
+}
+
+fn install_background_gh(bin_dir: &Path, survivor: &Path) {
+    let path = bin_dir.join("gh");
+    fs::write(
+        &path,
+        format!(
+            "#!/bin/sh\n\
+             \"{}\" \"$1\" \"$2\" \"$GITHUB_TOKEN\" </dev/null >/dev/null 2>&1 &\n\
+             while [ ! -s \"$1\" ]; do sleep 0.01; done\n",
+            survivor.display()
+        ),
+    )
+    .unwrap();
+    let mut perms = fs::metadata(&path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&path, perms).unwrap();
+}
+
+fn wait_for_survivor_pid(path: &Path) -> u32 {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(text) = fs::read_to_string(path) {
+            if let Ok(pid) = text.parse() {
+                return pid;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "survivor never wrote its pid to {}",
+            path.display()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn process_is_alive(pid: u32) -> bool {
+    let result = unsafe { libc::kill(pid.cast_signed(), 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+struct SurvivorGuard(u32);
+
+impl Drop for SurvivorGuard {
+    fn drop(&mut self) {
+        let _ = unsafe { libc::kill(self.0.cast_signed(), libc::SIGTERM) };
+    }
+}
+
+fn survivor_audit_record(sb: &Sandbox, pid: u32) -> serde_json::Value {
+    let log = fs::read_to_string(sb.root().join("audit.log")).expect("read audit log");
+    log.lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|row| {
+            row.get("event").and_then(serde_json::Value::as_str) == Some("background_survivors")
+                && row
+                    .get("survivors")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|survivors| {
+                        survivors.iter().any(|survivor| {
+                            survivor.get("pid").and_then(serde_json::Value::as_u64)
+                                == Some(u64::from(pid))
+                        })
+                    })
+        })
+        .unwrap_or_else(|| panic!("no survivor audit row for pid {pid}; log:\n{log}"))
 }
 
 // ── wrap-and-run ──────────────────────────────────────────────────────────
@@ -119,6 +202,162 @@ fn raw_flag_disables_output_masking() {
         stdout.contains("GITHUB_TOKEN=the-token-value"),
         "got: {stdout}"
     );
+}
+
+#[test]
+fn piped_run_reports_and_preserves_a_background_process() {
+    let sb = Sandbox::new();
+    let bin_dir = sb.path().join("realbin");
+    let shim_dir = sb.path().join("shims");
+    let survivor = install_survivor(&bin_dir);
+    install_background_gh(&bin_dir, &survivor);
+    write_config(&sb.config_path(), &echo_provider_config(&shim_dir));
+    let pid_file = sb.path().join("piped-survivor.pid");
+    let hup_file = sb.path().join("piped-survivor.hup");
+    let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
+
+    let out = sb
+        .cmd(&[
+            "x",
+            "--sq-yes",
+            "gh",
+            pid_file.to_str().unwrap(),
+            hup_file.to_str().unwrap(),
+        ])
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let pid = wait_for_survivor_pid(&pid_file);
+    let _guard = SurvivorGuard(pid);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let survivor_lines: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.contains("background process"))
+        .collect();
+    assert_eq!(
+        survivor_lines.len(),
+        1,
+        "expected one survivor line; stderr:\n{stderr}"
+    );
+    assert!(survivor_lines[0].contains(&pid.to_string()));
+    assert!(survivor_lines[0].contains("secreq-test-survivor"));
+    assert!(
+        !stderr.contains("the-token-value"),
+        "survivor report leaked the injected value: {stderr}"
+    );
+
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(process_is_alive(pid), "secreq killed piped survivor {pid}");
+    assert!(
+        !hup_file.exists(),
+        "piped survivor received SIGHUP from secreq"
+    );
+    let audit = survivor_audit_record(&sb, pid);
+    assert_eq!(
+        audit.get("reach").and_then(serde_json::Value::as_str),
+        Some("child_session_or_process_group")
+    );
+    assert!(
+        !audit.to_string().contains("the-token-value"),
+        "survivor audit leaked the injected value: {audit}"
+    );
+}
+
+#[test]
+fn pty_run_reports_and_preserves_a_background_process() {
+    let sb = Sandbox::new();
+    let bin_dir = sb.path().join("realbin");
+    let shim_dir = sb.path().join("shims");
+    let survivor = install_survivor(&bin_dir);
+    install_background_gh(&bin_dir, &survivor);
+    write_config(&sb.config_path(), &echo_provider_config(&shim_dir));
+    let pid_file = sb.path().join("pty-survivor.pid");
+    let hup_file = sb.path().join("pty-survivor.hup");
+    let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
+    let mut command = sb.cmd(&[
+        "x",
+        "--sq-yes",
+        "gh",
+        pid_file.to_str().unwrap(),
+        hup_file.to_str().unwrap(),
+    ]);
+    command.env("PATH", path);
+    let mut run = common::pty::PtyRun::spawn_with(command);
+
+    let pid = wait_for_survivor_pid(&pid_file);
+    let _guard = SurvivorGuard(pid);
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        !hup_file.exists(),
+        "pty survivor received SIGHUP before secreq reported it"
+    );
+    // The harness drains the outer PTY on its own reader thread. Under a busy
+    // suite the process can exit before that thread has copied the final line,
+    // so wait on the report itself before inspecting the completed transcript.
+    run.wait_for("background processes still running", Duration::from_secs(5));
+    let status = run.wait_exit(Duration::from_secs(5));
+    assert!(
+        status.success(),
+        "output:\n{}",
+        String::from_utf8_lossy(&run.output_so_far())
+    );
+    let output_bytes = run.output_so_far();
+    let output = String::from_utf8_lossy(&output_bytes);
+    let survivor_lines: Vec<&str> = output
+        .lines()
+        .filter(|line| line.contains("background process"))
+        .collect();
+    assert_eq!(
+        survivor_lines.len(),
+        1,
+        "expected one survivor line; output:\n{output}"
+    );
+    assert!(survivor_lines[0].contains(&pid.to_string()));
+    assert!(survivor_lines[0].contains("secreq-test-survivor"));
+    assert!(
+        !output.contains("the-token-value"),
+        "survivor report leaked the injected value: {output}"
+    );
+
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(process_is_alive(pid), "secreq killed pty survivor {pid}");
+    assert!(
+        !hup_file.exists(),
+        "pty survivor received SIGHUP from secreq"
+    );
+    let audit = survivor_audit_record(&sb, pid);
+    assert!(
+        !audit.to_string().contains("the-token-value"),
+        "survivor audit leaked the injected value: {audit}"
+    );
+}
+
+#[test]
+fn run_without_a_survivor_emits_no_survivor_line_or_audit_record() {
+    let sb = Sandbox::new();
+    let bin_dir = sb.path().join("realbin");
+    let shim_dir = sb.path().join("shims");
+    install_fake_gh(&bin_dir);
+    write_config(&sb.config_path(), &echo_provider_config(&shim_dir));
+    let path = format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap());
+    let out = sb
+        .cmd(&["x", "--sq-yes", "gh"])
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("background process"), "stderr:\n{stderr}");
+
+    let audit_path = sb.root().join("audit.log");
+    if let Ok(log) = fs::read_to_string(audit_path) {
+        assert!(!log.contains("\"event\":\"background_survivors\""));
+    }
 }
 
 /// Run `secreq x` with the fake-`gh` sandbox wired up: fake binary on PATH,
