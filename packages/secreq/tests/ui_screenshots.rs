@@ -518,6 +518,7 @@ fn audit_line(
         callers_truncated: Some(false),
         secrets: secrets.iter().map(|s| (*s).to_owned()).collect(),
         decision: decision.to_owned(),
+        reason: None,
         rule_id: None,
         approvers: Default::default(),
         fingerprint: None,
@@ -589,6 +590,7 @@ fn audit_line_traced(
         callers_truncated: Some(false),
         secrets: secrets.iter().map(|s| (*s).to_owned()).collect(),
         decision: decision.to_owned(),
+        reason: None,
         rule_id: None,
         approvers: Default::default(),
         fingerprint: None,
@@ -705,6 +707,7 @@ fn audit_auto_fire(secs_ago: u64, rule_id: &str, decision: &str) -> AuditEntry {
         callers_truncated: Some(false),
         secrets: vec!["GITHUB_TOKEN".to_owned()],
         decision: decision.to_owned(),
+        reason: None,
         rule_id: Some(rule_id.to_owned()),
         approvers: Default::default(),
         fingerprint: None,
@@ -1062,8 +1065,10 @@ fn render_prompt_fixture(
     audit_entries: Vec<AuditEntry>,
     setup: impl FnOnce(&SharedState) -> Vec<mpsc::Receiver<secreq::daemon::state::WaiterReply>>,
 ) {
-    render_prompt_fixture_full(shot, PROMPT_SIZE, audit_entries, None, setup);
+    render_prompt_fixture_full(shot, PROMPT_SIZE, audit_entries, None, None, setup);
 }
+
+type PromptStateSetup<'a> = Box<dyn Fn(&mut PromptWindowState) + 'a>;
 
 /// Pin the OS chrome and one appearance. Fixtures pin the flavor so the
 /// PNGs are deterministic regardless of the host OS; the appearance is
@@ -1083,6 +1088,7 @@ fn render_prompt_fixture_full(
     size: Vec2,
     audit_entries: Vec<AuditEntry>,
     toast: Option<AutoDenyToastView>,
+    window_state: Option<PromptStateSetup<'_>>,
     setup: impl FnOnce(&SharedState) -> Vec<mpsc::Receiver<secreq::daemon::state::WaiterReply>>,
 ) {
     let shot = shot.into();
@@ -1103,7 +1109,13 @@ fn render_prompt_fixture_full(
         &shot,
         ShotKind::Prompt,
         size,
-        PromptWindowState::new,
+        || {
+            let mut state = PromptWindowState::new();
+            if let Some(setup) = &window_state {
+                setup(&mut state);
+            }
+            state
+        },
         |ui, ws: &mut PromptWindowState, flavor, dark| {
             let ctx = ui.ctx().clone();
             apply_theme_pin(&ctx, flavor, dark);
@@ -1247,6 +1259,35 @@ fn single_pending() {
                 state,
                 "gh",
                 vec!["gh", "auth", "login"],
+                vec![caller(7926, "zsh", 1_700_000_000)],
+                vec![secret(
+                    "GITHUB_TOKEN",
+                    "op",
+                    "op://Personal/GitHub/credential",
+                )],
+            )]
+        },
+    );
+}
+
+#[test]
+fn pending_with_denial_reason() {
+    render_prompt_fixture_full(
+        Shot::new("51-pending-denial-reason").caption(
+            "A denial can carry an optional explanation into the audit log. Leave the \
+             field empty and Deny is still one click.",
+        ),
+        PROMPT_SIZE,
+        vec![],
+        None,
+        Some(Box::new(|state| {
+            state.set_denial_reason("Wrong repository");
+        })),
+        |state| {
+            vec![submit(
+                state,
+                "gh",
+                vec!["gh", "repo", "delete", "acme/api"],
                 vec![caller(7926, "zsh", 1_700_000_000)],
                 vec![secret(
                     "GITHUB_TOKEN",
@@ -1981,6 +2022,7 @@ fn auto_deny_toast_on_pending() {
         PROMPT_SIZE,
         vec![],
         Some(toast),
+        None,
         |state| {
             vec![submit(
                 state,
@@ -2069,7 +2111,8 @@ fn audit_tab_populated() {
             ],
             &["KUBECONFIG_TOKEN"],
             "deny",
-        ),
+        )
+        .with_reason(Some("Wrong production repository".to_owned())),
         audit_line_traced(
             60 * 60,
             "psql",
@@ -3493,6 +3536,7 @@ fn resize_stress() {
             Shot::new(name).exercise_only(),
             *size,
             vec![],
+            None,
             None,
             |state| {
                 vec![submit(

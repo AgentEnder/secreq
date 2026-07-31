@@ -1,0 +1,3 @@
+$ gh repo delete acme/api
+
+secreq: denied: Wrong repository — `gh` not run

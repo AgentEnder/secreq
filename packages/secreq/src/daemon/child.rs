@@ -541,6 +541,7 @@ impl eframe::App for ChildApp {
                     let msg = ClientMsg::ConsentDecision {
                         key: act.key,
                         decision: act.decision,
+                        reason: act.reason,
                         scope: act.scope,
                     };
                     if let Err(err) = send_msg(&self.writer, &msg) {

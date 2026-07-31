@@ -79,6 +79,9 @@ pub struct Suggestion {
     /// Union of secret names requested across the cluster. Drives
     /// the trained-secrets guard on the resulting rule.
     pub trained_secrets: BTreeSet<String>,
+    /// Most recent non-empty denial explanation in the cluster. Seeds the
+    /// resulting deny rule's message; always `None` for approve suggestions.
+    pub deny_message: Option<String>,
     /// How many cluster rows backed this suggestion (within the
     /// window). Surfaced in the UI as "N asks in the last 30 days".
     pub count: usize,
@@ -184,7 +187,13 @@ pub fn suggest(entries: &[AuditEntry], rules: &[Rule], now_unix: u64) -> Vec<Sug
         let cwd = entry.cwd.as_str();
 
         if let Some(c) = clusters.iter_mut().find(|c| c.key == key) {
-            c.absorb(argv, cwd, &entry.secrets, entry.ts_unix);
+            c.absorb(
+                argv,
+                cwd,
+                &entry.secrets,
+                entry.ts_unix,
+                entry.reason.as_deref(),
+            );
         } else {
             clusters.push(Cluster::seed(key, side, entry, argv, cwd));
         }
@@ -263,6 +272,7 @@ struct Cluster {
     argv_samples: Vec<String>,
     cwd_prefix: String,
     trained_secrets: BTreeSet<String>,
+    denial_reason: Option<(u64, String)>,
     count: usize,
     last_ts_unix: u64,
 }
@@ -293,18 +303,39 @@ impl Cluster {
             argv_samples,
             cwd_prefix: cwd.to_owned(),
             trained_secrets: entry.secrets.iter().cloned().collect(),
+            denial_reason: (side == SuggestionDecision::Deny)
+                .then(|| entry.reason.clone().map(|reason| (entry.ts_unix, reason)))
+                .flatten(),
             count: 1,
             last_ts_unix: entry.ts_unix,
         }
     }
 
-    fn absorb(&mut self, argv: String, cwd: &str, secrets: &[String], ts_unix: u64) {
+    fn absorb(
+        &mut self,
+        argv: String,
+        cwd: &str,
+        secrets: &[String],
+        ts_unix: u64,
+        reason: Option<&str>,
+    ) {
         self.count += 1;
         if ts_unix > self.last_ts_unix {
             self.last_ts_unix = ts_unix;
         }
         for s in secrets {
             self.trained_secrets.insert(s.clone());
+        }
+        if self.side == SuggestionDecision::Deny {
+            if let Some(reason) = reason.filter(|reason| !reason.is_empty()) {
+                let replace = self
+                    .denial_reason
+                    .as_ref()
+                    .is_none_or(|(recorded_at, _)| ts_unix >= *recorded_at);
+                if replace {
+                    self.denial_reason = Some((ts_unix, reason.to_owned()));
+                }
+            }
         }
         if !argv.is_empty()
             && self.argv_samples.len() < MAX_ARGV_SAMPLES
@@ -330,6 +361,7 @@ impl Cluster {
             ancestor: self.ancestor,
             cwd,
             trained_secrets: self.trained_secrets,
+            deny_message: self.denial_reason.map(|(_, reason)| reason),
             count: self.count,
             last_ts_unix: self.last_ts_unix,
         })
@@ -508,6 +540,7 @@ mod tests {
             callers_truncated: Some(false),
             secrets: secrets.iter().map(|s| (*s).to_owned()).collect(),
             decision: decision.to_owned(),
+            reason: None,
             rule_id: None,
             approvers: Default::default(),
             fingerprint: None,
@@ -710,6 +743,29 @@ mod tests {
         // Every row's argv is identical: no divergence ⇒ no `*`.
         assert_eq!(s.argv.as_deref(), Some("gh auth token"));
         assert_eq!(s.decide, SuggestionDecision::Deny);
+    }
+
+    #[test]
+    fn denial_suggestion_keeps_the_most_recent_recorded_reason() {
+        let now = 10_000;
+        let mut entries: Vec<AuditEntry> = (0..3)
+            .map(|i| {
+                entry(
+                    now - i,
+                    "gh",
+                    &["auth", "token"],
+                    "claude",
+                    "/Users/x",
+                    &["GITHUB_TOKEN"],
+                    "deny",
+                )
+            })
+            .collect();
+        entries[0].reason = Some("wrong repository".to_owned());
+        entries[1].reason = Some("older explanation".to_owned());
+
+        let s = &suggest(&entries, &[], now)[0];
+        assert_eq!(s.deny_message.as_deref(), Some("wrong repository"));
     }
 
     // ── cwd prefix aggregation ──────────────────────────────────

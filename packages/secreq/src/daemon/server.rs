@@ -296,6 +296,7 @@ fn handle_consent_window_connection(
             ClientMsg::ConsentDecision {
                 key,
                 decision,
+                reason,
                 scope,
             } => {
                 super::log::log_at(
@@ -317,7 +318,7 @@ fn handle_consent_window_connection(
                 handle
                     .lock()
                     .expect("state mutex")
-                    .resolve(&key, decision, scope, &state);
+                    .resolve(&key, decision, reason, scope, &state);
             }
             ClientMsg::ConsentWindowDetach => {
                 super::log::log_at("server", format_args!("← ConsentWindowDetach"));
@@ -1311,7 +1312,7 @@ fn handle_rule_hit(
                 secrets: std::collections::HashMap::new(),
                 rule_id: Some(hit.rule_id),
                 rule_name: Some(hit.rule_name),
-                deny_message: hit.deny_message,
+                reason: hit.deny_message,
                 declared_by,
                 // A deny grants nothing — no per-secret attribution.
                 approvers: std::collections::BTreeMap::new(),
@@ -1340,7 +1341,7 @@ fn handle_rule_hit(
                     secrets,
                     rule_id: Some(hit.rule_id),
                     rule_name: Some(hit.rule_name),
-                    deny_message: None,
+                    reason: None,
                     declared_by,
                     // Per-secret attribution: which rule blessed which
                     // secret, recorded in the client's audit row.
@@ -1407,17 +1408,21 @@ fn waiter_reply_to_daemon_msg(
     declared_by: Option<crate::audit::ScopeDeclarant>,
 ) -> DaemonMsg {
     match reply {
-        WaiterReply::Decision { decision, secrets } => DaemonMsg::Decision {
+        WaiterReply::Decision {
+            decision,
+            secrets,
+            reason,
+        } => DaemonMsg::Decision {
             decision,
             secrets,
             // The user-decision path (manual click) never carries
             // rule attribution. Auto-decisions take a different path
             // and construct DaemonMsg::Decision directly with
-            // `rule_id` / `rule_name` / `deny_message` / `approvers`
+            // `rule_id` / `rule_name` / `reason` / `approvers`
             // populated.
             rule_id: None,
             rule_name: None,
-            deny_message: None,
+            reason,
             declared_by,
             approvers: std::collections::BTreeMap::new(),
         },
@@ -1499,9 +1504,48 @@ mod tests {
             secrets: std::collections::HashMap::new(),
             rule_id: None,
             rule_name: None,
-            deny_message: None,
+            reason: None,
             declared_by: None,
             approvers: std::collections::BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn auto_deny_reply_carries_the_rules_reason_to_the_audit_writing_client() {
+        use std::sync::{Arc, Mutex};
+
+        let state: SharedState = Arc::new(Mutex::new(super::super::state::State::new()));
+        let (cache, in_flight) = {
+            let guard = state.lock().expect("state mutex");
+            (guard.secret_cache_arc(), guard.in_flight_arc())
+        };
+        let reply = handle_rule_hit(
+            forged_ask("gh"),
+            crate::rules::RuleHit {
+                rule_id: "rule-01".to_owned(),
+                rule_name: "block destructive gh".to_owned(),
+                decide: crate::rules::RuleDecision::Deny,
+                deny_message: Some("wrong repository".to_owned()),
+                approvals: std::collections::BTreeMap::new(),
+            },
+            cache,
+            in_flight,
+            state,
+            None,
+        );
+
+        match reply {
+            DaemonMsg::Decision {
+                decision,
+                rule_id,
+                reason,
+                ..
+            } => {
+                assert_eq!(decision, crate::consent::Decision::DenyAuto);
+                assert_eq!(rule_id.as_deref(), Some("rule-01"));
+                assert_eq!(reason.as_deref(), Some("wrong repository"));
+            }
+            other => panic!("expected auto-deny decision, got {other:?}"),
         }
     }
 

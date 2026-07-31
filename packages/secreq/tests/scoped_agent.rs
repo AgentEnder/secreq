@@ -65,6 +65,7 @@ struct RecordingGate {
     /// satisfied by dropping it on the floor.
     seen_chains: Mutex<Vec<Option<String>>>,
     decision: Decision,
+    reason: Option<String>,
 }
 
 impl RecordingGate {
@@ -78,7 +79,16 @@ impl RecordingGate {
             resolves: Mutex::new(Vec::new()),
             seen_chains: Mutex::new(Vec::new()),
             decision,
+            reason: None,
         })
+    }
+
+    fn denying_with_reason(reason: &str) -> Arc<RecordingGate> {
+        let mut gate = Arc::try_unwrap(RecordingGate::deciding(Decision::Deny))
+            .ok()
+            .expect("new gate has one owner");
+        gate.reason = Some(reason.to_owned());
+        Arc::new(gate)
     }
 
     fn prompts(&self) -> Vec<String> {
@@ -111,6 +121,7 @@ impl Gate for RecordingGate {
             .push(guest_chain.display().map(str::to_owned));
         Ok(Consented {
             decision: self.decision,
+            reason: self.reason.clone(),
             declared_by: ScopeDeclarant::Peer(AuditLocalPeer {
                 pid: 4711,
                 name: "secreq".to_owned(),
@@ -583,6 +594,27 @@ fn a_denial_is_not_cached_and_never_becomes_a_silent_approval() {
     for row in &history {
         assert_eq!(row.decision, "deny");
     }
+}
+
+#[test]
+fn a_host_denial_reason_is_audited_but_never_forwarded_to_the_guest() {
+    let sb = common::Sandbox::new();
+    let _env = sb.enter();
+    let host_reason = "wrong production repository";
+    let harness = Harness::with_gate(RecordingGate::denying_with_reason(host_reason));
+
+    let response = harness.round_trip(&Request::resolve(ALLOWED_REF));
+    assert_eq!(
+        response,
+        Response::Denied {
+            message: "denied".to_owned()
+        },
+        "the scoped-agent wire must remain deliberately uninformative"
+    );
+
+    let history = audit::read_history(None).expect("read audit history");
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].reason.as_deref(), Some(host_reason));
 }
 
 // ── The guest-reported chain: display-only ───────────────────────────────

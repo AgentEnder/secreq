@@ -438,10 +438,10 @@ fn handle_sign(
     // 3. Decide whether to sign: approval-cache hit (skip the prompt) or
     //    interactive consent. The lock is held only for the cache check and
     //    the queue submission, never across the (blocking) consent wait.
-    let decision = match decide_sign(state, identity, &anchor, &chain, &cwd, data) {
-        Some(d) if d.approved() => d,
-        Some(deny) => {
-            audit_sign(identity, &chain, &anchor, &cwd, deny);
+    let outcome = match decide_sign(state, identity, &anchor, &chain, &cwd, data) {
+        Some(outcome) if outcome.decision.approved() => outcome,
+        Some(denied) => {
+            audit_sign(identity, &chain, &anchor, &cwd, &denied);
             super::log::log_at(
                 "ssh-agent",
                 format_args!(
@@ -469,7 +469,7 @@ fn handle_sign(
     //    "Approve all keys 30m" grants every key on this anchor. Under agent
     //    forwarding that anchor is the `ssh` client, so the grant expires with
     //    the SSH session as well as with the clock.
-    if let Some(scope) = grant_scope_for(decision, &identity.key_id) {
+    if let Some(scope) = grant_scope_for(outcome.decision, &identity.key_id) {
         let expires_at = now_unix_secs().saturating_add(SSH_SESSION_GRANT_TTL_SECS);
         state
             .lock()
@@ -494,13 +494,13 @@ fn handle_sign(
             // carries the decision that authorized it (`ApproveCached` on a
             // cache hit, or whatever the user chose). The signature bytes are
             // never recorded; the row holds only the key id + fingerprint.
-            audit_sign(identity, &chain, &anchor, &cwd, decision);
+            audit_sign(identity, &chain, &anchor, &cwd, &outcome);
             super::log::log_at(
                 "ssh-agent",
                 format_args!(
                     "← SIGN_REQUEST for {:?} ({}); signed {} byte challenge",
                     identity.key_id,
-                    decision.as_str(),
+                    outcome.decision.as_str(),
                     data.len()
                 ),
             );
@@ -529,6 +529,23 @@ fn handle_sign(
 /// on an `mpsc::Receiver` with **no lock held**, mirroring `server.rs`'s
 /// `handle_ask` so the consent-window child can attach and render while the
 /// prompt is up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SignDecision {
+    decision: Decision,
+    reason: Option<String>,
+    rule_id: Option<String>,
+}
+
+impl SignDecision {
+    fn manual(decision: Decision, reason: Option<String>) -> SignDecision {
+        SignDecision {
+            decision,
+            reason,
+            rule_id: None,
+        }
+    }
+}
+
 fn decide_sign(
     state: &SharedState,
     identity: &PreparedIdentity,
@@ -536,7 +553,7 @@ fn decide_sign(
     chain: &crate::provenance::CallerChain,
     cwd: &str,
     data: &[u8],
-) -> Option<Decision> {
+) -> Option<SignDecision> {
     // Grant check — lock held only for the lookup. A live session grant needs
     // no UI, so this path is unaffected by whether a display is available; it
     // works headless.
@@ -546,7 +563,7 @@ fn decide_sign(
             // The audit row for a grant hit is written at the sign outcome
             // (with `decision = ApproveCached`), alongside the approve/deny
             // rows — one audit-write site, fed the decision this returns.
-            return Some(Decision::ApproveCached);
+            return Some(SignDecision::manual(Decision::ApproveCached, None));
         }
     }
 
@@ -562,13 +579,21 @@ fn decide_sign(
         guard.reload_rules_if_changed();
         if let Some(hit) = guard.evaluate_rules_for_ask(&ask) {
             return Some(match hit.decide {
-                crate::rules::RuleDecision::Approve => Decision::ApproveAuto,
+                crate::rules::RuleDecision::Approve => SignDecision {
+                    decision: Decision::ApproveAuto,
+                    reason: None,
+                    rule_id: Some(hit.rule_id),
+                },
                 crate::rules::RuleDecision::Deny => {
                     // Surface the auto-deny to any attached consent window,
                     // matching the wrap path's `handle_rule_hit` toast.
                     guard
                         .broadcast_auto_deny_toast(hit.rule_name.clone(), hit.deny_message.clone());
-                    Decision::DenyAuto
+                    SignDecision {
+                        decision: Decision::DenyAuto,
+                        reason: hit.deny_message,
+                        rule_id: Some(hit.rule_id),
+                    }
                 }
             });
         }
@@ -605,7 +630,7 @@ fn decide_sign_on_miss(
     cwd: &str,
     data: &[u8],
     gui_available: bool,
-) -> Option<Decision> {
+) -> Option<SignDecision> {
     // No display → the consent window can never render, so `rx.recv()` below
     // would block indefinitely and hang `ssh`/`git`. Fail closed before we
     // touch state or enqueue anything. (A cached approval already returned
@@ -663,7 +688,9 @@ fn decide_sign_on_miss(
     // daemon's lifetime. Generous enough that a user reading the prompt is
     // never the one who hits it: `ssh` itself gives up long before.
     match rx.recv_timeout(SIGN_DECISION_TIMEOUT) {
-        Ok(WaiterReply::Decision { decision, .. }) => Some(decision),
+        Ok(WaiterReply::Decision {
+            decision, reason, ..
+        }) => Some(SignDecision::manual(decision, reason)),
         // A resolve error on the wrap path can't happen here (the sign ask
         // carries no secrets for the daemon to resolve — we resolve the key
         // ourselves, fresh), and a dropped sender means the daemon went down
@@ -864,7 +891,7 @@ fn audit_sign(
     chain: &crate::provenance::CallerChain,
     anchor: &SignAnchor,
     cwd: &str,
-    decision: Decision,
+    outcome: &SignDecision,
 ) {
     let entry = crate::audit::AuditEntry::ssh_sign(
         &identity.key_id,
@@ -872,8 +899,10 @@ fn audit_sign(
         chain,
         anchor,
         cwd,
-        decision,
-    );
+        outcome.decision,
+    )
+    .with_reason(outcome.reason.clone())
+    .with_rule_id(outcome.rule_id.clone());
     if let Err(err) = crate::audit::append(&entry) {
         super::log::log_at(
             "ssh-agent",
@@ -1231,14 +1260,9 @@ mod tests {
         let local = crate::provenance::select_sign_anchor(None, &chain.frames).expect("anchor");
 
         let rows = crate::audit::with_temp_log(|| {
-            audit_sign(
-                &identity,
-                &chain,
-                &forwarded,
-                "/repos/acme",
-                Decision::Approve,
-            );
-            audit_sign(&identity, &chain, &local, "/repos/acme", Decision::Approve);
+            let approved = SignDecision::manual(Decision::Approve, None);
+            audit_sign(&identity, &chain, &forwarded, "/repos/acme", &approved);
+            audit_sign(&identity, &chain, &local, "/repos/acme", &approved);
             crate::audit::read_history(None).expect("read audit history")
         });
 
@@ -1370,7 +1394,7 @@ mod tests {
         );
 
         assert_eq!(
-            decision,
+            decision.map(|outcome| outcome.decision),
             Some(Decision::ApproveAuto),
             "a matching ssh:<key_id> approve rule must auto-approve the sign"
         );
@@ -1409,7 +1433,10 @@ mod tests {
             b"challenge",
         );
 
-        assert_eq!(decision, Some(Decision::DenyAuto));
+        assert_eq!(
+            decision.map(|outcome| outcome.decision),
+            Some(Decision::DenyAuto)
+        );
         assert!(
             state
                 .lock()

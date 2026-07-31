@@ -71,6 +71,13 @@ pub struct AuditEntry {
     pub secrets: Vec<String>,
     /// The consent decision.
     pub decision: String,
+    /// Why a denial was issued, when the user or auto-rule supplied one.
+    ///
+    /// Absent on approvals, abandoned asks, denials without an explanation,
+    /// and rows written before this field existed. Secret values must never
+    /// be placed here; this is user-authored or rule-authored audit context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
     /// Stable id of the auto-rule that produced this decision, if any.
     /// `Some(...)` for `approve+auto` / `deny+auto`; `None` for every
     /// other decision shape. `#[serde(default)]` so logs written by an
@@ -367,6 +374,7 @@ impl AuditEntry {
             callers_truncated: Some(chain.truncated),
             secrets: secret_names.to_vec(),
             decision: decision.as_str().to_owned(),
+            reason: None,
             rule_id: None,
             approvers: BTreeMap::new(),
             fingerprint: None,
@@ -419,6 +427,7 @@ impl AuditEntry {
             callers_truncated: Some(chain.truncated),
             secrets: Vec::new(),
             decision: decision.as_str().to_owned(),
+            reason: None,
             rule_id: None,
             approvers: BTreeMap::new(),
             fingerprint: Some(fingerprint.to_owned()),
@@ -478,6 +487,7 @@ impl AuditEntry {
             callers_truncated: Some(false),
             secrets: vec![reference.to_owned()],
             decision: decision.as_str().to_owned(),
+            reason: None,
             rule_id: None,
             approvers: BTreeMap::new(),
             fingerprint: None,
@@ -526,6 +536,8 @@ impl AuditEntry {
             callers_truncated: Some(ask.callers_truncated),
             secrets: ask.secret_names.to_vec(),
             decision: Decision::Abandoned.as_str().to_owned(),
+            // An abandoned ask has no author and therefore no reason.
+            reason: None,
             rule_id: None,
             approvers: BTreeMap::new(),
             fingerprint: None,
@@ -540,6 +552,15 @@ impl AuditEntry {
     /// to the rule that fired.
     pub fn with_rule_id(mut self, rule_id: Option<String>) -> AuditEntry {
         self.rule_id = rule_id;
+        self
+    }
+
+    /// Chainable setter for a denial explanation carried back by the daemon.
+    ///
+    /// Callers pass the same value for a manual deny and an auto-rule deny;
+    /// approvals and authorless abandoned asks leave it absent.
+    pub fn with_reason(mut self, reason: Option<String>) -> AuditEntry {
+        self.reason = reason;
         self
     }
 
@@ -890,6 +911,29 @@ mod tests {
                        "secrets":["secret://op/a/b"],"decision":"approve"}"#;
         let parsed: AuditEntry = serde_json::from_str(json).expect("older rows must parse");
         assert!(parsed.unverified_guest_chain.is_none());
+    }
+
+    #[test]
+    fn denial_reason_round_trips_and_is_omitted_when_absent() {
+        let chain = CallerChain {
+            frames: Vec::new(),
+            truncated: false,
+        };
+        let denied = AuditEntry::new("gh", &[], &chain, &[], Decision::Deny)
+            .with_reason(Some("wrong repository".to_owned()));
+        let json = serde_json::to_string(&denied).expect("serialize denial");
+        assert!(json.contains(r#""reason":"wrong repository""#), "{json}");
+        let parsed: AuditEntry = serde_json::from_str(&json).expect("round-trip denial");
+        assert_eq!(parsed.reason.as_deref(), Some("wrong repository"));
+
+        let approved = AuditEntry::new("gh", &[], &chain, &[], Decision::Approve);
+        let json = serde_json::to_string(&approved).expect("serialize approval");
+        assert!(!json.contains(r#""reason""#), "{json}");
+
+        let old_json = r#"{"ts_unix":1,"cwd":"","wrap":"gh","args":[],"callers":[],
+                           "secrets":[],"decision":"deny"}"#;
+        let old: AuditEntry = serde_json::from_str(old_json).expect("older row must parse");
+        assert!(old.reason.is_none());
     }
 
     #[test]

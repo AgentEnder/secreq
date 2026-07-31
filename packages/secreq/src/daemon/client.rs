@@ -55,15 +55,14 @@ const RESTART_TIMEOUT: Duration = Duration::from_secs(5);
 ///
 /// `rule_id` / `rule_name` are `Some` when a matching auto-rule fired,
 /// so the wrap client can write a precise audit row and (on
-/// `DenyAuto`) print the rule's configured `deny_message` to stderr
-/// before exiting 1.
+/// `DenyAuto`) print the denial explanation to stderr before exiting 1.
 #[derive(Debug)]
 pub struct ConsentOutcome {
     pub decision: Decision,
     pub secrets: HashMap<String, String>,
     pub rule_id: Option<String>,
     pub rule_name: Option<String>,
-    pub deny_message: Option<String>,
+    pub reason: Option<String>,
     /// On a scoped-agent ask, which local process the daemon saw naming the
     /// scope — carried back so the agent (a *client*, which writes its own
     /// audit rows) can record the kernel's answer rather than a description of
@@ -85,7 +84,7 @@ impl ConsentOutcome {
             secrets: HashMap::new(),
             rule_id: None,
             rule_name: None,
-            deny_message: None,
+            reason: None,
             declared_by: crate::audit::ScopeDeclarant::NotRead,
             approvers: std::collections::BTreeMap::new(),
         }
@@ -125,7 +124,7 @@ pub fn request_consent(ask: Ask, show_indicator: bool) -> Result<ConsentOutcome>
             secrets,
             rule_id,
             rule_name,
-            deny_message,
+            reason,
             declared_by,
             approvers,
         } => Ok(ConsentOutcome {
@@ -133,7 +132,7 @@ pub fn request_consent(ask: Ask, show_indicator: bool) -> Result<ConsentOutcome>
             secrets,
             rule_id,
             rule_name,
-            deny_message,
+            reason,
             // Absent on every ask that declared no scope. A scoped-agent ask
             // always gets an answer, so `NotRead` here means the reply carried
             // nothing to record, not that the daemon declined to look.

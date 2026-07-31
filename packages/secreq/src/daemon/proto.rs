@@ -105,6 +105,10 @@ pub enum ClientMsg {
     ConsentDecision {
         key: DedupeKey,
         decision: crate::consent::Decision,
+        /// Optional explanation for a manual denial. Empty input is sent as
+        /// `None`, preserving the one-keystroke deny path.
+        #[serde(default)]
+        reason: Option<String>,
         /// The process a remembered approval is written against. One value
         /// rather than a `scope_pid` / `scope_start_time` pair: what lands in
         /// the approvals cache is a [`ProcessIdentity`], and every hop that
@@ -1001,7 +1005,8 @@ pub enum DaemonMsg {
     /// `rule_id` / `rule_name` are `Some` when a matching auto-rule fired
     /// (decision is `ApproveAuto` or `DenyAuto`); the client uses them
     /// for the audit row and the auto-deny stderr message.
-    /// `deny_message` is the rule's configured message on auto-deny.
+    /// `reason` is the explanation on a manual denial or the rule's
+    /// configured message on auto-deny.
     /// All three are `#[serde(default)]` so older daemons that don't
     /// emit them still deserialize cleanly here.
     Decision {
@@ -1012,7 +1017,7 @@ pub enum DaemonMsg {
         #[serde(default)]
         rule_name: Option<String>,
         #[serde(default)]
-        deny_message: Option<String>,
+        reason: Option<String>,
         /// On a scoped-agent ask, the peer the daemon stamped onto
         /// [`AgentAskInfo::declared_by`]; `None` on every other kind.
         ///
@@ -1161,7 +1166,7 @@ impl std::fmt::Debug for DaemonMsg {
                 secrets,
                 rule_id,
                 rule_name,
-                deny_message,
+                reason,
                 declared_by,
                 approvers,
             } => f
@@ -1170,7 +1175,7 @@ impl std::fmt::Debug for DaemonMsg {
                 .field("secrets", &RedactedNames(secrets))
                 .field("rule_id", rule_id)
                 .field("rule_name", rule_name)
-                .field("deny_message", deny_message)
+                .field("reason", reason)
                 .field("declared_by", declared_by)
                 // Secret *names* → rule ids. No values, so it prints in
                 // full — the same reasoning that keeps names above.
@@ -1353,7 +1358,7 @@ mod debug_redaction_tests {
                 secrets,
                 rule_id: None,
                 rule_name: None,
-                deny_message: None,
+                reason: None,
                 declared_by: None,
                 approvers: std::collections::BTreeMap::new(),
             }

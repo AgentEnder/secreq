@@ -57,10 +57,14 @@ histories.
 ### Deciding
 
 **Approve** releases the secret. **Deny** aborts the run; the wrapped binary
-never starts. <kbd>A</kbd> or <kbd>Enter</kbd> approves, <kbd>D</kbd> or
-<kbd>Esc</kbd> denies. The buttons carry the same letters as underlined
-mnemonics. Keys are live only while a decision is actually pending, and the
-prompt has no text fields, so bare letters are safe to press.
+never starts. The optional reason field adds context to the terminal and
+audit row, but leaving it empty keeps Deny a single click or keystroke.
+<kbd>A</kbd> or <kbd>Enter</kbd> approves, <kbd>D</kbd> or <kbd>Esc</kbd>
+denies. The buttons carry the same letters as underlined mnemonics. Those
+shortcuts are live only while a decision is pending and the reason field is
+not focused.
+
+::shot{id=51-pending-denial-reason}
 
 For an ordinary wrap, Approve also **remembers**, scoped to the process that
 asked. That scoping, and why it has no TTL, is in
@@ -182,6 +186,9 @@ abandoned requests all land in the same list.
 
 ::shot{id=07-audit-tab}
 
+When a person or auto-deny rule supplied a reason, the denial row shows it
+under the requested secret names.
+
 A row's process tree is the ancestry secreq walked at the time, and it says
 when that walk was not the whole story. `… more above` means the walk stopped
 at its limit of 16 frames, so whatever launched the command sits above the
@@ -273,10 +280,11 @@ jq -c 'select(.decision | startswith("deny"))' ~/.secreq/audit.log
 `secrets` holds **names only, never values**. That is the invariant the
 whole file rests on. `callers_truncated` answers whether `callers` is the
 whole ancestry or only the part the walk reached; rows written before it
-existed omit it, which reads as "unknown" rather than as "complete". Five
-more fields appear only when they apply: `rule_id` on
-auto-decisions, `fingerprint` (of the **public** key) and `sign_anchor` on SSH
-sign rows, and `declared_by` plus `unverified_guest_chain` on sandbox rows.
+existed omit it, which reads as "unknown" rather than as "complete". Six
+more fields appear only when they apply: `reason` on an explained denial,
+`rule_id` on auto-decisions, `fingerprint` (of the **public** key) and
+`sign_anchor` on SSH sign rows, and `declared_by` plus
+`unverified_guest_chain` on sandbox rows.
 That last one is a claim rather than evidence, so it is kept out of `callers`
 and never read by rule matching. The audit view draws it beside the caveat
 the prompt uses, on its own line and never truncated
@@ -326,8 +334,8 @@ you:
 | `approve+ssh-session`     | You approved a signature and granted this key for the session.                   |
 | `approve+ssh-session-all` | You approved a signature and granted every key for the session.                  |
 | `approve+agent-session`   | You approved a sandbox request and granted its scope for the TTL.                |
-| `deny`                    | You denied it.                                                                   |
-| `deny+auto`               | Refused by a matching deny rule. Carries `rule_id`.                              |
+| `deny`                    | You denied it. Carries `reason` when you supplied one.                           |
+| `deny+auto`               | Refused by a matching deny rule. Carries `rule_id` and its `reason`, when given. |
 | `deny+out-of-scope`       | A sandbox asked for something outside its allowlist. Refused without asking you. |
 | `abandoned`               | The requesting process exited before you decided. Nothing was released.          |
 

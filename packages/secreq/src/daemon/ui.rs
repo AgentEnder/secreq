@@ -81,6 +81,7 @@ const AUDIT_VERDICT_COL_WIDTH: f32 = 132.0;
 pub struct PendingAction {
     pub key: DedupeKey,
     pub decision: Decision,
+    pub reason: Option<String>,
     pub scope: Option<ProcessIdentity>,
 }
 
@@ -219,7 +220,7 @@ impl RuleDraft {
             argv,
             ancestor,
             cwd: entry.cwd.clone(),
-            deny_message: String::new(),
+            deny_message: entry.reason.clone().unwrap_or_default(),
             trained_secrets,
             save_attempted: false,
         }
@@ -247,7 +248,7 @@ impl RuleDraft {
             argv: s.argv.clone().unwrap_or_default(),
             ancestor: s.ancestor.clone(),
             cwd: s.cwd.clone().unwrap_or_default(),
-            deny_message: String::new(),
+            deny_message: s.deny_message.clone().unwrap_or_default(),
             trained_secrets: s.trained_secrets.clone(),
             save_attempted: false,
         }
@@ -1039,6 +1040,7 @@ fn audit_row_identity(entry: &AuditEntry) -> String {
 
     push(&entry.wrap);
     push(&entry.decision);
+    push(entry.reason.as_deref().unwrap_or_default());
     push(&entry.cwd);
     push(entry.rule_id.as_deref().unwrap_or_default());
     push(entry.fingerprint.as_deref().unwrap_or_default());
@@ -1225,6 +1227,9 @@ fn audit_entry_matches(entry: &AuditEntry, query: &str) -> bool {
     let mut fields: Vec<String> = Vec::with_capacity(2 + entry.args.len() + entry.secrets.len());
     fields.push(entry.wrap.to_ascii_lowercase());
     fields.push(entry.decision.to_ascii_lowercase());
+    if let Some(reason) = &entry.reason {
+        fields.push(reason.to_ascii_lowercase());
+    }
     fields.extend(entry.args.iter().map(|a| a.to_ascii_lowercase()));
     for caller in &entry.callers {
         fields.push(caller.name.to_ascii_lowercase());
@@ -2910,6 +2915,21 @@ fn render_audit_row_body(ui: &mut egui::Ui, entry: &AuditEntry, now: u64) {
         });
     }
 
+    // ── Denial explanation, when one was supplied ──
+    if let Some(reason) = &entry.reason {
+        ui.add_space(5.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 5.0;
+            ui.label(
+                egui::RichText::new("reason")
+                    .size(10.5)
+                    .strong()
+                    .color(th.faint),
+            );
+            ui.label(egui::RichText::new(reason).size(11.5).color(th.dim));
+        });
+    }
+
     // ── Line 3: process tree (the load-bearing provenance) ──
     //
     // The caller chain WITH each parent's argv is the whole reason an
@@ -4225,6 +4245,7 @@ mod tests {
             callers_truncated: Some(false),
             secrets: secrets.iter().map(|s| (*s).to_owned()).collect(),
             decision: decision.to_owned(),
+            reason: None,
             rule_id: None,
             approvers: Default::default(),
             fingerprint: None,
@@ -4297,6 +4318,16 @@ mod tests {
         let denied = audit_entry_for_search("gh", &[], "zsh", &[], "deny");
         assert!(audit_entry_matches(&denied, "deny"));
         assert!(!audit_entry_matches(&e, "deny"));
+    }
+
+    #[test]
+    fn search_matches_and_rule_draft_keeps_a_denial_reason() {
+        let mut e = audit_entry_for_search("gh", &["repo", "delete"], "zsh", &[], "deny");
+        e.reason = Some("wrong repository".to_owned());
+        assert!(audit_entry_matches(&e, "repository"));
+
+        let draft = RuleDraft::from_audit_entry(&e);
+        assert_eq!(draft.deny_message, "wrong repository");
     }
 
     #[test]
@@ -4608,6 +4639,7 @@ mod tests {
             callers_truncated: Some(false),
             secrets: vec![],
             decision: "approve+auto".to_owned(),
+            reason: None,
             rule_id: rule_id.map(str::to_owned),
             approvers: Default::default(),
             fingerprint: None,
@@ -4731,6 +4763,7 @@ mod tests {
             callers_truncated: Some(false),
             secrets: vec![],
             decision: decision.to_owned(),
+            reason: None,
             rule_id: None,
             approvers: Default::default(),
             fingerprint: None,

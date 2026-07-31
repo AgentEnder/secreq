@@ -362,6 +362,9 @@ pub trait Gate: Send + Sync {
 /// could not.
 pub struct Consented {
     pub decision: Decision,
+    /// Host-side denial explanation for the audit row only. It is never
+    /// forwarded to the guest.
+    pub reason: Option<String>,
     pub declared_by: ScopeDeclarant,
 }
 
@@ -527,6 +530,7 @@ impl Gate for DaemonGate {
             crate::daemon::client::request_consent(ask, false).context("consent request failed")?;
         Ok(Consented {
             decision: outcome.decision,
+            reason: outcome.reason,
             // Whatever the daemon read off `consent.sock`, unexamined. The
             // one field on this row we deliberately did not compute.
             declared_by: outcome.declared_by,
@@ -714,6 +718,7 @@ pub fn handle_request(
                     scope,
                     &reference,
                     Decision::DenyOutOfScope,
+                    None,
                     &guest_chain,
                     ScopeDeclarant::NotRead,
                 );
@@ -734,6 +739,7 @@ pub fn handle_request(
             // refuses to sell.
             let Consented {
                 decision,
+                reason,
                 declared_by,
             } = if approvals.granted(scope, &reference) {
                 // Served by the scope's own grant, so again nothing read a
@@ -741,6 +747,7 @@ pub fn handle_request(
                 // row, with its own declarant.
                 Consented {
                     decision: Decision::ApproveCached,
+                    reason: None,
                     declared_by: ScopeDeclarant::NotRead,
                 }
             } else {
@@ -765,7 +772,14 @@ pub fn handle_request(
             };
 
             if !decision.approved() {
-                audit_release(scope, &reference, decision, &guest_chain, declared_by);
+                audit_release(
+                    scope,
+                    &reference,
+                    decision,
+                    reason,
+                    &guest_chain,
+                    declared_by,
+                );
                 log(
                     scope,
                     format_args!(
@@ -790,7 +804,7 @@ pub fn handle_request(
             // Fresh, every time — including on the cached-decision path.
             match gate.resolve(scope, &reference) {
                 Ok(value) => {
-                    audit_release(scope, &reference, decision, &guest_chain, declared_by);
+                    audit_release(scope, &reference, decision, None, &guest_chain, declared_by);
                     log(
                         scope,
                         format_args!(
@@ -860,6 +874,7 @@ fn audit_release(
     scope: &Scope,
     reference: &Reference,
     decision: Decision,
+    reason: Option<String>,
     guest_chain: &GuestChain,
     declared_by: ScopeDeclarant,
 ) {
@@ -870,7 +885,8 @@ fn audit_release(
         decision,
         guest_chain.display(),
         declared_by,
-    );
+    )
+    .with_reason(reason);
     if let Err(err) = audit::append(&entry) {
         log(
             scope,
@@ -1333,6 +1349,7 @@ mod tests {
                 .push(guest_chain.display().map(str::to_owned));
             Ok(Consented {
                 decision: self.decision,
+                reason: None,
                 declared_by: test_declarant(),
             })
         }
