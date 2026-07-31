@@ -7,6 +7,7 @@
 //! ~/.secreq/
 //!   config.toml            config
 //!   auto-rules.toml       config
+//!   devices.json           paired-device credentials
 //!   rules/                 compiled wasm rule modules (<rule-id>.wasm)
 //!   rule-drafts/           scaffolded programmatic-rule source projects
 //!   audit.log              append-only, daemon + wrap clients
@@ -201,6 +202,16 @@ pub fn rules_path() -> Result<PathBuf> {
     Ok(secreq_root()?.join("auto-rules.toml"))
 }
 
+/// The paired-device registry.
+///
+/// It holds public keys, not secrets, but its mode is security-relevant:
+/// anyone who can replace it can enroll themselves as an approver.
+/// [`crate::link::devices::load`] therefore refuses a group- or
+/// world-accessible registry.
+pub fn devices_path() -> Result<PathBuf> {
+    Ok(secreq_root()?.join("devices.json"))
+}
+
 /// Directory holding registered wasm rule modules (`rules/<id>.wasm`).
 pub fn rule_wasm_dir() -> Result<PathBuf> {
     Ok(secreq_root()?.join("rules"))
@@ -391,6 +402,13 @@ mod tests {
         // lookups already used. `SECREQ_HOME=` must not root us at "".
         let root = root_from(Some(OsString::from("")), Some(PathBuf::from("/home/ada"))).unwrap();
         assert_eq!(root, PathBuf::from("/home/ada/.secreq"));
+    }
+
+    #[test]
+    fn devices_path_sits_in_the_secreq_root() {
+        let path = devices_path().expect("devices_path");
+        assert!(path.ends_with("devices.json"), "got {path:?}");
+        assert_eq!(path.parent(), Some(secreq_root().unwrap().as_path()));
     }
 
     #[test]

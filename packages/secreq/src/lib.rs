@@ -60,6 +60,7 @@ pub mod commands;
 pub mod consent;
 pub mod daemon;
 pub mod exec;
+pub mod link;
 pub mod manifest;
 pub mod mask;
 pub mod migrate;
