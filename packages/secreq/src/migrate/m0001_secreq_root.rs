@@ -13,7 +13,6 @@
 //! `$XDG_CONFIG_HOME/secreq/wraps.json5` follows the link and reads the right
 //! file.
 
-use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -146,11 +145,9 @@ fn ensure_symlink(link: &Path, target: &Path) -> Result<()> {
         // goes in it is the compatibility symlink an older secreq follows to
         // find `wraps.json5`: a directory anyone can write to is one in which
         // anyone can repoint that link at a config of their own.
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(super::OWNER_ONLY_DIR)
-            .create(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        if !parent.is_dir() {
+            super::create_owner_only_dir(parent)?;
+        }
     }
     std::os::unix::fs::symlink(target, link)
         .with_context(|| format!("symlink {} -> {}", link.display(), target.display()))
@@ -180,11 +177,7 @@ fn migrate_audit_log(ctx: &Ctx) -> Result<()> {
     // ran, so today this only ever finds it there. It names the mode anyway:
     // a bare `create_dir_all` here is one reordering away from being the call
     // that creates the root, and it would create it at the umask.
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(super::OWNER_ONLY_DIR)
-        .create(&ctx.root)
-        .with_context(|| format!("create {}", ctx.root.display()))?;
+    super::create_owner_only_dir(&ctx.root)?;
 
     match std::fs::rename(&old, &new) {
         Ok(()) => Ok(()),

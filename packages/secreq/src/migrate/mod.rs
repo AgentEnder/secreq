@@ -34,7 +34,7 @@ mod m0003_config_format;
 
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
@@ -210,15 +210,11 @@ pub fn run_pending_in(ctx: &Ctx) -> Result<()> {
     // questions. `create_dir_all` takes the umask's answer, which is 0755
     // under the common 022 and **0777** under the `umask 000` CI and container
     // images set, and the root goes on to hold `audit.log`, `auto-rules.toml`
-    // and `config.toml`. Inlined at [`OWNER_ONLY_DIR`] rather than routed
-    // through `paths::ensure_private_dir` for the same reason as the snapshot
-    // dir below: migrations resolve nothing through `paths`, and the mode is a
-    // constant rather than a location, so no frozen history is at stake.
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(OWNER_ONLY_DIR)
-        .create(&ctx.root)
-        .with_context(|| format!("create {}", ctx.root.display()))?;
+    // and `config.toml`. Migrations own the mode-setting helper rather than
+    // routing through `paths::ensure_private_dir`: they resolve nothing
+    // through `paths`, and the mode is a constant rather than a location, so
+    // no frozen history is at stake.
+    create_owner_only_dir(&ctx.root)?;
     let _lock = acquire_lock(&ctx.root)?;
 
     // Re-read under the lock. On first upgrade a burst of wraps all observe
@@ -431,7 +427,34 @@ const OWNER_ONLY: u32 = 0o600;
 /// The directory counterpart, for the snapshot dirs those files live in. A
 /// directory's mode governs who can *list* it, and a listing of what a restore
 /// touched is a map of the user's config paths.
+///
+/// This is the desired final mode, not a value that is safe to pass to
+/// `DirBuilder::mode` on its own: the process umask can clear owner bits too.
+/// Use [`create_owner_only_dir`] so creation is followed by an unmasked
+/// permissions pass.
 const OWNER_ONLY_DIR: u32 = 0o700;
+
+/// Create `dir` and every missing parent at exactly [`OWNER_ONLY_DIR`].
+///
+/// Missing components are handled from shallowest to deepest. A single
+/// recursive `DirBuilder` call followed by `set_permissions(dir, ...)` is not
+/// enough under a hostile umask: the builder can create an intermediate
+/// directory without owner traversal and then fail before it reaches `dir`.
+fn create_owner_only_dir(dir: &Path) -> Result<()> {
+    if let Some(parent) = dir.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        if !parent.is_dir() {
+            create_owner_only_dir(parent)?;
+        }
+    }
+
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(OWNER_ONLY_DIR)
+        .create(dir)
+        .with_context(|| format!("create {}", dir.display()))?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(OWNER_ONLY_DIR))
+        .with_context(|| format!("set mode 0700 on {}", dir.display()))
+}
 
 // ── restore ───────────────────────────────────────────────────────────────
 
@@ -592,11 +615,7 @@ fn restore_in(root: &Path, level: u32, assume_yes: bool) -> Result<i32> {
     // whatever the restore is about to overwrite, `~/.ssh/config` included, so
     // the directory has to be as private as the copies inside it: at the
     // umask's 0755 the listing alone maps every config path on the machine.
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(OWNER_ONLY_DIR)
-        .create(&saved)
-        .with_context(|| format!("create {}", saved.display()))?;
+    create_owner_only_dir(&saved)?;
     for (entry, live, live_body, _) in &plan {
         if live.exists() {
             // Carry the live file's mode into the saved copy: this is the
@@ -633,11 +652,9 @@ fn restore_in(root: &Path, level: u32, assume_yes: bool) -> Result<i32> {
             // being restored into it. Only directories this actually creates
             // are affected: an existing `~/.ssh` or `~/.config` keeps its own
             // mode, so this narrows nothing the user chose.
-            std::fs::DirBuilder::new()
-                .recursive(true)
-                .mode(OWNER_ONLY_DIR)
-                .create(parent)
-                .with_context(|| format!("create {}", parent.display()))?;
+            if !parent.is_dir() {
+                create_owner_only_dir(parent)?;
+            }
         }
         atomic::replace(
             &entry.restore_to,
@@ -959,11 +976,7 @@ fn snapshot_if_absent(ctx: &Ctx, m: &Migration) -> Result<()> {
     // `paths::ensure_private_dir` for the same reason as the root and the
     // pre-restore save: migrations resolve no locations through `paths`, and a
     // mode is a constant, not a location.
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(OWNER_ONLY_DIR)
-        .create(&staging)
-        .with_context(|| format!("create {}", staging.display()))?;
+    create_owner_only_dir(&staging)?;
 
     let mut files = Vec::new();
     for src in &sources {
