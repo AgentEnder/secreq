@@ -650,19 +650,6 @@ pub fn rules_new_wasm(
         ),
         seed,
     };
-    // The SDK is kept publishable (`tests/sdk_publish.rs`) but is not on
-    // npm yet, so this fallback is a dependency `npm install` cannot
-    // satisfy. Say so at scaffold time rather than letting the install
-    // fail with a 404 the user has to interpret.
-    if opts.sdk == rule_scaffold::SdkDep::Published {
-        eprintln!(
-            "WARNING: no secreq-rule checkout found, so package.json depends on \
-             `secreq-rule@{}` from the registry — which is not published yet, and \
-             `npm install` will fail on it. Re-run with --sdk <checkout>/packages/secreq-rule \
-             to depend on a local copy.",
-            rule_scaffold::SDK_VERSION_RANGE
-        );
-    }
     let scaffold = rule_scaffold::write_project(&dir, &opts)?;
 
     println!("scaffolded {} ({})", scaffold.dir.display(), opts.name);
