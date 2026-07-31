@@ -210,7 +210,11 @@ fn config_json5_to_toml(root: &Value) -> Result<String> {
     if !wraps.is_empty() {
         root.insert("wraps", toml_edit::Item::Table(wraps));
     }
-    Ok(doc.to_string())
+    Ok(format!(
+        "#:schema {}\n{}",
+        crate::wraps::CONFIG_SCHEMA_URL,
+        doc
+    ))
 }
 
 /// `auto-rules.json5` → `auto-rules.toml`. The rules file has no dynamic keys
@@ -228,7 +232,11 @@ fn config_json5_to_toml(root: &Value) -> Result<String> {
 fn rules_json5_to_toml(root: &Value) -> Result<String> {
     let doc =
         toml_edit::ser::to_document(&strip_nulls(root)).context("re-serialize rules as TOML")?;
-    Ok(doc.to_string())
+    Ok(format!(
+        "#:schema {}\n{}",
+        crate::rules::AUTO_RULES_SCHEMA_URL,
+        doc
+    ))
 }
 
 /// Recursively drop every null-valued key, and every null element of an array.
@@ -384,6 +392,13 @@ mod tests {
         // `cwd` pattern would match nothing rather than anything.
         assert!(!out.contains("cwd"), "{out}");
         assert!(!out.contains("ancestor"), "{out}");
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(RULES);
+        std::fs::write(&path, &out).unwrap();
+        let loaded = crate::rules::load_rules(&path)
+            .expect("the shipped loader must read the migration's output");
+        assert_eq!(loaded.rules.len(), 1);
     }
 
     #[test]
@@ -437,11 +452,15 @@ mod tests {
     }
 
     #[test]
-    fn the_schema_pointer_is_dropped_rather_than_translated() {
-        // TOML carries it as a `#:schema` comment, so a `$schema` key would
-        // just be an unknown field the new loader rejects.
+    fn the_schema_pointer_becomes_a_taplo_directive() {
+        // A `$schema` data key would be an unknown field the new loader
+        // rejects. The pointer survives as the comment syntax Taplo reads.
         let out = convert_config(r#"{ $schema: "https://secreq.dev/x.json", gh: { env: {} } }"#);
-        assert!(!out.contains("schema"), "got: {out}");
+        assert!(
+            out.starts_with(&format!("#:schema {}\n", crate::wraps::CONFIG_SCHEMA_URL)),
+            "got: {out}"
+        );
+        assert!(!out.contains("$schema"), "got: {out}");
         crate::wraps::WrapsConfig::parse(&out, "converted").expect("re-parses");
     }
 

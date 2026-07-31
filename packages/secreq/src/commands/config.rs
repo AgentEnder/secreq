@@ -238,9 +238,10 @@ pub fn edit_cmd(config_path: Option<&Path>) -> Result<i32> {
     // absent by construction). `atomic::replace` makes the parent, so the
     // `create_dir_all` this replaced is no longer needed.
     if !config_path.exists() {
+        let seed = format!("#:schema {}\n", crate::wraps::CONFIG_SCHEMA_URL);
         crate::atomic::replace(
             &config_path,
-            b"{\n}\n",
+            seed.as_bytes(),
             crate::atomic::Mode::Like(&config_path),
         )?;
     }
@@ -443,9 +444,8 @@ fn parse_env_assignments(envs: &[String]) -> Result<BTreeMap<String, String>> {
     Ok(out)
 }
 
-/// Serialize a `WrapsConfig` to JSON-pretty (the parser accepts JSON5, so
-/// this is a valid input). Same caveat as `store`: comments and exact
-/// formatting from a hand-edited file aren't preserved through a write.
+/// Edit the named config entries in place, preserving every unmentioned
+/// table, comment, and formatting choice.
 ///
 /// **`Mode::Like` the destination, not `Mode::Exactly(0o600)`.** The fallback
 /// is the fix: `Like` resolves to 0600 when the mode source does not exist, and
@@ -488,7 +488,13 @@ fn parse_env_assignments(envs: &[String]) -> Result<BTreeMap<String, String>> {
 /// So callers say what changed. Each [`ConfigEdit`] names one entry, and
 /// nothing else in the document is read, rewritten, or reordered.
 pub(super) fn edit_config(path: &Path, edits: &[ConfigEdit]) -> Result<()> {
-    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let existing = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            format!("#:schema {}\n", crate::wraps::CONFIG_SCHEMA_URL)
+        }
+        Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
+    };
     let mut doc: toml_edit::DocumentMut = existing
         .parse()
         .with_context(|| format!("{} is not valid TOML", path.display()))?;

@@ -11,7 +11,7 @@
 //! `wraps.rs`, `manifest.rs`), which closes the shape half by construction.
 //! The rest of this file closes what construction cannot reach:
 //!
-//! - **`auto-rules.json5`** — every rule shape `secreq` writes is validated
+//! - **`auto-rules.toml`** — every rule shape `secreq` writes is validated
 //!   against the committed schema, and a rule the loader refuses is checked to
 //!   be one the schema refuses too. A published contract that rejects a file
 //!   secreq itself wrote is the failure this catches; `"argv": null` was that
@@ -86,14 +86,11 @@ fn compile(path: &str, id: &str) -> (boon::Schemas, boon::SchemaIndex) {
 }
 
 fn auto_rules_schema() -> (boon::Schemas, boon::SchemaIndex) {
-    compile(
-        AUTO_RULES_PATH,
-        "https://secreq.dev/schema/auto-rules.schema.json",
-    )
+    compile(AUTO_RULES_PATH, secreq::rules::AUTO_RULES_SCHEMA_URL)
 }
 
 fn wraps_schema() -> (boon::Schemas, boon::SchemaIndex) {
-    compile(WRAPS_PATH, "https://secreq.dev/schema/wraps.schema.json")
+    compile(WRAPS_PATH, secreq::wraps::CONFIG_SCHEMA_URL)
 }
 
 fn declarative_rule(r#match: RuleMatch, decide: StaticDecision) -> Rule {
@@ -118,10 +115,8 @@ fn wrap_only(wrap: &str) -> RuleMatch {
 
 /// Every rule shape `secreq` writes has to satisfy the schema it publishes.
 ///
-/// The unconstrained clause is the load-bearing case: `RuleMatch`'s options
-/// carry `default` but no `skip_serializing_if`, so a rule matching a wrap and
-/// nothing else is written as `"argv": null, "ancestor": null, "cwd": null` —
-/// which the published schema typed as `string`, and would have rejected.
+/// The unconstrained clause is the load-bearing case: TOML has no null, so an
+/// absent optional matcher must remain valid against the published schema.
 #[test]
 fn every_rule_secreq_writes_validates_against_the_published_schema() {
     let cases: Vec<(&str, Rule)> = vec![
@@ -287,12 +282,7 @@ fields.name = { required = true }
 retrieve = ["true"]
 "#;
 
-/// The published schema and the hand-written parser must accept the same keys.
-///
-/// `manifest.rs` and `wraps.rs` walk a `serde_json::Value` rather than deriving
-/// `Deserialize`, so the JSON name of every field whose Rust name differs is a
-/// `schemars(rename)` beside it — a mapping the compiler does not check. This
-/// is what checks it.
+/// The published schema and serde loader must accept the same keys.
 #[test]
 fn schema_covers_every_key_the_parser_accepts() {
     let (schemas, index) = wraps_schema();
@@ -316,14 +306,15 @@ fn schema_covers_every_key_the_parser_accepts() {
 #[test]
 fn schema_and_parser_refuse_the_same_unknown_key() {
     let (schemas, index) = wraps_schema();
-    let document = json!({ "gh": { "env": {}, "$bogus": "nope" } });
+    let text = "[wraps.gh]\nbogus = \"nope\"\n";
+    let document: Value = toml::from_str(text).expect("fixture is valid TOML");
 
     assert!(
         schemas.validate(&document, index).is_err(),
         "docs/wraps.schema.json accepts a wrap key the parser refuses"
     );
     assert!(
-        WrapsConfig::parse(&document.to_string(), "unknown-key").is_err(),
+        WrapsConfig::parse(text, "unknown-key").is_err(),
         "the parser was expected to refuse an unknown wrap key"
     );
 }

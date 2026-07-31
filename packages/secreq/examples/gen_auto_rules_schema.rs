@@ -1,4 +1,4 @@
-//! Emit the JSON Schema for `auto-rules.json5` to stdout.
+//! Emit the JSON Schema for `auto-rules.toml` to stdout.
 //!
 //! Regenerate the committed file with:
 //!

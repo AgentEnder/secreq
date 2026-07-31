@@ -909,7 +909,9 @@ fn imply_empty_headers(table: &mut toml_edit::Table) {
 fn save_preferred_editor_at(path: &Path, id: &str) -> Result<()> {
     let existing = match std::fs::read_to_string(path) {
         Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            format!("#:schema {}\n", crate::wraps::CONFIG_SCHEMA_URL)
+        }
         Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
     };
     // `toml_edit` edits the parsed document, so everything else in the file —
