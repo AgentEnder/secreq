@@ -5,7 +5,7 @@
   "definitions": {
     "BatchRetrieve": {
       "additionalProperties": false,
-      "description": "Batched-retrieve: one command invocation resolves many secrets at once (e.g. `op run -- printenv`). Used automatically when a wrap's `env` references the same provider for two or more entries, cutting biometric prompts from N to 1. Protocol: per requested (name, locator), set env var `name` to `env_value` with `{locator}` substituted; spawn `command`; parse stdout as `KEY=VALUE` lines.",
+      "description": "Batched-retrieve: one command invocation resolves many secrets at once (e.g. `op run -- printenv`). Used automatically when a wrap's `env_secrets` and `env` together reference the same provider for two or more entries, cutting biometric prompts from N to 1. Protocol: per requested (name, locator), set env var `name` to `env_value` with `{locator}` substituted; spawn `command`; parse stdout as `KEY=VALUE` lines.",
       "properties": {
         "command": {
           "description": "argv to execute. The synthetic env entries are added to the child's environment; no placeholder substitution happens on `command` itself.",
@@ -93,7 +93,7 @@
               "type": "null"
             }
           ],
-          "description": "Batched retrieve: one command invocation resolves many secrets at once (e.g. `op run -- printenv`). Used automatically when a wrap's `env` references the same provider for two or more entries, cutting biometric prompts from N to 1."
+          "description": "Batched retrieve: one command invocation resolves many secrets at once (e.g. `op run -- printenv`). Used automatically when a wrap's `env_secrets` and `env` together reference the same provider for two or more entries, cutting biometric prompts from N to 1."
         },
         "store": {
           "anyOf": [

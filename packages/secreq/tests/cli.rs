@@ -699,6 +699,34 @@ fn wrap_secret_rejects_invalid_flag_shapes_before_editing_config() {
             "{invalid}: invalid flags must not edit config"
         );
     }
+
+    let sb = Sandbox::new();
+    let config = sb.config_path();
+    let shim_dir = sb.path().join("shims");
+    fs::create_dir_all(&shim_dir).unwrap();
+    write_config(
+        &config,
+        &format!(
+            r#"
+            shim_dir = "{}"
+
+            [secrets.GITHUB_TOKEN]
+            ref = "secret://op/Personal/GitHub/token"
+            "#,
+            shim_dir.display()
+        ),
+    );
+
+    let out = sb.run(&["wrap", "--secret", "GITHUB_TOKN", "gh"]);
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("--secret `GITHUB_TOKN`"), "{stderr}");
+    assert!(stderr.contains("[secrets.GITHUB_TOKEN]"), "{stderr}");
+    assert!(!stderr.contains("internal:"), "{stderr}");
+    assert!(
+        !fs::read_to_string(&config).unwrap().contains("env_secrets"),
+        "an undeclared name must fail before editing config"
+    );
 }
 
 #[test]
@@ -1081,7 +1109,28 @@ fn check_flags_unknown_provider_in_a_wrap() {
     );
     let out = sb.run(&["check"]);
     assert_eq!(out.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&out.stdout).contains("unknown provider scheme"));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("wraps.gh.env.X"), "{stdout}");
+    assert!(stdout.contains("unknown provider scheme"), "{stdout}");
+
+    let sb = Sandbox::new();
+    write_config(
+        &sb.config_path(),
+        r#"
+        [secrets.GITHUB_TOKEN]
+        ref = "secret://made-up-provider/loc"
+        [wraps.gh]
+        env_secrets = ["GITHUB_TOKEN"]
+        "#,
+    );
+    let out = sb.run(&["check"]);
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(r#"wraps.gh.env_secrets["GITHUB_TOKEN"]"#),
+        "{stdout}"
+    );
+    assert!(stdout.contains("unknown provider scheme"), "{stdout}");
 }
 
 // ── init (auto-PATH setup) ────────────────────────────────────────────────

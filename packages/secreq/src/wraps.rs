@@ -560,7 +560,7 @@ impl WrapsConfig {
     }
 
     /// The declared secret key with the smallest edit distance from `name`.
-    fn closest_secret_name(&self, name: &str) -> Option<&str> {
+    pub(crate) fn closest_secret_name(&self, name: &str) -> Option<&str> {
         let folded_name = name.to_ascii_uppercase();
         let max_distance = folded_name.chars().count().div_ceil(3).max(2);
         self.secrets
@@ -652,25 +652,24 @@ fn edit_distance(left: &str, right: &str) -> usize {
         current.push(left_idx + 1);
         for (right_idx, right_char) in right_chars.iter().enumerate() {
             let insertion = current
-                .last()
-                .copied()
-                .unwrap_or(usize::MAX)
-                .saturating_add(1);
+                .get(right_idx)
+                .expect("current distance row has one entry per visited character")
+                + 1;
             let deletion = previous
                 .get(right_idx + 1)
-                .copied()
-                .unwrap_or(usize::MAX)
-                .saturating_add(1);
+                .expect("previous distance row covers every right-hand character")
+                + 1;
             let substitution = previous
                 .get(right_idx)
-                .copied()
-                .unwrap_or(usize::MAX)
-                .saturating_add(usize::from(left_char != *right_char));
+                .expect("previous distance row starts with the empty-prefix distance")
+                + usize::from(left_char != *right_char);
             current.push(insertion.min(deletion).min(substitution));
         }
         std::mem::swap(&mut previous, &mut current);
     }
-    previous.last().copied().unwrap_or_default()
+    *previous
+        .last()
+        .expect("a distance row always contains the empty-prefix entry")
 }
 
 /// Expand a leading `~/` in a path string.

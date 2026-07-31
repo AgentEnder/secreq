@@ -563,13 +563,13 @@ fn obtain_wrap_consent(
     let mut command = vec![wrap.name.clone()];
     command.extend(args.iter().cloned());
 
-    // Parse the wrap's env into references. Bare-locator wraps (no
-    // `secret://...` prefix) never made it through `wraps::parse`, so we can
-    // assume `Reference::parse` succeeds — but if it doesn't, surface the
-    // malformed ref early instead of sending a junk ask the daemon would
-    // reject at resolution time.
+    // Parse the wrap's `env_secrets` and `env` union into references.
+    // Bare-locator wraps (no `secret://...` prefix) never made it through
+    // `wraps::parse`, so we can assume `Reference::parse` succeeds — but if it
+    // doesn't, surface the malformed ref early instead of sending a junk ask
+    // the daemon would reject at resolution time.
     let config = load_config_or_default(None)?;
-    let refs = parse_wrap_refs(&config, wrap)?;
+    let refs = config.wrap_refs(wrap)?;
 
     let ask = build_ask(
         AskSpec {
@@ -591,17 +591,12 @@ fn obtain_wrap_consent(
         .context("daemon consent request failed")
 }
 
-/// Parse a wrap's `env` map into `(name, Reference)` pairs, surfacing a
-/// malformed `secret://` ref with the wrap-specific error message.
-fn parse_wrap_refs(config: &WrapsConfig, wrap: &Wrap) -> Result<Vec<(String, ResolvedRef)>> {
-    config.wrap_refs(wrap)
-}
-
-/// Resolve every env entry for the wrap through its provider. Reuses the
-/// resolve grouping/batching machinery by building a one-shot manifest with
-/// the wrap's env as eager secrets.
+/// Resolve every `env_secrets` and `env` entry for the wrap through its
+/// provider. Reuses the resolve grouping/batching machinery by building a
+/// one-shot manifest with the wrap's complete injection union as eager
+/// secrets.
 fn resolve_wrap_env(config: &WrapsConfig, wrap: &Wrap) -> Result<Vec<(String, SecretValue)>> {
-    let refs = parse_wrap_refs(config, wrap)?;
+    let refs = config.wrap_refs(wrap)?;
     resolve_refs_client_side(config, &refs, wrap.reason.as_deref())
 }
 

@@ -96,6 +96,7 @@ pub fn wrap(args: WrapArgs, config_path: Option<&Path>) -> Result<i32> {
         } else {
             (Vec::new(), BTreeMap::new())
         };
+    validate_declared_secret_names(&config, &env_secrets)?;
 
     let reason = args.reason.or_else(|| {
         if interactive {
@@ -278,14 +279,14 @@ pub fn check(config_path: Option<&Path>) -> Result<i32> {
         for (env_name, resolved) in config.wrap_refs(wrap)? {
             let reference = resolved.reference;
             if !config.providers.contains_key(&reference.provider) {
-                let source = if wrap.env_secrets.contains(&env_name) {
-                    "env_secrets"
+                let location = if wrap.env_secrets.contains(&env_name) {
+                    format!("wraps.{}.env_secrets[\"{env_name}\"]", wrap.name)
                 } else {
-                    "env"
+                    format!("wraps.{}.env.{env_name}", wrap.name)
                 };
                 println!(
-                    "  ✗ {}.{}.{}: unknown provider scheme `{}`",
-                    wrap.name, source, env_name, reference.provider
+                    "  ✗ {location}: unknown provider scheme `{}`",
+                    reference.provider
                 );
                 problems += 1;
             }
@@ -460,6 +461,19 @@ fn parse_secret_names(names: &[String]) -> Result<Vec<String>> {
         }
     }
     Ok(names.to_vec())
+}
+
+fn validate_declared_secret_names(config: &WrapsConfig, names: &[String]) -> Result<()> {
+    for name in names {
+        if !config.secrets.contains_key(name) {
+            let suggestion = config
+                .closest_secret_name(name)
+                .map(|closest| format!("; did you mean `[secrets.{closest}]`?"))
+                .unwrap_or_default();
+            bail!("--secret `{name}` is not a declared secret{suggestion}");
+        }
+    }
+    Ok(())
 }
 
 /// Serialize a `WrapsConfig` to JSON-pretty (the parser accepts JSON5, so
