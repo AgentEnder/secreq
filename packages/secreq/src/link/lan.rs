@@ -142,24 +142,43 @@ fn accept_loop(server: Arc<Server>, runtime: Arc<Runtime>) {
 }
 
 fn handle_request(request: Request, runtime: &Runtime) -> std::io::Result<()> {
-    if !request.remote_addr().is_some_and(|addr| is_lan(&addr.ip())) {
-        return request.respond(Response::empty(StatusCode(403)));
+    match route_decision(&request) {
+        RouteDecision::Forbidden => request.respond(Response::empty(StatusCode(403))),
+        RouteDecision::Health => request.respond(Response::empty(StatusCode(200))),
+        RouteDecision::Pair => handle_pair(request, &runtime.pairing),
+        RouteDecision::Events => handle_events(request, Arc::clone(&runtime.state)),
+        RouteDecision::Decision => handle_decision(request, runtime, &runtime.state),
+        RouteDecision::NotFound => request.respond(Response::empty(StatusCode(404))),
     }
+}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RouteDecision {
+    Forbidden,
+    Health,
+    Pair,
+    Events,
+    Decision,
+    NotFound,
+}
+
+fn route_decision(request: &Request) -> RouteDecision {
+    if !request.remote_addr().is_some_and(|addr| is_lan(&addr.ip())) {
+        return RouteDecision::Forbidden;
+    }
     if request.method() == &Method::Get && request.url() == "/healthz" {
-        return request.respond(Response::empty(StatusCode(200)));
+        return RouteDecision::Health;
     }
     if request.method() == &Method::Post && request.url() == "/pair" {
-        return handle_pair(request, &runtime.pairing);
+        return RouteDecision::Pair;
     }
     if request.method() == &Method::Get && request.url() == "/events" {
-        return handle_events(request, Arc::clone(&runtime.state));
+        return RouteDecision::Events;
     }
     if request.method() == &Method::Post && request.url() == "/decision" {
-        return handle_decision(request, runtime, &runtime.state);
+        return RouteDecision::Decision;
     }
-
-    request.respond(Response::empty(StatusCode(404)))
+    RouteDecision::NotFound
 }
 
 fn handle_events(
@@ -329,9 +348,17 @@ fn handle_pair(mut request: Request, pairing: &Pairing) -> std::io::Result<()> {
 
 fn pair_error_status(error: &PairError) -> StatusCode {
     match error {
-        PairError::NoOpenWindow | PairError::Expired | PairError::InvalidToken => StatusCode(403),
-        PairError::InvalidPublicKey | PairError::EmptyNickname => StatusCode(400),
-        PairError::NicknameCollision { .. } => StatusCode(409),
+        PairError::NoOpenWindow
+        | PairError::Expired
+        | PairError::InvalidToken
+        | PairError::TooManyTokenAttempts => StatusCode(403),
+        PairError::InvalidPublicKey
+        | PairError::EmptyNickname
+        | PairError::NicknameTooLong
+        | PairError::NicknameControlCharacter => StatusCode(400),
+        PairError::NicknameCollision { .. } | PairError::PublicKeyCollision { .. } => {
+            StatusCode(409)
+        }
         PairError::Unavailable | PairError::Clock(_) | PairError::Registry(_) => StatusCode(500),
     }
 }
@@ -369,12 +396,30 @@ mod tests {
 
     #[test]
     fn non_lan_sources_are_refused_before_routing() {
-        let request: Request = TestRequest::new()
+        let public_health: Request = TestRequest::new()
             .with_method(Method::Get)
             .with_path("/healthz")
             .with_remote_addr("203.0.113.7:1234".parse().unwrap())
             .into();
+        let public_unknown: Request = TestRequest::new()
+            .with_method(Method::Get)
+            .with_path("/missing")
+            .with_remote_addr("203.0.113.7:1234".parse().unwrap())
+            .into();
+        let local_health: Request = TestRequest::new()
+            .with_method(Method::Get)
+            .with_path("/healthz")
+            .with_remote_addr("127.0.0.1:1234".parse().unwrap())
+            .into();
+        let local_unknown: Request = TestRequest::new()
+            .with_method(Method::Get)
+            .with_path("/missing")
+            .with_remote_addr("127.0.0.1:1234".parse().unwrap())
+            .into();
 
-        assert!(!request.remote_addr().is_some_and(|addr| is_lan(&addr.ip())));
+        assert_eq!(route_decision(&public_health), RouteDecision::Forbidden);
+        assert_eq!(route_decision(&public_unknown), RouteDecision::Forbidden);
+        assert_eq!(route_decision(&local_health), RouteDecision::Health);
+        assert_eq!(route_decision(&local_unknown), RouteDecision::NotFound);
     }
 }

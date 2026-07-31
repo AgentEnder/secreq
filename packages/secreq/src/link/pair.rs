@@ -8,11 +8,15 @@ use p256::ecdsa::VerifyingKey;
 use rand::RngCore;
 use serde::Deserialize;
 use ssh_encoding::base64::{Base64, Encoding};
+use subtle::ConstantTimeEq;
 
 use super::devices::Device;
 
 /// How long an in-person enrollment token remains valid.
 pub const ENROLLMENT_TTL: Duration = Duration::from_secs(60);
+
+const MAX_FAILED_TOKEN_ATTEMPTS: u8 = 5;
+const MAX_NICKNAME_CHARS: usize = 64;
 
 /// The JSON body accepted by `POST /pair`.
 #[derive(Debug, Deserialize)]
@@ -31,6 +35,7 @@ pub struct Pairing {
 struct Window {
     token: String,
     expires_at: Instant,
+    failed_token_attempts: u8,
 }
 
 /// A pairing request that is safe to report to the enrolling user.
@@ -42,12 +47,20 @@ pub enum PairError {
     Expired,
     #[error("the enrollment token is not valid")]
     InvalidToken,
+    #[error("too many invalid enrollment tokens; run `secreq link` to open another window")]
+    TooManyTokenAttempts,
     #[error("the public key is not a valid uncompressed P-256 key")]
     InvalidPublicKey,
     #[error("a device nickname cannot be empty")]
     EmptyNickname,
+    #[error("a device nickname cannot exceed 64 characters")]
+    NicknameTooLong,
+    #[error("a device nickname cannot contain a control character")]
+    NicknameControlCharacter,
     #[error("a device named `{nickname}` is already paired; choose another nickname")]
     NicknameCollision { nickname: String },
+    #[error("that public key is already paired as `{nickname}`; one key cannot name two devices")]
+    PublicKeyCollision { nickname: String },
     #[error("pairing state is unavailable")]
     Unavailable,
     #[error("read the system clock")]
@@ -89,6 +102,7 @@ impl Pairing {
         *self.window.lock().map_err(|_| PairError::Unavailable)? = Some(Window {
             token,
             expires_at: now + ENROLLMENT_TTL,
+            failed_token_attempts: 0,
         });
         Ok(())
     }
@@ -100,34 +114,41 @@ impl Pairing {
         enrolled_at: u64,
     ) -> Result<Device, PairError> {
         let mut window = self.window.lock().map_err(|_| PairError::Unavailable)?;
-        let Some(open) = window.as_ref() else {
+        let Some(open) = window.as_mut() else {
             return Err(PairError::NoOpenWindow);
         };
         if now >= open.expires_at {
             *window = None;
             return Err(PairError::Expired);
         }
-        if request.token != open.token {
+        if !token_matches(&open.token, &request.token) {
+            open.failed_token_attempts = open.failed_token_attempts.saturating_add(1);
+            if open.failed_token_attempts >= MAX_FAILED_TOKEN_ATTEMPTS {
+                *window = None;
+                return Err(PairError::TooManyTokenAttempts);
+            }
             return Err(PairError::InvalidToken);
         }
-        if request.nickname.trim().is_empty() {
-            return Err(PairError::EmptyNickname);
-        }
-        validate_public_key(&request.public_key_b64)?;
+        let nickname = normalize_nickname(&request.nickname)?;
+        let public_key = validate_public_key(&request.public_key_b64)?;
+        let public_key_b64 = Base64::encode_string(&public_key);
 
         let mut devices = super::devices::load(&self.registry_path).map_err(PairError::Registry)?;
-        if devices
-            .iter()
-            .any(|device| device.nickname == request.nickname)
-        {
-            return Err(PairError::NicknameCollision {
-                nickname: request.nickname,
+        if devices.iter().any(|device| device.nickname == nickname) {
+            return Err(PairError::NicknameCollision { nickname });
+        }
+        if let Some(existing) = devices.iter().find(|device| {
+            Base64::decode_vec(&device.public_key_b64)
+                .is_ok_and(|existing_key| existing_key == public_key)
+        }) {
+            return Err(PairError::PublicKeyCollision {
+                nickname: existing.nickname.clone(),
             });
         }
 
         let device = Device {
-            nickname: request.nickname,
-            public_key_b64: request.public_key_b64,
+            nickname,
+            public_key_b64,
             enrolled_at,
             last_seen: None,
         };
@@ -136,6 +157,24 @@ impl Pairing {
         *window = None;
         Ok(device)
     }
+}
+
+fn token_matches(expected: &str, candidate: &str) -> bool {
+    bool::from(expected.as_bytes().ct_eq(candidate.as_bytes()))
+}
+
+fn normalize_nickname(raw: &str) -> Result<String, PairError> {
+    if raw.chars().any(char::is_control) {
+        return Err(PairError::NicknameControlCharacter);
+    }
+    let nickname = raw.trim();
+    if nickname.is_empty() {
+        return Err(PairError::EmptyNickname);
+    }
+    if nickname.chars().count() > MAX_NICKNAME_CHARS {
+        return Err(PairError::NicknameTooLong);
+    }
+    Ok(nickname.to_owned())
 }
 
 fn mint_token() -> String {
@@ -150,14 +189,13 @@ fn mint_token() -> String {
     token
 }
 
-fn validate_public_key(public_key_b64: &str) -> Result<(), PairError> {
+fn validate_public_key(public_key_b64: &str) -> Result<Vec<u8>, PairError> {
     let bytes = Base64::decode_vec(public_key_b64).map_err(|_| PairError::InvalidPublicKey)?;
     if bytes.len() != 65 || bytes.first() != Some(&0x04) {
         return Err(PairError::InvalidPublicKey);
     }
-    VerifyingKey::from_sec1_bytes(&bytes)
-        .map(|_| ())
-        .map_err(|_| PairError::InvalidPublicKey)
+    VerifyingKey::from_sec1_bytes(&bytes).map_err(|_| PairError::InvalidPublicKey)?;
+    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -174,9 +212,13 @@ mod tests {
     }
 
     fn request(token: &str, nickname: &str) -> PairRequest {
+        request_with_key(token, nickname, public_key_b64())
+    }
+
+    fn request_with_key(token: &str, nickname: &str, public_key_b64: String) -> PairRequest {
         PairRequest {
             token: token.into(),
-            public_key_b64: public_key_b64(),
+            public_key_b64,
             nickname: nickname.into(),
         }
     }
@@ -253,12 +295,134 @@ mod tests {
         pairing.open_at("collision".into(), now).unwrap();
 
         let err = pairing
-            .pair_at(request("collision", "Craig's iPhone"), now, 1_753_000_001)
+            .pair_at(
+                request("collision", "  Craig's iPhone  "),
+                now,
+                1_753_000_001,
+            )
             .expect_err("duplicate nickname must fail");
 
         let message = err.to_string();
         assert!(message.contains("Craig's iPhone"), "{message}");
         assert!(message.contains("already paired"), "{message}");
+        assert_eq!(devices::load(&path).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_nickname_is_trimmed_once_before_it_is_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("devices.json");
+        let pairing = Pairing::new(&path);
+        let now = Instant::now();
+        pairing.open_at("trimmed".into(), now).unwrap();
+
+        pairing
+            .pair_at(request("trimmed", "  Craig's iPhone  "), now, 1_753_000_000)
+            .expect("trimmed nickname pairs");
+
+        assert_eq!(devices::load(&path).unwrap()[0].nickname, "Craig's iPhone");
+    }
+
+    #[test]
+    fn nicknames_reject_terminal_controls_and_overlong_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("devices.json");
+        let pairing = Pairing::new(&path);
+        let now = Instant::now();
+        pairing.open_at("nickname".into(), now).unwrap();
+
+        for nickname in ["phone\nforged row".to_owned(), "phone\u{1b}[31m".to_owned()] {
+            let err = pairing
+                .pair_at(request("nickname", &nickname), now, 1_753_000_000)
+                .expect_err("terminal controls must be refused");
+            assert!(err.to_string().contains("control character"), "{err}");
+        }
+        let err = pairing
+            .pair_at(request("nickname", "   "), now, 1_753_000_000)
+            .expect_err("a nickname empty after trimming must fail");
+        assert!(matches!(err, PairError::EmptyNickname));
+        let err = pairing
+            .pair_at(request("nickname", &"a".repeat(65)), now, 1_753_000_000)
+            .expect_err("nicknames are capped at 64 characters");
+        assert!(err.to_string().contains("64"), "{err}");
+        assert!(devices::load(&path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn five_bad_token_guesses_close_the_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("devices.json");
+        let pairing = Pairing::new(&path);
+        let now = Instant::now();
+        pairing.open_at("right-token".into(), now).unwrap();
+
+        for attempt in 1..=5 {
+            let err = pairing
+                .pair_at(request("wrong-token", "phone"), now, 1_753_000_000)
+                .expect_err("a wrong token must fail");
+            if attempt == 5 {
+                assert!(err.to_string().contains("too many"), "{err}");
+            } else {
+                assert!(matches!(err, PairError::InvalidToken));
+            }
+        }
+        let err = pairing
+            .pair_at(request("right-token", "phone"), now, 1_753_000_000)
+            .expect_err("the locked window must be closed");
+
+        assert!(matches!(err, PairError::NoOpenWindow));
+        assert!(devices::load(&path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn four_bad_token_guesses_still_allow_the_in_person_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("devices.json");
+        let pairing = Pairing::new(&path);
+        let now = Instant::now();
+        pairing.open_at("right-token".into(), now).unwrap();
+
+        for _ in 0..4 {
+            pairing
+                .pair_at(request("wrong-token", "phone"), now, 1_753_000_000)
+                .expect_err("a wrong token must fail");
+        }
+        pairing
+            .pair_at(request("right-token", "phone"), now, 1_753_000_000)
+            .expect("the fifth attempt may use the real token");
+
+        assert_eq!(devices::load(&path).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn one_public_key_cannot_claim_a_second_nickname() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("devices.json");
+        let key = public_key_b64();
+        devices::save(
+            &path,
+            &[Device {
+                nickname: "phone".into(),
+                public_key_b64: key.clone(),
+                enrolled_at: 1_753_000_000,
+                last_seen: None,
+            }],
+        )
+        .unwrap();
+        let pairing = Pairing::new(&path);
+        let now = Instant::now();
+        pairing.open_at("same-key".into(), now).unwrap();
+
+        let err = pairing
+            .pair_at(
+                request_with_key("same-key", "tablet", key),
+                now,
+                1_753_000_001,
+            )
+            .expect_err("one key must have one audit identity");
+
+        assert!(err.to_string().contains("phone"), "{err}");
+        assert!(err.to_string().contains("public key"), "{err}");
         assert_eq!(devices::load(&path).unwrap().len(), 1);
     }
 }
