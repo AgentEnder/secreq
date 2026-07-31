@@ -94,10 +94,12 @@ pub struct PendingAction {
 /// caret is in is exempt until the user asks to save — see
 /// [`RuleDraft::problems`] for why.
 ///
-/// `id == None` ⇒ creating; `id == Some` ⇒ editing an existing rule.
+/// `original == None` ⇒ creating; `original == Some` ⇒ editing the exact
+/// version of an existing rule that seeded the form.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RuleDraft {
     id: Option<String>,
+    original: Option<Rule>,
     name: String,
     enabled: bool,
     decide: RuleDecisionDraft,
@@ -217,6 +219,7 @@ impl RuleDraft {
         let trained_secrets = entry.secrets.iter().cloned().collect();
         RuleDraft {
             id: None,
+            original: None,
             name,
             enabled: true,
             decide,
@@ -246,6 +249,7 @@ impl RuleDraft {
         let name = format!("{} from {}", s.wrap, s.ancestor);
         RuleDraft {
             id: None,
+            original: None,
             name,
             enabled: true,
             decide,
@@ -273,6 +277,7 @@ impl RuleDraft {
         };
         RuleDraft {
             id: Some(rule.id.clone()),
+            original: Some(rule.clone()),
             name: rule.name.clone(),
             enabled: rule.enabled,
             decide: decide.decision().into(),
@@ -429,9 +434,17 @@ impl RuleDraft {
 #[derive(Debug, Clone)]
 pub enum RuleAction {
     Add(Rule),
-    Update(Rule),
-    Delete(String),
-    SetEnabled { id: String, enabled: bool },
+    Update {
+        expected: Rule,
+        replacement: Box<Rule>,
+    },
+    Delete {
+        expected: Rule,
+    },
+    SetEnabled {
+        expected: Rule,
+        enabled: bool,
+    },
 }
 
 /// A live auto-deny toast for rendering at the top of the Pending
@@ -1991,7 +2004,7 @@ fn render_rules_row(
                 let mut enabled = rule.enabled;
                 if ui.checkbox(&mut enabled, "").changed() {
                     actions_out.push(RuleAction::SetEnabled {
-                        id: rule.id.clone(),
+                        expected: rule.clone(),
                         enabled,
                     });
                 }
@@ -2045,7 +2058,9 @@ fn render_rules_row(
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Delete").clicked() {
-                        actions_out.push(RuleAction::Delete(rule.id.clone()));
+                        actions_out.push(RuleAction::Delete {
+                            expected: rule.clone(),
+                        });
                     }
                     // The form edits declarative match clauses only;
                     // offering it for a wasm rule would let a Save
@@ -2244,9 +2259,13 @@ fn render_rule_form(
         return;
     }
     if save_clicked {
+        let expected = draft.original.clone();
         if let Ok(rule) = draft.clone().into_rule() {
             if editing {
-                actions_out.push(RuleAction::Update(rule));
+                actions_out.push(RuleAction::Update {
+                    expected: expected.expect("editing draft has its original rule"),
+                    replacement: Box::new(rule),
+                });
             } else {
                 actions_out.push(RuleAction::Add(rule));
             }
@@ -2708,7 +2727,7 @@ pub(crate) fn render_auto_deny_toast(ui: &mut egui::Ui, toast: &AutoDenyToastVie
 /// full-strength colour. Replaces the old hardcoded `COLOR_*_SOFT`
 /// constants so the tint tracks the flavor's own status tokens in both
 /// light and dark.
-fn soft_fill(color: egui::Color32) -> egui::Color32 {
+pub(crate) fn soft_fill(color: egui::Color32) -> egui::Color32 {
     color.gamma_multiply(0.18)
 }
 

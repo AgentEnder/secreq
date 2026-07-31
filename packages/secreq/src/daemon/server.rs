@@ -346,17 +346,13 @@ fn handle_consent_window_connection(
                     );
                 }
             }
-            // Rule mutations from the Rules tab. They arrive over the
-            // streaming socket because that's the connection the
-            // consent-window child already has open. Routed through
-            // the same `State` mutators as the one-shot CLI path; the
-            // UI doesn't wait for an ack — success shows up in the
-            // next `ConsentUpdate` broadcast.
+            // Kept on the prompt stream defensively for a child that changes
+            // view during attachment. The manager is the normal sender.
             ClientMsg::AddRule { .. }
             | ClientMsg::UpdateRule { .. }
             | ClientMsg::DeleteRule { .. }
             | ClientMsg::SetRuleEnabled { .. } => {
-                apply_streaming_rule_msg(&state, msg);
+                let _ = tx.send(apply_streaming_rule_msg(&state, msg));
             }
             other => {
                 super::log::log_at(
@@ -498,7 +494,7 @@ fn handle_manager_window_connection(
             | ClientMsg::UpdateRule { .. }
             | ClientMsg::DeleteRule { .. }
             | ClientMsg::SetRuleEnabled { .. } => {
-                apply_streaming_rule_msg(&state, msg);
+                let _ = tx.send(apply_streaming_rule_msg(&state, msg));
             }
             other => {
                 super::log::log_at(
@@ -781,17 +777,26 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
         ClientMsg::AddRule { rule } => {
             mutation_reply(state.lock().expect("state mutex").add_rule(rule))
         }
-        ClientMsg::UpdateRule { rule } => {
-            mutation_reply(state.lock().expect("state mutex").update_rule(rule))
-        }
-        ClientMsg::DeleteRule { id } => {
-            mutation_reply(state.lock().expect("state mutex").delete_rule(&id))
-        }
-        ClientMsg::SetRuleEnabled { id, enabled } => mutation_reply(
+        ClientMsg::UpdateRule {
+            expected,
+            replacement,
+        } => mutation_reply(
             state
                 .lock()
                 .expect("state mutex")
-                .set_rule_enabled(&id, enabled),
+                .update_rule_if_unchanged(expected, *replacement),
+        ),
+        ClientMsg::DeleteRule { expected } => mutation_reply(
+            state
+                .lock()
+                .expect("state mutex")
+                .delete_rule_if_unchanged(expected),
+        ),
+        ClientMsg::SetRuleEnabled { expected, enabled } => mutation_reply(
+            state
+                .lock()
+                .expect("state mutex")
+                .set_rule_enabled_if_unchanged(expected, enabled),
         ),
     };
     super::log::log_at("server", format_args!("→ DaemonMsg::{}", reply.tag()));
@@ -1235,52 +1240,58 @@ fn read_wasm_module_bytes(path: &str) -> Result<Vec<u8>> {
 }
 
 /// Apply a rule-mutation ClientMsg to State. Used by the streaming
-/// connection handler when the consent-window child sends an
-/// AddRule/UpdateRule/DeleteRule/SetRuleEnabled. Errors are logged
-/// rather than returned to the caller — the UI doesn't currently
-/// surface them, and silently leaving the form open without
-/// persisting would be a worse user experience than a daemon-log
-/// entry the operator can grep.
+/// connection handler when the manager child sends an
+/// AddRule/UpdateRule/DeleteRule/SetRuleEnabled.
 ///
 /// `pub(super)` to make the path unit-testable; in production it's
-/// only called from `handle_consent_window_connection`. Panics on
-/// non-rule variants because the call site is the only legal one
-/// and dispatches its own branches above.
-pub(super) fn apply_streaming_rule_msg(state: &SharedState, msg: ClientMsg) {
+/// called from the manager and defensive consent streaming handlers.
+/// Panics on non-rule variants because both call sites dispatch their
+/// own branches above.
+pub(super) fn apply_streaming_rule_msg(state: &SharedState, msg: ClientMsg) -> DaemonMsg {
     let result = match msg {
         ClientMsg::AddRule { rule } => state
             .lock()
             .expect("state mutex")
             .add_rule(rule)
             .map(|()| "AddRule"),
-        ClientMsg::UpdateRule { rule } => state
+        ClientMsg::UpdateRule {
+            expected,
+            replacement,
+        } => state
             .lock()
             .expect("state mutex")
-            .update_rule(rule)
+            .update_rule_if_unchanged(expected, *replacement)
             .map(|()| "UpdateRule"),
-        ClientMsg::DeleteRule { id } => state
+        ClientMsg::DeleteRule { expected } => state
             .lock()
             .expect("state mutex")
-            .delete_rule(&id)
+            .delete_rule_if_unchanged(expected)
             .map(|()| "DeleteRule"),
-        ClientMsg::SetRuleEnabled { id, enabled } => state
+        ClientMsg::SetRuleEnabled { expected, enabled } => state
             .lock()
             .expect("state mutex")
-            .set_rule_enabled(&id, enabled)
+            .set_rule_enabled_if_unchanged(expected, enabled)
             .map(|()| "SetRuleEnabled"),
         other => {
             panic!("apply_streaming_rule_msg called with non-rule variant: {other:?}");
         }
     };
     match result {
-        Ok(tag) => super::log::log_at(
-            "server",
-            format_args!("consent-window {tag} applied successfully"),
-        ),
-        Err(err) => super::log::log_at(
-            "server",
-            format_args!("consent-window rule mutation failed: {err:#}"),
-        ),
+        Ok(tag) => {
+            super::log::log_at(
+                "server",
+                format_args!("manager-window {tag} applied successfully"),
+            );
+            DaemonMsg::Ok
+        }
+        Err(err) => {
+            let message = format!("{err:#}");
+            super::log::log_at(
+                "server",
+                format_args!("manager-window rule mutation failed: {message}"),
+            );
+            DaemonMsg::Err { message }
+        }
     }
 }
 
@@ -1835,24 +1846,92 @@ mod tests {
                 },
             },
         };
-        apply_streaming_rule_msg(&state, ClientMsg::AddRule { rule });
+        apply_streaming_rule_msg(&state, ClientMsg::AddRule { rule: rule.clone() });
 
         apply_streaming_rule_msg(
             &state,
             ClientMsg::SetRuleEnabled {
-                id: "to-delete".to_owned(),
+                expected: rule.clone(),
                 enabled: false,
             },
         );
         assert!(!crate::rules::load_rules(&path).unwrap().rules[0].enabled);
 
-        apply_streaming_rule_msg(
+        let mut disabled = rule;
+        disabled.enabled = false;
+        apply_streaming_rule_msg(&state, ClientMsg::DeleteRule { expected: disabled });
+        assert!(crate::rules::load_rules(&path).unwrap().rules.is_empty());
+    }
+
+    #[test]
+    fn streaming_stale_update_returns_a_clear_error() {
+        use crate::rules::{Rule, RuleMatch};
+        use std::collections::BTreeSet;
+        use std::sync::{Arc, Mutex};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.toml");
+        let state: SharedState = Arc::new(Mutex::new(super::super::state::State::with_rules_path(
+            path.clone(),
+        )));
+        let original = Rule {
+            id: "no-github-token".to_owned(),
+            name: "No github token".to_owned(),
+            enabled: true,
+            wraps: None,
+            trained_secrets: BTreeSet::new(),
+            created_at_unix: 0,
+            body: crate::rules::RuleBody::Declarative {
+                r#match: RuleMatch {
+                    wrap: "gh".to_owned(),
+                    argv: Some(crate::rules::Pattern::parse("gh auth token")),
+                    ancestor: None,
+                    cwd: None,
+                },
+                decide: crate::rules::StaticDecision::Deny { message: None },
+            },
+        };
+        assert!(matches!(
+            apply_streaming_rule_msg(
+                &state,
+                ClientMsg::AddRule {
+                    rule: original.clone()
+                }
+            ),
+            DaemonMsg::Ok
+        ));
+
+        let mut hot_reloaded = original.clone();
+        hot_reloaded.name = "operator version".to_owned();
+        state
+            .lock()
+            .expect("state mutex")
+            .update_rule(hot_reloaded.clone())
+            .expect("simulate hot reload");
+
+        let mut stale_replacement = original.clone();
+        stale_replacement.name = "stale manager version".to_owned();
+        let reply = apply_streaming_rule_msg(
             &state,
-            ClientMsg::DeleteRule {
-                id: "to-delete".to_owned(),
+            ClientMsg::UpdateRule {
+                expected: original,
+                replacement: Box::new(stale_replacement),
             },
         );
-        assert!(crate::rules::load_rules(&path).unwrap().rules.is_empty());
+        match reply {
+            DaemonMsg::Err { message } => {
+                assert!(
+                    message.contains("changed since the Rules view loaded it"),
+                    "{message}"
+                );
+                assert!(message.contains("reload the Rules view"), "{message}");
+            }
+            other => panic!("expected stale-write error, got {other:?}"),
+        }
+        assert_eq!(
+            crate::rules::load_rules(&path).expect("reload").rules,
+            vec![hot_reloaded]
+        );
     }
 
     // ── Peer-derived provenance ───────────────────────────────────────

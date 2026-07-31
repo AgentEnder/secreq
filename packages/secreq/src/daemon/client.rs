@@ -286,12 +286,14 @@ pub fn set_rule_enabled(id: &str, enabled: bool) -> Result<()> {
     if daemon_disabled() {
         bail!("{NO_DAEMON_ENV} is set; cannot reach the daemon. Unset it and try again.");
     }
+    let expected = list_rules()?
+        .rules
+        .into_iter()
+        .find(|rule| rule.id == id)
+        .with_context(|| format!("no rule with id `{id}`"))?;
     let socket = server::default_socket_path()?;
     let stream = connect_or_spawn(&socket)?;
-    let msg = ClientMsg::SetRuleEnabled {
-        id: id.to_owned(),
-        enabled,
-    };
+    let msg = ClientMsg::SetRuleEnabled { expected, enabled };
     match send_and_recv(stream, msg)? {
         DaemonMsg::Ok => Ok(()),
         DaemonMsg::Err { message } => bail!("daemon error: {message}"),
@@ -304,9 +306,14 @@ pub fn delete_rule(id: &str) -> Result<()> {
     if daemon_disabled() {
         bail!("{NO_DAEMON_ENV} is set; cannot reach the daemon. Unset it and try again.");
     }
+    let expected = list_rules()?
+        .rules
+        .into_iter()
+        .find(|rule| rule.id == id)
+        .with_context(|| format!("no rule with id `{id}`"))?;
     let socket = server::default_socket_path()?;
     let stream = connect_or_spawn(&socket)?;
-    match send_and_recv(stream, ClientMsg::DeleteRule { id: id.to_owned() })? {
+    match send_and_recv(stream, ClientMsg::DeleteRule { expected })? {
         DaemonMsg::Ok => Ok(()),
         DaemonMsg::Err { message } => bail!("daemon error: {message}"),
         other => bail!("unexpected reply to DeleteRule: {other:?}"),
