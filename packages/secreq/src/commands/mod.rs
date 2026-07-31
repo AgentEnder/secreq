@@ -46,6 +46,7 @@ pub use daemon::{daemon_install, daemon_log_path, daemon_status, daemon_stop, da
 pub use init::init;
 pub use rules::{
     rules_add_wasm, rules_list, rules_new_wasm, rules_rm, rules_set_enabled, rules_show,
+    rules_stats,
 };
 pub use run::{run, wrap_run, WrapRunOpts};
 pub use secrets::{agent_open, read, resolve};

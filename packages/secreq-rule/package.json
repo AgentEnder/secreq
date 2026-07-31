@@ -19,10 +19,19 @@
   "files": [
     "assembly/",
     "bin/",
+    "testing/assembly.ts",
+    "testing/index.js",
     "index.ts",
     "asconfig.json"
   ],
   "types": "assembly/index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./assembly/*": "./assembly/*",
+    "./testing": "./testing/index.js",
+    "./testing/assembly": "./testing/assembly.ts",
+    "./package.json": "./package.json"
+  },
   "publishConfig": {
     "access": "public"
   },

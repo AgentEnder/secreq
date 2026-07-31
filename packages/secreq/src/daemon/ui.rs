@@ -190,11 +190,7 @@ impl RuleDraft {
     /// caller, cwd) and snapshots `entry.secrets` as `trained_secrets`
     /// so the safety guard kicks in by default.
     fn from_audit_entry(entry: &AuditEntry) -> RuleDraft {
-        let argv = if entry.args.is_empty() {
-            entry.wrap.clone()
-        } else {
-            format!("{} {}", entry.wrap, entry.args.join(" "))
-        };
+        let argv = entry.joined_argv();
         // Fall back to a sensible name even if the user types nothing
         // — they can edit it before saving.
         let name = if entry.wrap.is_empty() {
@@ -621,11 +617,28 @@ impl AuditCache {
             self.last_load = Some(now);
             return;
         }
-        if let Ok(entries) = audit::read_history(Some(AUDIT_HISTORY_LIMIT)) {
-            self.entries = entries;
+        match audit::read_history_with_summary(Some(AUDIT_HISTORY_LIMIT)) {
+            Ok((entries, summary)) => {
+                self.entries = entries;
+                self.last_mtime = mtime;
+                if summary.malformed > 0 {
+                    super::log::log_at(
+                        "ui",
+                        format_args!(
+                            "WARN: skipped {} malformed audit record(s) while refreshing history",
+                            summary.malformed
+                        ),
+                    );
+                }
+            }
+            Err(err) => {
+                super::log::log_at(
+                    "ui",
+                    format_args!("WARN: could not refresh audit history: {err:#}"),
+                );
+            }
         }
         self.last_load = Some(now);
-        self.last_mtime = mtime;
     }
 
     pub(crate) fn summarize(
@@ -4315,6 +4328,7 @@ mod tests {
             cwd: "/home/x".to_owned(),
             wrap: wrap.to_owned(),
             args: args.iter().map(|s| (*s).to_owned()).collect(),
+            command: None,
             callers: vec![AuditCaller {
                 pid: 1,
                 name: caller_name.to_owned(),
@@ -4714,6 +4728,7 @@ mod tests {
             cwd: String::new(),
             wrap: "gh".to_owned(),
             args: vec![],
+            command: None,
             callers: vec![],
             callers_truncated: Some(false),
             secrets: vec![],
@@ -4876,6 +4891,7 @@ mod tests {
             cwd: String::new(),
             wrap: wrap.to_owned(),
             args: vec![],
+            command: None,
             callers: vec![AuditCaller {
                 pid: 100,
                 name: caller.to_owned(),

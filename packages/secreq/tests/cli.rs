@@ -1376,19 +1376,10 @@ fn check_flags_unknown_provider_in_a_wrap() {
 fn check_flags_a_registered_rule_invalidated_by_a_config_edit() {
     let sb = Sandbox::new();
     sb.write_config("[wraps.gh.env]\nGITHUB_TOKEN = \"secret://op/gh\"\n");
-    fs::write(
-        sb.root().join("auto-rules.toml"),
-        r#"{
-          "rules": [{
-            "id": "scope01",
-            "name": "GitHub reads",
-            "enabled": true,
-            "decide": "approve",
-            "match": { "wrap": "gh" },
-            "trained_secrets": ["GITHUB_TOKNE"],
-            "created_at_unix": 0
-          }]
-        }"#,
+    let rule = stats_declarative_rule("scope01", "GitHub reads", true, "gh", None, "GITHUB_TOKNE");
+    secreq::rules::save_rules(
+        &sb.root().join("auto-rules.toml"),
+        std::slice::from_ref(&rule),
     )
     .unwrap();
 
@@ -1396,7 +1387,7 @@ fn check_flags_a_registered_rule_invalidated_by_a_config_edit() {
     assert_eq!(out.status.code(), Some(1));
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("GITHUB_TOKNE"), "{stdout}");
-    assert!(stdout.contains("did you mean 'GITHUB_TOKEN'?"), "{stdout}");
+    assert!(stdout.contains("did you mean `GITHUB_TOKEN`?"), "{stdout}");
 }
 
 #[test]
@@ -1411,19 +1402,10 @@ fn check_does_not_accept_a_named_secret_in_place_of_its_env_key() {
         ANTHROPIC_AUTH_TOKEN = "secret://ZAI_TOKEN"
         "#,
     );
-    fs::write(
-        sb.root().join("auto-rules.toml"),
-        r#"{
-          "rules": [{
-            "id": "scope02",
-            "name": "Claude reads",
-            "enabled": true,
-            "decide": "approve",
-            "match": { "wrap": "claude" },
-            "trained_secrets": ["ZAI_TOKEN"],
-            "created_at_unix": 0
-          }]
-        }"#,
+    let rule = stats_declarative_rule("scope02", "Claude reads", true, "claude", None, "ZAI_TOKEN");
+    secreq::rules::save_rules(
+        &sb.root().join("auto-rules.toml"),
+        std::slice::from_ref(&rule),
     )
     .unwrap();
 
@@ -1431,10 +1413,8 @@ fn check_does_not_accept_a_named_secret_in_place_of_its_env_key() {
     assert_eq!(out.status.code(), Some(1));
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains(
-            "'ZAI_TOKEN' is a named secret, but asks declare the env key \
-             — did you mean 'ANTHROPIC_AUTH_TOKEN'?"
-        ),
+        stdout.contains("`ZAI_TOKEN` is a valid `secreq read` subject")
+            && stdout.contains("use `ANTHROPIC_AUTH_TOKEN` for this approval"),
         "{stdout}"
     );
 }
@@ -3081,4 +3061,505 @@ fn a_scaffolded_project_is_readable_whatever_the_umask() {
             .contains("secreq-rule"),
         "the manifest must name the SDK dependency"
     );
+}
+
+// ── rules stats ──────────────────────────────────────────────────────────
+
+fn stats_declarative_rule(
+    id: &str,
+    name: &str,
+    enabled: bool,
+    wrap: &str,
+    argv: Option<&str>,
+    subject: &str,
+) -> secreq::rules::Rule {
+    secreq::rules::Rule {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        enabled,
+        wraps: None,
+        trained_secrets: [subject.to_owned()].into_iter().collect(),
+        created_at_unix: 10,
+        body: secreq::rules::RuleBody::Declarative {
+            r#match: secreq::rules::RuleMatch {
+                wrap: wrap.to_owned(),
+                argv: argv.map(secreq::rules::Pattern::parse),
+                ancestor: None,
+                cwd: None,
+            },
+            decide: secreq::rules::StaticDecision::from(secreq::rules::RuleDecision::Approve),
+        },
+    }
+}
+
+fn write_stats_rules(sb: &Sandbox) {
+    let rule = stats_declarative_rule(
+        "approve-gh",
+        "approve gh reads",
+        true,
+        "gh",
+        Some("gh api"),
+        "GITHUB_TOKEN",
+    );
+    secreq::rules::save_rules(
+        &sb.root().join("auto-rules.toml"),
+        std::slice::from_ref(&rule),
+    )
+    .unwrap();
+}
+
+fn write_stats_wasm_rule(
+    sb: &Sandbox,
+    id: &str,
+    fixture: &str,
+    subject: &str,
+) -> secreq::rules::Rule {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/wasm_rules")
+        .join(fixture);
+    let bytes = fs::read(&source).unwrap();
+    let module_dir = sb.root().join("rules");
+    fs::create_dir_all(&module_dir).unwrap();
+    fs::write(module_dir.join(format!("{id}.wasm")), &bytes).unwrap();
+    let rule = secreq::rules::Rule {
+        id: id.to_owned(),
+        name: id.to_owned(),
+        enabled: true,
+        wraps: None,
+        trained_secrets: [subject.to_owned()].into_iter().collect(),
+        created_at_unix: 10,
+        body: secreq::rules::RuleBody::Wasm(secreq::rules::WasmRule {
+            path: format!("rules/{id}.wasm"),
+            sha256: secreq::rules::sha256_hex(&bytes),
+            declared_secrets: None,
+        }),
+    };
+    secreq::rules::save_rules(
+        &sb.root().join("auto-rules.toml"),
+        std::slice::from_ref(&rule),
+    )
+    .unwrap();
+    rule
+}
+
+#[test]
+fn rules_stats_json_replays_an_alternate_concatenated_audit_and_verifies() {
+    let sb = Sandbox::new();
+    sb.stamp_migrations();
+    sb.write_config(
+        r#"
+            [wraps.gh.env]
+            GITHUB_TOKEN = "secret://op/GitHub/token"
+        "#,
+    );
+    write_stats_rules(&sb);
+    let audit = sb.path().join("fixture-audit.log");
+    fs::write(
+        &audit,
+        concat!(
+            r#"{"ts_unix":20,"cwd":"/work","wrap":"gh","args":["api","/user"],"callers":[],"secrets":["GITHUB_TOKEN"],"decision":"approve+auto","rule_id":"approve-gh"}"#,
+            r#"{"ts_unix":21,"cwd":"/work","wrap":"read","args":["read","resolved-value-marker"],"callers":[],"secrets":["DECLARED_SUBJECT"],"decision":"approve+remember"}"#,
+            r#"{"ts_unix":22,"cwd":"/work","wrap":"store","args":["store-value-marker"],"callers":[],"secrets":["NPM_TOKEN"],"decision":"approve"}"#,
+            r#"{"ts_unix":23,"cwd":"","wrap":"agent:sandbox","args":[],"callers":[],"secrets":["secret://op/item/token"],"decision":"approve+agent-session"}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+
+    let out = sb.run(&[
+        "rules",
+        "stats",
+        "--audit",
+        audit.to_str().unwrap(),
+        "--json",
+        "--verify",
+    ]);
+    assert!(
+        out.status.success(),
+        "stderr: {}\nstdout: {}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["rows"]["decoded"], 4);
+    assert_eq!(report["rows"]["replayed"], 2);
+    assert_eq!(report["rows"]["not_evaluated"], 1);
+    assert_eq!(report["rows"]["scoped_agent"], 1);
+    assert_eq!(report["outcomes"]["auto_approve"]["count"], 1);
+    assert_eq!(report["outcomes"]["prompt"]["count"], 1);
+    assert_eq!(report["verification"]["eligible"], 1);
+    assert_eq!(report["verification"]["agree"], 1);
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("resolved-value-marker"));
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("store-value-marker"));
+}
+
+#[test]
+fn rules_stats_verify_classifies_disabled_history_instead_of_drift() {
+    let sb = Sandbox::new();
+    sb.stamp_migrations();
+    sb.write_config(
+        r#"
+            [wraps.gh.env]
+            GITHUB_TOKEN = "secret://op/GitHub/token"
+
+            [wraps.npm.env]
+            NPM_TOKEN = "secret://op/npm/token"
+        "#,
+    );
+    let rules = [
+        stats_declarative_rule("active", "active", true, "gh", None, "GITHUB_TOKEN"),
+        stats_declarative_rule("paused", "paused", false, "npm", None, "NPM_TOKEN"),
+    ];
+    secreq::rules::save_rules(&sb.root().join("auto-rules.toml"), &rules).unwrap();
+    let audit = sb.path().join("disabled-rule-audit.log");
+    fs::write(
+        &audit,
+        concat!(
+            r#"{"ts_unix":20,"cwd":"/work","wrap":"gh","args":["api"],"callers":[],"secrets":["GITHUB_TOKEN"],"decision":"approve+auto","rule_id":"active"}"#,
+            "\n",
+            r#"{"ts_unix":21,"cwd":"/work","wrap":"npm","args":["publish"],"callers":[],"secrets":["NPM_TOKEN"],"decision":"approve+auto","rule_id":"paused"}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+
+    let json = sb.run(&[
+        "rules",
+        "stats",
+        "--audit",
+        audit.to_str().unwrap(),
+        "--json",
+        "--verify",
+    ]);
+    assert!(
+        json.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&json.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(report["verification"]["eligible"], 1);
+    assert_eq!(report["verification"]["agree"], 1);
+    assert_eq!(report["verification"]["disabled_rule"], 1);
+    assert_eq!(report["verification"]["disagreements"], 0);
+
+    let human = sb.run(&[
+        "rules",
+        "stats",
+        "--audit",
+        audit.to_str().unwrap(),
+        "--verify",
+    ]);
+    assert!(human.status.success());
+    let stdout = String::from_utf8_lossy(&human.stdout);
+    assert!(stdout.contains("1 disabled"), "stdout: {stdout}");
+    assert!(!stdout.contains("MISMATCH"), "stdout: {stdout}");
+}
+
+#[test]
+fn rules_stats_verify_exits_nonzero_and_prints_reproduction_context_on_drift() {
+    let sb = Sandbox::new();
+    sb.stamp_migrations();
+    sb.write_config(
+        r#"
+            [wraps.gh.env]
+            GITHUB_TOKEN = "secret://op/GitHub/token"
+        "#,
+    );
+    write_stats_rules(&sb);
+    let audit = sb.path().join("drift-audit.log");
+    fs::write(
+        &audit,
+        r#"{"ts_unix":20,"cwd":"/work","wrap":"gh","args":["api","--method","DELETE"],"callers":[],"secrets":["GITHUB_TOKEN"],"decision":"deny+auto","rule_id":"approve-gh"}
+"#,
+    )
+    .unwrap();
+
+    let out = sb.run(&[
+        "rules",
+        "stats",
+        "--audit",
+        audit.to_str().unwrap(),
+        "--verify",
+    ]);
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("MISMATCH"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("argv=\"gh api --method\""),
+        "stdout: {stdout}"
+    );
+    assert!(!stdout.contains("DELETE"), "full argv leaked: {stdout}");
+    assert!(stdout.contains("GITHUB_TOKEN"), "stdout: {stdout}");
+}
+
+#[test]
+fn rules_stats_verify_rejects_a_missing_audit_and_zero_eligible_rows() {
+    let sb = Sandbox::new();
+    sb.stamp_migrations();
+    sb.write_config("[wraps.gh]\n");
+    write_stats_rules(&sb);
+
+    let missing = sb.run(&[
+        "rules",
+        "stats",
+        "--audit",
+        sb.path().join("typo.log").to_str().unwrap(),
+        "--verify",
+    ]);
+    assert!(!missing.status.success());
+    assert!(
+        String::from_utf8_lossy(&missing.stderr).contains("audit file does not exist"),
+        "stderr: {}",
+        String::from_utf8_lossy(&missing.stderr)
+    );
+
+    let audit = sb.path().join("uncovered.log");
+    fs::write(
+        &audit,
+        r#"{"ts_unix":20,"cwd":"/work","wrap":"npm","args":["publish"],"callers":[],"secrets":["NPM_TOKEN"],"decision":"approve"}
+"#,
+    )
+    .unwrap();
+    let empty = sb.run(&[
+        "rules",
+        "stats",
+        "--audit",
+        audit.to_str().unwrap(),
+        "--verify",
+    ]);
+    assert_eq!(empty.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&empty.stdout).contains("no eligible historical auto decisions")
+    );
+}
+
+#[test]
+fn rules_stats_verify_fails_on_malformed_history_and_invalid_live_scope() {
+    let sb = Sandbox::new();
+    sb.stamp_migrations();
+    sb.write_config(
+        r#"
+            [wraps.gh.env]
+            GITHUB_TOKEN = "secret://op/GitHub/token"
+        "#,
+    );
+    let wrong_wrap = stats_declarative_rule(
+        "wrong-wrap",
+        "wrong wrap",
+        true,
+        "npm",
+        None,
+        "GITHUB_TOKEN",
+    );
+    secreq::rules::save_rules(
+        &sb.root().join("auto-rules.toml"),
+        std::slice::from_ref(&wrong_wrap),
+    )
+    .unwrap();
+    let audit = sb.path().join("malformed.log");
+    fs::write(
+        &audit,
+        concat!(
+            r#"{"ts_unix":20,"cwd":"/work","wrap":"npm","args":["publish"],"callers":[],"secrets":["GITHUB_TOKEN"],"decision":"approve+auto","rule_id":"wrong-wrap"}"#,
+            "\nnot-json\n"
+        ),
+    )
+    .unwrap();
+
+    let out = sb.run(&[
+        "rules",
+        "stats",
+        "--audit",
+        audit.to_str().unwrap(),
+        "--json",
+        "--verify",
+    ]);
+    assert_eq!(out.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["rows"]["malformed"], 1);
+    assert!(report["health"]["scope_findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|finding| finding["severity"] == "error"));
+}
+
+#[test]
+fn rules_stats_loads_real_wasm_and_verify_fails_on_runtime_error() {
+    let sb = Sandbox::new();
+    sb.stamp_migrations();
+    sb.write_config(
+        r#"
+            [wraps.gh.env]
+            GITHUB_TOKEN = "secret://op/GitHub/token"
+        "#,
+    );
+    write_stats_wasm_rule(&sb, "aborting", "aborts.wasm", "GITHUB_TOKEN");
+    let audit = sb.path().join("wasm.log");
+    fs::write(
+        &audit,
+        r#"{"ts_unix":20,"cwd":"/work","wrap":"gh","args":["api"],"callers":[],"secrets":["GITHUB_TOKEN"],"decision":"approve+auto","rule_id":"aborting"}
+"#,
+    )
+    .unwrap();
+
+    let out = sb.run(&[
+        "rules",
+        "stats",
+        "--audit",
+        audit.to_str().unwrap(),
+        "--json",
+        "--verify",
+    ]);
+    assert_eq!(out.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["runtime_failures"][0]["rule_id"], "aborting");
+    assert_eq!(report["runtime_failures"][0]["count"], 1);
+}
+
+#[test]
+fn rules_stats_loads_a_prompting_wasm_from_the_installed_store() {
+    let sb = Sandbox::new();
+    sb.stamp_migrations();
+    sb.write_config(
+        r#"
+            [wraps.gh.env]
+            GITHUB_TOKEN = "secret://op/GitHub/token"
+        "#,
+    );
+    write_stats_wasm_rule(&sb, "prompting", "prompts.wasm", "GITHUB_TOKEN");
+    let audit = sb.path().join("wasm-prompt.log");
+    fs::write(
+        &audit,
+        r#"{"ts_unix":20,"cwd":"/work","wrap":"gh","args":["api"],"callers":[],"secrets":["GITHUB_TOKEN"],"decision":"approve"}
+"#,
+    )
+    .unwrap();
+
+    let out = sb.run(&[
+        "rules",
+        "stats",
+        "--audit",
+        audit.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["outcomes"]["prompt"]["mandated"], 1);
+    assert!(report["runtime_failures"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn rules_stats_verify_fails_for_a_tampered_installed_module() {
+    let sb = Sandbox::new();
+    sb.stamp_migrations();
+    sb.write_config(
+        r#"
+            [wraps.gh.env]
+            GITHUB_TOKEN = "secret://op/GitHub/token"
+        "#,
+    );
+    write_stats_wasm_rule(&sb, "tampered", "always_pass.wasm", "GITHUB_TOKEN");
+    fs::write(
+        sb.root().join("rules/tampered.wasm"),
+        b"not the pinned module",
+    )
+    .unwrap();
+    let audit = sb.path().join("tampered.log");
+    fs::write(
+        &audit,
+        r#"{"ts_unix":20,"cwd":"/work","wrap":"gh","args":["api"],"callers":[],"secrets":["GITHUB_TOKEN"],"decision":"approve+auto","rule_id":"tampered"}
+"#,
+    )
+    .unwrap();
+
+    let out = sb.run(&[
+        "rules",
+        "stats",
+        "--audit",
+        audit.to_str().unwrap(),
+        "--json",
+        "--verify",
+    ]);
+    assert_eq!(out.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        report["health"]["refusals"]["wasm"][0]["rule_id"],
+        "tampered"
+    );
+}
+
+#[test]
+fn rules_stats_human_output_applies_since_wrap_and_top_filters() {
+    let sb = Sandbox::new();
+    sb.stamp_migrations();
+    sb.write_config("[wraps.gh]\n[wraps.npm]\n");
+    secreq::rules::save_rules(&sb.root().join("auto-rules.toml"), &[]).unwrap();
+    let audit = sb.path().join("filters.log");
+    fs::write(
+        &audit,
+        concat!(
+            r#"{"ts_unix":10,"cwd":"/work","wrap":"gh","args":["old"],"callers":[],"secrets":[],"decision":"approve"}"#,
+            "\n",
+            r#"{"ts_unix":20,"cwd":"/work","wrap":"npm","args":["publish"],"callers":[],"secrets":[],"decision":"approve"}"#,
+            "\n",
+            r#"{"ts_unix":30,"cwd":"/work","wrap":"gh","args":["api","/user"],"callers":[],"secrets":[],"decision":"approve"}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+
+    let out = sb.run(&[
+        "rules",
+        "stats",
+        "--audit",
+        audit.to_str().unwrap(),
+        "--since",
+        "20",
+        "--wrap",
+        "gh",
+        "--top",
+        "1",
+    ]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("rows replayed: 1 (2 filtered"),
+        "stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("prompts by shape (top 1)"),
+        "stdout: {stdout}"
+    );
+    assert!(stdout.contains("gh api /user"), "stdout: {stdout}");
+    assert!(!stdout.contains("npm publish"), "stdout: {stdout}");
+}
+
+#[test]
+fn check_counts_a_malformed_rules_file_and_skips_installed_rules_for_alternate_config() {
+    let sb = Sandbox::new();
+    sb.stamp_migrations();
+    sb.write_config("[wraps.gh]\n");
+    fs::write(sb.root().join("auto-rules.toml"), "{ definitely not rules").unwrap();
+
+    let installed = sb.run(&["check"]);
+    assert_eq!(installed.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&installed.stdout);
+    assert!(
+        stdout.contains("could not load installed rules"),
+        "stdout: {stdout}"
+    );
+    assert!(stdout.contains("1 problem(s) found"), "stdout: {stdout}");
+
+    let alternate = sb.path().join("alternate.toml");
+    fs::write(&alternate, "[wraps.npm]\n").unwrap();
+    let override_out = sb.run(&["--config", alternate.to_str().unwrap(), "check"]);
+    assert!(override_out.status.success());
+    assert!(String::from_utf8_lossy(&override_out.stdout)
+        .contains("Rules:  skipped for alternate --config"));
 }

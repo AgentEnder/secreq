@@ -305,6 +305,7 @@ pub fn edit_cmd(config_path: Option<&Path>) -> Result<i32> {
 
 /// `secreq check` — validate the config.
 pub fn check(config_path: Option<&Path>) -> Result<i32> {
+    let check_installed_rules = config_path.is_none();
     let config_path = resolve_config_path(config_path)?;
     if !config_path.is_file() {
         println!(
@@ -339,77 +340,70 @@ pub fn check(config_path: Option<&Path>) -> Result<i32> {
         }
     }
 
-    let rules_path = crate::paths::rules_path()?;
-    match crate::rules::load_rules(&rules_path) {
-        Ok(loaded_rules) => {
-            if !loaded_rules.rules.is_empty() {
-                println!("Auto-rules: {}", rules_path.display());
+    let mut rule_count = 0;
+    if check_installed_rules {
+        let rules_path = crate::paths::rules_path()?;
+        match crate::rules::load_rules(&rules_path) {
+            Ok(loaded) => {
+                rule_count = loaded.rules.len();
+                if !loaded.rules.is_empty()
+                    || !loaded.refusals.wasm.is_empty()
+                    || !loaded.refusals.patterns.is_empty()
+                    || !loaded.refusals.scopes.is_empty()
+                {
+                    println!("Rules:  {}", rules_path.display());
+                }
+                for refusal in loaded
+                    .refusals
+                    .wasm
+                    .iter()
+                    .map(|refusal| refusal.reason.as_str())
+                    .chain(
+                        loaded
+                            .refusals
+                            .patterns
+                            .iter()
+                            .map(|refusal| refusal.reason.as_str()),
+                    )
+                    .chain(
+                        loaded
+                            .refusals
+                            .scopes
+                            .iter()
+                            .map(|refusal| refusal.reason.as_str()),
+                    )
+                {
+                    println!("  ✗ {refusal}");
+                    problems += 1;
+                }
+                for finding in crate::rule_health::validate_rule_scopes(&config, &loaded.rules) {
+                    match finding.severity {
+                        crate::rule_health::ScopeSeverity::Error => {
+                            println!("  ✗ {}: {}", finding.rule_name, finding.message);
+                            problems += 1;
+                        }
+                        crate::rule_health::ScopeSeverity::Warning => {
+                            println!("  ! {}: {}", finding.rule_name, finding.message);
+                        }
+                    }
+                }
             }
-            for refusal in crate::rules::wrap_scope_refusals(&loaded_rules.rules, &config) {
-                println!("  ✗ auto-rule wrap scope: {}", refusal.reason);
+            Err(err) => {
+                println!("Rules:  {}", rules_path.display());
+                println!("  ✗ could not load installed rules: {err:#}");
                 problems += 1;
             }
-            for rule in &loaded_rules.rules {
-                let mut scoped_subjects = rule.trained_secrets.clone();
-                if let Some(wasm) = rule.wasm() {
-                    if let Some(declared) = &wasm.declared_secrets {
-                        if declared.is_empty() {
-                            println!(
-                                "  ✗ rule '{}' ({}): module declaration is empty",
-                                rule.name, rule.id
-                            );
-                            problems += 1;
-                        }
-                        scoped_subjects.extend(declared.iter().cloned());
-                        let outside: Vec<_> =
-                            rule.trained_secrets.difference(declared).cloned().collect();
-                        if !outside.is_empty() {
-                            println!(
-                                "  ✗ rule '{}' ({}): trained subjects [{}] were not declared by \
-                                 the module",
-                                rule.name,
-                                rule.id,
-                                outside.join(", ")
-                            );
-                            problems += 1;
-                        }
-                    }
-                }
-                for error in crate::rules::subject_validation_errors(&config, &scoped_subjects) {
-                    println!("  ✗ rule '{}' ({}): {error}", rule.name, rule.id);
-                    problems += 1;
-                }
-                let can_approve = match &rule.body {
-                    crate::rules::RuleBody::Wasm(_) => true,
-                    crate::rules::RuleBody::Declarative { decide, .. } => {
-                        decide.decision() == crate::rules::RuleDecision::Approve
-                    }
-                };
-                if can_approve && rule.trained_secrets.is_empty() {
-                    println!(
-                        "  ⚠ rule '{}' ({}): approval scope is unbounded (--all-secrets)",
-                        rule.name, rule.id
-                    );
-                }
-            }
-            for refusal in &loaded_rules.refusals.wasm {
-                if refusal.category == crate::rules::WasmRefusalCategory::DeclarationMismatch {
-                    println!("  ✗ rule {}: {}", refusal.rule_id, refusal.reason);
-                    problems += 1;
-                }
-            }
         }
-        Err(err) => {
-            println!("  ✗ auto-rules: {err:#}");
-            problems += 1;
-        }
+    } else {
+        println!("Rules:  skipped for alternate --config");
     }
 
     if problems == 0 {
         println!(
-            "✓ config OK: {} wrap(s), {} provider(s)",
+            "✓ config OK: {} wrap(s), {} provider(s), {} rule(s)",
             config.wraps.len(),
-            config.providers.len()
+            config.providers.len(),
+            rule_count
         );
         Ok(0)
     } else {
@@ -749,22 +743,24 @@ mod tests {
     fn check_and_unwrap_helpers_report_rules_with_dangling_scopes() {
         let dir = tempfile::tempdir().expect("tempdir");
         let rules_path = dir.path().join("auto-rules.toml");
-        std::fs::write(
-            &rules_path,
-            r#"{
-                "rules": [{
-                    "id": "01",
-                    "name": "gh guard",
-                    "enabled": true,
-                    "wraps": ["gh"],
-                    "decide": "deny",
-                    "match": { "wrap": "gh" },
-                    "trained_secrets": [],
-                    "created_at_unix": 0
-                }]
-            }"#,
-        )
-        .expect("rules");
+        let rule = crate::rules::Rule {
+            id: "01".to_owned(),
+            name: "gh guard".to_owned(),
+            enabled: true,
+            wraps: Some(["gh".to_owned()].into_iter().collect()),
+            trained_secrets: Default::default(),
+            created_at_unix: 0,
+            body: crate::rules::RuleBody::Declarative {
+                r#match: crate::rules::RuleMatch {
+                    wrap: "gh".to_owned(),
+                    argv: None,
+                    ancestor: None,
+                    cwd: None,
+                },
+                decide: crate::rules::StaticDecision::from(crate::rules::RuleDecision::Deny),
+            },
+        };
+        crate::rules::save_rules(&rules_path, std::slice::from_ref(&rule)).expect("rules");
         let config_without_gh = WrapsConfig::default();
 
         let refusals =

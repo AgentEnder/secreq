@@ -96,7 +96,8 @@
           "{workspaceRoot}/docs/wasm-rules.md",
           "{workspaceRoot}/packages/secreq-rule/README.md",
           "{workspaceRoot}/packages/secreq-rule/index.ts",
-          "{workspaceRoot}/packages/secreq-rule/assembly/**/*.ts"
+          "{workspaceRoot}/packages/secreq-rule/assembly/**/*.ts",
+          "{workspaceRoot}/packages/secreq-rule/testing/assembly.ts"
         ],
         "outputs": []
       },

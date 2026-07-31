@@ -33,6 +33,7 @@
 //! caller in `daemon::server` builds an [`EvalCtx`] from an `Ask` and
 //! passes it in.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -2073,6 +2074,53 @@ pub struct EvalCtx<'a> {
     /// Names of the secrets requested. Checked against the rule's
     /// `trained_secrets` guard.
     pub secrets: &'a [&'a str],
+}
+
+/// Convert the subjects carried by an ask into the exact names the evaluator
+/// scopes against. Wrap asks normally provide env keys. Ask kinds that release
+/// no provider value still need a non-vacuous subject: an SSH identity is
+/// already spelled `ssh:<key_id>`, while a gate-only wrap becomes
+/// `wrap:<name>`.
+///
+/// Shared by live daemon asks and audit replay so a new subject shape cannot
+/// silently acquire two interpretations.
+pub fn evaluation_subjects<'a>(
+    wrap: &'a str,
+    secret_names: impl IntoIterator<Item = &'a str>,
+) -> Vec<Cow<'a, str>> {
+    let names: Vec<Cow<'a, str>> = secret_names.into_iter().map(Cow::Borrowed).collect();
+    if !names.is_empty() {
+        names
+    } else if wrap.starts_with("ssh:") {
+        vec![Cow::Borrowed(wrap)]
+    } else {
+        vec![Cow::Owned(format!("wrap:{wrap}"))]
+    }
+}
+
+/// Build the exact argv string passed to every rule evaluator.
+///
+/// Audit replay calls this with the command vector captured on the live ask,
+/// so whitespace and the ask-kind-specific argv shape have one production
+/// definition.
+pub fn joined_argv(command: &[String]) -> String {
+    command.join(" ")
+}
+
+/// Recover the command vector from an audit row written before the audit
+/// format carried `command` explicitly. This is compatibility decoding, not
+/// evaluation logic: current writers persist the live vector verbatim.
+pub fn legacy_audit_command(wrap: &str, args: &[String]) -> Vec<String> {
+    if matches!(wrap, "run" | "read" | "store") {
+        args.to_vec()
+    } else if let Some(key_id) = wrap.strip_prefix("ssh:") {
+        vec![format!("ssh-sign {key_id}")]
+    } else {
+        let mut command = Vec::with_capacity(args.len() + 1);
+        command.push(wrap.to_owned());
+        command.extend(args.iter().cloned());
+        command
+    }
 }
 
 /// One caller as a rule sees it.

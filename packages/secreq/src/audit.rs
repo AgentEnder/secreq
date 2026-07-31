@@ -5,9 +5,9 @@
 //! records a separate event when processes remain in the observed child scope.
 //! Secret **values never appear** here, per the threat model (§11).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -36,6 +36,10 @@ pub struct AuditEntry {
     /// applicable.
     #[serde(default)]
     pub args: Vec<String>,
+    /// Exact command vector the live evaluator received. Rows written before
+    /// this field are decoded through `rules::legacy_audit_command`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<Vec<String>>,
     /// Caller process chain, nearest-first. Carries pid + command so the
     /// audit view can render the full process tree that triggered this
     /// request rather than just a stack of process names.
@@ -229,6 +233,8 @@ struct SurvivorAuditEntry<'a> {
 pub struct AbandonedAsk<'a> {
     pub wrap: &'a str,
     pub args: &'a [String],
+    /// Exact command vector handed to the live rules evaluator.
+    pub command: &'a [String],
     /// The **requesting** process's working directory, not the daemon's.
     pub cwd: &'a str,
     pub callers: &'a [AuditCaller],
@@ -349,6 +355,31 @@ impl AuditCaller {
 }
 
 impl AuditEntry {
+    /// Whether this audit event corresponds to an ask that entered the
+    /// production rules evaluator.
+    ///
+    /// `store` records the user's decision to persist unresolved references;
+    /// it never constructs an [`crate::daemon::state::Ask`]. Scoped-agent
+    /// traffic has its own scope gate and likewise never consults auto-rules.
+    /// Keeping this distinction on the audit model prevents history consumers
+    /// from inventing evaluator inputs for either path.
+    pub fn rules_were_evaluated(&self) -> bool {
+        self.wrap != "store" && !self.wrap.starts_with("agent:")
+    }
+
+    /// Exact command vector used by rule evaluation. New rows carry it
+    /// verbatim; old rows use the one compatibility decoder shared by every
+    /// history consumer.
+    pub fn evaluator_command(&self) -> Vec<String> {
+        self.command
+            .clone()
+            .unwrap_or_else(|| crate::rules::legacy_audit_command(&self.wrap, &self.args))
+    }
+
+    pub fn joined_argv(&self) -> String {
+        crate::rules::joined_argv(&self.evaluator_command())
+    }
+
     /// Assemble an entry from the pieces a `run` already has. Rule
     /// linkage is attached via [`AuditEntry::with_rule_id`] when the
     /// decision came from an auto-rule.
@@ -370,6 +401,7 @@ impl AuditEntry {
                 .unwrap_or_default(),
             wrap: wrap.to_owned(),
             args: args.to_vec(),
+            command: Some(crate::rules::legacy_audit_command(wrap, args)),
             callers: chain.frames.iter().map(AuditCaller::from_runtime).collect(),
             callers_truncated: Some(chain.truncated),
             secrets: secret_names.to_vec(),
@@ -423,6 +455,7 @@ impl AuditEntry {
             cwd: cwd.to_owned(),
             wrap: format!("ssh:{key_id}"),
             args: Vec::new(),
+            command: Some(vec![format!("ssh-sign {key_id}")]),
             callers: chain.frames.iter().map(AuditCaller::from_runtime).collect(),
             callers_truncated: Some(chain.truncated),
             secrets: Vec::new(),
@@ -477,6 +510,7 @@ impl AuditEntry {
             cwd: String::new(),
             wrap: format!("agent:{scope}"),
             args: Vec::new(),
+            command: None,
             callers: Vec::new(),
             // `Some(false)`, structurally, the same answer
             // `Ask::callers_truncated` gives a guest ask: there was no walk to
@@ -532,6 +566,7 @@ impl AuditEntry {
             cwd: ask.cwd.to_owned(),
             wrap: ask.wrap.to_owned(),
             args: ask.args.to_vec(),
+            command: Some(ask.command.to_vec()),
             callers: ask.callers.to_vec(),
             callers_truncated: Some(ask.callers_truncated),
             secrets: ask.secret_names.to_vec(),
@@ -623,35 +658,93 @@ pub fn audit_log_mtime() -> Option<SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
 }
 
-/// Stream the audit log into memory, newest-last. Corrupt lines (anything
-/// that doesn't parse as `AuditEntry`) are skipped silently — the audit
-/// log spans daemon versions, and a single bad line shouldn't blank the
-/// history view. Missing file returns an empty vec, not an error.
-pub fn read_history(limit: Option<usize>) -> Result<Vec<AuditEntry>> {
-    let path = crate::paths::audit_log_path()?;
+/// Counts produced while streaming an audit file.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AuditReadSummary {
+    pub entries: usize,
+    /// Physical lines whose remaining bytes could not be decoded as another
+    /// [`AuditEntry`]. A line may contain several concatenated top-level JSON
+    /// objects; successfully decoded objects before the bad bytes still count.
+    pub malformed: usize,
+}
+
+/// Stream every decodable audit entry from `path` without assuming JSONL.
+///
+/// Old clients occasionally appended two complete JSON objects before the
+/// newline write landed, so one physical line can be `}{`-concatenated. A
+/// serde stream deserializer recognizes that shape while retaining the
+/// append-only log's useful failure isolation: malformed bytes discard the
+/// remainder of their physical line, not the rest of the file.
+pub fn visit_history(
+    path: &std::path::Path,
+    mut visit: impl FnMut(AuditEntry) -> Result<()>,
+) -> Result<AuditReadSummary> {
     if !path.exists() {
-        return Ok(Vec::new());
+        return Ok(AuditReadSummary::default());
     }
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("read audit log {}", path.display()))?;
-    let mut entries: Vec<AuditEntry> = text
-        .lines()
-        .filter_map(|l| {
-            let t = l.trim();
-            if t.is_empty() {
-                None
+    let file =
+        std::fs::File::open(path).with_context(|| format!("open audit log {}", path.display()))?;
+    let mut summary = AuditReadSummary::default();
+    let mut reader = BufReader::new(file);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let bytes = reader
+            .read_until(b'\n', &mut line)
+            .with_context(|| format!("read audit log {}", path.display()))?;
+        if bytes == 0 {
+            break;
+        }
+        if line.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        let stream = serde_json::Deserializer::from_slice(&line).into_iter::<AuditEntry>();
+        for entry in stream {
+            if let Ok(entry) = entry {
+                visit(entry)?;
+                summary.entries += 1;
             } else {
-                serde_json::from_str::<AuditEntry>(t).ok()
+                summary.malformed += 1;
+                break;
             }
-        })
-        .collect();
-    if let Some(max) = limit {
-        if entries.len() > max {
-            let drop_n = entries.len() - max;
-            entries.drain(..drop_n);
         }
     }
-    Ok(entries)
+    Ok(summary)
+}
+
+fn read_history_path(
+    path: &std::path::Path,
+    limit: Option<usize>,
+) -> Result<(Vec<AuditEntry>, AuditReadSummary)> {
+    let mut entries = VecDeque::new();
+    let summary = visit_history(path, |entry| {
+        if limit == Some(0) {
+            return Ok(());
+        }
+        entries.push_back(entry);
+        if let Some(max) = limit {
+            if entries.len() > max {
+                entries.pop_front();
+            }
+        }
+        Ok(())
+    })?;
+    Ok((entries.into(), summary))
+}
+
+/// Stream the audit log into memory, newest-last. Corrupt physical lines are
+/// skipped — the audit log spans versions, and one bad record must not blank
+/// history. Missing file returns an empty vec, not an error.
+pub fn read_history(limit: Option<usize>) -> Result<Vec<AuditEntry>> {
+    read_history_with_summary(limit).map(|(entries, _)| entries)
+}
+
+/// Read history and retain corruption accounting for reporting surfaces.
+pub fn read_history_with_summary(
+    limit: Option<usize>,
+) -> Result<(Vec<AuditEntry>, AuditReadSummary)> {
+    let path = crate::paths::audit_log_path()?;
+    read_history_path(&path, limit)
 }
 
 fn now_unix() -> u64 {
@@ -689,7 +782,7 @@ pub(crate) fn with_temp_log<R>(f: impl FnOnce() -> R) -> R {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::path::Path;
 
     fn write_log(text: &str) -> tempfile::NamedTempFile {
         use std::io::Write as _;
@@ -699,27 +792,94 @@ mod tests {
         f
     }
 
-    fn read_path(path: &PathBuf, limit: Option<usize>) -> Vec<AuditEntry> {
-        // Internal variant of read_history that doesn't depend on XDG paths.
-        let text = std::fs::read_to_string(path).unwrap_or_default();
-        let mut entries: Vec<AuditEntry> = text
-            .lines()
-            .filter_map(|l| {
-                let t = l.trim();
-                if t.is_empty() {
-                    None
-                } else {
-                    serde_json::from_str::<AuditEntry>(t).ok()
-                }
-            })
-            .collect();
-        if let Some(max) = limit {
-            if entries.len() > max {
-                let drop_n = entries.len() - max;
-                entries.drain(..drop_n);
-            }
+    fn read_path(path: &Path, limit: Option<usize>) -> Vec<AuditEntry> {
+        read_history_path(path, limit)
+            .expect("read audit fixture")
+            .0
+    }
+
+    #[test]
+    fn history_reader_accepts_concatenated_top_level_objects() {
+        let first = r#"{"ts_unix":1,"cwd":"/a","wrap":"gh","args":[],"callers":[],"secrets":["TOKEN"],"decision":"approve"}"#;
+        let second = r#"{"ts_unix":2,"cwd":"/b","wrap":"npm","args":["publish"],"callers":[],"secrets":["NPM_TOKEN"],"decision":"deny"}"#;
+        let log = write_log(&format!("{first}{second}\n"));
+
+        let (entries, malformed) = read_history_path(log.path(), None).expect("read fixture");
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].wrap, "gh");
+        assert_eq!(entries[1].wrap, "npm");
+        assert_eq!(malformed.malformed, 0);
+    }
+
+    #[test]
+    fn invalid_utf8_discards_only_its_physical_line() {
+        let first = br#"{"ts_unix":1,"cwd":"/a","wrap":"gh","args":[],"callers":[],"secrets":[],"decision":"approve"}
+"#;
+        let second = br#"{"ts_unix":2,"cwd":"/b","wrap":"npm","args":[],"callers":[],"secrets":[],"decision":"deny"}
+"#;
+        let mut log = tempfile::NamedTempFile::new().expect("audit fixture");
+        log.write_all(first).expect("first row");
+        log.write_all(b"broken-\xff-row\n").expect("invalid row");
+        log.write_all(second).expect("second row");
+        log.flush().expect("flush fixture");
+
+        let (entries, malformed) = read_history_path(log.path(), None).expect("read fixture");
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].wrap, "gh");
+        assert_eq!(entries[1].wrap, "npm");
+        assert_eq!(malformed.malformed, 1);
+    }
+
+    #[test]
+    fn current_rows_store_the_exact_evaluator_command_for_each_ask_path() {
+        let chain = CallerChain {
+            frames: Vec::new(),
+            truncated: false,
+        };
+        let cases = [
+            ("gh", vec!["api", "/user"], "gh api /user", true),
+            ("run", vec!["npm", "publish"], "npm publish", true),
+            (
+                "read",
+                vec!["read", "github_token"],
+                "read github_token",
+                true,
+            ),
+            ("store", vec!["npm", "publish"], "npm publish", false),
+        ];
+        for (wrap, args, expected, rules_were_evaluated) in cases {
+            let args: Vec<String> = args.into_iter().map(str::to_owned).collect();
+            let entry = AuditEntry::new(wrap, &args, &chain, &[], Decision::Approve);
+            assert_eq!(
+                crate::rules::joined_argv(entry.command.as_deref().expect("new command field")),
+                expected
+            );
+            assert_eq!(entry.rules_were_evaluated(), rules_were_evaluated);
         }
-        entries
+        let ssh = AuditEntry::ssh_sign(
+            "work",
+            "SHA256:test",
+            &chain,
+            &test_anchor(SignAnchorKind::Session, 1, "zsh"),
+            "/work",
+            Decision::Approve,
+        );
+        assert_eq!(
+            crate::rules::joined_argv(ssh.command.as_deref().expect("ssh command field")),
+            "ssh-sign work"
+        );
+        assert!(ssh.rules_were_evaluated());
+
+        let agent = AuditEntry::agent_resolve(
+            "sandbox",
+            "secret://op/item/token",
+            Decision::Approve,
+            None,
+            ScopeDeclarant::NotRead,
+        );
+        assert!(!agent.rules_were_evaluated());
     }
 
     #[test]
@@ -959,6 +1119,12 @@ mod tests {
         let entry = AuditEntry::abandoned(AbandonedAsk {
             wrap: "gh",
             args: &["pr".to_owned(), "view".to_owned(), "42".to_owned()],
+            command: &[
+                "gh".to_owned(),
+                "pr".to_owned(),
+                "view".to_owned(),
+                "42".to_owned(),
+            ],
             cwd: "/home/dev/project",
             callers: &callers,
             callers_truncated: false,
@@ -1206,6 +1372,7 @@ mod tests {
             AuditEntry::abandoned(AbandonedAsk {
                 wrap: "agent:brain-nx-t5",
                 args: &[],
+                command: &[],
                 cwd: "",
                 callers: &[],
                 callers_truncated: false,
@@ -1272,6 +1439,7 @@ mod tests {
             AuditEntry::abandoned(AbandonedAsk {
                 wrap: "ssh:ssh.deploy",
                 args: &[],
+                command: &["ssh-sign ssh.deploy".to_owned()],
                 cwd: "/w",
                 callers: &[],
                 callers_truncated: false,
@@ -1345,6 +1513,7 @@ mod tests {
             AuditEntry::abandoned(AbandonedAsk {
                 wrap: "gh",
                 args: &[],
+                command: &["gh".to_owned()],
                 cwd: "/w",
                 callers: &[],
                 callers_truncated: true,
@@ -1430,7 +1599,7 @@ not json at all
 {\"ts_unix\":200,\"cwd\":\"/b\",\"wrap\":\"aws\",\"args\":[],\"callers\":[{\"pid\":222,\"name\":\"npm\",\"command\":\"npm test\"}],\"secrets\":[\"AWS_KEY\"],\"decision\":\"deny\"}
 ";
         let f = write_log(log);
-        let entries = read_path(&f.path().to_path_buf(), None);
+        let entries = read_path(f.path(), None);
         assert_eq!(entries.len(), 2, "two valid entries, garbage dropped");
         assert_eq!(entries[0].wrap, "gh");
         assert_eq!(entries[0].args, vec!["pr", "view", "42"]);
@@ -1448,7 +1617,7 @@ not json at all
 {\"ts_unix\":3,\"cwd\":\"\",\"wrap\":\"c\",\"args\":[],\"callers\":[],\"secrets\":[],\"decision\":\"approve\"}
 ";
         let f = write_log(log);
-        let entries = read_path(&f.path().to_path_buf(), Some(2));
+        let entries = read_path(f.path(), Some(2));
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].wrap, "b");
         assert_eq!(entries[1].wrap, "c");

@@ -281,6 +281,11 @@ pub struct State {
     /// constructor). Set by [`State::with_rules_path`] at daemon
     /// startup.
     rules_path: Option<PathBuf>,
+    /// Config snapshot used only for advisory scope findings on rule
+    /// mutations. The daemon startup constructor supplies it; isolated state
+    /// stores leave it `None`. Rule CRUD must never be bricked by an unrelated
+    /// config parse failure.
+    scope_config: Option<crate::wraps::WrapsConfig>,
     /// In-memory copy of the ruleset. Mutated by AddRule / UpdateRule /
     /// DeleteRule / SetRuleEnabled, kept in sync with the on-disk
     /// file by every mutation path that writes the file.
@@ -360,6 +365,7 @@ impl Default for State {
             // logic has a stable "started counting" anchor.
             queue_empty_since: Some(Instant::now()),
             rules_path: None,
+            scope_config: None,
             rules: Vec::new(),
             rule_modules: rules::RuleModules::new(),
             wasm_refusals: Vec::new(),
@@ -626,6 +632,13 @@ impl State {
     /// block consent" contract. The mtime is still recorded so the
     /// freshness check can detect when the user fixes the file.
     pub fn with_rules_path(rules_path: PathBuf) -> State {
+        State::with_rules_path_and_config(rules_path, None)
+    }
+
+    pub(crate) fn with_rules_path_and_config(
+        rules_path: PathBuf,
+        scope_config: Option<crate::wraps::WrapsConfig>,
+    ) -> State {
         let mut state = State::new();
         match rules::load_rules(&rules_path) {
             Ok(loaded) => {
@@ -653,6 +666,7 @@ impl State {
             }
         }
         state.rules_path = Some(rules_path);
+        state.scope_config = scope_config;
         state
     }
 
@@ -1159,7 +1173,7 @@ impl State {
         let is_new = !self.queue.contains_key(&key);
         // Command label stamped onto each merged secret's provenance. The
         // plan uses the full joined command; the UI truncates it.
-        let command_label = ask.command.join(" ");
+        let command_label = rules::joined_argv(&ask.command);
         let entry = self.queue.entry(key.clone()).or_insert_with(|| QueueEntry {
             key: key.clone(),
             // Build the representative's secrets by folding the creating
@@ -1421,6 +1435,7 @@ impl State {
         AuditEntry::abandoned(AbandonedAsk {
             wrap: &key.wrap,
             args,
+            command: &waiter.command,
             cwd: &waiter.cwd,
             callers: &callers,
             callers_truncated: waiter.callers_truncated,
@@ -1671,15 +1686,15 @@ impl State {
         // Written as a match on the two kinds that *may* reach the engine, so
         // a fourth kind of ask has to state which side of this line it is on
         // instead of defaulting onto the permissive one.
-        let (callers, secrets, cwd, ssh) = match &ask.subject {
-            AskSubject::Wrap(w) => (&w.callers, w.secrets.as_slice(), w.cwd.as_str(), None),
-            AskSubject::SshSign(s) => (&s.callers, [].as_slice(), s.cwd.as_str(), Some(&s.info)),
+        let (callers, secrets, cwd) = match &ask.subject {
+            AskSubject::Wrap(w) => (&w.callers, w.secrets.as_slice(), w.cwd.as_str()),
+            AskSubject::SshSign(s) => (&s.callers, [].as_slice(), s.cwd.as_str()),
             AskSubject::ScopedAgent(_) => return None,
         };
         if self.rules.is_empty() {
             return None;
         }
-        let joined_argv = ask.command.join(" ");
+        let joined_argv = rules::joined_argv(&ask.command);
         let callers: Vec<rules::EvalCaller<'_>> = callers
             .iter()
             .map(|c| rules::EvalCaller {
@@ -1709,15 +1724,11 @@ impl State {
         // minted to close, and the fix landed only on the SSH branch. Name the
         // wrap itself, so `--secret wrap:op` scopes a rule to it and a rule
         // trained on anything else stops being consulted.
-        let subject = ssh.map(|s| format!("ssh:{}", s.key_id)).or_else(|| {
-            secrets
-                .is_empty()
-                .then(|| format!("wrap:{}", ask.dedupe_key.wrap))
-        });
-        let requested: Vec<&str> = match &subject {
-            Some(subject) => vec![subject.as_str()],
-            None => secrets.iter().map(|s| s.name.as_str()).collect(),
-        };
+        let subjects = rules::evaluation_subjects(
+            &ask.dedupe_key.wrap,
+            secrets.iter().map(|secret| secret.name.as_str()),
+        );
+        let requested: Vec<&str> = subjects.iter().map(AsRef::as_ref).collect();
         let ctx = EvalCtx {
             wrap: &ask.dedupe_key.wrap,
             joined_argv: &joined_argv,
@@ -1776,6 +1787,7 @@ impl State {
     pub fn add_rule(&mut self, rule: Rule) -> Result<()> {
         self.refuse_broken_wrap_scope(&rule.name, rule.wraps.as_ref())?;
         Self::refuse_broken_patterns(&rule)?;
+        self.log_scope_findings(&rule);
         if rule.is_wasm() && rule.trained_secrets.is_empty() {
             anyhow::bail!(
                 "refusing wasm rule `{}` with an empty trained-secrets snapshot: \
@@ -1863,6 +1875,22 @@ impl State {
         );
     }
 
+    fn log_scope_findings(&self, rule: &Rule) {
+        let Some(config) = &self.scope_config else {
+            return;
+        };
+        for finding in crate::rule_health::validate_rule_scopes(config, std::slice::from_ref(rule))
+        {
+            super::log::log_at(
+                "state",
+                format_args!(
+                    "WARN: advisory rule-scope finding for `{}` ({}): {}",
+                    finding.rule_name, finding.rule_id, finding.message
+                ),
+            );
+        }
+    }
+
     /// The guarded insert behind [`State::add_rule`] and
     /// [`State::add_wasm_rule`] (which enforces the empty-snapshot
     /// opt-in itself before calling in). On persist failure the
@@ -1891,8 +1919,6 @@ impl State {
     /// protocol calls [`State::update_rule_if_unchanged`] with the exact rule
     /// the client rendered.
     pub fn update_rule(&mut self, rule: Rule) -> Result<()> {
-        self.refuse_broken_wrap_scope(&rule.name, rule.wraps.as_ref())?;
-        Self::refuse_broken_patterns(&rule)?;
         let Some(expected) = self
             .rules
             .iter()
@@ -1907,7 +1933,9 @@ impl State {
     /// Replace `expected` with `rule`, rejecting a hot reload or hand edit of
     /// that same rule. Edits to other ids merge in [`rules::edit_rule`].
     pub fn update_rule_if_unchanged(&mut self, expected: Rule, rule: Rule) -> Result<()> {
+        self.refuse_broken_wrap_scope(&rule.name, rule.wraps.as_ref())?;
         Self::refuse_broken_patterns(&rule)?;
+        self.log_scope_findings(&rule);
         if expected.id != rule.id {
             anyhow::bail!("cannot change rule id `{}` to `{}`", expected.id, rule.id);
         }
@@ -2162,6 +2190,34 @@ impl State {
                 store.display()
             );
         }
+        // Build and diagnose the registration before writing its module. The
+        // findings are advisory, but keeping every validation step ahead of
+        // the filesystem mutation preserves that boundary if diagnostics
+        // become stricter later.
+        let rules_dir = self
+            .rules_path
+            .as_deref()
+            .and_then(Path::parent)
+            .unwrap_or(Path::new(""));
+        let recorded_path = store
+            .strip_prefix(rules_dir)
+            .unwrap_or(&store)
+            .to_string_lossy()
+            .into_owned();
+        let rule = Rule {
+            id,
+            name: name.to_owned(),
+            enabled: true,
+            wraps,
+            trained_secrets,
+            created_at_unix: rules::now_unix(),
+            body: crate::rules::RuleBody::Wasm(crate::rules::WasmRule {
+                path: recorded_path,
+                sha256: rules::sha256_hex(module_bytes),
+                declared_secrets,
+            }),
+        };
+        self.log_scope_findings(&rule);
         let store_dir = crate::paths::rule_wasm_dir()?;
         // `ensure_private_dir`, not `create_dir_all`, which takes the umask's
         // answer — measured at **0777** under the `umask 000` that container
@@ -2196,40 +2252,13 @@ impl State {
         crate::atomic::replace(&store, module_bytes, crate::atomic::Mode::Exactly(0o600))
             .with_context(|| format!("write wasm module {}", store.display()))?;
 
-        // Record the store path relative to the rules file's directory
-        // when it lives underneath it (the production layout: both
-        // under the secreq root), absolute otherwise.
-        let rules_dir = self
-            .rules_path
-            .as_deref()
-            .and_then(Path::parent)
-            .unwrap_or(Path::new(""));
-        let recorded_path = store
-            .strip_prefix(rules_dir)
-            .unwrap_or(&store)
-            .to_string_lossy()
-            .into_owned();
-
-        let rule = Rule {
-            id,
-            name: name.to_owned(),
-            enabled: true,
-            wraps,
-            trained_secrets,
-            created_at_unix: rules::now_unix(),
-            body: crate::rules::RuleBody::Wasm(crate::rules::WasmRule {
-                path: recorded_path,
-                sha256: rules::sha256_hex(module_bytes),
-                declared_secrets,
-            }),
-        };
         // `admit_rule`, not `add_rule`: the empty-snapshot opt-in was
         // already enforced above, with the flag to prove it.
         if let Err(err) = self.admit_rule(rule.clone()) {
             // Nothing was registered (admit_rule rolled back any
             // in-memory state); don't leave the copied module orphaned
             // in the store either.
-            let _ = std::fs::remove_file(&store);
+            self.remove_stored_module(&rule);
             return Err(err);
         }
         Ok(rule)
@@ -4090,6 +4119,36 @@ mod tests {
     }
 
     #[test]
+    fn advisory_scope_validation_admits_a_named_read_subject() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.toml");
+        let config = crate::wraps::WrapsConfig::parse(
+            r#"
+                [secrets.github_token]
+                ref = "secret://op/GitHub/token"
+
+                [wraps.gh.env]
+                GITHUB_TOKEN = "secret://github_token"
+            "#,
+            "fixture",
+        )
+        .expect("valid config");
+        let mut state = State::with_rules_path_and_config(path.clone(), Some(config));
+        let mut rule = mk_rule("read-name", "read", RuleDecision::Approve, Some("read *"));
+        rule.trained_secrets = ["github_token".to_owned()].into_iter().collect();
+
+        state
+            .add_rule(rule.clone())
+            .expect("advisory scope admitted");
+
+        assert_eq!(state.rules_snapshot(), vec![rule.clone()]);
+        assert_eq!(
+            crate::rules::load_rules(&path).expect("reload").rules,
+            vec![rule]
+        );
+    }
+
+    #[test]
     fn resolve_for_ask_hits_cache_for_sibling_with_a_different_ppid() {
         // Regression: rule-based ApproveAuto used to key the secret
         // cache by the asking process's direct-parent (pid, start_time).
@@ -5273,18 +5332,13 @@ mod tests {
             rule.wasm().unwrap().declared_secrets,
             Some(trained_github())
         );
-        let saved: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(rules_path).expect("read persisted rules"),
-        )
-        .expect("parse persisted rules");
+        let saved = crate::rules::load_rules(&rules_path).expect("parse persisted rules");
+        assert_eq!(saved.rules.len(), 1);
         assert_eq!(
-            saved["rules"][0]["declared_secrets"],
-            serde_json::json!(["GITHUB_TOKEN"])
+            saved.rules[0].wasm().unwrap().declared_secrets,
+            Some(trained_github())
         );
-        assert_eq!(
-            saved["rules"][0]["trained_secrets"],
-            serde_json::json!(["GITHUB_TOKEN"])
-        );
+        assert_eq!(saved.rules[0].trained_secrets, trained_github());
         state.delete_rule(&rule.id).expect("delete");
     }
 

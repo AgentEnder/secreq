@@ -96,7 +96,7 @@ pub const MAX_GUEST_MEMORY_BYTES: usize = 64 << 20;
 /// Cap on the decision JSON a guest may return. The largest legitimate
 /// decision is a deny with a human-readable reason; 64 KiB is already
 /// absurdly generous.
-const MAX_DECISION_LEN: u32 = 64 * 1024;
+pub const MAX_DECISION_LEN: u32 = 64 * 1024;
 
 /// Cap on the optional declaration JSON returned at registration/load time.
 const MAX_SUBJECTS_LEN: u32 = 64 * 1024;

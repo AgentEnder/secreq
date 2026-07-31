@@ -292,6 +292,23 @@ secreq rules list
 
 One-line listing of every rule with its decide direction, enabled state, declarative wrap match, and consultation wrap scope. Default action for `secreq rules`
 
+### `secreq rules stats`
+
+```
+secreq rules stats [OPTIONS]
+```
+
+Validate the installed ruleset and replay it over historical audit asks using the same evaluator and wasm host as live requests
+
+| Flag | Meaning |
+| --- | --- |
+| `--since <DATE>` | Include rows at or after this UTC date (`YYYY-MM-DD`) or Unix timestamp |
+| `--wrap <WRAP>` | Replay only rows for this exact wrap |
+| `--top <TOP>` | Maximum prompt-shape rows in each ranked breakdown |
+| `--audit <PATH>` | Read this audit file instead of `~/.secreq/audit.log` |
+| `--json` | Emit the stable machine-readable report schema |
+| `--verify` | Check eligible historical auto decisions for evaluator drift. Also exits non-zero for refused modules/patterns, invalid live scope, malformed audit records, or runtime wasm failures. Ordinary uncovered prompts are not failures |
+
 ### `secreq rules show`
 
 ```

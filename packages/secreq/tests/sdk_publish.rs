@@ -68,7 +68,12 @@ fn files_allowlist_ships_the_build_toolchain() {
     // itself, the package-root re-export (bare `import "secreq-rule"`
     // resolves here), and every `.ts` under assembly/ that the generated
     // ABI entry compiles through.
-    let mut required = vec!["bin/build.js".to_string(), "index.ts".to_string()];
+    let mut required = vec![
+        "bin/build.js".to_string(),
+        "index.ts".to_string(),
+        "testing/index.js".to_string(),
+        "testing/assembly.ts".to_string(),
+    ];
     for entry in std::fs::read_dir(format!("{PKG_DIR}/assembly"))
         .expect("assembly/ must exist")
         .flatten()
@@ -94,6 +99,16 @@ fn files_allowlist_ships_the_build_toolchain() {
 }
 
 #[test]
+fn package_exports_both_testing_layers() {
+    let pkg = manifest();
+    assert_eq!(pkg["exports"]["./testing"], "./testing/index.js");
+    assert_eq!(
+        pkg["exports"]["./testing/assembly"],
+        "./testing/assembly.ts"
+    );
+}
+
+#[test]
 fn declared_bin_exists_and_ships() {
     let pkg = manifest();
     let bin = pkg["bin"]["secreq-rule-build"]
@@ -106,5 +121,30 @@ fn declared_bin_exists_and_ships() {
     assert!(
         covered(&files_allowlist(&pkg), bin),
         "the secreq-rule-build bin ({bin}) is not covered by the `files` allowlist"
+    );
+}
+
+#[test]
+fn node_runner_limits_track_the_host_abi() {
+    let runner = std::fs::read_to_string(format!("{PKG_DIR}/testing/index.js"))
+        .expect("testing/index.js must exist");
+    let literal = |name: &str| -> usize {
+        let prefix = format!("const {name} = ");
+        runner
+            .lines()
+            .find_map(|line| line.strip_prefix(&prefix))
+            .and_then(|value| value.strip_suffix(';'))
+            .unwrap_or_else(|| panic!("testing/index.js must declare {name} as a decimal literal"))
+            .parse()
+            .unwrap_or_else(|_| panic!("{name} must be a decimal literal"))
+    };
+
+    assert_eq!(
+        literal("MAX_GUEST_MEMORY_BYTES"),
+        secreq::wasm_rules::MAX_GUEST_MEMORY_BYTES
+    );
+    assert_eq!(
+        literal("MAX_DECISION_BYTES"),
+        secreq::wasm_rules::MAX_DECISION_LEN as usize
     );
 }

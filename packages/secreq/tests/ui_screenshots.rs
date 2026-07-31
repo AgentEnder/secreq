@@ -509,6 +509,7 @@ fn audit_line(
         cwd: "~/repos/acme".to_owned(),
         wrap: wrap.to_owned(),
         args: vec![],
+        command: None,
         callers: vec![secreq::audit::AuditCaller {
             pid: 1000,
             name: caller_name.to_owned(),
@@ -578,6 +579,7 @@ fn audit_line_traced(
         cwd: "~/repos/acme".to_owned(),
         wrap: wrap.to_owned(),
         args: args.iter().map(|s| (*s).to_owned()).collect(),
+        command: None,
         callers: chain
             .iter()
             .map(|(pid, name, cmd)| secreq::audit::AuditCaller {
@@ -698,6 +700,7 @@ fn audit_auto_fire(secs_ago: u64, rule_id: &str, decision: &str) -> AuditEntry {
         cwd: "~/repos/acme".to_owned(),
         wrap: "gh".to_owned(),
         args: vec!["api".to_owned()],
+        command: None,
         callers: vec![secreq::audit::AuditCaller {
             pid: 4242,
             name: "Cursor.app".to_owned(),
@@ -1273,7 +1276,7 @@ fn single_pending() {
 #[test]
 fn pending_with_denial_reason() {
     render_prompt_fixture_full(
-        Shot::new("51-pending-denial-reason").caption(
+        Shot::new("54-pending-denial-reason").caption(
             "A denial can carry an optional explanation into the audit log. Leave the \
              field empty and Deny is still one click.",
         ),
@@ -2960,7 +2963,7 @@ fn rules_tab_stale_mutation_rejected() {
         Some("gh auth token"),
     );
     render_manager_fixture(
-        Shot::new("51-rules-stale-mutation").caption(
+        Shot::new("53-rules-stale-mutation").caption(
             "This rule changed outside the open window, so secreq rejected the stale \
              edit instead of replacing newer policy. Reload the Rules view before \
              trying again.",

@@ -17,7 +17,15 @@
     },
     "test": {
       "command": "cargo test -p secreq",
-      "inputs": ["rust", "^rust", "{workspaceRoot}/docs/**/*", "{workspaceRoot}/dev-docs/**/*"]
+      "inputs": [
+        "rust",
+        "^rust",
+        "{workspaceRoot}/docs/**/*",
+        "{workspaceRoot}/dev-docs/**/*",
+        "{workspaceRoot}/packages/secreq-rule/package.json",
+        "{workspaceRoot}/packages/secreq-rule/assembly/**",
+        "{workspaceRoot}/packages/secreq-rule/testing/**"
+      ]
     },
     "lint": {
       "command": "cargo clippy -p secreq --all-targets -- -D warnings",

@@ -643,7 +643,7 @@ const RULE_TS: &str = r#"// A programmable secreq auto-rule.
 // loops behave as you expect; regexes, closures and most of the JavaScript
 // standard library are not available.
 
-import { RuleCtx, Decision, pass } from 'secreq-rule';
+import { RuleCtx, Decision, approve, pass, prompt, deny } from 'secreq-rule';
 
 // This is the module author's request, not its grant. Registration validates
 // each name against config.toml and asks the operator to confirm the effective
@@ -674,14 +674,14 @@ export function decide(ctx: RuleCtx): Decision {
   //                   .command and .exe — only .exe is not self-reported,
   //                   so gate on it when it matters who is really calling
   //
-  // A policy reads like this:
-  //
-  //   if (ctx.wrap != 'gh') return pass();
-  //   if (ctx.joinedArgv.startsWith('gh api --get ')) return approve();
-  //   if (ctx.joinedArgv.startsWith('gh repo delete')) {
-  //     return deny('repo deletes are never auto-approved');
-  //   }
-
+  if (ctx.wrap != 'gh') return pass();
+  if (ctx.joinedArgv.startsWith('gh api --get ')) return approve();
+  if (ctx.joinedArgv.startsWith('gh api --method POST ')) {
+    return prompt('write requests require review');
+  }
+  if (ctx.joinedArgv.startsWith('gh repo delete')) {
+    return deny('repo deletes are never auto-approved');
+  }
   return pass();
 }
 "#;
@@ -695,30 +695,48 @@ const RULE_SPEC_TS: &str = r#"// as-pect specs for this rule. Run them with `npm
 // glue `secreq-rule-build` generates. secreq never runs this file: you test
 // here, secreq only ever loads the compiled `rule.wasm`.
 
-import { RuleCtx, Caller, DecisionKind } from 'secreq-rule';
+import {
+  assertDecision,
+  caller,
+  expectApprove,
+  expectDeny,
+  expectPass,
+  expectPrompt,
+  ruleCtx,
+} from 'secreq-rule/testing/assembly';
 import { decide } from '../rule';
 
-function caller(name: string, command: string): Caller {
-  const c = new Caller();
-  c.name = name;
-  c.command = command;
-  return c;
-}
-
-function ctx(wrap: string, joinedArgv: string, cwd: string): RuleCtx {
-  const c = new RuleCtx();
-  c.wrap = wrap;
-  c.joinedArgv = joinedArgv;
-  c.cwd = cwd;
-  c.callers = [caller('zsh', '-zsh')];
-  c.secrets = ['SOME_TOKEN'];
-  return c;
-}
-
 describe('rule', () => {
-  it('has no opinion until the policy says otherwise', () => {
-    const d = decide(ctx('gh', 'gh api /user', '/home/me/code/app'));
-    expect(d.kind).toBe(DecisionKind.Pass);
+  it('covers approve, pass, prompt, and deny with readable contexts', () => {
+    const shell = [caller('zsh', '-zsh', '/bin/zsh')];
+    assertDecision(
+      decide(ruleCtx('gh', 'gh api --get /user', '/home/me/code/app', shell, ['SOME_TOKEN'])),
+      expectApprove(),
+      'safe API read',
+    );
+    assertDecision(
+      decide(ruleCtx('npm', 'npm test', '/home/me/code/app', shell, ['SOME_TOKEN'])),
+      expectPass(),
+      'other wrap',
+    );
+    assertDecision(
+      decide(
+        ruleCtx(
+          'gh',
+          'gh api --method POST /repos/acme/app/issues',
+          '/home/me/code/app',
+          shell,
+          ['SOME_TOKEN'],
+        ),
+      ),
+      expectPrompt('write requests require review'),
+      'write API request',
+    );
+    assertDecision(
+      decide(ruleCtx('gh', 'gh repo delete acme/app', '/home/me/code/app', shell, ['SOME_TOKEN'])),
+      expectDeny('repo deletes are never auto-approved'),
+      'destructive command',
+    );
   });
 });
 "#;

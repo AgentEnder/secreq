@@ -3,6 +3,27 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "projectType": "library",
   "targets": {
+    "test": {
+      "command": "node --test packages/secreq-rule/testing/runner.test.js",
+      "dependsOn": ["test:assembly"],
+      "inputs": [
+        "js",
+        "^js",
+        "{workspaceRoot}/packages/secreq/tests/fixtures/wasm_rules/**",
+        "{workspaceRoot}/packages/secreq/src/wasm_rules.rs"
+      ]
+    },
+    "test:assembly": {
+      "command": "node packages/secreq-rule/node_modules/assemblyscript/bin/asc.js packages/secreq-rule/testing/assembly.compile.ts --noEmit",
+      "inputs": [
+        "{projectRoot}/testing/assembly.ts",
+        "{projectRoot}/testing/assembly.compile.ts",
+        "{projectRoot}/assembly/**/*.ts",
+        "{projectRoot}/index.ts",
+        "{projectRoot}/package.json"
+      ],
+      "outputs": []
+    },
     "lint": {
       "command": "oxlint packages/secreq-rule",
       "inputs": ["js"],

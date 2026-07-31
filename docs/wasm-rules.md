@@ -38,16 +38,16 @@ A rule module is untrusted code that helps decide whether a secret is
 released. The daemon constrains what it can do structurally, so the limits
 hold whatever the module contains.
 
-| Constraint                         | How it is enforced                                                                                                                                                       |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| No I/O of any kind                 | The only import a module may declare is AssemblyScript's `env.abort`. Anything else, WASI included, is refused at registration with an error naming the import.          |
-| No secret values                   | The ctx carries names: env-var names, or `ssh:<key_id>` for a signing. No value enters the sandbox.                                                                      |
-| Bounded time                       | A fixed fuel budget of 10⁸ instructions per call. An infinite loop stops in well under a second.                                                                         |
-| Bounded memory                     | 64 MiB of guest memory, and 64 KiB for the decision it returns.                                                                                                          |
-| No state between asks              | Every evaluation instantiates the module fresh.                                                                                                                          |
-| Only the bytes you registered      | Registration records the module's SHA-256 and re-verifies it on every rules load. A file that changed is refused, and `rules list`, `rules show` and the manager say so. |
-| Only the wraps you scoped it to    | A rule-level wrap allowlist is checked before evaluation. An out-of-scope wasm module is not instantiated.                                                               |
-| Only the secrets you trained it on | A module is consulted only when the ask overlaps its trained names, and an approval blesses only the requested names inside that snapshot.                               |
+| Constraint                          | How it is enforced                                                                                                                                                       |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| No I/O of any kind                  | The only import a module may declare is AssemblyScript's `env.abort`. Anything else, WASI included, is refused at registration with an error naming the import.          |
+| No secret values                    | The ctx carries names: env-var names, or `ssh:<key_id>` for a signing. No value enters the sandbox.                                                                      |
+| Bounded time                        | A fixed fuel budget of 10⁸ instructions per call. An infinite loop stops in well under a second.                                                                         |
+| Bounded memory                      | 64 MiB of guest memory, and 64 KiB for the decision it returns.                                                                                                          |
+| No state between asks               | Every evaluation instantiates the module fresh.                                                                                                                          |
+| Only the bytes you registered       | Registration records the module's SHA-256 and re-verifies it on every rules load. A file that changed is refused, and `rules list`, `rules show` and the manager say so. |
+| Only the wraps you scoped it to     | A rule-level wrap allowlist is checked before evaluation. An out-of-scope wasm module is not instantiated.                                                               |
+| Only the subjects you trained it on | A wasm rule is consulted when its trained subjects overlap the ask, and an approve blesses only that intersection. Several rules may jointly cover a multi-subject ask.  |
 
 Two behaviors matter when you write one.
 
@@ -220,39 +220,81 @@ JavaScript standard library are not available.
 ## Test it
 
 Because a rule is just a function of ctx → decision, it unit-tests
-cleanly. The example uses [as-pect](https://github.com/as-pect/as-pect),
-the AssemblyScript test runner. Your spec is compiled to wasm and
-exercises `decide` with contexts you construct:
+cleanly. The SDK's `secreq-rule/testing/assembly` entry point supplies
+context/caller builders and decision assertions without adding a test
+framework dependency to the deployed rule. The example uses
+[as-pect](https://github.com/as-pect/as-pect); the spec is compiled to wasm
+and exercises `decide` directly:
 
 ```ts path=assembly/__tests__/rule.spec.ts
 // assembly/__tests__/rule.spec.ts
-import { RuleCtx, Caller, DecisionKind } from 'secreq-rule';
+import {
+  assertDecision,
+  caller,
+  expectApprove,
+  expectDeny,
+  expectPass,
+  ruleCtx,
+} from 'secreq-rule/testing/assembly';
 import { decide } from '../rule';
 
-function ctx(wrap: string, joinedArgv: string, cwd: string): RuleCtx {
-  const c = new RuleCtx();
-  c.wrap = wrap;
-  c.joinedArgv = joinedArgv;
-  c.cwd = cwd;
-  c.callers = [];
-  c.secrets = ['NPM_TOKEN'];
-  return c;
-}
-
 describe('npm-publish-guard', () => {
-  it('approves a publish from inside the publish root', () => {
-    const d = decide(ctx('npm', 'npm publish', '/home/me/oss/my-lib'));
-    expect(d.kind).toBe(DecisionKind.Approve);
-  });
-
-  it('passes on a publish from outside the publish root', () => {
-    const d = decide(ctx('npm', 'npm publish', '/tmp/scratch-clone'));
-    expect(d.kind).toBe(DecisionKind.Pass);
+  it('covers the decision table', () => {
+    const shell = [caller('zsh', '-zsh', '/bin/zsh')];
+    assertDecision(
+      decide(ruleCtx('npm', 'npm publish', '/home/me/oss/lib', shell, ['NPM_TOKEN'])),
+      expectApprove(),
+    );
+    assertDecision(
+      decide(ruleCtx('npm', 'npm publish', '/tmp/clone', shell, ['NPM_TOKEN'])),
+      expectPass(),
+    );
+    assertDecision(
+      decide(
+        ruleCtx(
+          'npm',
+          'npm publish',
+          '/home/me/oss/lib',
+          [caller('Claude', 'claude')],
+          ['NPM_TOKEN'],
+        ),
+      ),
+      expectDeny('npm publish from an AI-agent session is never auto-approved (caller: Claude)'),
+    );
   });
 });
 ```
 
 Run with `npm test`, which both scaffolds wire to `asp`.
+
+The second testing layer drives the compiled artifact through the real
+snake_case JSON and packed pointer/length ABI:
+
+```js
+const { runCases } = require('secreq-rule/testing');
+
+runCases('./rule.wasm', [
+  {
+    name: 'safe read',
+    context: { wrap: 'gh', joinedArgv: 'gh api --get /user' },
+    expected: 'approve',
+  },
+  { name: 'no opinion', context: { wrap: 'npm', joinedArgv: 'npm test' }, expected: 'pass' },
+  {
+    name: 'human required',
+    context: { wrap: 'npm', joinedArgv: 'npm publish' },
+    expected: { prompt: 'publishing' },
+  },
+]);
+```
+
+The Node runner vets the abort-only import names and kinds, uses a fresh
+instance per case, checks memory before and after calls, enforces the 64 KiB
+decision cap, and decodes Approve, Pass, Prompt, and Deny. Node's built-in
+WebAssembly engine cannot meter fuel or constrain an exported memory while a
+guest call is running, and its reflection API does not expose import function
+signatures. Those protections remain intentionally host-only; inspect
+`sandboxPosture` for the machine-readable differences.
 
 **secreq never runs your tests.** Testing happens entirely in your
 package, before you compile; the daemon only ever loads the compiled
@@ -307,7 +349,9 @@ trained on:     NPM_TOKEN
   no `subjects()` export can still be registered with explicit `--secret`
   flags.
 - Wrap and subject scopes are independent AND gates: both must overlap the
-  ask. An approval blesses only requested subjects in the trained snapshot.
+  ask. An approval blesses only requested subjects in the trained snapshot,
+  and several rules may jointly cover a multi-subject ask. Valid subjects
+  include wrap env keys, `ssh:<key_id>`, and `wrap:<name>` for gate-only wraps.
 - `--name` labels the rule in the UI and audit log (defaults to the
   module's file name, minus the `.wasm` extension).
 - The module is **copied** into the canonical store
@@ -345,6 +389,33 @@ secreq rules show <id|name>  # module path, pinned sha256, integrity status
 secreq rules disable <id>    # pause without deleting; enable to resume
 secreq rules rm <id>         # delete (also removes the stored module file)
 ```
+
+## Validate and replay the ruleset
+
+`rules stats` loads the current config, rules, and wasm modules through the
+production loaders, then streams historical asks through the same evaluator
+used by the daemon. It never resolves a secret, contacts a provider, executes a
+wrap, reads remembered approvals, or mutates daemon state.
+
+```sh
+secreq rules stats
+secreq rules stats --since 2026-07-01 --wrap gh --top 30
+secreq rules stats --audit ./fixtures/audit.log --json
+secreq rules stats --verify
+```
+
+The report includes current approve/deny/prompt percentages, per-rule
+attribution, prompt shapes, costly historical rows now automated, recorded
+decisions for rows that still prompt, scope findings, and refused modules or
+patterns. `--verify` compares eligible historical `approve+auto` and
+`deny+auto` rows with their current replay. It exits non-zero for drift,
+refused/tampered rules, invalid live scope, malformed audit records, or runtime
+wasm failures. Ordinary uncovered prompts remain informational. Deleted-rule,
+disabled-rule, pre-creation, and scoped-agent history is classified separately
+and is not an evaluator failure. Older SSH rows that predate rule attribution
+are reported separately from malformed rows with a missing rule id. `store`
+and scoped-agent records never entered the rules evaluator, so they are not in
+the replay outcome denominator.
 
 A healthy wasm rule shows:
 

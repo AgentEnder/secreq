@@ -6,7 +6,7 @@
   "steps": [
     {
       "action": "show",
-      "id": "51-pending-denial-reason",
+      "id": "54-pending-denial-reason",
       "kind": "gui"
     },
     {
@@ -51,7 +51,7 @@
     },
     {
       "action": "hide",
-      "id": "51-pending-denial-reason",
+      "id": "54-pending-denial-reason",
       "kind": "gui"
     },
     {

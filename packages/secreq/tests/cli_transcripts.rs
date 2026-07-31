@@ -1586,10 +1586,10 @@ fn run_gh_denied_with_reason() {
     ));
 
     rec.await_ask(&daemon);
-    rec.gui_show("51-pending-denial-reason");
+    rec.gui_show("54-pending-denial-reason");
     rec.expect_spinner(&SPINNER_BEATS, WAIT_LINE_TAIL);
     daemon.respond();
-    rec.gui_hide("51-pending-denial-reason");
+    rec.gui_hide("54-pending-denial-reason");
 
     rec.finish_denied(Transcript::new(
         "run-gh-denied",

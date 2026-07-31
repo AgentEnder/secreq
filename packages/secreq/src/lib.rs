@@ -70,7 +70,9 @@ pub mod provider;
 pub mod recommendations;
 pub mod reference;
 pub mod resolve;
+pub mod rule_health;
 pub mod rule_scaffold;
+pub mod rule_stats;
 pub mod rules;
 /// Generates the two published JSON Schemas. Behind the `schema` feature so
 /// `schemars` stays out of a shipped binary; the feature is on for the test
