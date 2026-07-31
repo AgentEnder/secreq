@@ -1323,6 +1323,7 @@ fn handle_rule_hit(
             DaemonMsg::Decision {
                 decision: crate::consent::Decision::DenyAuto,
                 secrets: std::collections::HashMap::new(),
+                deciding_device: None,
                 rule_id: Some(hit.rule_id),
                 rule_name: Some(hit.rule_name),
                 reason: hit.deny_message,
@@ -1352,6 +1353,7 @@ fn handle_rule_hit(
                 WaiterReply::Decision { secrets, .. } => DaemonMsg::Decision {
                     decision: crate::consent::Decision::ApproveAuto,
                     secrets,
+                    deciding_device: None,
                     rule_id: Some(hit.rule_id),
                     rule_name: Some(hit.rule_name),
                     reason: None,
@@ -1360,7 +1362,7 @@ fn handle_rule_hit(
                     // secret, recorded in the client's audit row.
                     approvers: hit.approvals,
                 },
-                WaiterReply::Err { message } => DaemonMsg::Err { message },
+                WaiterReply::Err { message, .. } => DaemonMsg::Err { message },
             }
         }
     }
@@ -1408,10 +1410,14 @@ fn resolve_approved_with_pending(
         }
     });
     if cold {
+        let public_error = match &reply {
+            WaiterReply::Err { public_message, .. } => Some(public_message.as_str()),
+            WaiterReply::Decision { .. } => None,
+        };
         state
             .lock()
             .expect("state mutex")
-            .end_pending(&ask.dedupe_key);
+            .end_pending(&ask.dedupe_key, public_error);
     }
     reply
 }
@@ -1424,10 +1430,12 @@ fn waiter_reply_to_daemon_msg(
         WaiterReply::Decision {
             decision,
             secrets,
+            deciding_device,
             reason,
         } => DaemonMsg::Decision {
             decision,
             secrets,
+            deciding_device,
             // The user-decision path (manual click) never carries
             // rule attribution. Auto-decisions take a different path
             // and construct DaemonMsg::Decision directly with
@@ -1439,7 +1447,7 @@ fn waiter_reply_to_daemon_msg(
             declared_by,
             approvers: std::collections::BTreeMap::new(),
         },
-        WaiterReply::Err { message } => DaemonMsg::Err { message },
+        WaiterReply::Err { message, .. } => DaemonMsg::Err { message },
     }
 }
 
@@ -1515,6 +1523,7 @@ mod tests {
         DaemonMsg::Decision {
             decision: crate::consent::Decision::Deny,
             secrets: std::collections::HashMap::new(),
+            deciding_device: None,
             rule_id: None,
             rule_name: None,
             reason: None,

@@ -1022,6 +1022,7 @@ fn serve_stub(
                 respond.recv().expect("recorder never answered the ask");
                 DaemonMsg::Decision {
                     decision,
+                    deciding_device: None,
                     // Answer exactly what was asked for, rather than a
                     // hardcoded name: the reply then stays correct if the
                     // fixture's wrap ever declares a different variable.

@@ -75,6 +75,10 @@ pub struct AuditEntry {
     pub secrets: Vec<String>,
     /// The consent decision.
     pub decision: String,
+    /// Nickname of the linked device that made the decision. Absent for the
+    /// local prompt and automatic decisions, preserving old row semantics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deciding_device: Option<String>,
     /// Why a denial was issued, when the user or auto-rule supplied one.
     ///
     /// Absent on approvals, abandoned asks, denials without an explanation,
@@ -406,6 +410,7 @@ impl AuditEntry {
             callers_truncated: Some(chain.truncated),
             secrets: secret_names.to_vec(),
             decision: decision.as_str().to_owned(),
+            deciding_device: None,
             reason: None,
             rule_id: None,
             approvers: BTreeMap::new(),
@@ -460,6 +465,7 @@ impl AuditEntry {
             callers_truncated: Some(chain.truncated),
             secrets: Vec::new(),
             decision: decision.as_str().to_owned(),
+            deciding_device: None,
             reason: None,
             rule_id: None,
             approvers: BTreeMap::new(),
@@ -521,6 +527,7 @@ impl AuditEntry {
             callers_truncated: Some(false),
             secrets: vec![reference.to_owned()],
             decision: decision.as_str().to_owned(),
+            deciding_device: None,
             reason: None,
             rule_id: None,
             approvers: BTreeMap::new(),
@@ -571,6 +578,7 @@ impl AuditEntry {
             callers_truncated: Some(ask.callers_truncated),
             secrets: ask.secret_names.to_vec(),
             decision: Decision::Abandoned.as_str().to_owned(),
+            deciding_device: None,
             // An abandoned ask has no author and therefore no reason.
             reason: None,
             rule_id: None,
@@ -605,6 +613,13 @@ impl AuditEntry {
     /// [`AuditEntry::rule_id`]. A no-op empty map on every other path.
     pub fn with_approvers(mut self, approvers: BTreeMap<String, String>) -> AuditEntry {
         self.approvers = approvers;
+        self
+    }
+
+    /// Attach the linked device that made this decision. Local and automatic
+    /// paths pass `None`, so their serialized audit shape is unchanged.
+    pub fn with_deciding_device(mut self, device: Option<String>) -> AuditEntry {
+        self.deciding_device = device;
         self
     }
 }
@@ -880,6 +895,26 @@ mod tests {
             ScopeDeclarant::NotRead,
         );
         assert!(!agent.rules_were_evaluated());
+    }
+
+    #[test]
+    fn only_remote_decisions_name_a_deciding_device() {
+        let chain = CallerChain {
+            frames: Vec::new(),
+            truncated: false,
+        };
+        let local = AuditEntry::new("run", &[], &chain, &[], Decision::Approve);
+        let remote = AuditEntry::new("run", &[], &chain, &[], Decision::Approve)
+            .with_deciding_device(Some("Craig's iPhone".to_owned()));
+
+        assert!(local.deciding_device.is_none());
+        assert_eq!(remote.deciding_device.as_deref(), Some("Craig's iPhone"));
+        assert!(!serde_json::to_string(&local)
+            .unwrap()
+            .contains("deciding_device"));
+        assert!(serde_json::to_string(&remote)
+            .unwrap()
+            .contains("Craig's iPhone"));
     }
 
     #[test]

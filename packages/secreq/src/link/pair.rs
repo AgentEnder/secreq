@@ -65,6 +65,10 @@ impl Pairing {
         }
     }
 
+    pub(crate) fn registry_path(&self) -> &std::path::Path {
+        &self.registry_path
+    }
+
     /// Open a fresh 60-second enrollment window and return its one-time token.
     pub fn open(&self) -> Result<String, PairError> {
         let token = mint_token();

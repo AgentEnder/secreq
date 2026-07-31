@@ -1,16 +1,28 @@
 //! Plain-HTTP listener for devices linked over the local network.
 
-use std::io::Read;
+use std::io::{Cursor, Read};
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{mpsc, Arc};
 use std::thread::{self, JoinHandle};
 
 use anyhow::{bail, Context, Result};
-use tiny_http::{Method, Request, Response, Server, StatusCode};
+use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
+use super::nonce::NonceStore;
 use super::pair::{PairError, PairRequest, Pairing};
+use super::sig::SignedDecision;
 
 const MAX_PAIR_BODY_BYTES: u64 = 16 * 1024;
+const MAX_DECISION_BODY_BYTES: u64 = 16 * 1024;
+const SSE_CHUNK_FLUSH_BYTES: usize = 8 * 1024 + 1;
+
+struct Runtime {
+    pairing: Arc<Pairing>,
+    state: Option<crate::daemon::state::SharedState>,
+    registry_path: PathBuf,
+    nonces: Arc<NonceStore>,
+}
 
 /// Returns whether an address is local to the host or its private LAN.
 ///
@@ -66,6 +78,38 @@ impl Drop for Listener {
 /// parsed HTTP request is handled on its own thread, matching the daemon's
 /// existing thread-per-connection model.
 pub fn start(bind_addr: SocketAddr, pairing: Arc<Pairing>) -> Result<Listener> {
+    let registry_path = pairing.registry_path().to_owned();
+    start_runtime(
+        bind_addr,
+        Arc::new(Runtime {
+            pairing,
+            state: None,
+            registry_path,
+            nonces: Arc::new(NonceStore::default()),
+        }),
+    )
+}
+
+/// Start the listener with live daemon state, enabling `/events` and
+/// `/decision` in addition to pairing.
+pub fn start_synced(
+    bind_addr: SocketAddr,
+    pairing: Arc<Pairing>,
+    state: crate::daemon::state::SharedState,
+) -> Result<Listener> {
+    let registry_path = pairing.registry_path().to_owned();
+    start_runtime(
+        bind_addr,
+        Arc::new(Runtime {
+            pairing,
+            state: Some(state),
+            registry_path,
+            nonces: Arc::new(NonceStore::default()),
+        }),
+    )
+}
+
+fn start_runtime(bind_addr: SocketAddr, runtime: Arc<Runtime>) -> Result<Listener> {
     if !is_lan(&bind_addr.ip()) {
         bail!("refuse to bind LAN listener to non-LAN address {bind_addr}");
     }
@@ -80,7 +124,7 @@ pub fn start(bind_addr: SocketAddr, pairing: Arc<Pairing>) -> Result<Listener> {
     let accept_server = Arc::clone(&server);
     let accept_thread = thread::Builder::new()
         .name("secreqd-link-accept".to_owned())
-        .spawn(move || accept_loop(accept_server, pairing))
+        .spawn(move || accept_loop(accept_server, runtime))
         .context("spawn LAN listener accept thread")?;
 
     Ok(Listener {
@@ -90,13 +134,13 @@ pub fn start(bind_addr: SocketAddr, pairing: Arc<Pairing>) -> Result<Listener> {
     })
 }
 
-fn accept_loop(server: Arc<Server>, pairing: Arc<Pairing>) {
+fn accept_loop(server: Arc<Server>, runtime: Arc<Runtime>) {
     for request in server.incoming_requests() {
-        let pairing = Arc::clone(&pairing);
+        let runtime = Arc::clone(&runtime);
         thread::Builder::new()
             .name("secreqd-link-conn".to_owned())
             .spawn(move || {
-                if let Err(err) = handle_request(request, &pairing) {
+                if let Err(err) = handle_request(request, &runtime) {
                     eprintln!("secreqd: link connection error: {err}");
                 }
             })
@@ -104,7 +148,7 @@ fn accept_loop(server: Arc<Server>, pairing: Arc<Pairing>) {
     }
 }
 
-fn handle_request(request: Request, pairing: &Pairing) -> std::io::Result<()> {
+fn handle_request(request: Request, runtime: &Runtime) -> std::io::Result<()> {
     if !request.remote_addr().is_some_and(|addr| is_lan(&addr.ip())) {
         return request.respond(Response::empty(StatusCode(403)));
     }
@@ -113,10 +157,164 @@ fn handle_request(request: Request, pairing: &Pairing) -> std::io::Result<()> {
         return request.respond(Response::empty(StatusCode(200)));
     }
     if request.method() == &Method::Post && request.url() == "/pair" {
-        return handle_pair(request, pairing);
+        return handle_pair(request, &runtime.pairing);
+    }
+    if request.method() == &Method::Get && request.url() == "/events" {
+        return match &runtime.state {
+            Some(state) => handle_events(request, Arc::clone(state)),
+            None => request.respond(Response::empty(StatusCode(404))),
+        };
+    }
+    if request.method() == &Method::Post && request.url() == "/decision" {
+        return match &runtime.state {
+            Some(state) => handle_decision(request, runtime, state),
+            None => request.respond(Response::empty(StatusCode(404))),
+        };
     }
 
     request.respond(Response::empty(StatusCode(404)))
+}
+
+fn handle_events(
+    request: Request,
+    state: crate::daemon::state::SharedState,
+) -> std::io::Result<()> {
+    let (tx, rx) = mpsc::channel();
+    let (subscriber_id, initial) = state
+        .lock()
+        .map_err(|_| std::io::Error::other("daemon state unavailable"))?
+        .attach_link_events(tx);
+    let reader = SseReader::new(state, subscriber_id, rx, initial)?;
+    let headers = vec![
+        Header::from_bytes("Content-Type", "text/event-stream; charset=utf-8")
+            .expect("static SSE content-type header"),
+        Header::from_bytes("Cache-Control", "no-cache").expect("static cache header"),
+        Header::from_bytes("X-Accel-Buffering", "no").expect("static buffering header"),
+    ];
+    request.respond(Response::new(StatusCode(200), headers, reader, None, None))
+}
+
+struct SseReader {
+    state: crate::daemon::state::SharedState,
+    subscriber_id: u64,
+    rx: mpsc::Receiver<crate::daemon::proto::DaemonMsg>,
+    frame: Cursor<Vec<u8>>,
+}
+
+impl SseReader {
+    fn new(
+        state: crate::daemon::state::SharedState,
+        subscriber_id: u64,
+        rx: mpsc::Receiver<crate::daemon::proto::DaemonMsg>,
+        initial: crate::daemon::proto::WireSnapshot,
+    ) -> std::io::Result<SseReader> {
+        Ok(SseReader {
+            state,
+            subscriber_id,
+            rx,
+            frame: Cursor::new(sse_frame(&initial)?),
+        })
+    }
+}
+
+impl Read for SseReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            let read = self.frame.read(buf)?;
+            if read != 0 {
+                return Ok(read);
+            }
+            match self.rx.recv() {
+                Ok(crate::daemon::proto::DaemonMsg::ConsentUpdate { snapshot }) => {
+                    self.frame = Cursor::new(sse_frame(&snapshot)?);
+                }
+                Ok(crate::daemon::proto::DaemonMsg::ConsentExitPlease) | Err(_) => return Ok(0),
+                Ok(_) => {}
+            }
+        }
+    }
+}
+
+impl Drop for SseReader {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.detach_link_events(self.subscriber_id);
+        }
+    }
+}
+
+fn sse_frame(snapshot: &crate::daemon::proto::WireSnapshot) -> std::io::Result<Vec<u8>> {
+    let json = serde_json::to_string(snapshot).map_err(std::io::Error::other)?;
+    let mut frame = format!("data: {json}\n\n").into_bytes();
+    // `tiny_http`'s chunked encoder buffers 8 KiB and exposes no flush hook.
+    // A smaller long-lived body would therefore leave both headers and the
+    // first event buffered until the connection ended. An SSE comment is
+    // semantically inert, so pad each state frame just past that boundary:
+    // every update forces the prior encoder buffer onto the socket and the
+    // browser dispatches the `data` event at the blank line before padding.
+    if frame.len() < SSE_CHUNK_FLUSH_BYTES {
+        frame.extend_from_slice(b":");
+        let padding = SSE_CHUNK_FLUSH_BYTES.saturating_sub(frame.len() + 2);
+        frame.resize(frame.len() + padding, b' ');
+        frame.extend_from_slice(b"\n\n");
+    }
+    Ok(frame)
+}
+
+fn handle_decision(
+    mut request: Request,
+    runtime: &Runtime,
+    state: &crate::daemon::state::SharedState,
+) -> std::io::Result<()> {
+    let mut body = Vec::new();
+    request
+        .as_reader()
+        .take(MAX_DECISION_BODY_BYTES + 1)
+        .read_to_end(&mut body)?;
+    if body.len() as u64 > MAX_DECISION_BODY_BYTES {
+        return request.respond(Response::empty(StatusCode(413)));
+    }
+    let Ok(payload) = serde_json::from_slice::<SignedDecision>(&body) else {
+        return request.respond(Response::empty(StatusCode(400)));
+    };
+
+    // Find the signer only among the registry as it exists for this request.
+    // Iterating avoids a caller-supplied device id becoming an identity oracle.
+    let Ok(devices) = super::devices::load(&runtime.registry_path) else {
+        return request.respond(Response::empty(StatusCode(503)));
+    };
+    let Some(device) = devices
+        .into_iter()
+        .find(|device| super::sig::verify(device, &payload).is_ok())
+    else {
+        return request.respond(Response::empty(StatusCode(403)));
+    };
+
+    if runtime
+        .nonces
+        .accept(&payload.request_id, &payload.nonce)
+        .is_err()
+    {
+        return request.respond(Response::empty(StatusCode(409)));
+    }
+
+    let resolved = state
+        .lock()
+        .map_err(|_| std::io::Error::other("daemon state unavailable"))?
+        .resolve_remote(
+            &payload.request_id,
+            &payload.ask_hash_hex,
+            &payload.decision,
+            device.nickname,
+            state,
+        );
+    match resolved {
+        Ok(()) => {
+            let _ = runtime.nonces.retire(&payload.request_id);
+            request.respond(Response::empty(StatusCode(204)))
+        }
+        Err(_) => request.respond(Response::empty(StatusCode(409))),
+    }
 }
 
 fn handle_pair(mut request: Request, pairing: &Pairing) -> std::io::Result<()> {

@@ -99,13 +99,20 @@ const RESOURCE_SAMPLE_INTERVAL: Duration = Duration::from_secs(60);
 /// agent is enabled, `SSH_AUTH_SOCK` points at the daemon's
 /// `agent.sock`; an idle-exit would yank that socket out from under
 /// every SSH client, so we never idle-exit in that mode regardless of
-/// how long the queue has sat empty.
+/// how long the queue has sat empty. A live link SSE subscription pins the
+/// daemon for the same reason: exiting would silently strand the open page.
 ///
 /// `ssh_agent_enabled` is fixed for the daemon's lifetime — the config
 /// is loaded exactly once at startup (see [`run`]), so capturing it as
-/// a single bool there is sufficient.
-fn should_idle_exit(queue_empty: bool, idle_elapsed: bool, ssh_agent_enabled: bool) -> bool {
-    if ssh_agent_enabled {
+/// a single bool there is sufficient. Link attachment is sampled from
+/// [`state::State`] on every tick because subscribers come and go.
+fn should_idle_exit(
+    queue_empty: bool,
+    idle_elapsed: bool,
+    ssh_agent_enabled: bool,
+    link_subscriber_attached: bool,
+) -> bool {
+    if ssh_agent_enabled || link_subscriber_attached {
         return false;
     }
     queue_empty && idle_elapsed
@@ -269,6 +276,7 @@ pub fn run() -> Result<i32> {
             guard.queue_is_empty(),
             guard.last_activity().elapsed() >= idle_timeout,
             ssh_agent_enabled,
+            guard.link_subscriber_count() > 0,
         ) {
             log::log(format_args!(
                 "no activity for {}s and no UI attached; initiating idle-exit",
@@ -624,15 +632,20 @@ mod tests {
         // Otherwise-idle daemon (empty queue, timeout elapsed) must
         // NOT exit while the SSH agent is enabled — `SSH_AUTH_SOCK`
         // depends on the daemon's `agent.sock` staying alive.
-        assert!(!should_idle_exit(true, true, true));
+        assert!(!should_idle_exit(true, true, true, false));
     }
 
     #[test]
     fn wrap_only_idle_behavior_preserved() {
         // With no SSH identities the existing behavior is unchanged:
         // exit only when the queue is empty AND the timeout elapsed.
-        assert!(should_idle_exit(true, true, false));
-        assert!(!should_idle_exit(false, true, false));
-        assert!(!should_idle_exit(true, false, false));
+        assert!(should_idle_exit(true, true, false, false));
+        assert!(!should_idle_exit(false, true, false, false));
+        assert!(!should_idle_exit(true, false, false, false));
+    }
+
+    #[test]
+    fn idle_exit_disabled_while_a_link_subscriber_is_attached() {
+        assert!(!should_idle_exit(true, true, false, true));
     }
 }

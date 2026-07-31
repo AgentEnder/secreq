@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result};
+use rand::RngCore as _;
 use zeroize::Zeroizing;
 
 use crate::audit::{self, AbandonedAsk, AuditCaller, AuditEntry, AuditSignAnchor, ScopeDeclarant};
@@ -38,6 +39,8 @@ use super::proto::{Ask, AskAnchor, AskSubject, DedupeKey, RowStatus, WireProvide
 /// waiter — one provider invocation per approved batch, not N.
 pub struct QueueEntry {
     pub key: DedupeKey,
+    /// Random daemon-lifetime identity used by linked-device signatures.
+    pub request_id: String,
     /// The first ask we saw for this key. Provides the metadata the UI
     /// renders *and* the provider definitions used to resolve. Later asks
     /// with the same key are assumed to be equivalent (same wrap, same
@@ -98,6 +101,26 @@ impl QueueEntry {
     }
 }
 
+fn mint_link_request_id() -> String {
+    use std::fmt::Write as _;
+
+    let mut bytes = [0_u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    let mut id = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(&mut id, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    id
+}
+
+fn unix_millis_now() -> u64 {
+    SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| {
+            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+        })
+}
+
 /// What the connection thread is parked on. On approval the daemon runs
 /// resolution once and broadcasts the resulting map to all waiters; on
 /// deny it broadcasts `Deny` with an empty map; on resolution failure it
@@ -108,11 +131,16 @@ pub enum WaiterReply {
     Decision {
         decision: Decision,
         secrets: HashMap<String, String>,
+        /// Linked-device nickname for remote decisions; absent locally.
+        deciding_device: Option<String>,
         /// Optional explanation for a denial. Never contains secret material.
         reason: Option<String>,
     },
     Err {
+        /// Full diagnostic chain for the waiting terminal.
         message: String,
+        /// Top-level-only diagnostic safe for the cleartext LAN stream.
+        public_message: String,
     },
 }
 
@@ -125,6 +153,7 @@ pub struct QueueSnapshot {
 
 #[derive(Debug, Clone)]
 pub struct QueueRow {
+    pub request_id: String,
     pub key: DedupeKey,
     pub representative: Ask,
     pub waiter_count: usize,
@@ -132,6 +161,7 @@ pub struct QueueRow {
     /// Awaiting a decision, or already approved with resolution in
     /// flight. Resolving rows render read-only (no Approve/Deny).
     pub status: RowStatus,
+    pub resolving_since: Option<Instant>,
 }
 
 /// An approved ask whose secrets are being resolved off the queue. We
@@ -140,8 +170,10 @@ pub struct QueueRow {
 /// instead of popping over an empty window.
 struct PendingEntry {
     representative: Ask,
+    request_id: String,
     /// When resolution began — drives the card's "Ns ago" label.
     since: Instant,
+    resolving_since_unix_ms: u64,
 }
 
 /// The prompt's anchor as the audit log records it.
@@ -257,6 +289,12 @@ pub struct State {
     // parallel means none of the consent-window focus / restart /
     // auto-hide logic accidentally tears the badge down.
     badge: SubscriberGroup<()>,
+    /// Linked HTTP SSE subscribers. Separate from desktop windows because an
+    /// HTTP client has no child pid, focus state, or spawn lifecycle.
+    link: SubscriberGroup<()>,
+    /// One-shot top-level resolve failure included in the next linked
+    /// snapshot only. The full chain remains in `WaiterReply`.
+    link_error: Option<super::proto::LinkResolveError>,
     /// `true` between `initiate_consent_restart()` and the moment the
     /// dying child's detach is processed. Tells the detach handler
     /// "this isn't a user-initiated close — preserve viewer_mode and
@@ -360,6 +398,8 @@ impl Default for State {
             consent: SubscriberGroup::new("consent window"),
             manager: SubscriberGroup::new("manager window"),
             badge: SubscriberGroup::new("badge window"),
+            link: SubscriberGroup::new("linked SSE client"),
+            link_error: None,
             consent_restart_pending: false,
             // Queue starts empty; record the moment so the auto-hide
             // logic has a stable "started counting" anchor.
@@ -691,6 +731,8 @@ impl State {
         // as its "please exit" signal.
         self.badge
             .broadcast(super::proto::DaemonMsg::ConsentExitPlease);
+        self.link
+            .broadcast(super::proto::DaemonMsg::ConsentExitPlease);
     }
 
     // ── Consent-window subscriber API ────────────────────────────
@@ -828,6 +870,28 @@ impl State {
     /// Number of currently-attached badge children.
     pub fn badge_subscriber_count(&self) -> usize {
         self.badge.count()
+    }
+
+    // ── Linked-device SSE subscriber API ────────────────────────
+
+    /// Attach one HTTP event stream and return its detach id plus the
+    /// snapshot that opens the stream.
+    pub fn attach_link_events(
+        &mut self,
+        sender: mpsc::Sender<super::proto::DaemonMsg>,
+    ) -> (u64, super::proto::WireSnapshot) {
+        let id = self.link.attach(sender, ());
+        (id, self.snapshot_for_wire())
+    }
+
+    /// Detach an HTTP event stream after its response writer exits.
+    pub fn detach_link_events(&mut self, id: u64) {
+        self.link.detach(id);
+    }
+
+    /// Number of live linked-device event streams. Used by idle-exit.
+    pub fn link_subscriber_count(&self) -> usize {
+        self.link.count()
     }
 
     /// Should the daemon ensure a pending-badge child is running? True
@@ -1043,7 +1107,8 @@ impl State {
         // flag, and the badge just counts `Awaiting` rows.
         self.consent.broadcast(msg.clone());
         self.manager.broadcast(msg.clone());
-        self.badge.broadcast(msg);
+        self.badge.broadcast(msg.clone());
+        self.link.broadcast(msg);
     }
 
     /// Build a wire-form snapshot for the consent UI.
@@ -1053,23 +1118,30 @@ impl State {
             .queue
             .values()
             .map(|e| super::proto::WireQueueRow {
+                request_id: e.request_id.clone(),
+                ask_hash_hex: crate::link::canonical::canonical_hash(&e.representative),
                 key: e.key.clone(),
                 representative: e.representative.clone(),
                 waiter_count: e.waiter_count(),
                 first_seen_secs_ago: now.saturating_duration_since(e.first_seen).as_secs(),
                 status: RowStatus::Awaiting,
+                resolving_since: None,
             })
             .chain(self.pending.values().map(|p| super::proto::WireQueueRow {
+                request_id: p.request_id.clone(),
+                ask_hash_hex: crate::link::canonical::canonical_hash(&p.representative),
                 key: p.representative.dedupe_key.clone(),
                 representative: p.representative.clone(),
                 waiter_count: 0,
                 first_seen_secs_ago: now.saturating_duration_since(p.since).as_secs(),
                 status: RowStatus::Resolving,
+                resolving_since: Some(p.resolving_since_unix_ms),
             }))
             .collect();
         super::proto::WireSnapshot {
             queue,
             viewer_mode: self.viewer_mode,
+            link_error: self.link_error.clone(),
             rules: self.rules.clone(),
             refusals: self.refusals_snapshot(),
         }
@@ -1137,7 +1209,9 @@ impl State {
             .entry(ask.dedupe_key.clone())
             .or_insert_with(|| PendingEntry {
                 representative: ask,
+                request_id: mint_link_request_id(),
                 since: Instant::now(),
+                resolving_since_unix_ms: unix_millis_now(),
             });
         self.show_window();
         self.broadcast_consent_update();
@@ -1145,9 +1219,17 @@ impl State {
 
     /// Clear a resolving card once its secrets have landed (or failed).
     /// No-op if the key was already cleared by a coalesced sibling.
-    pub fn end_pending(&mut self, key: &DedupeKey) {
-        if self.pending.remove(key).is_some() {
+    pub fn end_pending(&mut self, key: &DedupeKey, public_error: Option<&str>) {
+        if let Some(pending) = self.pending.remove(key) {
             self.last_activity = Instant::now();
+            if let Some(message) = public_error {
+                self.link_error = Some(super::proto::LinkResolveError {
+                    request_id: pending.request_id,
+                    message: message.to_owned(),
+                });
+                self.broadcast_consent_update();
+                self.link_error = None;
+            }
             self.broadcast_consent_update();
             self.refresh_queue_empty_since();
             self.maybe_immediate_auto_hide();
@@ -1176,6 +1258,7 @@ impl State {
         let command_label = rules::joined_argv(&ask.command);
         let entry = self.queue.entry(key.clone()).or_insert_with(|| QueueEntry {
             key: key.clone(),
+            request_id: mint_link_request_id(),
             // Build the representative's secrets by folding the creating
             // ask's own secrets through `merge_secret`, so even the first
             // ask's secrets carry `← command` provenance. Only a wrap ask
@@ -1270,6 +1353,50 @@ impl State {
         scope: Option<ProcessIdentity>,
         shared: &SharedState,
     ) {
+        self.resolve_with_device(key, decision, reason, scope, None, shared);
+    }
+
+    /// Land a linked-device decision on the same queue transition as the
+    /// local consent window, after binding it to the still-live request and
+    /// canonical ask hash. The HTTP handler already authenticated `device`;
+    /// this method owns the atomic live-state check.
+    pub fn resolve_remote(
+        &mut self,
+        request_id: &str,
+        ask_hash_hex: &str,
+        decision: &str,
+        device: String,
+        shared: &SharedState,
+    ) -> Result<()> {
+        let Some((key, entry)) = self
+            .queue
+            .iter()
+            .find(|(_, entry)| entry.request_id == request_id)
+            .map(|(key, entry)| (key.clone(), entry))
+        else {
+            anyhow::bail!("linked decision no longer names a live ask");
+        };
+        if crate::link::canonical::canonical_hash(&entry.representative) != ask_hash_hex {
+            anyhow::bail!("linked decision ask hash is stale");
+        }
+        let decision = match decision {
+            "approve" => Decision::Approve,
+            "deny" => Decision::Deny,
+            _ => anyhow::bail!("linked decision is neither approve nor deny"),
+        };
+        self.resolve_with_device(&key, decision, None, None, Some(device), shared);
+        Ok(())
+    }
+
+    fn resolve_with_device(
+        &mut self,
+        key: &DedupeKey,
+        decision: Decision,
+        reason: Option<String>,
+        scope: Option<ProcessIdentity>,
+        deciding_device: Option<String>,
+        shared: &SharedState,
+    ) {
         self.last_activity = Instant::now();
         let Some(entry) = self.queue.remove(key) else {
             self.broadcast_consent_update();
@@ -1325,7 +1452,9 @@ impl State {
                 key.clone(),
                 PendingEntry {
                     representative: entry.representative.clone(),
+                    request_id: entry.request_id.clone(),
                     since: Instant::now(),
+                    resolving_since_unix_ms: unix_millis_now(),
                 },
             );
         }
@@ -1350,6 +1479,7 @@ impl State {
             let in_flight = self.in_flight.clone();
             let shared = shared.clone();
             let key = key.clone();
+            let deciding_device = deciding_device.clone();
             std::thread::spawn(move || {
                 // Resolve the union once (singleflight dedupes provider
                 // calls across the batch), keyed by (provider, locator).
@@ -1361,7 +1491,7 @@ impl State {
                 // of its keys gets Err (per-waiter, not all-or-nothing).
                 for w in &entry.waiters {
                     let mut secrets = HashMap::new();
-                    let mut failure: Option<String> = None;
+                    let mut failure: Option<ResolveFailure> = None;
                     for s in &w.requested {
                         match union.get(&(s.provider.clone(), s.locator.clone())) {
                             Some(Ok(value)) => {
@@ -1372,16 +1502,23 @@ impl State {
                             }
                             None => {
                                 failure.get_or_insert_with(|| {
-                                    format!("secret `{}` was not resolved for this session", s.name)
+                                    ResolveFailure::plain(format!(
+                                        "secret `{}` was not resolved for this session",
+                                        s.name
+                                    ))
                                 });
                             }
                         }
                     }
                     let reply = match failure {
-                        Some(message) => WaiterReply::Err { message },
+                        Some(failure) => WaiterReply::Err {
+                            message: failure.full,
+                            public_message: failure.public,
+                        },
                         None => WaiterReply::Decision {
                             decision,
                             secrets,
+                            deciding_device: deciding_device.clone(),
                             reason: None,
                         },
                     };
@@ -1393,7 +1530,7 @@ impl State {
                 // shutdown may have poisoned/dropped the mutex.
                 if cold {
                     if let Ok(mut guard) = shared.lock() {
-                        guard.end_pending(&key);
+                        guard.end_pending(&key, union_public_error(&union));
                     }
                 }
             });
@@ -1402,6 +1539,7 @@ impl State {
             let reply = WaiterReply::Decision {
                 decision,
                 secrets: HashMap::new(),
+                deciding_device,
                 reason,
             };
             for w in &entry.waiters {
@@ -1497,18 +1635,22 @@ impl State {
             .queue
             .values()
             .map(|e| QueueRow {
+                request_id: e.request_id.clone(),
                 key: e.key.clone(),
                 representative: e.representative.clone(),
                 waiter_count: e.waiter_count(),
                 first_seen: e.first_seen,
                 status: RowStatus::Awaiting,
+                resolving_since: None,
             })
             .chain(self.pending.values().map(|p| QueueRow {
+                request_id: p.request_id.clone(),
                 key: p.representative.dedupe_key.clone(),
                 representative: p.representative.clone(),
                 waiter_count: 0,
                 first_seen: p.since,
                 status: RowStatus::Resolving,
+                resolving_since: Some(p.since),
             }))
             .collect();
         entries.sort_by_key(|r| r.first_seen);
@@ -2332,10 +2474,12 @@ impl WaiterReply {
             WaiterReply::Decision {
                 decision,
                 secrets,
+                deciding_device,
                 reason,
             } => WaiterReply::Decision {
                 decision: f(decision),
                 secrets,
+                deciding_device,
                 reason,
             },
             err @ WaiterReply::Err { .. } => err,
@@ -2352,6 +2496,29 @@ pub enum SubmitResult {
 }
 
 pub type SharedState = Arc<Mutex<State>>;
+
+#[derive(Debug, Clone)]
+struct ResolveFailure {
+    full: String,
+    public: String,
+}
+
+impl ResolveFailure {
+    fn plain(message: String) -> ResolveFailure {
+        ResolveFailure {
+            full: message.clone(),
+            public: message,
+        }
+    }
+}
+
+fn union_public_error(
+    union: &HashMap<(String, String), std::result::Result<String, ResolveFailure>>,
+) -> Option<&str> {
+    union
+        .values()
+        .find_map(|result| result.as_ref().err().map(|failure| failure.public.as_str()))
+}
 
 // ── Resolution ────────────────────────────────────────────────────────────
 //
@@ -2671,12 +2838,20 @@ pub(super) fn resolve_for_ask(
                         s.provider, s.locator,
                     );
                     fail_guards(guards, &msg);
-                    return WaiterReply::Err { message: msg };
+                    return WaiterReply::Err {
+                        public_message: msg.clone(),
+                        message: msg,
+                    };
                 }
             }
             Acquired::Failed(msg) => {
                 fail_guards(guards, &msg);
-                return WaiterReply::Err { message: msg };
+                return WaiterReply::Err {
+                    // `InFlightMap` stores the full diagnostic propagated by
+                    // the first resolver, which may include provider stderr.
+                    public_message: "secret provider resolution failed".to_owned(),
+                    message: msg,
+                };
             }
         }
     }
@@ -2687,6 +2862,7 @@ pub(super) fn resolve_for_ask(
         return WaiterReply::Decision {
             decision: Decision::Approve,
             secrets,
+            deciding_device: None,
             reason: None,
         };
     }
@@ -2732,15 +2908,20 @@ pub(super) fn resolve_for_ask(
             WaiterReply::Decision {
                 decision: Decision::Approve,
                 secrets,
+                deciding_device: None,
                 reason: None,
             }
         }
         Err(err) => {
             let msg = format!("{err:#}");
+            let public_message = err.to_string();
             // Propagate the real provider error to any waiters
             // rather than the generic "did not signal" default.
             fail_guards(guards, &msg);
-            WaiterReply::Err { message: msg }
+            WaiterReply::Err {
+                message: msg,
+                public_message,
+            }
         }
     }
 }
@@ -2783,7 +2964,7 @@ fn resolve_union(
     rep: &Ask,
     cache: Arc<Mutex<SecretCache>>,
     in_flight: Arc<InFlightMap>,
-) -> HashMap<(String, String), Result<String, String>> {
+) -> HashMap<(String, String), std::result::Result<String, ResolveFailure>> {
     // Collect the distinct (provider, locator) pairs, remembering the first
     // SecretAsk seen for each so provider-facing metadata (reason,
     // description, default) is preserved. Insertion order is stable so the
@@ -2798,7 +2979,8 @@ fn resolve_union(
         });
     }
 
-    let mut out: HashMap<(String, String), Result<String, String>> = HashMap::new();
+    let mut out: HashMap<(String, String), std::result::Result<String, ResolveFailure>> =
+        HashMap::new();
     // Keys this thread owns the singleflight slot for, paired with the
     // synthetic request name we resolve them under (unique per pair, so a
     // shared user-facing name never collapses two pairs in the resolver
@@ -2844,15 +3026,25 @@ fn resolve_union(
                         // may still resolve fine; the batch runs below.
                         out.insert(
                             pl.clone(),
-                            Err(format!(
+                            Err(ResolveFailure::plain(format!(
                                 "in-flight slot for {provider}/{locator} signalled ready but cache was empty",
-                            )),
+                            ))),
                         );
                     }
                 }
             }
             Acquired::Failed(msg) => {
-                out.insert(pl.clone(), Err(msg));
+                // The first resolver put its full chain in the in-flight
+                // failure so waiting terminals retain the useful diagnostic.
+                // Provider stderr may sit in that chain; never reuse it as
+                // the LAN-safe summary.
+                out.insert(
+                    pl.clone(),
+                    Err(ResolveFailure {
+                        full: msg,
+                        public: "secret provider resolution failed".to_owned(),
+                    }),
+                );
             }
         }
     }
@@ -2908,9 +3100,9 @@ fn resolve_union(
                     None => {
                         out.insert(
                             pl,
-                            Err(format!(
+                            Err(ResolveFailure::plain(format!(
                                 "provider {provider} returned no value for {locator}"
-                            )),
+                            ))),
                         );
                     }
                 }
@@ -2922,13 +3114,16 @@ fn resolve_union(
             }
         }
         Err(err) => {
-            let msg = format!("{err:#}");
+            let failure = ResolveFailure {
+                full: format!("{err:#}"),
+                public: err.to_string(),
+            };
             // The whole batch failed: every resolver-owned pair failed.
             // Fail the slots so concurrent waiters on those keys see a real
             // error rather than the "did not signal" default.
-            fail_guards(guards, &msg);
+            fail_guards(guards, &failure.full);
             for ((provider, locator), _req_name) in &needs_resolve {
-                out.insert((provider.clone(), locator.clone()), Err(msg.clone()));
+                out.insert((provider.clone(), locator.clone()), Err(failure.clone()));
             }
         }
     }
@@ -4191,7 +4386,7 @@ mod tests {
                     Some("ghp_value"),
                 );
             }
-            WaiterReply::Err { message } => {
+            WaiterReply::Err { message, .. } => {
                 panic!("expected cache hit, got err: {message}");
             }
         }
@@ -4275,7 +4470,7 @@ mod tests {
                         Some("secret-x"),
                     );
                 }
-                WaiterReply::Err { message } => panic!("unexpected error reply: {message}"),
+                WaiterReply::Err { message, .. } => panic!("unexpected error reply: {message}"),
             }
         }
 
@@ -4437,7 +4632,7 @@ mod tests {
                     Some("secret-x")
                 );
             }
-            WaiterReply::Err { message } => panic!("expected a cache hit, got: {message}"),
+            WaiterReply::Err { message, .. } => panic!("expected a cache hit, got: {message}"),
         }
         assert_eq!(
             invocations(&counter),
@@ -4663,11 +4858,11 @@ mod tests {
 
         let secrets_a = match reply_a {
             WaiterReply::Decision { secrets, .. } => secrets,
-            WaiterReply::Err { message } => panic!("A got err: {message}"),
+            WaiterReply::Err { message, .. } => panic!("A got err: {message}"),
         };
         let secrets_b = match reply_b {
             WaiterReply::Decision { secrets, .. } => secrets,
-            WaiterReply::Err { message } => panic!("B got err: {message}"),
+            WaiterReply::Err { message, .. } => panic!("B got err: {message}"),
         };
 
         // The load-bearing isolation assertions: each waiter sees only its
@@ -4719,7 +4914,7 @@ mod tests {
                 WaiterReply::Decision { secrets, .. } => {
                     assert_eq!(secrets.get("TOKEN").map(String::as_str), Some("resolved-t"));
                 }
-                WaiterReply::Err { message } => panic!("unexpected err: {message}"),
+                WaiterReply::Err { message, .. } => panic!("unexpected err: {message}"),
             }
         }
     }
@@ -4754,11 +4949,11 @@ mod tests {
 
         let secrets_a = match rx_a.recv().expect("A reply") {
             WaiterReply::Decision { secrets, .. } => secrets,
-            WaiterReply::Err { message } => panic!("A got err: {message}"),
+            WaiterReply::Err { message, .. } => panic!("A got err: {message}"),
         };
         let secrets_b = match rx_b.recv().expect("B reply") {
             WaiterReply::Decision { secrets, .. } => secrets,
-            WaiterReply::Err { message } => panic!("B got err: {message}"),
+            WaiterReply::Err { message, .. } => panic!("B got err: {message}"),
         };
 
         assert_eq!(secrets_a.get("FOO").map(String::as_str), Some("resolved-a"));
@@ -6109,7 +6304,7 @@ mod tests {
                 assert_eq!(decision, Decision::Deny);
                 assert_eq!(reason.as_deref(), Some("wrong repository"));
             }
-            WaiterReply::Err { message } => panic!("unexpected error reply: {message}"),
+            WaiterReply::Err { message, .. } => panic!("unexpected error reply: {message}"),
         }
     }
 
@@ -6317,5 +6512,135 @@ mod tests {
         state.put_cached_for_test(&ask, "value");
         wrap_of(&mut ask).nested_run = false;
         assert!(!state.nested_run_may_skip_window(&ask));
+    }
+
+    #[test]
+    fn resolving_since_is_published_only_while_resolution_is_in_flight() {
+        let state: SharedState = Arc::new(Mutex::new(State::new()));
+        let (events_tx, events_rx) = mpsc::channel();
+        state.lock().unwrap().attach_link_events(events_tx);
+
+        let mut ask = ask_with_secret("deploy", &["deploy"], "TOKEN");
+        wrap_of(&mut ask).providers = [(
+            "fake".to_owned(),
+            WireProvider {
+                name: "fake".to_owned(),
+                retrieve: vec![
+                    "sh".to_owned(),
+                    "-c".to_owned(),
+                    "sleep 0.1; echo resolved-{locator}".to_owned(),
+                ],
+                retrieve_batch: None,
+            },
+        )]
+        .into_iter()
+        .collect();
+        let key = ask.dedupe_key.clone();
+        let (waiter_tx, waiter_rx) = mpsc::channel();
+        state.lock().unwrap().submit_ask(ask, waiter_tx);
+
+        let queued = state.lock().unwrap().snapshot_for_wire();
+        assert_eq!(queued.queue.len(), 1);
+        assert!(queued.queue[0].resolving_since.is_none());
+
+        state
+            .lock()
+            .unwrap()
+            .resolve(&key, Decision::Approve, None, None, &state);
+
+        let resolving = (0..8)
+            .find_map(
+                |_| match events_rx.recv_timeout(Duration::from_secs(1)).ok()? {
+                    super::super::proto::DaemonMsg::ConsentUpdate { snapshot }
+                        if snapshot
+                            .queue
+                            .iter()
+                            .any(|row| row.resolving_since.is_some()) =>
+                    {
+                        Some(snapshot)
+                    }
+                    _ => None,
+                },
+            )
+            .expect("a resolving snapshot");
+        assert!(resolving.queue[0].resolving_since.is_some());
+
+        waiter_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("resolution reply");
+        for _ in 0..20 {
+            if state.lock().unwrap().snapshot_for_wire().queue.is_empty() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("resolving row did not clear after completion");
+    }
+
+    #[test]
+    fn provider_error_chain_reaches_waiter_but_not_link_snapshot() {
+        const SENTINEL: &str = "provider-secret-sentinel-316";
+        let temp = tempfile::tempdir().unwrap();
+        let stderr_path = temp.path().join("provider-stderr");
+        std::fs::write(&stderr_path, SENTINEL).unwrap();
+
+        let state: SharedState = Arc::new(Mutex::new(State::new()));
+        let (events_tx, events_rx) = mpsc::channel();
+        state.lock().unwrap().attach_link_events(events_tx);
+        let mut ask = ask_with_secret("deploy", &["deploy"], "TOKEN");
+        wrap_of(&mut ask).providers = [(
+            "fake".to_owned(),
+            WireProvider {
+                name: "fake".to_owned(),
+                retrieve: vec![
+                    "sh".to_owned(),
+                    "-c".to_owned(),
+                    format!("cat {} >&2; exit 7", stderr_path.display()),
+                ],
+                retrieve_batch: None,
+            },
+        )]
+        .into_iter()
+        .collect();
+        let key = ask.dedupe_key.clone();
+        let (waiter_tx, waiter_rx) = mpsc::channel();
+        state.lock().unwrap().submit_ask(ask, waiter_tx);
+        state
+            .lock()
+            .unwrap()
+            .resolve(&key, Decision::Approve, None, None, &state);
+
+        let reply = waiter_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("failure reply");
+        let WaiterReply::Err {
+            message,
+            public_message,
+        } = reply
+        else {
+            panic!("expected provider failure, got {reply:?}");
+        };
+        assert!(message.contains(SENTINEL), "{message}");
+        assert!(!public_message.contains(SENTINEL), "{public_message}");
+
+        let error_snapshot = (0..12)
+            .find_map(
+                |_| match events_rx.recv_timeout(Duration::from_secs(1)).ok()? {
+                    super::super::proto::DaemonMsg::ConsentUpdate { snapshot }
+                        if snapshot.link_error.is_some() =>
+                    {
+                        Some(snapshot)
+                    }
+                    _ => None,
+                },
+            )
+            .expect("one-shot link failure snapshot");
+        let wire = serde_json::to_string(&error_snapshot).unwrap();
+        assert!(!wire.contains(SENTINEL), "{wire}");
+        assert!(error_snapshot.queue.is_empty());
+        assert!(error_snapshot
+            .link_error
+            .as_ref()
+            .is_some_and(|error| !error.message.is_empty()));
     }
 }
