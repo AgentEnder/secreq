@@ -979,6 +979,8 @@ fn check_accepts_env_secrets_only_and_mixed_wraps() {
         [wraps.aws]
         env_secrets = ["AWS_PROFILE"]
         env.AWS_REGION = "secret://op/Work/AWS/region"
+
+        [wraps.op]
         "#,
     );
 
@@ -1024,6 +1026,16 @@ fn check_rejects_invalid_env_secrets_entries() {
             env_secrets = ["secret://GITHUB_TOKEN"]
             "#,
             "declaration name",
+        ),
+        (
+            "not an env var name",
+            r#"
+            [secrets."github token"]
+            ref = "secret://op/x"
+            [wraps.gh]
+            env_secrets = ["github token"]
+            "#,
+            "[A-Za-z_][A-Za-z0-9_]*",
         ),
     ];
 

@@ -210,8 +210,9 @@
           "type": "object"
         },
         "env_secrets": {
-          "description": "Secret declaration names to inject as environment variables under those same names. Each entry must name a top-level `[secrets.<name>]`; use `env` when the environment variable needs a different name or the reference is inline.",
+          "description": "Secret declaration names to inject as environment variables under those same names. Each entry must name a top-level `[secrets.<name>]`; it must also match `[A-Za-z_][A-Za-z0-9_]*`. Use `env` when the environment variable needs a different name or the reference is inline.",
           "items": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
             "type": "string"
           },
           "type": "array"
@@ -266,7 +267,7 @@
       "additionalProperties": {
         "$ref": "#/definitions/Wrap"
       },
-      "description": "Per-binary wrap configuration, keyed by the binary name the shim is installed under. A wrap with no `env` is *gate-only*: consent is required before the binary runs, but nothing is injected.",
+      "description": "Per-binary wrap configuration, keyed by the binary name the shim is installed under. A wrap with neither `env_secrets` nor `env` is *gate-only*: consent is required before the binary runs, but nothing is injected.",
       "type": "object"
     }
   },

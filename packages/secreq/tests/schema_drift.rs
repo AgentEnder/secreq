@@ -331,3 +331,35 @@ fn schema_and_parser_refuse_the_same_unknown_key() {
         "the parser was expected to refuse an unknown wrap key"
     );
 }
+
+#[test]
+fn schema_and_parser_refuse_a_non_env_name_in_env_secrets() {
+    let (schemas, index) = wraps_schema();
+    let document = json!({
+        "secrets": {
+            "github token": { "ref": "secret://op/Personal/GitHub/token" }
+        },
+        "wraps": {
+            "gh": { "env_secrets": ["github token"] }
+        }
+    });
+
+    assert!(
+        schemas.validate(&document, index).is_err(),
+        "docs/wraps.schema.json accepts an env_secrets entry that cannot name an env var"
+    );
+    assert!(
+        WrapsConfig::parse(
+            r#"
+            [secrets."github token"]
+            ref = "secret://op/Personal/GitHub/token"
+
+            [wraps.gh]
+            env_secrets = ["github token"]
+            "#,
+            "invalid-env-secret-name",
+        )
+        .is_err(),
+        "the parser was expected to refuse the same invalid env name"
+    );
+}

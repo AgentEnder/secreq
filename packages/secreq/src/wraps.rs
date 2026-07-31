@@ -316,9 +316,10 @@ pub struct Wrap {
     pub reason: Option<String>,
     /// Secret declaration names to inject as environment variables under
     /// those same names. Each entry must name a top-level `[secrets.<name>]`;
-    /// use `env` when the environment variable needs a different name or the
-    /// reference is inline.
+    /// it must also match `[A-Za-z_][A-Za-z0-9_]*`. Use `env` when the
+    /// environment variable needs a different name or the reference is inline.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::schema::EnvSecretNames"))]
     pub env_secrets: Vec<String>,
     /// Environment variables to inject. Each value is a
     /// `secret://provider/locator` reference; resolution happens at invocation
@@ -334,6 +335,19 @@ pub struct Wrap {
         schemars(default, with = "crate::schema::SecretRefMap")
     )]
     pub env: BTreeMap<String, String>,
+}
+
+/// JSON Schema pattern for names that can safely become environment variables.
+pub(crate) const ENV_VAR_NAME_PATTERN: &str = r"^[A-Za-z_][A-Za-z0-9_]*$";
+
+/// Whether `name` has the portable shell environment-variable shape.
+pub(crate) fn is_env_var_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .next()
+            .is_some_and(|c| c == '_' || c.is_ascii_alphabetic())
+        && name.chars().all(|c| c == '_' || c.is_ascii_alphanumeric())
 }
 
 impl Wrap {
@@ -423,6 +437,12 @@ impl WrapsConfig {
                     bail!(
                         "{source}: `{location}` entry `{name}` must be a declaration name, not a \
                          `secret://…` reference or provider/locator"
+                    );
+                }
+                if !is_env_var_name(name) {
+                    bail!(
+                        "{source}: `{location}` entry `{name}` cannot be used as an environment \
+                         variable; names must match `[A-Za-z_][A-Za-z0-9_]*`"
                     );
                 }
                 if !seen.insert(name) {
@@ -540,10 +560,17 @@ impl WrapsConfig {
 
     /// The declared secret key with the smallest edit distance from `name`.
     fn closest_secret_name(&self, name: &str) -> Option<&str> {
+        let folded_name = name.to_ascii_uppercase();
+        let max_distance = folded_name.chars().count().div_ceil(3).max(2);
         self.secrets
             .keys()
-            .min_by_key(|candidate| edit_distance(name, candidate))
-            .map(String::as_str)
+            .map(|candidate| {
+                let distance = edit_distance(&folded_name, &candidate.to_ascii_uppercase());
+                (candidate, distance)
+            })
+            .min_by_key(|(_, distance)| *distance)
+            .filter(|(_, distance)| *distance <= max_distance)
+            .map(|(candidate, _)| candidate.as_str())
     }
 
     /// Load from `path`.
@@ -1000,6 +1027,29 @@ mod tests {
     }
 
     #[test]
+    fn env_secrets_rejects_declaration_names_that_are_not_env_var_names() {
+        for entry in ["github token", "GITHUB-TOKEN", "9TOKEN", "TÖKEN"] {
+            let err = WrapsConfig::parse(
+                &format!(
+                    r#"
+                    [secrets."{entry}"]
+                    ref = "secret://op/Personal/GitHub/token"
+
+                    [wraps.gh]
+                    env_secrets = ["{entry}"]
+                    "#
+                ),
+                "config.toml",
+            )
+            .unwrap_err();
+            let text = format!("{err:#}");
+            assert!(text.contains("wraps.gh.env_secrets"), "{entry}: {text}");
+            assert!(text.contains(entry), "{entry}: {text}");
+            assert!(text.contains("[A-Za-z_][A-Za-z0-9_]*"), "{entry}: {text}");
+        }
+    }
+
+    #[test]
     fn env_secrets_unknown_name_suggests_the_closest_declaration() {
         let err = WrapsConfig::parse(
             r#"
@@ -1018,6 +1068,42 @@ mod tests {
         let text = format!("{err:#}");
         assert!(text.contains("wraps.gh.env_secrets"), "{text}");
         assert!(text.contains("GITHUB_TOKN"), "{text}");
+        assert!(text.contains("secrets.GITHUB_TOKEN"), "{text}");
+    }
+
+    #[test]
+    fn env_secrets_unknown_name_omits_an_unrelated_suggestion() {
+        let err = WrapsConfig::parse(
+            r#"
+            [secrets.AWS_PROFILE]
+            ref = "secret://op/Work/AWS/profile"
+
+            [wraps.gh]
+            env_secrets = ["FOO"]
+            "#,
+            "config.toml",
+        )
+        .unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("FOO"), "{text}");
+        assert!(!text.contains("did you mean"), "{text}");
+        assert!(!text.contains("secrets.AWS_PROFILE"), "{text}");
+    }
+
+    #[test]
+    fn env_secrets_suggestions_ignore_ascii_case() {
+        let err = WrapsConfig::parse(
+            r#"
+            [secrets.GITHUB_TOKEN]
+            ref = "secret://op/Personal/GitHub/token"
+
+            [wraps.gh]
+            env_secrets = ["github_token"]
+            "#,
+            "config.toml",
+        )
+        .unwrap_err();
+        let text = format!("{err:#}");
         assert!(text.contains("secrets.GITHUB_TOKEN"), "{text}");
     }
 
@@ -1296,6 +1382,15 @@ mod tests {
             c.known_secret_refs(),
             vec!["secret://GITHUB_TOKEN".to_owned()]
         );
+    }
+
+    #[test]
+    fn edit_distance_handles_substitutions_and_empty_edges() {
+        assert_eq!(edit_distance("", ""), 0);
+        assert_eq!(edit_distance("TOKEN", ""), 5);
+        assert_eq!(edit_distance("", "TOKEN"), 5);
+        assert_eq!(edit_distance("GITHUB_TOKN", "GITHUB_TOKEN"), 1);
+        assert_eq!(edit_distance("kitten", "sitting"), 3);
     }
 
     #[test]
