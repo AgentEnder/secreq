@@ -105,6 +105,10 @@ pub(crate) struct RuleDraft {
     ancestor: String,
     cwd: String,
     deny_message: String,
+    /// Rule-level consultation scope. The current declarative editor does not
+    /// expose this field, but it must preserve a hand-authored scope when an
+    /// existing rule is edited.
+    wraps: Option<std::collections::BTreeSet<String>>,
     /// Snapshot of the secret-set this rule was originally trained on.
     /// Seeded from the audit-row "create rule from this" affordance
     /// (slice 5); empty for blank-form creation, which disables the
@@ -220,6 +224,7 @@ impl RuleDraft {
             ancestor,
             cwd: entry.cwd.clone(),
             deny_message: String::new(),
+            wraps: None,
             trained_secrets,
             save_attempted: false,
         }
@@ -248,6 +253,7 @@ impl RuleDraft {
             ancestor: s.ancestor.clone(),
             cwd: s.cwd.clone().unwrap_or_default(),
             deny_message: String::new(),
+            wraps: None,
             trained_secrets: s.trained_secrets.clone(),
             save_attempted: false,
         }
@@ -274,6 +280,7 @@ impl RuleDraft {
             ancestor: pattern_str(r#match.ancestor.as_ref()),
             cwd: pattern_str(r#match.cwd.as_ref()),
             deny_message: decide.deny_message().unwrap_or_default().to_owned(),
+            wraps: rule.wraps.clone(),
             trained_secrets: rule.trained_secrets.clone(),
             save_attempted: false,
         }
@@ -387,6 +394,7 @@ impl RuleDraft {
             id,
             name: name.to_owned(),
             enabled: self.enabled,
+            wraps: self.wraps,
             trained_secrets: self.trained_secrets,
             created_at_unix: created_at,
             // The form authors declarative rules only; wasm rules are
@@ -4639,6 +4647,7 @@ mod tests {
             id: id.to_owned(),
             name: name.to_owned(),
             enabled: true,
+            wraps: None,
             trained_secrets: std::collections::BTreeSet::new(),
             created_at_unix: 0,
             body: RuleBody::Declarative {
@@ -4651,6 +4660,18 @@ mod tests {
                 decide: RuleDecision::Approve.into(),
             },
         }
+    }
+
+    #[test]
+    fn declarative_editor_preserves_a_hand_authored_wrap_scope() {
+        let mut rule = rule_named("01", "scoped");
+        rule.wraps = Some(["gh".to_owned()].into_iter().collect());
+
+        let edited = RuleDraft::from_rule(&rule)
+            .into_rule()
+            .expect("unchanged draft saves");
+
+        assert_eq!(edited.wraps, rule.wraps);
     }
 
     #[test]

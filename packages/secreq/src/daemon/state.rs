@@ -1950,7 +1950,8 @@ impl State {
     /// 1. Refuse an empty `trained_secrets` snapshot unless
     ///    `allow_all_secrets` — an empty snapshot disables the
     ///    trained-secrets guard, letting the module decide every ask
-    ///    across every wrap.
+    ///    inside its optional `wraps` consultation scope (or across every
+    ///    wrap when that scope is absent).
     /// 2. Vet the bytes in the wasm sandbox
     ///    ([`crate::wasm_rules::RuleModule::from_binary`] — the
     ///    registration-time checks) *before* anything touches disk.
@@ -1965,14 +1966,15 @@ impl State {
         &mut self,
         name: &str,
         module_bytes: &[u8],
+        wraps: Option<std::collections::BTreeSet<String>>,
         trained_secrets: std::collections::BTreeSet<String>,
         allow_all_secrets: bool,
     ) -> Result<Rule> {
         if trained_secrets.is_empty() && !allow_all_secrets {
             anyhow::bail!(
                 "refusing to register wasm rule `{name}` with an empty trained-secrets \
-                 snapshot: the module would be consulted for every ask across every \
-                 wrap, and an Approve from it would auto-approve secrets it was never \
+                 snapshot: the module would be consulted for every ask in its wrap \
+                 scope, and an Approve from it would auto-approve secrets it was never \
                  trained on. Name the secrets it may decide, or opt in to the \
                  unlimited blast radius explicitly"
             );
@@ -2047,6 +2049,7 @@ impl State {
             id,
             name: name.to_owned(),
             enabled: true,
+            wraps,
             trained_secrets,
             created_at_unix: rules::now_unix(),
             body: crate::rules::RuleBody::Wasm(crate::rules::WasmRule {
@@ -3368,6 +3371,7 @@ mod tests {
             id: id.to_owned(),
             name: id.to_owned(),
             enabled: true,
+            wraps: None,
             trained_secrets: ["GITHUB_TOKEN".to_owned()].into_iter().collect(),
             created_at_unix: 0,
             body: RuleBody::Declarative {
@@ -4608,6 +4612,7 @@ mod tests {
             id: id.to_owned(),
             name: "wasm approve".to_owned(),
             enabled: true,
+            wraps: None,
             trained_secrets: ["GITHUB_TOKEN".to_owned()].into_iter().collect(),
             created_at_unix: 0,
             body: RuleBody::Wasm(crate::rules::WasmRule {
@@ -4764,7 +4769,13 @@ mod tests {
         let mut state = State::with_rules_path(path.clone());
 
         let rule = state
-            .add_wasm_rule("cursor gh reads", APPROVE_IF_BYTES, trained_github(), false)
+            .add_wasm_rule(
+                "cursor gh reads",
+                APPROVE_IF_BYTES,
+                Some(["gh".to_owned()].into_iter().collect()),
+                trained_github(),
+                false,
+            )
             .expect("register");
 
         // The module was copied into the canonical store, byte-exact.
@@ -4788,6 +4799,10 @@ mod tests {
         // …and in a fresh daemon loading the persisted rules file.
         let reloaded = State::with_rules_path(path);
         assert_eq!(reloaded.rules_snapshot(), vec![rule.clone()]);
+        assert_eq!(
+            reloaded.rules_snapshot()[0].wraps,
+            Some(["gh".to_owned()].into_iter().collect())
+        );
         assert!(reloaded.refusals_snapshot().is_empty());
         let hit = reloaded
             .evaluate_rules_for_ask(&cursor_ask())
@@ -4812,7 +4827,7 @@ mod tests {
         let err = format!(
             "{:#}",
             state
-                .add_wasm_rule("smuggler", &bad, trained_github(), false)
+                .add_wasm_rule("smuggler", &bad, None, trained_github(), false)
                 .expect_err("must refuse")
         );
         assert!(err.contains("vetting wasm module"), "{err}");
@@ -4857,7 +4872,13 @@ mod tests {
             .expect("widen store dir");
 
         let rule = state
-            .add_wasm_rule("owner only", APPROVE_IF_BYTES, trained_github(), false)
+            .add_wasm_rule(
+                "owner only",
+                APPROVE_IF_BYTES,
+                None,
+                trained_github(),
+                false,
+            )
             .expect("register");
 
         let mode = std::fs::metadata(&store_dir)
@@ -4897,7 +4918,7 @@ mod tests {
         let before = store_listing();
 
         let rule = state
-            .add_wasm_rule("no litter", APPROVE_IF_BYTES, trained_github(), false)
+            .add_wasm_rule("no litter", APPROVE_IF_BYTES, None, trained_github(), false)
             .expect("register");
 
         let added: Vec<String> = store_listing().difference(&before).cloned().collect();
@@ -4922,7 +4943,7 @@ mod tests {
         let err = format!(
             "{:#}",
             state
-                .add_wasm_rule("greedy", APPROVE_IF_BYTES, Default::default(), false)
+                .add_wasm_rule("greedy", APPROVE_IF_BYTES, None, Default::default(), false,)
                 .expect_err("must refuse")
         );
         assert!(err.contains("trained-secrets"), "{err}");
@@ -4930,7 +4951,7 @@ mod tests {
 
         // The explicit opt-in registers with the guard disabled.
         let rule = state
-            .add_wasm_rule("greedy", APPROVE_IF_BYTES, Default::default(), true)
+            .add_wasm_rule("greedy", APPROVE_IF_BYTES, None, Default::default(), true)
             .expect("opt-in registers");
         assert!(rule.trained_secrets.is_empty());
         // Clean up the store entry this test just created.
@@ -4948,7 +4969,7 @@ mod tests {
         let path = dir.path().join("auto-rules.toml");
         let mut state = State::with_rules_path(path.clone());
         let rule = state
-            .add_wasm_rule("tamper me", APPROVE_IF_BYTES, trained_github(), false)
+            .add_wasm_rule("tamper me", APPROVE_IF_BYTES, None, trained_github(), false)
             .expect("register");
         let store = crate::paths::rule_wasm_path(&rule.id).expect("store path");
         std::fs::write(&store, b"not the registered module").expect("tamper");
@@ -5154,7 +5175,7 @@ mod tests {
 
         let store_before = store_listing();
         state
-            .add_wasm_rule("doomed", APPROVE_IF_BYTES, trained_github(), false)
+            .add_wasm_rule("doomed", APPROVE_IF_BYTES, None, trained_github(), false)
             .expect_err("persist must fail");
         assert!(state.rules_snapshot().is_empty());
         assert!(
@@ -5225,7 +5246,7 @@ mod tests {
         let path = dir.path().join("auto-rules.toml");
         let mut state = State::with_rules_path(path.clone());
         let rule = state
-            .add_wasm_rule("heal me", APPROVE_IF_BYTES, trained_github(), false)
+            .add_wasm_rule("heal me", APPROVE_IF_BYTES, None, trained_github(), false)
             .expect("register");
         let store = crate::paths::rule_wasm_path(&rule.id).expect("store path");
         std::fs::write(&store, ALWAYS_PASS).expect("swap module");
@@ -5549,6 +5570,7 @@ mod tests {
             id: "01".to_owned(),
             name: "npm publish guard".to_owned(),
             enabled: true,
+            wraps: None,
             trained_secrets: ["NPM_TOKEN".to_owned()].into_iter().collect(),
             created_at_unix: 0,
             body: RuleBody::Declarative {
@@ -5580,6 +5602,7 @@ mod tests {
             id: "01".to_owned(),
             name: "op reads".to_owned(),
             enabled: true,
+            wraps: None,
             trained_secrets: ["wrap:op".to_owned()].into_iter().collect(),
             created_at_unix: 0,
             body: RuleBody::Declarative {
@@ -5619,6 +5642,7 @@ mod tests {
             id: "01".to_owned(),
             name: "approve everything".to_owned(),
             enabled: true,
+            wraps: None,
             trained_secrets: Default::default(),
             created_at_unix: 0,
             body: RuleBody::Declarative {

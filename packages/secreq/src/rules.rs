@@ -62,6 +62,12 @@ pub struct Rule {
     /// `false` ⇒ rule is in the file but the evaluator skips it. Used
     /// for "pause this rule without losing the configuration."
     pub enabled: bool,
+    /// Optional consultation gate by ask wrap. `None` means every wrap;
+    /// `Some` means the evaluator skips the rule unless the live ask's wrap
+    /// is in this set. This is independent of a declarative rule's
+    /// [`RuleMatch::wrap`]: this field decides whether to consult the rule at
+    /// all, while the match field remains one clause in the rule's decision.
+    pub wraps: Option<BTreeSet<String>>,
     /// Env var names the rule was created against. The evaluator
     /// refuses to fire if the live ask requests any name outside this
     /// set — the trained-secrets guard. **Empty set means the guard
@@ -238,6 +244,15 @@ pub(crate) struct RuleWire {
     /// `false` ⇒ rule is in the file but the evaluator skips it. Used for
     /// "pause this rule without losing the configuration".
     enabled: bool,
+    /// Optional consultation gate by ask wrap, applied before either rule kind
+    /// is evaluated. Omitted or null means every wrap. When present, the rule
+    /// is skipped unless the ask's wrap is listed; for wasm rules this happens
+    /// before the module is instantiated. This composes with
+    /// `trained_secrets` as an AND gate. A declarative rule's `match.wrap` is
+    /// separate: `wraps` decides whether the rule is consulted at all, while
+    /// `match.wrap` remains one clause in the rule's static match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    wraps: Option<BTreeSet<String>>,
     /// Direction a declarative rule fires when it matches. Among matching
     /// rules, any deny wins; otherwise the most-specific approve wins (a wasm
     /// rule that returns a decision counts as maximally specific). Forbidden
@@ -329,6 +344,7 @@ impl TryFrom<RuleWire> for Rule {
             id: wire.id,
             name: wire.name,
             enabled: wire.enabled,
+            wraps: wire.wraps,
             trained_secrets: wire.trained_secrets,
             created_at_unix: wire.created_at_unix,
             body,
@@ -351,6 +367,7 @@ impl From<Rule> for RuleWire {
             id: rule.id,
             name: rule.name,
             enabled: rule.enabled,
+            wraps: rule.wraps,
             decide,
             r#match,
             wasm,
@@ -1478,7 +1495,7 @@ pub fn evaluate(rules: &[Rule], modules: &RuleModules, ctx: &EvalCtx) -> Evaluat
     };
 
     for rule in rules {
-        if !rule.enabled {
+        if !rule.enabled || !wrap_in_scope(rule, ctx.wrap) {
             continue;
         }
         match &rule.body {
@@ -1685,6 +1702,15 @@ fn record_deny<'r>(slot: &mut Option<Candidate<'r>>, candidate: Candidate<'r>) {
     }
 }
 
+/// Whether this rule is consulted for `wrap`. An absent scope preserves the
+/// pre-scope behavior; a present (including empty) set is an explicit
+/// allowlist. This predicate is checked before branching on [`RuleBody`], so a
+/// wasm rule outside its scope never reaches [`RuleModule::evaluate`] and is
+/// never instantiated.
+fn wrap_in_scope(rule: &Rule, wrap: &str) -> bool {
+    rule.wraps.as_ref().is_none_or(|wraps| wraps.contains(wrap))
+}
+
 /// Record that `candidate` approved `secret`, keeping the most-specific
 /// approver for that secret (id tiebreak) — the per-secret analogue of the
 /// single `best_approve` slot this replaced.
@@ -1830,6 +1856,7 @@ mod tests {
             id: rule_id(id),
             name: name.to_owned(),
             enabled: true,
+            wraps: None,
             trained_secrets: trained.iter().map(|s| (*s).to_owned()).collect(),
             created_at_unix: 0,
             body: RuleBody::Declarative {
@@ -1847,6 +1874,7 @@ mod tests {
             id: rule_id(id),
             name: name.to_owned(),
             enabled: true,
+            wraps: None,
             trained_secrets: trained.iter().map(|s| (*s).to_owned()).collect(),
             created_at_unix: 0,
             body: RuleBody::Wasm(WasmRule {
@@ -1854,6 +1882,11 @@ mod tests {
                 sha256: "unverified-in-eval-tests".to_owned(),
             }),
         }
+    }
+
+    fn with_wrap_scope(mut rule: Rule, wraps: &[&str]) -> Rule {
+        rule.wraps = Some(wraps.iter().map(|wrap| (*wrap).to_owned()).collect());
+        rule
     }
 
     /// Set (or clear) a declarative deny rule's message in place.
@@ -2754,6 +2787,130 @@ mod tests {
             "module's returned reason should be the deny message: {hit:?}"
         );
         assert!(out.wasm_failures.is_empty());
+    }
+
+    #[test]
+    fn wrap_scope_gates_declarative_rules_before_the_match_clause() {
+        let deny = with_wrap_scope(
+            mk_rule(
+                "01",
+                "brain deny scoped to gh",
+                RuleDecision::Deny,
+                match_for("brain", None, None, None),
+                &["GITHUB_TOKEN"],
+            ),
+            &["gh"],
+        );
+        let c = ctx("brain", "brain task show 417", &[], "/x", &["GITHUB_TOKEN"]);
+
+        assert_eq!(
+            evaluate(&[deny], &RuleModules::new(), &c).hit,
+            None,
+            "an out-of-scope declarative rule is not consulted even when its match clause matches"
+        );
+    }
+
+    #[test]
+    fn absent_and_null_wrap_scopes_are_unscoped_but_an_empty_list_consults_nothing() {
+        let rule = mk_rule(
+            "01",
+            "deny brain",
+            RuleDecision::Deny,
+            match_for("brain", None, None, None),
+            &["GITHUB_TOKEN"],
+        );
+        let mut serialized = serde_json::to_value(&rule).expect("serialize");
+        assert!(
+            serialized.get("wraps").is_none(),
+            "an absent scope must stay absent on disk"
+        );
+        serialized
+            .as_object_mut()
+            .expect("rule object")
+            .insert("wraps".to_owned(), serde_json::Value::Null);
+        let null_scope: Rule = serde_json::from_value(serialized).expect("null scope");
+        assert_eq!(null_scope.wraps, None);
+
+        let c = ctx("brain", "brain task show 417", &[], "/x", &["GITHUB_TOKEN"]);
+        assert_eq!(
+            evaluate(std::slice::from_ref(&null_scope), &RuleModules::new(), &c)
+                .hit
+                .expect("null is unscoped")
+                .decide,
+            RuleDecision::Deny
+        );
+
+        let empty_scope = with_wrap_scope(rule, &[]);
+        assert_eq!(
+            evaluate(&[empty_scope], &RuleModules::new(), &c).hit,
+            None,
+            "a present empty allowlist is explicit and matches no wrap"
+        );
+    }
+
+    #[test]
+    fn wrap_scope_and_trained_secrets_are_both_required_before_wasm_instantiation() {
+        // ABORTS traps whenever evaluation reaches it. `RuleModule::evaluate`
+        // starts by instantiating the module, so no failure on either
+        // out-of-scope ask proves the consult gate runs before that
+        // instantiation — the performance property `wraps` exists to provide.
+        let rule = with_wrap_scope(mk_wasm_rule("01", "gh only", &["GITHUB_TOKEN"]), &["gh"]);
+        let modules = modules_for(&[("01", ABORTS)]);
+
+        let wrong_wrap = ctx("brain", "brain task show 417", &[], "/x", &["GITHUB_TOKEN"]);
+        let out = evaluate(std::slice::from_ref(&rule), &modules, &wrong_wrap);
+        assert!(out.wasm_failures.is_empty(), "{:?}", out.wasm_failures);
+
+        let wrong_secret = ctx("gh", "gh api /user", &[], "/x", &["LINEAR_TOKEN"]);
+        let out = evaluate(std::slice::from_ref(&rule), &modules, &wrong_secret);
+        assert!(out.wasm_failures.is_empty(), "{:?}", out.wasm_failures);
+
+        let in_scope = ctx("gh", "gh api /user", &[], "/x", &["GITHUB_TOKEN"]);
+        let out = evaluate(&[rule], &modules, &in_scope);
+        assert_eq!(
+            out.wasm_failures.len(),
+            1,
+            "the same module must instantiate once both independent gates match"
+        );
+    }
+
+    #[test]
+    fn scoped_wasm_deny_wins_in_scope_and_has_no_opinion_out_of_scope() {
+        let scoped_deny =
+            with_wrap_scope(mk_wasm_rule("01", "gh guard", &["GITHUB_TOKEN"]), &["gh"]);
+        let gh_approve = mk_rule(
+            "02",
+            "approve gh",
+            RuleDecision::Approve,
+            match_for("gh", None, None, None),
+            &["GITHUB_TOKEN"],
+        );
+        let brain_approve = mk_rule(
+            "03",
+            "approve brain",
+            RuleDecision::Approve,
+            match_for("brain", None, None, None),
+            &["GITHUB_TOKEN"],
+        );
+        let modules = modules_for(&[("01", DENY_ECHO)]);
+
+        let gh = ctx("gh", "gh api /user", &[], "/x", &["GITHUB_TOKEN"]);
+        let hit = evaluate(
+            &[scoped_deny.clone(), gh_approve, brain_approve.clone()],
+            &modules,
+            &gh,
+        )
+        .hit
+        .expect("in-scope deny must fire");
+        assert_eq!(hit.decide, RuleDecision::Deny);
+        assert_eq!(hit.rule_id, "01");
+
+        let brain = ctx("brain", "brain task show 417", &[], "/x", &["GITHUB_TOKEN"]);
+        let hit = evaluate(&[scoped_deny, brain_approve], &modules, &brain)
+            .hit
+            .expect("out-of-scope deny must not suppress an approve");
+        assert_eq!(hit.decide, RuleDecision::Approve);
+        assert_eq!(hit.rule_id, "03");
     }
 
     #[test]

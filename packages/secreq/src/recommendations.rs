@@ -522,6 +522,7 @@ mod tests {
             id: id.to_owned(),
             name: id.to_owned(),
             enabled: true,
+            wraps: None,
             trained_secrets: BTreeSet::new(),
             created_at_unix: 0,
             body: crate::rules::RuleBody::Declarative {

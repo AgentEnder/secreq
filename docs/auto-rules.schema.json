@@ -115,6 +115,17 @@
               "type": "null"
             }
           ]
+        },
+        "wraps": {
+          "description": "Optional consultation gate by ask wrap, applied before either rule kind is evaluated. Omitted or null means every wrap. When present, the rule is skipped unless the ask's wrap is listed; for wasm rules this happens before the module is instantiated. This composes with `trained_secrets` as an AND gate. A declarative rule's `match.wrap` is separate: `wraps` decides whether the rule is consulted at all, while `match.wrap` remains one clause in the rule's static match.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ],
+          "uniqueItems": true
         }
       },
       "required": [

@@ -2811,6 +2811,7 @@ fn sample_rule(id: &str, name: &str, decide: RuleDecision, argv: Option<&str>) -
         id: id.to_owned(),
         name: name.to_owned(),
         enabled: true,
+        wraps: None,
         trained_secrets: ["GITHUB_TOKEN".to_owned()].into_iter().collect(),
         created_at_unix: 0,
         body: RuleBody::Declarative {
@@ -2926,6 +2927,7 @@ fn rules_tab_wasm_refused() {
         id: id.to_owned(),
         name: name.to_owned(),
         enabled: true,
+        wraps: None,
         trained_secrets: ["NPM_TOKEN".to_owned()].into_iter().collect(),
         created_at_unix: 0,
         body: RuleBody::Wasm(WasmRule {
