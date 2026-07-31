@@ -846,7 +846,7 @@ const SPINNER_BEATS: [&str; 4] = ["⠋", "⠙", "⠹", "⠸"];
 /// injects one secret, a `gh` to actually exec, and the wait indicator
 /// turned on out loud.
 ///
-/// `$wait_indicator: true` is the default, so writing it changes nothing
+/// `wait_indicator = true` is the default, so writing it changes nothing
 /// about the run. It is here because the indicator *is* the subject — it is
 /// the only thing the terminal has to say during the beat this recording
 /// exists for — and a fixture whose subject depends on a default should say
@@ -855,18 +855,16 @@ fn run_sandbox() -> (Sandbox, std::path::PathBuf) {
     let (sb, bin_dir) = recording_sandbox();
     install_fake_gh(&bin_dir);
     std::fs::write(
-        recording_root().join("wraps.json5"),
+        recording_root().join("config.toml"),
         format!(
-            r#"{{
-  $shim_dir: "{shim}",
-  $wait_indicator: true,
-  gh: {{
-    $reason: "GitHub API access",
-    env: {{
-      GITHUB_TOKEN: "secret://op/Personal/GitHub/credential",
-    }},
-  }},
-}}
+            r#"shim_dir = "{shim}"
+wait_indicator = true
+
+[wraps.gh]
+reason = "GitHub API access"
+
+[wraps.gh.env]
+GITHUB_TOKEN = "secret://op/Personal/GitHub/credential"
 "#,
             shim = shim_dir().display(),
         ),
@@ -887,8 +885,8 @@ fn run_sandbox() -> (Sandbox, std::path::PathBuf) {
 fn wrap_sandbox() -> (Sandbox, std::path::PathBuf) {
     let (sb, bin_dir) = recording_sandbox();
     std::fs::write(
-        recording_root().join("wraps.json5"),
-        format!("{{\n  $shim_dir: \"{}\",\n}}\n", shim_dir().display()),
+        recording_root().join("config.toml"),
+        format!("shim_dir = {:?}\n", shim_dir().display().to_string()),
     )
     .expect("seed recording config");
     (sb, bin_dir)
@@ -1353,18 +1351,14 @@ fn init_first_time_setup() {
 fn ssh_setup_guided() {
     let (sb, bin_dir) = recording_sandbox();
     std::fs::write(
-        recording_root().join("wraps.json5"),
+        recording_root().join("config.toml"),
         format!(
-            r#"{{
-  $shim_dir: "{shim}",
-  ssh: {{
-    github: {{
-      $reason: "git pushes to github",
-      public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample me@mac",
-      private_key: "secret://op/Private/gh-key/private key",
-    }},
-  }},
-}}
+            r#"shim_dir = "{shim}"
+
+[ssh.github]
+reason = "git pushes to github"
+public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample me@mac"
+private_key = "secret://op/Private/gh-key/private key"
 "#,
             shim = shim_dir().display(),
         ),

@@ -3893,7 +3893,7 @@ mod tests {
     #[test]
     fn with_rules_path_tolerates_missing_file() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("nope.json5");
+        let path = dir.path().join("nope.toml");
         let state = State::with_rules_path(path);
         assert!(state.rules_snapshot().is_empty());
     }
@@ -5341,7 +5341,7 @@ mod tests {
         assert_eq!(state.rules, vec![rule.clone()]);
 
         std::thread::sleep(std::time::Duration::from_millis(1100));
-        std::fs::write(&path, "{ this is not json5 }").expect("corrupt write");
+        std::fs::write(&path, "this is not = valid TOML").expect("corrupt write");
 
         state.reload_rules_if_changed();
         assert_eq!(

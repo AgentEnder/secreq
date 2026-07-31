@@ -1,4 +1,4 @@
-//! Emit the JSON Schema for `wraps.json5` to stdout.
+//! Emit the JSON Schema for `config.toml` to stdout.
 //!
 //! Regenerate the committed file with:
 //!
@@ -6,7 +6,7 @@
 //! cargo run --example gen-schema > docs/wraps.schema.json
 //! ```
 //!
-//! The schema is derived from the types that read `wraps.json5` — `Wrap` and
+//! The schema is derived from the types that read `config.toml` — `Wrap` and
 //! `SshIdentity` in `src/wraps.rs`, `Provider` and friends in
 //! `src/manifest.rs` — so a field's doc comment is what a reader of the
 //! published schema sees. `tests/schema_drift.rs` fails when the committed

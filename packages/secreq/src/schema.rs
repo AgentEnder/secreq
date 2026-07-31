@@ -26,28 +26,22 @@
 //!
 //! ## What is still written by hand, and why
 //!
-//! Two things a Rust type cannot say, both of them here rather than scattered:
+//! Two things are still assembled here rather than scattered:
 //!
-//! - **The file envelope.** `config.toml` is keyed by names the user chooses —
-//!   binary names — which is `patternProperties`, not a struct. `$schema` is
-//!   in the same category: secreq ignores the key, so no type has a field for
-//!   it, but an editor writes it and must not be told it is invalid.
+//! - **The config file envelope.** The `wraps`, `providers`, `secrets`, and
+//!   `ssh` maps have user-chosen keys, so their `additionalProperties`
+//!   definitions point at the derived entry types.
 //! - **Constraints that are not shapes.** Declarative-XOR-wasm is a `oneOf`
 //!   ([`crate::rules::rule_one_of`], stated next to the `TryFrom` that
 //!   enforces it), and a provider's `retrieve`/`read` pair is an `anyOf`
 //!   ([`provider_any_of`]).
 //!
-//! ## The `config.toml` parser is hand-written, so its key names are too
+//! ## The config loader and schema share the same types
 //!
-//! `manifest.rs` and `wraps.rs` walk a [`serde_json::Value`] rather than
-//! deriving `Deserialize`, because a wraps file's top level is arbitrary binary
-//! names beside a reserved `providers` key. So the JSON name of a field whose
-//! Rust name differs (`env_value_template` → `env_value`, `locator_template` →
-//! `locator`, `value_mode` → `value`) is a `schemars(rename)` beside that
-//! field, not something the compiler derives.
-//! `schema_covers_every_key_the_parser_accepts` in `tests/schema_drift.rs` is
-//! what holds those two halves together: it feeds the parser a config using
-//! every key the schema declares, and one key the schema does not.
+//! Both files deserialize through serde derives with
+//! `deny_unknown_fields`. `tests/schema_drift.rs` still feeds the loader a
+//! config using every published key and checks unknown-key rejection, but
+//! there is no separate value walker whose spellings can drift.
 
 use serde_json::{json, Value};
 
@@ -55,32 +49,17 @@ use crate::manifest::Provider;
 use crate::rules::RulesFile;
 use crate::wraps::{SecretDecl, SshIdentity, Wrap};
 
-// An `$id` is what a user's editor fetches when they put `$schema` at the top
-// of their config, so it has to be the URL the file is actually served from.
+// An `$id` is what a user's editor fetches from the Taplo `#:schema`
+// directive, so it has to be the URL the file is actually served from.
 // These were `secreq.dev/schema/…` and were wrong twice over: the domain was
 // never registered, and the path was singular while `docs-site` publishes the
 // files under `/schemas/`. Neither `$id` has ever resolved.
 
 /// `$id` of the auto-rules schema. Read by [`RulesFile`]'s derive.
-pub const AUTO_RULES_ID: &str = "https://craigory.dev/secreq/schemas/auto-rules.schema.json";
+pub const AUTO_RULES_ID: &str = crate::rules::AUTO_RULES_SCHEMA_URL;
 
 /// `$id` of the wraps schema.
-pub const WRAPS_ID: &str = "https://craigory.dev/secreq/schemas/wraps.schema.json";
-
-/// The reserved top-level `$schema` key, which both of these files may carry
-/// and neither of them reads.
-///
-/// Not a field on any type: secreq's loaders skip `$`-prefixed metadata
-/// wholesale, so there is nothing in Rust for it to be derived from. Declaring
-/// it stops an editor from flagging the pointer it wrote itself.
-pub fn schema_pointer_property() -> Value {
-    json!({
-        "$schema": {
-            "type": "string",
-            "description": "URL or path of this JSON Schema. Ignored by `secreq`."
-        }
-    })
-}
+pub const WRAPS_ID: &str = crate::wraps::CONFIG_SCHEMA_URL;
 
 /// `retrieve` is required, but `read` satisfies it — see `parse_provider`,
 /// which accepts either. Stated as an `anyOf` because a plain
@@ -217,21 +196,19 @@ fn flatten_descriptions(schema: &mut Value) {
 /// The complete JSON Schema for `auto-rules.toml`.
 ///
 /// The root is [`RulesFile`] — `{ rules: [...] }` really is a struct — so
-/// there is nothing to assemble beyond letting the derive run and declaring
-/// the `$schema` pointer no type has a field for.
+/// there is nothing to assemble beyond letting the derive run. Taplo reads the
+/// URL from the TOML file's `#:schema` comment directive, not a data key.
 pub fn auto_rules_schema() -> Value {
     let mut schema = generator().into_root_schema_for::<RulesFile>().to_value();
-    add_properties(&mut schema, &schema_pointer_property());
     flatten_descriptions(&mut schema);
     schema
 }
 
 /// The complete JSON Schema for `config.toml`.
 ///
-/// Assembled rather than derived from [`crate::wraps::WrapsConfig`], because
-/// the top level is *dynamic*: every key that isn't `providers`, `ssh`, or
-/// `$`-prefixed metadata is a binary name the user chose, which no struct
-/// field can stand for. Every definition it points at is derived.
+/// Assembled rather than derived from [`crate::wraps::WrapsConfig`] so the
+/// user-keyed maps can point at named entry definitions. Every definition it
+/// points at is derived.
 pub fn wraps_schema() -> Value {
     let mut generator = generator();
 

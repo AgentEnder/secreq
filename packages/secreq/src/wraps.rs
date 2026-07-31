@@ -39,6 +39,9 @@ use serde::{Deserialize, Serialize};
 use crate::manifest::{builtin_providers, Provider};
 use crate::reference::{undeclared_secret_message, RefForm, Reference};
 
+/// Taplo schema directive written at the top of `config.toml`.
+pub const CONFIG_SCHEMA_URL: &str = "https://craigory.dev/secreq/schemas/wraps.schema.json";
+
 /// The reserved top-level key holding named secret declarations. The section
 /// name in the file, and how errors spell a declaration's path.
 pub const SECRETS_KEY: &str = "secrets";

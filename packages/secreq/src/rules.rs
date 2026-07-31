@@ -43,6 +43,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::wasm_rules::{Decision as WasmDecision, RuleModule};
 
+/// Taplo schema directive written at the top of `auto-rules.toml`.
+pub const AUTO_RULES_SCHEMA_URL: &str =
+    "https://craigory.dev/secreq/schemas/auto-rules.schema.json";
+
 /// One persisted rule: the fields every rule carries, plus a [`RuleBody`]
 /// holding the half that differs between the two kinds.
 ///
@@ -215,8 +219,8 @@ impl Rule {
 // The type exists so [`Rule`] can be a sum type *and* leave the file format
 // exactly where it is. The two obvious alternatives both move it.
 // `#[serde(flatten)]` writes the flattened keys last, shuffling
-// `decide`/`match` past `created_at_unix` in every file the daemon rewrites —
-// and it rewrites the whole file on every mutation. `#[serde(untagged)]`
+// `decide`/`match` past `created_at_unix` in every newly-written rule.
+// `#[serde(untagged)]`
 // matches the first variant that fits and **drops the leftover keys**, so a
 // wasm rule carrying `decide: "deny"` would load as "whatever the module
 // returns" where today it is a loud error; `deny_unknown_fields` cannot be
@@ -225,6 +229,7 @@ impl Rule {
 // Field order here is the written key order — see
 // `a_rule_is_written_in_this_key_order`.
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(rename = "Rule", deny_unknown_fields))]
 #[cfg_attr(feature = "schema", schemars(extend("oneOf" = rule_one_of())))]
@@ -408,6 +413,7 @@ pub enum RuleDecision {
 // secreq root — see [`crate::paths::rule_wasm_path`]); the rules file pins
 // them by content hash.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct WasmRule {
@@ -748,6 +754,7 @@ pub fn load_rule_module(
 // `cwd` reads `ask.cwd`, and `ancestor` walks the caller chain through
 // [`Pattern::matches_ancestor`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct RuleMatch {
@@ -791,9 +798,8 @@ pub struct RuleMatch {
 /// [refused](PatternRefusal), matches nothing, and is reported. See
 /// [`Pattern::parse`].
 ///
-/// Serializes as the raw source string, refused or not — `save_rules`
-/// rewrites the whole file on every mutation, and a pattern secreq could
-/// not read is the last thing it should silently rewrite.
+/// Serializes as the raw source string, refused or not. A pattern secreq could
+/// not consult is the last thing it should silently correct during an edit.
 #[derive(Debug, Clone)]
 pub struct Pattern {
     raw: String,
@@ -990,11 +996,8 @@ fn has_wildcards(s: &str) -> bool {
 /// (`~/.secreq/auto-rules.toml`, or `$SECREQ_HOME/auto-rules.toml`). Owned by
 /// the consent daemon; clients normally don't edit the file directly.
 //
-// Top-level wrapper around a rule list so we can add metadata fields
-// ($version, …) later without breaking the format. `$schema` is already
-// tolerated: `RulesFileWire` ignores unknown keys, and the published schema
-// declares it so an editor doesn't flag the pointer it just wrote.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(title = "secreq auto-rules config"))]
 #[cfg_attr(feature = "schema", schemars(extend("$id" = crate::schema::AUTO_RULES_ID)))]
@@ -1014,6 +1017,7 @@ pub struct RulesFile {
 /// warning. The shape check is unchanged — it still runs in
 /// `TryFrom<RuleWire> for Rule`, one line later.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RulesFileWire {
     #[serde(default)]
     rules: Vec<RuleWire>,
@@ -1087,7 +1091,7 @@ pub struct LoadedRules {
 ///
 /// ## Failure granularity (deliberate, two-tier)
 ///
-/// - **File-level**: unparseable JSON5 or a rule whose *shape* is
+/// - **File-level**: unparseable TOML or a rule whose *shape* is
 ///   invalid (both `match` and `wasm`, neither, a wasm rule with
 ///   `decide`/`deny_message`) errors the whole load — the file was
 ///   authored wrong, same class as a syntax error, and the daemon's
@@ -1127,7 +1131,7 @@ pub fn load_rules(path: &Path) -> Result<LoadedRules> {
     let mtime = meta.modified().ok();
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("read auto-rules file: {}", path.display()))?;
-    let parsed: RulesFileWire = json5::from_str(&text)
+    let parsed: RulesFileWire = toml::from_str(&text)
         .with_context(|| format!("parse auto-rules file: {}", path.display()))?;
     // Spot the stray `deny_message`s on the wire, where the key still
     // exists, then convert. Warning here rather than in the conversion
@@ -1181,7 +1185,7 @@ pub fn load_rules(path: &Path) -> Result<LoadedRules> {
     })
 }
 
-/// Atomically replace the rules file with `rules`. Used by the
+/// Atomically update the rules file to contain `rules`. Used by the
 /// AddRule / UpdateRule / DeleteRule / SetRuleEnabled IPC paths. The
 /// daemon owns all writes; users hand-edit only when the daemon is
 /// stopped.
@@ -1228,12 +1232,208 @@ pub fn save_rules(path: &Path, rules: &[Rule]) -> Result<()> {
         crate::paths::ensure_private_dir(parent)
             .with_context(|| format!("create dir {}", parent.display()))?;
     }
-    let file = RulesFile {
-        rules: rules.to_vec(),
+    let existing = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            format!("#:schema {AUTO_RULES_SCHEMA_URL}\n")
+        }
+        Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
     };
-    // Pretty JSON. JSON5 is a superset, so this round-trips cleanly.
-    let json = serde_json::to_string_pretty(&file).context("serialize rules")?;
-    crate::atomic::replace(path, json.as_bytes(), crate::atomic::Mode::Like(path))
+    let mut doc: toml_edit::DocumentMut = existing
+        .parse()
+        .with_context(|| format!("{} is not valid TOML", path.display()))?;
+    // Refuse to edit a document the typed loader would reject. `toml_edit`
+    // intentionally preserves unknown material, but this file's schema is
+    // closed: carrying a misspelled policy field forward would make it look
+    // live when the daemon never consults it.
+    toml::from_str::<RulesFileWire>(&existing)
+        .with_context(|| format!("parse auto-rules file: {}", path.display()))?;
+
+    let target = toml_edit::ser::to_document(&RulesFile {
+        rules: rules.to_vec(),
+    })
+    .context("serialize rules as TOML")?;
+    reconcile_rule_tables(&mut doc, &target)?;
+
+    let text = doc.to_string();
+    toml::from_str::<RulesFileWire>(&text)
+        .context("internal: edited auto-rules file doesn't re-parse")?;
+    crate::atomic::replace(path, text.as_bytes(), crate::atomic::Mode::Like(path))
+}
+
+/// Reconcile the one mutable key in the document while preserving the parsed
+/// tables for rules that still exist. Rule ids are stable, so they are the
+/// identity across add/update/delete operations.
+fn reconcile_rule_tables(
+    doc: &mut toml_edit::DocumentMut,
+    target: &toml_edit::DocumentMut,
+) -> Result<()> {
+    use toml_edit::{ArrayOfTables, Item};
+
+    let Some(target_item) = target.get("rules") else {
+        bail!("internal: serialized rules document has no `rules` key");
+    };
+    let Ok(target_tables) = target_item.clone().into_array_of_tables() else {
+        // An empty Vec serializes as `rules = []`. Keeping an already-empty
+        // value retains its comments and spacing; otherwise every old rule is
+        // intentionally being deleted.
+        if doc
+            .get("rules")
+            .and_then(Item::as_value)
+            .zip(target_item.as_value())
+            .is_some_and(|(old, new)| same_toml_value(old, new))
+        {
+            return Ok(());
+        }
+        crate::rule_scaffold::set_preserving_decor(
+            doc.as_table_mut(),
+            "rules",
+            target_item.clone(),
+        );
+        return Ok(());
+    };
+    let mut old: Vec<Option<toml_edit::Table>> = doc
+        .get("rules")
+        .and_then(Item::as_array_of_tables)
+        .map(|tables| tables.iter().cloned().map(Some).collect())
+        .unwrap_or_default();
+    let mut reconciled = ArrayOfTables::new();
+    for serialized_table in target_tables.iter() {
+        let mut target_table = serialized_table.clone();
+        let id = target_table
+            .get("id")
+            .and_then(Item::as_str)
+            .context("internal: serialized rule has no string `id`")?;
+        let found = old.iter().position(|candidate| {
+            candidate
+                .as_ref()
+                .is_some_and(|table| table.get("id").and_then(Item::as_str) == Some(id))
+        });
+        let table = if let Some(mut table) = found
+            .and_then(|index| old.get_mut(index))
+            .and_then(Option::take)
+        {
+            shape_rule_table_like(&mut target_table, &table);
+            merge_rule_table(&mut table, &target_table);
+            table
+        } else {
+            shape_rule_table(&mut target_table);
+            target_table
+        };
+        reconciled.push(table);
+    }
+
+    crate::rule_scaffold::set_preserving_decor(
+        doc.as_table_mut(),
+        "rules",
+        Item::ArrayOfTables(reconciled),
+    );
+    Ok(())
+}
+
+/// Match the nested-table style of an existing rule before merging it.
+///
+/// TOML permits `match = { wrap = "gh" }` as well as `[rules.match]`.
+/// Promoting an existing inline table would discard its value decoration,
+/// including a comment after the closing brace.
+fn shape_rule_table_like(target: &mut toml_edit::Table, existing: &toml_edit::Table) {
+    use toml_edit::Item;
+
+    for key in ["match", "wasm"] {
+        if existing.get(key).is_some_and(Item::is_table) {
+            shape_rule_field(target, key);
+        }
+    }
+}
+
+/// The serializer uses inline tables for nested structs. Promote the two rule
+/// bodies so generated files use readable `[rules.match]` / `[rules.wasm]`
+/// stanzas and the targeted merger can edit their fields independently.
+fn shape_rule_table(table: &mut toml_edit::Table) {
+    for key in ["match", "wasm"] {
+        shape_rule_field(table, key);
+    }
+}
+
+fn shape_rule_field(table: &mut toml_edit::Table, key: &str) {
+    use toml_edit::{Item, Value};
+
+    let Some(Item::Value(Value::InlineTable(_))) = table.get(key) else {
+        return;
+    };
+    let Some(Item::Value(Value::InlineTable(inline))) = table.remove(key) else {
+        unreachable!("just matched an inline table at {key}");
+    };
+    table.insert(key, Item::Table(inline.into_table()));
+}
+
+/// Apply only changed fields from one serialized rule. Assigning through an
+/// existing item retains the key decoration; copying the value/table
+/// decoration retains inline comments and comments on nested headers.
+fn merge_rule_table(existing: &mut toml_edit::Table, target: &toml_edit::Table) {
+    use toml_edit::Item;
+
+    let target_keys: Vec<String> = target.iter().map(|(key, _)| key.to_owned()).collect();
+    let removed: Vec<String> = existing
+        .iter()
+        .map(|(key, _)| key.to_owned())
+        .filter(|key| !target.contains_key(key))
+        .collect();
+    for key in removed {
+        existing.remove(&key);
+    }
+
+    for key in target_keys {
+        let Some(target_item) = target.get(&key) else {
+            continue;
+        };
+        match existing.get_mut(&key) {
+            Some(Item::Value(old)) => {
+                let Some(new) = target_item.as_value() else {
+                    *existing.get_mut(&key).expect("entry exists") = target_item.clone();
+                    continue;
+                };
+                if !same_toml_value(old, new) {
+                    let mut replacement = new.clone();
+                    *replacement.decor_mut() = old.decor().clone();
+                    *old = replacement;
+                }
+            }
+            Some(Item::Table(old)) => {
+                let Some(new) = target_item.as_table() else {
+                    *existing.get_mut(&key).expect("entry exists") = target_item.clone();
+                    continue;
+                };
+                merge_rule_table(old, new);
+            }
+            Some(slot) => *slot = target_item.clone(),
+            None => {
+                existing.insert(&key, target_item.clone());
+            }
+        }
+    }
+}
+
+/// TOML data equality without formatting decoration.
+fn same_toml_value(left: &toml_edit::Value, right: &toml_edit::Value) -> bool {
+    use toml_edit::Value;
+
+    match (left, right) {
+        (Value::String(a), Value::String(b)) => a.value() == b.value(),
+        (Value::Integer(a), Value::Integer(b)) => a.value() == b.value(),
+        (Value::Float(a), Value::Float(b)) => a.value() == b.value(),
+        (Value::Boolean(a), Value::Boolean(b)) => a.value() == b.value(),
+        (Value::Datetime(a), Value::Datetime(b)) => a.value() == b.value(),
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b.iter()).all(|(a, b)| same_toml_value(a, b))
+        }
+        (Value::InlineTable(a), Value::InlineTable(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .all(|(key, a)| b.get(key).is_some_and(|b| same_toml_value(a, b)))
+        }
+        _ => false,
+    }
 }
 
 /// `mtime` of the rules file, or `None` if it doesn't exist. The daemon
@@ -1973,9 +2173,8 @@ mod tests {
             p.invalid_reason().is_some(),
             "the glob error is kept, not discarded"
         );
-        // The source text still round-trips: `save_rules` rewrites the whole
-        // file on every mutation, and a refused pattern must come back out
-        // of that byte-for-byte rather than being helpfully corrected.
+        // The source text still round-trips: a refused pattern must come back
+        // out byte-for-byte rather than being helpfully corrected.
         assert_eq!(p.as_str(), "foo[bar");
     }
 
@@ -2662,7 +2861,7 @@ mod tests {
     #[test]
     fn load_returns_empty_when_file_missing() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("nonexistent.json5");
+        let path = dir.path().join("nonexistent.toml");
         let loaded = load_rules(&path).expect("missing file is not an error");
         assert!(loaded.rules.is_empty());
         assert!(loaded.mtime.is_none());
@@ -2674,37 +2873,33 @@ mod tests {
         // we just need the function to surface the failure so the
         // daemon's caller can log it.
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("broken.json5");
-        std::fs::write(&path, "{ this is not json5 }").expect("write");
+        let path = dir.path().join("broken.toml");
+        std::fs::write(&path, "this is not = valid TOML").expect("write");
         assert!(load_rules(&path).is_err());
     }
 
     #[test]
     fn load_parses_a_hand_authored_file() {
-        // Smoke test that the JSON5 features users will reach for
-        // (trailing commas, unquoted keys, comments) all work for the
-        // hand-edit path.
+        // This is also the shape m0003 writes. A loader still pointed at
+        // the old JSON5 format cannot read the migration's own output.
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("auto-rules.toml");
         std::fs::write(
             &path,
-            r#"{
-                // Auto-rules — generated by the UI; hand-edits welcome.
-                rules: [
-                    {
-                        id: "01",
-                        name: "Cursor reads via gh",
-                        enabled: true,
-                        decide: "approve",
-                        match: {
-                            wrap: "gh",
-                            argv: "gh api --get /repos/*/pulls*",
-                            ancestor: "Cursor.app",
-                        },
-                        trained_secrets: ["GITHUB_TOKEN"],
-                    },
-                ],
-            }"#,
+            r#"
+# Auto-rules — generated by the UI; hand-edits welcome.
+[[rules]]
+id = "01"
+name = "Cursor reads via gh"
+enabled = true
+decide = "approve"
+trained_secrets = ["GITHUB_TOKEN"]
+
+[rules.match]
+wrap = "gh"
+argv = "gh api --get /repos/*/pulls*"
+ancestor = "Cursor.app"
+"#,
         )
         .expect("write");
         let loaded = load_rules(&path).expect("load");
@@ -2724,6 +2919,120 @@ mod tests {
             m.argv.as_ref().map(Pattern::as_str),
             Some("gh api --get /repos/*/pulls*")
         );
+    }
+
+    #[test]
+    fn load_rejects_unknown_toml_keys_at_every_level() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for (name, text, unknown) in [
+            ("root", "bogus = true\n", "bogus"),
+            (
+                "rule",
+                r#"
+[[rules]]
+id = "01"
+name = "rule"
+enabled = true
+decide = "approve"
+bogus = true
+
+[rules.match]
+wrap = "gh"
+"#,
+                "bogus",
+            ),
+            (
+                "match",
+                r#"
+[[rules]]
+id = "01"
+name = "rule"
+enabled = true
+decide = "approve"
+
+[rules.match]
+wrap = "gh"
+bogus = true
+"#,
+                "bogus",
+            ),
+        ] {
+            let path = dir.path().join(format!("{name}.toml"));
+            std::fs::write(&path, text).expect("write");
+            let err = format!(
+                "{:#}",
+                load_rules(&path).expect_err("must reject unknown key")
+            );
+            assert!(err.contains(unknown), "{name}: {err}");
+        }
+    }
+
+    #[test]
+    fn saving_one_changed_rule_preserves_toml_comments() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.toml");
+        std::fs::write(
+            &path,
+            r#"#:schema https://craigory.dev/secreq/schemas/auto-rules.schema.json
+# Keep the rule disabled during incident response.
+[[rules]]
+id = "01" # stable audit identity
+name = "Cursor reads via gh"
+enabled = true # toggled from the UI
+decide = "approve"
+trained_secrets = ["GITHUB_TOKEN"]
+
+[rules.match]
+wrap = "gh" # only GitHub CLI
+"#,
+        )
+        .expect("write");
+
+        let mut loaded = load_rules(&path).expect("load");
+        loaded.rules[0].enabled = false;
+        save_rules(&path, &loaded.rules).expect("save");
+
+        let written = std::fs::read_to_string(&path).expect("read back");
+        for comment in [
+            "#:schema https://craigory.dev/secreq/schemas/auto-rules.schema.json",
+            "# Keep the rule disabled during incident response.",
+            "# stable audit identity",
+            "# toggled from the UI",
+            "# only GitHub CLI",
+        ] {
+            assert!(written.contains(comment), "lost {comment:?}:\n{written}");
+        }
+        assert!(written.contains("enabled = false"), "{written}");
+        toml::from_str::<RulesFileWire>(&written).expect("saved file is TOML");
+    }
+
+    #[test]
+    fn saving_an_unrelated_field_preserves_an_inline_match_table() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.toml");
+        std::fs::write(
+            &path,
+            r#"
+[[rules]]
+id = "01"
+name = "compact rule"
+enabled = true
+decide = "approve"
+match = { wrap = "gh" } # keep this compact
+"#,
+        )
+        .expect("write");
+
+        let mut loaded = load_rules(&path).expect("load");
+        loaded.rules[0].enabled = false;
+        save_rules(&path, &loaded.rules).expect("save");
+
+        let written = std::fs::read_to_string(&path).expect("read back");
+        assert!(
+            written.contains(r#"match = { wrap = "gh" } # keep this compact"#),
+            "{written}"
+        );
+        assert!(!written.contains("[rules.match]"), "{written}");
     }
 
     // ── Wasm rules in the same evaluation pass ────────────────────────
@@ -3290,18 +3599,26 @@ mod tests {
     #[test]
     fn load_rejects_a_rule_with_both_shapes_loudly() {
         // The shape check is a *file-level* error — same class as bad
-        // JSON5 — so the whole load fails and the daemon's existing
+        // TOML — so the whole load fails and the daemon's existing
         // warn-and-continue-empty contract kicks in.
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("auto-rules.toml");
         std::fs::write(
             &path,
-            r#"{ rules: [ {
-                id: "01", name: "confused", enabled: true,
-                decide: "approve",
-                match: { wrap: "gh" },
-                wasm: { path: "01.wasm", sha256: "00" },
-            } ] }"#,
+            r#"
+[[rules]]
+id = "01"
+name = "confused"
+enabled = true
+decide = "approve"
+
+[rules.match]
+wrap = "gh"
+
+[rules.wasm]
+path = "01.wasm"
+sha256 = "00"
+"#,
         )
         .expect("write");
         let err = format!("{:#}", load_rules(&path).expect_err("must reject"));
@@ -3569,9 +3886,8 @@ mod tests {
 
     #[test]
     fn a_rule_is_written_in_this_key_order() {
-        // Cosmetic but user-visible: the daemon rewrites the whole
-        // file on every mutation, and the user reads what it wrote.
-        // Serde emits fields in declaration order — but a `flatten`ed
+        // Cosmetic but user-visible for every newly-added rule. Serde emits
+        // fields in declaration order — but a `flatten`ed
         // body would emit the flattened keys last, silently shuffling
         // `decide` and `match` past `created_at_unix` in every file on
         // every machine. If you mean to reorder, change it here
@@ -3607,7 +3923,7 @@ mod tests {
 
     #[test]
     fn a_hand_authored_file_round_trips_through_save_and_load() {
-        // The whole path a user's file takes: hand-written JSON5 in,
+        // The whole path a user's file takes: hand-written TOML in,
         // parsed, rewritten by the daemon, re-read. Both rule shapes
         // must survive it byte-stable — a second save of what the
         // first save produced has to be identical, or the daemon
@@ -3616,35 +3932,42 @@ mod tests {
         let path = dir.path().join("auto-rules.toml");
         std::fs::write(
             &path,
-            r#"{
-                rules: [
-                    {
-                        id: "01",
-                        name: "Cursor reads via gh",
-                        enabled: true,
-                        decide: "approve",
-                        match: { wrap: "gh", argv: "gh api --get /repos/*" },
-                        trained_secrets: ["GITHUB_TOKEN"],
-                        created_at_unix: 1700000000,
-                    },
-                    {
-                        id: "02",
-                        name: "block deletes",
-                        enabled: false,
-                        decide: "deny",
-                        match: { wrap: "gh", ancestor: "Cursor.app", cwd: "/Users/me/oss" },
-                        deny_message: "Use the UI instead.",
-                        trained_secrets: [],
-                    },
-                    {
-                        id: "03",
-                        name: "npm publish guard",
-                        enabled: true,
-                        wasm: { path: "rules/03.wasm", sha256: "00" },
-                        trained_secrets: ["NPM_TOKEN"],
-                    },
-                ],
-            }"#,
+            r#"
+[[rules]]
+id = "01"
+name = "Cursor reads via gh"
+enabled = true
+decide = "approve"
+trained_secrets = ["GITHUB_TOKEN"]
+created_at_unix = 1700000000
+
+[rules.match]
+wrap = "gh"
+argv = "gh api --get /repos/*"
+
+[[rules]]
+id = "02"
+name = "block deletes"
+enabled = false
+decide = "deny"
+deny_message = "Use the UI instead."
+trained_secrets = []
+
+[rules.match]
+wrap = "gh"
+ancestor = "Cursor.app"
+cwd = "/Users/me/oss"
+
+[[rules]]
+id = "03"
+name = "npm publish guard"
+enabled = true
+trained_secrets = ["NPM_TOKEN"]
+
+[rules.wasm]
+path = "rules/03.wasm"
+sha256 = "00"
+"#,
         )
         .expect("write");
         let first = load_rules(&path).expect("load hand-authored file");
@@ -3696,18 +4019,24 @@ mod tests {
         // variant that fits and dropping the rest.
         let dir = tempfile::tempdir().expect("tempdir");
         for (field, snippet) in [
-            ("decide", r#"decide: "deny","#),
-            ("deny_message", r#"deny_message: "blocked","#),
+            ("decide", r#"decide = "deny""#),
+            ("deny_message", r#"deny_message = "blocked""#),
         ] {
-            let path = dir.path().join(format!("{field}.json5"));
+            let path = dir.path().join(format!("{field}.toml"));
             std::fs::write(
                 &path,
                 format!(
-                    r#"{{ rules: [ {{
-                        id: "01", name: "confused", enabled: true,
-                        {snippet}
-                        wasm: {{ path: "01.wasm", sha256: "00" }},
-                    }} ] }}"#
+                    r#"
+[[rules]]
+id = "01"
+name = "confused"
+enabled = true
+{snippet}
+
+[rules.wasm]
+path = "01.wasm"
+sha256 = "00"
+"#
                 ),
             )
             .expect("write");
@@ -3730,10 +4059,15 @@ mod tests {
         let path = dir.path().join("auto-rules.toml");
         std::fs::write(
             &path,
-            r#"{ rules: [ {
-                id: "01", name: "half a rule", enabled: true,
-                match: { wrap: "gh" },
-            } ] }"#,
+            r#"
+[[rules]]
+id = "01"
+name = "half a rule"
+enabled = true
+
+[rules.match]
+wrap = "gh"
+"#,
         )
         .expect("write");
         let err = format!("{:#}", load_rules(&path).expect_err("must reject"));
@@ -3757,16 +4091,20 @@ mod tests {
         let path = dir.join("auto-rules.toml");
         std::fs::write(
             &path,
-            r#"{ rules: [ {
-                id: "0a1b2c3d4e5f",
-                name: "Cursor reads via gh",
-                enabled: true,
-                decide: "approve",
-                match: { wrap: "gh", argv: "gh api --get /repos/*" },
-                deny_message: "Use the UI instead.",
-                trained_secrets: ["GITHUB_TOKEN"],
-                created_at_unix: 1700000000,
-            } ] }"#,
+            r#"
+[[rules]]
+id = "0a1b2c3d4e5f"
+name = "Cursor reads via gh"
+enabled = true
+decide = "approve"
+deny_message = "Use the UI instead."
+trained_secrets = ["GITHUB_TOKEN"]
+created_at_unix = 1700000000
+
+[rules.match]
+wrap = "gh"
+argv = "gh api --get /repos/*"
+"#,
         )
         .expect("write");
         path
@@ -3837,18 +4175,22 @@ mod tests {
 
         // The same rule authored without the stray key must produce
         // byte-identical output — the drop is the only difference.
-        let clean_path = dir.path().join("clean.json5");
+        let clean_path = dir.path().join("clean.toml");
         std::fs::write(
             &clean_path,
-            r#"{ rules: [ {
-                id: "0a1b2c3d4e5f",
-                name: "Cursor reads via gh",
-                enabled: true,
-                decide: "approve",
-                match: { wrap: "gh", argv: "gh api --get /repos/*" },
-                trained_secrets: ["GITHUB_TOKEN"],
-                created_at_unix: 1700000000,
-            } ] }"#,
+            r#"
+[[rules]]
+id = "0a1b2c3d4e5f"
+name = "Cursor reads via gh"
+enabled = true
+decide = "approve"
+trained_secrets = ["GITHUB_TOKEN"]
+created_at_unix = 1700000000
+
+[rules.match]
+wrap = "gh"
+argv = "gh api --get /repos/*"
+"#,
         )
         .expect("write");
         let clean = load_rules(&clean_path).expect("load");
@@ -3871,16 +4213,20 @@ mod tests {
         let path = dir.path().join("auto-rules.toml");
         std::fs::write(
             &path,
-            r#"{ rules: [ {
-                id: "0a1b2c3d4e5f",
-                name: "block deletes",
-                enabled: true,
-                decide: "deny",
-                match: { wrap: "gh", argv: "gh repo delete *" },
-                deny_message: "Use the UI instead.",
-                trained_secrets: ["GITHUB_TOKEN"],
-                created_at_unix: 1700000000,
-            } ] }"#,
+            r#"
+[[rules]]
+id = "0a1b2c3d4e5f"
+name = "block deletes"
+enabled = true
+decide = "deny"
+deny_message = "Use the UI instead."
+trained_secrets = ["GITHUB_TOKEN"]
+created_at_unix = 1700000000
+
+[rules.match]
+wrap = "gh"
+argv = "gh repo delete *"
+"#,
         )
         .expect("write");
         let loaded = load_rules(&path).expect("load");
@@ -3888,7 +4234,7 @@ mod tests {
         save_rules(&path, &loaded.rules).expect("save");
         let written = std::fs::read_to_string(&path).expect("read back");
         assert!(
-            written.contains(r#""deny_message": "Use the UI instead.""#),
+            written.contains(r#"deny_message = "Use the UI instead.""#),
             "{written}"
         );
         // And a second pass writes the same bytes.
