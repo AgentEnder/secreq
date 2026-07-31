@@ -13,6 +13,7 @@
 //! - [`provenance`]— walk the parent process tree for the consent prompt.
 //! - [`consent`]   — `Decision` enum + persistent approvals cache I/O.
 //! - [`daemon`]    — long-running consent daemon (socket + queue + egui UI).
+//! - [`link`]      — LAN listener and linked-device approval support.
 //! - [`scoped_agent`] — scoped, ephemeral socket serving `secret://` refs to
 //!   a guest VM, bounded by a host-declared allowlist.
 //! - [`audit`]     — append-only JSONL audit log (names only, never values).
@@ -60,6 +61,7 @@ pub mod commands;
 pub mod consent;
 pub mod daemon;
 pub mod exec;
+pub mod link;
 pub mod manifest;
 pub mod mask;
 pub mod migrate;
