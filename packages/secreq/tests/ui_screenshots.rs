@@ -2907,6 +2907,36 @@ fn rules_tab_list_populated() {
     );
 }
 
+#[test]
+fn rules_tab_stale_mutation_rejected() {
+    let deny = sample_rule(
+        "deny-pat-release",
+        "No github token",
+        RuleDecision::Deny,
+        Some("gh auth token"),
+    );
+    render_manager_fixture(
+        Shot::new("51-rules-stale-mutation").caption(
+            "This rule changed outside the open window, so secreq rejected the stale \
+             edit instead of replacing newer policy. Reload the Rules view before \
+             trying again.",
+        ),
+        vec![],
+        ManagerExtras {
+            rules: vec![deny],
+            window_state: Some(Box::new(|state| {
+                state.focus_rules_view();
+                state.set_rule_mutation_error(Some(
+                    "Rule `No github token` changed since the Rules view loaded it; \
+                     reload the Rules view and try again"
+                        .to_owned(),
+                ));
+            })),
+            ..ManagerExtras::default()
+        },
+    );
+}
+
 /// A wasm rule whose stored module no longer hashes to what was pinned.
 ///
 /// This is the only state in the whole UI where a rule that looks entirely

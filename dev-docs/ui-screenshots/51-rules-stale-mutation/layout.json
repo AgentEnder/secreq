@@ -1,0 +1,2384 @@
+{
+  "window": "manager",
+  "caption": "This rule changed outside the open window, so secreq rejected the stale edit instead of replacing newer policy. Reload the Rules view before trying again.",
+  "variants": {
+    "gnome-dark": {
+      "digest": "0ec909b4aa7e0174a57fabe8154abf6f4477900a17ef5a366c5d590afb253c33",
+      "shapes": [
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#383838ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#303030ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#45454aff","k":"rect","radius":[7,7,7,7],"rect":[340.0,9.0,560.0,37.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[7,7,7,7],"rect":[340.0,9.0,560.0,37.0],"stroke":[1.0,"#14141414"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#383838ff","k":"rect","radius":[6,6,6,6],"rect":[342.0,11.0,450.0,35.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[342.0,11.0,450.0,35.0],"stroke":[1.0,"#1a1a1a1a"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [380.28,15.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,31.44,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"Rules","underline":[0.0,"#00000000"],"x":[0.0,30.56]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [488.3,15.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,31.41,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#9a9996ff","family":"proportional","size":13.0,"text":"Audit","underline":[0.0,"#00000000"],"x":[0.0,31.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#303030ff","k":"rect","radius":[8,8,8,8],"rect":[680.0,10.0,880.0,36.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[8,8,8,8],"rect":[680.0,10.0,880.0,36.0],"stroke":[1.0,"#1a1a1a1a"],"stroke_kind":"Inside"},
+        {"center":[694.0,22.0],"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"circle","radius":4.5,"stroke":[1.5,"#9a9996ff"]},
+        {"a":[697.18,25.18],"b":[700.68,28.68],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.5,"#9a9996ff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[713.0,15.5,874.0,30.5],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [713.0,15.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,74.34,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#99999999","family":"proportional","size":13.0,"text":"Filter rules…","underline":[0.0,"#00000000"],"x":[0.0,73.95]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [712.0,14.5,788.34,31.5],
+          "k": "text",
+          "pos": [713.0,15.5],
+          "rows": [
+            {"rect":[0.0,0.0,0.0,15.0],"runs":[]}
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"a":[0.0,45.5],"b":[900.0,45.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#1a1a1a1a"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,52.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2e16122e","k":"rect","radius":[6,6,6,6],"rect":[20.0,66.0,545.78,118.0],"stroke":[1.0,"#ff7b63ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [33.0,75.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,121.66,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ff7b63ff","family":"proportional","size":13.0,"text":"Rule change rejected","underline":[0.0,"#00000000"],"x":[0.0,121.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [33.0,96.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,499.78,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#ffffffff","family":"proportional","size":11.5,"text":"Rule `No github token` changed since the Rules view loaded it; reload the Rules view and try again","underline":[0.0,"#00000000"],"x":[0.0,499.54]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#303030ff","k":"rect","radius":[12,12,12,12],"rect":[20.0,134.0,846.72,257.0],"stroke":[1.0,"#1d497d8c"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#0a18292e","k":"rect","radius":[6,6,6,6],"rect":[35.0,149.0,129.69,173.0],"stroke":[1.0,"#3584e4ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [43.0,157.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#3584e4ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [52.22,154.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,69.47,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#3584e4ff","family":"proportional","size":11.0,"text":"programmatic","underline":[0.0,"#00000000"],"x":[0.0,69.06]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [145.69,152.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,175.81,17.0],
+              "runs": [
+                {"baseline":14.0,"color":"#ffffffff","family":"proportional","size":15.0,"text":"Write a programmatic rule","underline":[0.0,"#00000000"],"x":[0.0,175.22]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [35.0,183.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,796.72,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#9a9996ff","family":"proportional","size":11.5,"text":"The primary way to author auto-approvals: a sandboxed decide(ctx) function with the full power of code. Scaffold a starter project and open it in your editor.","underline":[0.0,"#00000000"],"x":[0.0,796.83]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#3584e4ff","k":"rect","radius":[6,6,6,6],"rect":[35.0,212.0,134.63,242.0],"stroke":[1.0,"#45454aff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [45.0,220.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,79.63,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#ffffffff","family":"proportional","size":12.5,"text":"Scaffold a rule","underline":[0.0,"#00000000"],"x":[0.0,78.85]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#45454aff","k":"rect","radius":[6,6,6,6],"rect":[20.0,275.0,102.38,302.0],"stroke":[1.0,"#45454aff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [30.0,281.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,62.38,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"+ New rule","underline":[0.0,"#00000000"],"x":[0.0,62.12]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [118.38,282.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,577.94,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9a9996ff","family":"proportional","size":11.0,"text":"Or add a simple declarative rule. Rules fire before the consent prompt. Deny rules win; most-specific approve wins ties.","underline":[0.0,"#00000000"],"x":[0.0,577.71]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,320.0,880.0,485.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,322.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,53.94,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#9a9996ff","family":"proportional","size":12.0,"text":"Your rules","underline":[0.0,"#00000000"],"x":[0.0,53.14]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[821.31,320.0,880.0,345.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [830.31,325.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,40.69,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"Recent","underline":[0.0,"#00000000"],"x":[0.0,40.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#132e5059","k":"rect","radius":[6,6,6,6],"rect":[733.28,320.0,813.31,347.0],"stroke":[1.0,"#45454aff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [743.28,326.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,60.03,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"Most used","underline":[0.0,"#00000000"],"x":[0.0,59.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [725.28,327.0],
+          "rows": [
+            {
+              "rect": [-20.0,0.0,0.25,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":11.0,"text":"Sort","underline":[0.0,"#00000000"],"x":[0.0,20.26]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#303030ff","k":"rect","radius":[12,12,12,12],"rect":[20.0,361.0,880.0,471.0],"stroke":[1.0,"#14141414"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[33.0,374.0,51.0,392.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [51.0,375.5],
+          "rows": [
+            {"rect":[0.0,0.0,0.0,15.0],"runs":[]}
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#45454aff","k":"rect","radius":[6,6,6,6],"rect":[33.0,376.0,47.0,390.0],"stroke":[1.0,"#45454aff"],"stroke_kind":"Inside"},
+        {"clip":[0.0,317.0,900.0,589.0],"k":"path"},
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#2e16122e","k":"rect","radius":[6,6,6,6],"rect":[59.0,374.0,108.13,398.0],"stroke":[1.0,"#ff7b63ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [67.0,382.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#ff7b63ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [76.22,379.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,23.91,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#ff7b63ff","family":"proportional","size":11.0,"text":"deny","underline":[0.0,"#00000000"],"x":[0.0,23.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [124.13,378.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,94.19,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"No github token","underline":[0.0,"#00000000"],"x":[0.0,93.4]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#45454aff","k":"rect","radius":[6,6,6,6],"rect":[808.16,374.0,867.0,401.0],"stroke":[1.0,"#45454aff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [818.16,380.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,38.84,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"Delete","underline":[0.0,"#00000000"],"x":[0.0,38.12]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#45454aff","k":"rect","radius":[6,6,6,6],"rect":[757.25,374.0,800.16,401.0],"stroke":[1.0,"#45454aff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [767.25,380.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,22.91,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"Edit","underline":[0.0,"#00000000"],"x":[0.0,23.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [33.0,411.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,264.34,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9a9996ff","family":"proportional","size":11.0,"text":"wrap: gh · argv: 'gh auth token' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,263.64]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [33.0,430.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,74.47,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#77767bff","family":"proportional","size":10.0,"text":"No auto-fires yet","underline":[0.0,"#00000000"],"x":[0.0,73.87]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [33.0,447.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,108.13,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#77767bff","family":"proportional","size":10.0,"text":"trained: GITHUB_TOKEN","underline":[0.0,"#00000000"],"x":[0.0,108.09]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        }
+      ],
+      "size": [900.0,600.0]
+    },
+    "gnome-light": {
+      "digest": "686cccc3ce4fe4e1f24328e6d057706a047596b48c1cd2f0b6f1bbb49b5c20fb",
+      "shapes": [
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fafafaff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f0f0f0ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#eaeaecff","k":"rect","radius":[7,7,7,7],"rect":[340.0,9.0,560.0,37.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[7,7,7,7],"rect":[340.0,9.0,560.0,37.0],"stroke":[1.0,"#00000017"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fafafaff","k":"rect","radius":[6,6,6,6],"rect":[342.0,11.0,450.0,35.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[342.0,11.0,450.0,35.0],"stroke":[1.0,"#0000001c"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [380.28,15.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,31.44,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#26262bff","family":"proportional","size":13.0,"text":"Rules","underline":[0.0,"#00000000"],"x":[0.0,30.56]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [488.3,15.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,31.41,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#77767bff","family":"proportional","size":13.0,"text":"Audit","underline":[0.0,"#00000000"],"x":[0.0,31.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#ffffffff","k":"rect","radius":[8,8,8,8],"rect":[680.0,10.0,880.0,36.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[8,8,8,8],"rect":[680.0,10.0,880.0,36.0],"stroke":[1.0,"#0000001c"],"stroke_kind":"Inside"},
+        {"center":[694.0,22.0],"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"circle","radius":4.5,"stroke":[1.5,"#77767bff"]},
+        {"a":[697.18,25.18],"b":[700.68,28.68],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.5,"#77767bff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[713.0,15.5,874.0,30.5],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [713.0,15.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,74.34,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#17171a99","family":"proportional","size":13.0,"text":"Filter rules…","underline":[0.0,"#00000000"],"x":[0.0,73.95]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [712.0,14.5,788.34,31.5],
+          "k": "text",
+          "pos": [713.0,15.5],
+          "rows": [
+            {"rect":[0.0,0.0,0.0,15.0],"runs":[]}
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"a":[0.0,45.5],"b":[900.0,45.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#0000001c"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,52.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2305072e","k":"rect","radius":[6,6,6,6],"rect":[20.0,66.0,545.78,118.0],"stroke":[1.0,"#c01c28ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [33.0,75.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,121.66,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#c01c28ff","family":"proportional","size":13.0,"text":"Rule change rejected","underline":[0.0,"#00000000"],"x":[0.0,121.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [33.0,96.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,499.78,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#26262bff","family":"proportional","size":11.5,"text":"Rule `No github token` changed since the Rules view loaded it; reload the Rules view and try again","underline":[0.0,"#00000000"],"x":[0.0,499.54]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#ffffffff","k":"rect","radius":[12,12,12,12],"rect":[20.0,134.0,846.72,257.0],"stroke":[1.0,"#1d497d8c"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#0a18292e","k":"rect","radius":[6,6,6,6],"rect":[35.0,149.0,129.69,173.0],"stroke":[1.0,"#3584e4ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [43.0,157.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#3584e4ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [52.22,154.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,69.47,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#3584e4ff","family":"proportional","size":11.0,"text":"programmatic","underline":[0.0,"#00000000"],"x":[0.0,69.06]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [145.69,152.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,175.81,17.0],
+              "runs": [
+                {"baseline":14.0,"color":"#26262bff","family":"proportional","size":15.0,"text":"Write a programmatic rule","underline":[0.0,"#00000000"],"x":[0.0,175.22]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [35.0,183.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,796.72,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#77767bff","family":"proportional","size":11.5,"text":"The primary way to author auto-approvals: a sandboxed decide(ctx) function with the full power of code. Scaffold a starter project and open it in your editor.","underline":[0.0,"#00000000"],"x":[0.0,796.83]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#3584e4ff","k":"rect","radius":[6,6,6,6],"rect":[35.0,212.0,134.63,242.0],"stroke":[1.0,"#eaeaecff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [45.0,220.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,79.63,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#ffffffff","family":"proportional","size":12.5,"text":"Scaffold a rule","underline":[0.0,"#00000000"],"x":[0.0,78.85]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#eaeaecff","k":"rect","radius":[6,6,6,6],"rect":[20.0,275.0,102.38,302.0],"stroke":[1.0,"#eaeaecff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [30.0,281.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,62.38,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#26262bff","family":"proportional","size":13.0,"text":"+ New rule","underline":[0.0,"#00000000"],"x":[0.0,62.12]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [118.38,282.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,577.94,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":11.0,"text":"Or add a simple declarative rule. Rules fire before the consent prompt. Deny rules win; most-specific approve wins ties.","underline":[0.0,"#00000000"],"x":[0.0,577.71]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,320.0,880.0,485.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,322.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,53.94,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#77767bff","family":"proportional","size":12.0,"text":"Your rules","underline":[0.0,"#00000000"],"x":[0.0,53.14]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[821.31,320.0,880.0,345.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [830.31,325.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,40.69,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#26262bff","family":"proportional","size":13.0,"text":"Recent","underline":[0.0,"#00000000"],"x":[0.0,40.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#132e5059","k":"rect","radius":[6,6,6,6],"rect":[733.28,320.0,813.31,347.0],"stroke":[1.0,"#eaeaecff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [743.28,326.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,60.03,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#26262bff","family":"proportional","size":13.0,"text":"Most used","underline":[0.0,"#00000000"],"x":[0.0,59.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [725.28,327.0],
+          "rows": [
+            {
+              "rect": [-20.0,0.0,0.25,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#a4a3a8ff","family":"proportional","size":11.0,"text":"Sort","underline":[0.0,"#00000000"],"x":[0.0,20.26]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#ffffffff","k":"rect","radius":[12,12,12,12],"rect":[20.0,361.0,880.0,471.0],"stroke":[1.0,"#00000017"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[33.0,374.0,51.0,392.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [51.0,375.5],
+          "rows": [
+            {"rect":[0.0,0.0,0.0,15.0],"runs":[]}
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#eaeaecff","k":"rect","radius":[6,6,6,6],"rect":[33.0,376.0,47.0,390.0],"stroke":[1.0,"#eaeaecff"],"stroke_kind":"Inside"},
+        {"clip":[0.0,317.0,900.0,589.0],"k":"path"},
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#2305072e","k":"rect","radius":[6,6,6,6],"rect":[59.0,374.0,108.13,398.0],"stroke":[1.0,"#c01c28ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [67.0,382.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#c01c28ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [76.22,379.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,23.91,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#c01c28ff","family":"proportional","size":11.0,"text":"deny","underline":[0.0,"#00000000"],"x":[0.0,23.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [124.13,378.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,94.19,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#26262bff","family":"proportional","size":13.0,"text":"No github token","underline":[0.0,"#00000000"],"x":[0.0,93.4]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#eaeaecff","k":"rect","radius":[6,6,6,6],"rect":[808.16,374.0,867.0,401.0],"stroke":[1.0,"#eaeaecff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [818.16,380.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,38.84,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#26262bff","family":"proportional","size":13.0,"text":"Delete","underline":[0.0,"#00000000"],"x":[0.0,38.12]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#eaeaecff","k":"rect","radius":[6,6,6,6],"rect":[757.25,374.0,800.16,401.0],"stroke":[1.0,"#eaeaecff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [767.25,380.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,22.91,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#26262bff","family":"proportional","size":13.0,"text":"Edit","underline":[0.0,"#00000000"],"x":[0.0,23.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [33.0,411.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,264.34,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":11.0,"text":"wrap: gh · argv: 'gh auth token' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,263.64]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [33.0,430.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,74.47,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#a4a3a8ff","family":"proportional","size":10.0,"text":"No auto-fires yet","underline":[0.0,"#00000000"],"x":[0.0,73.87]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [33.0,447.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,108.13,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#a4a3a8ff","family":"proportional","size":10.0,"text":"trained: GITHUB_TOKEN","underline":[0.0,"#00000000"],"x":[0.0,108.09]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        }
+      ],
+      "size": [900.0,600.0]
+    },
+    "macos-dark": {
+      "digest": "0d75d02704dca99622d3cf172aecc1e0973eb2ff2fe2633fc5873ad13c3afbd3",
+      "shapes": [
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2dff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2dff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#232325ff","k":"rect","radius":[7,7,7,7],"rect":[350.0,10.0,550.0,36.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[7,7,7,7],"rect":[350.0,10.0,550.0,36.0],"stroke":[1.0,"#3a3a3eff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#48484cff","k":"rect","radius":[6,6,6,6],"rect":[352.0,12.0,450.0,34.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[352.0,12.0,450.0,34.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [385.89,16.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,30.22,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#e9e9ebff","family":"proportional","size":12.5,"text":"Rules","underline":[0.0,"#00000000"],"x":[0.0,30.35]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [483.89,16.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,30.22,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#98989dff","family":"proportional","size":12.5,"text":"Audit","underline":[0.0,"#00000000"],"x":[0.0,29.84]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#232325ff","k":"rect","radius":[8,8,8,8],"rect":[670.0,10.0,880.0,36.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[8,8,8,8],"rect":[670.0,10.0,880.0,36.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
+        {"center":[684.0,22.0],"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"circle","radius":4.5,"stroke":[1.5,"#98989dff"]},
+        {"a":[687.18,25.18],"b":[690.68,28.68],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.5,"#98989dff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[703.0,15.5,874.0,30.5],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [703.0,15.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,74.34,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#8c8c8d99","family":"proportional","size":13.0,"text":"Filter rules…","underline":[0.0,"#00000000"],"x":[0.0,73.95]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [702.0,14.5,778.34,31.5],
+          "k": "text",
+          "pos": [703.0,15.5],
+          "rows": [
+            {"rect":[0.0,0.0,0.0,14.0],"runs":[]}
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"a":[0.0,45.5],"b":[900.0,45.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#3c3c40ff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,52.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2814112e","k":"rect","radius":[6,6,6,6],"rect":[20.0,66.0,545.78,118.0],"stroke":[1.0,"#e0705fff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [33.0,75.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,121.66,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#e0705fff","family":"proportional","size":13.0,"text":"Rule change rejected","underline":[0.0,"#00000000"],"x":[0.0,121.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [33.0,96.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,499.78,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#e9e9ebff","family":"proportional","size":11.5,"text":"Rule `No github token` changed since the Rules view loaded it; reload the Rules view and try again","underline":[0.0,"#00000000"],"x":[0.0,499.54]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#232325ff","k":"rect","radius":[8,8,8,8],"rect":[20.0,134.0,846.72,257.0],"stroke":[1.0,"#06498c8c"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#02182e2e","k":"rect","radius":[6,6,6,6],"rect":[35.0,149.0,129.69,173.0],"stroke":[1.0,"#0a84ffff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [43.0,157.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#0a84ffff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [52.22,154.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,69.47,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#0a84ffff","family":"proportional","size":11.0,"text":"programmatic","underline":[0.0,"#00000000"],"x":[0.0,69.06]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [145.69,152.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,175.81,17.0],
+              "runs": [
+                {"baseline":14.0,"color":"#e9e9ebff","family":"proportional","size":15.0,"text":"Write a programmatic rule","underline":[0.0,"#00000000"],"x":[0.0,175.22]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [35.0,183.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,796.72,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#98989dff","family":"proportional","size":11.5,"text":"The primary way to author auto-approvals: a sandboxed decide(ctx) function with the full power of code. Scaffold a starter project and open it in your editor.","underline":[0.0,"#00000000"],"x":[0.0,796.83]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#0a84ffff","k":"rect","radius":[6,6,6,6],"rect":[35.0,212.0,134.63,242.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [45.0,220.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,79.63,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#ffffffff","family":"proportional","size":12.5,"text":"Scaffold a rule","underline":[0.0,"#00000000"],"x":[0.0,78.85]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#48484cff","k":"rect","radius":[6,6,6,6],"rect":[20.0,275.0,102.38,302.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [30.0,281.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,62.38,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#e9e9ebff","family":"proportional","size":13.0,"text":"+ New rule","underline":[0.0,"#00000000"],"x":[0.0,62.12]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [118.38,282.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,577.94,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#98989dff","family":"proportional","size":11.0,"text":"Or add a simple declarative rule. Rules fire before the consent prompt. Deny rules win; most-specific approve wins ties.","underline":[0.0,"#00000000"],"x":[0.0,577.71]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,320.0,880.0,485.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,322.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,53.94,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#98989dff","family":"proportional","size":12.0,"text":"Your rules","underline":[0.0,"#00000000"],"x":[0.0,53.14]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[821.31,320.0,880.0,345.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [830.31,325.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,40.69,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#e9e9ebff","family":"proportional","size":13.0,"text":"Recent","underline":[0.0,"#00000000"],"x":[0.0,40.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#042e5959","k":"rect","radius":[6,6,6,6],"rect":[733.28,320.0,813.31,347.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [743.28,326.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,60.03,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#e9e9ebff","family":"proportional","size":13.0,"text":"Most used","underline":[0.0,"#00000000"],"x":[0.0,59.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [725.28,327.0],
+          "rows": [
+            {
+              "rect": [-20.0,0.0,0.25,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6a6a70ff","family":"proportional","size":11.0,"text":"Sort","underline":[0.0,"#00000000"],"x":[0.0,20.26]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#232325ff","k":"rect","radius":[8,8,8,8],"rect":[20.0,361.0,880.0,471.0],"stroke":[1.0,"#3a3a3eff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[33.0,374.0,51.0,392.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [51.0,375.5],
+          "rows": [
+            {"rect":[0.0,0.0,0.0,15.0],"runs":[]}
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#48484cff","k":"rect","radius":[6,6,6,6],"rect":[33.0,376.0,47.0,390.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
+        {"clip":[0.0,317.0,900.0,589.0],"k":"path"},
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#2814112e","k":"rect","radius":[6,6,6,6],"rect":[59.0,374.0,108.13,398.0],"stroke":[1.0,"#e0705fff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [67.0,382.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#e0705fff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [76.22,379.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,23.91,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#e0705fff","family":"proportional","size":11.0,"text":"deny","underline":[0.0,"#00000000"],"x":[0.0,23.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [124.13,378.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,94.19,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#e9e9ebff","family":"proportional","size":13.0,"text":"No github token","underline":[0.0,"#00000000"],"x":[0.0,93.4]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#48484cff","k":"rect","radius":[6,6,6,6],"rect":[808.16,374.0,867.0,401.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [818.16,380.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,38.84,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#e9e9ebff","family":"proportional","size":13.0,"text":"Delete","underline":[0.0,"#00000000"],"x":[0.0,38.12]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#48484cff","k":"rect","radius":[6,6,6,6],"rect":[757.25,374.0,800.16,401.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [767.25,380.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,22.91,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#e9e9ebff","family":"proportional","size":13.0,"text":"Edit","underline":[0.0,"#00000000"],"x":[0.0,23.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [33.0,411.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,264.34,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#98989dff","family":"proportional","size":11.0,"text":"wrap: gh · argv: 'gh auth token' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,263.64]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [33.0,430.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,74.47,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#6a6a70ff","family":"proportional","size":10.0,"text":"No auto-fires yet","underline":[0.0,"#00000000"],"x":[0.0,73.87]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [33.0,447.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,108.13,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#6a6a70ff","family":"proportional","size":10.0,"text":"trained: GITHUB_TOKEN","underline":[0.0,"#00000000"],"x":[0.0,108.09]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        }
+      ],
+      "size": [900.0,600.0]
+    },
+    "macos-light": {
+      "digest": "c379fc962c70e18f5f2bfe7cd5faf733d66df94ede38b8a94d08ee10f7676c55",
+      "shapes": [
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f5f5f7ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f5f5f7ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#ececefff","k":"rect","radius":[7,7,7,7],"rect":[350.0,10.0,550.0,36.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[7,7,7,7],"rect":[350.0,10.0,550.0,36.0],"stroke":[1.0,"#dcdce1ff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#ffffffff","k":"rect","radius":[6,6,6,6],"rect":[352.0,12.0,450.0,34.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[352.0,12.0,450.0,34.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [385.89,16.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,30.22,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#1d1d1fff","family":"proportional","size":12.5,"text":"Rules","underline":[0.0,"#00000000"],"x":[0.0,30.35]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [483.89,16.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,30.22,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#6e6e73ff","family":"proportional","size":12.5,"text":"Audit","underline":[0.0,"#00000000"],"x":[0.0,29.84]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#ececefff","k":"rect","radius":[8,8,8,8],"rect":[670.0,10.0,880.0,36.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[8,8,8,8],"rect":[670.0,10.0,880.0,36.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
+        {"center":[684.0,22.0],"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"circle","radius":4.5,"stroke":[1.5,"#6e6e73ff"]},
+        {"a":[687.18,25.18],"b":[690.68,28.68],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.5,"#6e6e73ff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[703.0,15.5,874.0,30.5],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [703.0,15.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,74.34,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#11111399","family":"proportional","size":13.0,"text":"Filter rules…","underline":[0.0,"#00000000"],"x":[0.0,73.95]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [702.0,14.5,778.34,31.5],
+          "k": "text",
+          "pos": [703.0,15.5],
+          "rows": [
+            {"rect":[0.0,0.0,0.0,14.0],"runs":[]}
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"a":[0.0,45.5],"b":[900.0,45.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#d2d2d7ff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,52.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#230a082e","k":"rect","radius":[6,6,6,6],"rect":[20.0,66.0,545.78,118.0],"stroke":[1.0,"#c4392eff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [33.0,75.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,121.66,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#c4392eff","family":"proportional","size":13.0,"text":"Rule change rejected","underline":[0.0,"#00000000"],"x":[0.0,121.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [33.0,96.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,499.78,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#1d1d1fff","family":"proportional","size":11.5,"text":"Rule `No github token` changed since the Rules view loaded it; reload the Rules view and try again","underline":[0.0,"#00000000"],"x":[0.0,499.54]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#ececefff","k":"rect","radius":[8,8,8,8],"rect":[20.0,134.0,846.72,257.0],"stroke":[1.0,"#00438c8c"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00162e2e","k":"rect","radius":[6,6,6,6],"rect":[35.0,149.0,129.69,173.0],"stroke":[1.0,"#007affff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [43.0,157.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#007affff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [52.22,154.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,69.47,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#007affff","family":"proportional","size":11.0,"text":"programmatic","underline":[0.0,"#00000000"],"x":[0.0,69.06]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [145.69,152.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,175.81,17.0],
+              "runs": [
+                {"baseline":14.0,"color":"#1d1d1fff","family":"proportional","size":15.0,"text":"Write a programmatic rule","underline":[0.0,"#00000000"],"x":[0.0,175.22]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [35.0,183.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,796.72,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#6e6e73ff","family":"proportional","size":11.5,"text":"The primary way to author auto-approvals: a sandboxed decide(ctx) function with the full power of code. Scaffold a starter project and open it in your editor.","underline":[0.0,"#00000000"],"x":[0.0,796.83]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#007affff","k":"rect","radius":[6,6,6,6],"rect":[35.0,212.0,134.63,242.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [45.0,220.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,79.63,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#ffffffff","family":"proportional","size":12.5,"text":"Scaffold a rule","underline":[0.0,"#00000000"],"x":[0.0,78.85]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#ffffffff","k":"rect","radius":[6,6,6,6],"rect":[20.0,275.0,102.38,302.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [30.0,281.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,62.38,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#1d1d1fff","family":"proportional","size":13.0,"text":"+ New rule","underline":[0.0,"#00000000"],"x":[0.0,62.12]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [118.38,282.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,577.94,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6e6e73ff","family":"proportional","size":11.0,"text":"Or add a simple declarative rule. Rules fire before the consent prompt. Deny rules win; most-specific approve wins ties.","underline":[0.0,"#00000000"],"x":[0.0,577.71]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,320.0,880.0,485.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,322.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,53.94,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#6e6e73ff","family":"proportional","size":12.0,"text":"Your rules","underline":[0.0,"#00000000"],"x":[0.0,53.14]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[821.31,320.0,880.0,345.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [830.31,325.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,40.69,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#1d1d1fff","family":"proportional","size":13.0,"text":"Recent","underline":[0.0,"#00000000"],"x":[0.0,40.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#002b5959","k":"rect","radius":[6,6,6,6],"rect":[733.28,320.0,813.31,347.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [743.28,326.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,60.03,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#1d1d1fff","family":"proportional","size":13.0,"text":"Most used","underline":[0.0,"#00000000"],"x":[0.0,59.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [725.28,327.0],
+          "rows": [
+            {
+              "rect": [-20.0,0.0,0.25,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9d9da3ff","family":"proportional","size":11.0,"text":"Sort","underline":[0.0,"#00000000"],"x":[0.0,20.26]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#ececefff","k":"rect","radius":[8,8,8,8],"rect":[20.0,361.0,880.0,471.0],"stroke":[1.0,"#dcdce1ff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[33.0,374.0,51.0,392.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [51.0,375.5],
+          "rows": [
+            {"rect":[0.0,0.0,0.0,15.0],"runs":[]}
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#ffffffff","k":"rect","radius":[6,6,6,6],"rect":[33.0,376.0,47.0,390.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
+        {"clip":[0.0,317.0,900.0,589.0],"k":"path"},
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#230a082e","k":"rect","radius":[6,6,6,6],"rect":[59.0,374.0,108.13,398.0],"stroke":[1.0,"#c4392eff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [67.0,382.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#c4392eff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [76.22,379.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,23.91,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#c4392eff","family":"proportional","size":11.0,"text":"deny","underline":[0.0,"#00000000"],"x":[0.0,23.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [124.13,378.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,94.19,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#1d1d1fff","family":"proportional","size":13.0,"text":"No github token","underline":[0.0,"#00000000"],"x":[0.0,93.4]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#ffffffff","k":"rect","radius":[6,6,6,6],"rect":[808.16,374.0,867.0,401.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [818.16,380.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,38.84,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#1d1d1fff","family":"proportional","size":13.0,"text":"Delete","underline":[0.0,"#00000000"],"x":[0.0,38.12]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,317.0,900.0,589.0],"fill":"#ffffffff","k":"rect","radius":[6,6,6,6],"rect":[757.25,374.0,800.16,401.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [767.25,380.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,22.91,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#1d1d1fff","family":"proportional","size":13.0,"text":"Edit","underline":[0.0,"#00000000"],"x":[0.0,23.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [33.0,411.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,264.34,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6e6e73ff","family":"proportional","size":11.0,"text":"wrap: gh · argv: 'gh auth token' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,263.64]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [33.0,430.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,74.47,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#9d9da3ff","family":"proportional","size":10.0,"text":"No auto-fires yet","underline":[0.0,"#00000000"],"x":[0.0,73.87]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,317.0,900.0,589.0],
+          "k": "text",
+          "pos": [33.0,447.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,108.13,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#9d9da3ff","family":"proportional","size":10.0,"text":"trained: GITHUB_TOKEN","underline":[0.0,"#00000000"],"x":[0.0,108.09]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        }
+      ],
+      "size": [900.0,600.0]
+    },
+    "windows-dark": {
+      "digest": "bb7d5e8e4fdfc711953eb85b4646f0517273f4364e9d29c2b260494d73964197",
+      "shapes": [
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2bff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2bff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,58.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [20.0,6.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,78.28,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#9d9d9dff","family":"proportional","size":11.0,"text":"secreq Manager","underline":[0.0,"#00000000"],"x":[0.0,78.11]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [24.0,30.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,33.84,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#ffffffff","family":"proportional","size":14.0,"text":"Rules","underline":[0.0,"#00000000"],"x":[0.0,32.99]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [24.3,30.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,33.84,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#ffffffff","family":"proportional","size":14.0,"text":"Rules","underline":[0.0,"#00000000"],"x":[0.0,32.99]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#60cdffff","k":"rect","radius":[2,2,2,2],"rect":[22.0,48.0,59.84,51.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [79.84,30.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,33.84,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#9d9d9dff","family":"proportional","size":14.0,"text":"Audit","underline":[0.0,"#00000000"],"x":[0.0,33.42]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#323232ff","k":"rect","radius":[6,6,6,6],"rect":[670.0,25.0,880.0,51.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[670.0,25.0,880.0,51.0],"stroke":[1.0,"#383838ff"],"stroke_kind":"Inside"},
+        {"center":[684.0,37.0],"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"circle","radius":4.5,"stroke":[1.5,"#9d9d9dff"]},
+        {"a":[687.18,40.18],"b":[690.68,43.68],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.5,"#9d9d9dff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[703.0,30.25,874.0,45.78],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [703.0,30.25],
+          "rows": [
+            {
+              "rect": [0.0,0.0,74.34,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#99999999","family":"proportional","size":13.0,"text":"Filter rules…","underline":[0.0,"#00000000"],"x":[0.0,73.95]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [702.0,29.25,778.34,46.25],
+          "k": "text",
+          "pos": [703.0,30.25],
+          "rows": [
+            {"rect":[0.0,0.0,0.0,16.0],"runs":[]}
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"a":[0.0,57.5],"b":[900.0,57.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#383838ff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,64.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2e1c1e2e","k":"rect","radius":[6,6,6,6],"rect":[20.0,78.0,545.78,130.0],"stroke":[1.0,"#ff99a4ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [33.0,87.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,121.66,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ff99a4ff","family":"proportional","size":13.0,"text":"Rule change rejected","underline":[0.0,"#00000000"],"x":[0.0,121.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [33.0,108.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,499.78,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#ffffffff","family":"proportional","size":11.5,"text":"Rule `No github token` changed since the Rules view loaded it; reload the Rules view and try again","underline":[0.0,"#00000000"],"x":[0.0,499.54]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#323232ff","k":"rect","radius":[4,4,4,4],"rect":[20.0,146.0,846.72,269.0],"stroke":[1.0,"#35718c8c"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#11252e2e","k":"rect","radius":[6,6,6,6],"rect":[35.0,161.0,129.69,185.0],"stroke":[1.0,"#60cdffff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [43.0,169.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#60cdffff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [52.22,166.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,69.47,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#60cdffff","family":"proportional","size":11.0,"text":"programmatic","underline":[0.0,"#00000000"],"x":[0.0,69.06]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [145.69,164.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,175.81,17.0],
+              "runs": [
+                {"baseline":14.0,"color":"#ffffffff","family":"proportional","size":15.0,"text":"Write a programmatic rule","underline":[0.0,"#00000000"],"x":[0.0,175.22]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [35.0,195.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,796.72,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#9d9d9dff","family":"proportional","size":11.5,"text":"The primary way to author auto-approvals: a sandboxed decide(ctx) function with the full power of code. Scaffold a starter project and open it in your editor.","underline":[0.0,"#00000000"],"x":[0.0,796.83]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#60cdffff","k":"rect","radius":[4,4,4,4],"rect":[35.0,224.0,134.63,254.0],"stroke":[1.0,"#454545ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [45.0,232.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,79.63,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#ffffffff","family":"proportional","size":12.5,"text":"Scaffold a rule","underline":[0.0,"#00000000"],"x":[0.0,78.85]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#383838ff","k":"rect","radius":[4,4,4,4],"rect":[20.0,287.0,102.38,314.0],"stroke":[1.0,"#454545ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [30.0,293.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,62.38,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"+ New rule","underline":[0.0,"#00000000"],"x":[0.0,62.12]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [118.38,294.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,577.94,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9d9d9dff","family":"proportional","size":11.0,"text":"Or add a simple declarative rule. Rules fire before the consent prompt. Deny rules win; most-specific approve wins ties.","underline":[0.0,"#00000000"],"x":[0.0,577.71]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,329.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,332.0,880.0,497.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,334.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,53.94,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#9d9d9dff","family":"proportional","size":12.0,"text":"Your rules","underline":[0.0,"#00000000"],"x":[0.0,53.14]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,329.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[821.31,332.0,880.0,357.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [830.31,337.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,40.69,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"Recent","underline":[0.0,"#00000000"],"x":[0.0,40.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,329.0,900.0,589.0],"fill":"#22485959","k":"rect","radius":[4,4,4,4],"rect":[733.28,332.0,813.31,359.0],"stroke":[1.0,"#454545ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [743.28,338.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,60.03,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"Most used","underline":[0.0,"#00000000"],"x":[0.0,59.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [725.28,339.0],
+          "rows": [
+            {
+              "rect": [-20.0,0.0,0.25,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#6d6d6dff","family":"proportional","size":11.0,"text":"Sort","underline":[0.0,"#00000000"],"x":[0.0,20.26]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,329.0,900.0,589.0],"fill":"#323232ff","k":"rect","radius":[4,4,4,4],"rect":[20.0,373.0,880.0,483.0],"stroke":[1.0,"#1f1f1fff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,329.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[33.0,386.0,51.0,404.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [51.0,387.5],
+          "rows": [
+            {"rect":[0.0,0.0,0.0,15.0],"runs":[]}
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,329.0,900.0,589.0],"fill":"#383838ff","k":"rect","radius":[4,4,4,4],"rect":[33.0,388.0,47.0,402.0],"stroke":[1.0,"#454545ff"],"stroke_kind":"Inside"},
+        {"clip":[0.0,329.0,900.0,589.0],"k":"path"},
+        {"blur":0.0,"clip":[0.0,329.0,900.0,589.0],"fill":"#2e1c1e2e","k":"rect","radius":[6,6,6,6],"rect":[59.0,386.0,108.13,410.0],"stroke":[1.0,"#ff99a4ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [67.0,394.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#ff99a4ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [76.22,391.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,23.91,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#ff99a4ff","family":"proportional","size":11.0,"text":"deny","underline":[0.0,"#00000000"],"x":[0.0,23.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [124.13,390.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,94.19,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"No github token","underline":[0.0,"#00000000"],"x":[0.0,93.4]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,329.0,900.0,589.0],"fill":"#383838ff","k":"rect","radius":[4,4,4,4],"rect":[808.16,386.0,867.0,413.0],"stroke":[1.0,"#454545ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [818.16,392.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,38.84,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"Delete","underline":[0.0,"#00000000"],"x":[0.0,38.12]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,329.0,900.0,589.0],"fill":"#383838ff","k":"rect","radius":[4,4,4,4],"rect":[757.25,386.0,800.16,413.0],"stroke":[1.0,"#454545ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [767.25,392.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,22.91,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"Edit","underline":[0.0,"#00000000"],"x":[0.0,23.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [33.0,423.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,264.34,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9d9d9dff","family":"proportional","size":11.0,"text":"wrap: gh · argv: 'gh auth token' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,263.64]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [33.0,442.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,74.47,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#6d6d6dff","family":"proportional","size":10.0,"text":"No auto-fires yet","underline":[0.0,"#00000000"],"x":[0.0,73.87]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [33.0,459.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,108.13,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#6d6d6dff","family":"proportional","size":10.0,"text":"trained: GITHUB_TOKEN","underline":[0.0,"#00000000"],"x":[0.0,108.09]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        }
+      ],
+      "size": [900.0,600.0]
+    },
+    "windows-light": {
+      "digest": "8f9f6540c9b81328e300b1a25c251ca690ae30c78503fb0c5d4daff5c0efba44",
+      "shapes": [
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fbfbfbff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fbfbfbff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,58.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [20.0,6.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,78.28,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#5f5f5fff","family":"proportional","size":11.0,"text":"secreq Manager","underline":[0.0,"#00000000"],"x":[0.0,78.11]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [24.0,30.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,33.84,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#1b1b1bff","family":"proportional","size":14.0,"text":"Rules","underline":[0.0,"#00000000"],"x":[0.0,32.99]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [24.3,30.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,33.84,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#1b1b1bff","family":"proportional","size":14.0,"text":"Rules","underline":[0.0,"#00000000"],"x":[0.0,32.99]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#005fb8ff","k":"rect","radius":[2,2,2,2],"rect":[22.0,48.0,59.84,51.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [79.84,30.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,33.84,16.0],
+              "runs": [
+                {"baseline":13.0,"color":"#5f5f5fff","family":"proportional","size":14.0,"text":"Audit","underline":[0.0,"#00000000"],"x":[0.0,33.42]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f6f6f6ff","k":"rect","radius":[6,6,6,6],"rect":[670.0,25.0,880.0,51.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[6,6,6,6],"rect":[670.0,25.0,880.0,51.0],"stroke":[1.0,"#e5e5e5ff"],"stroke_kind":"Inside"},
+        {"center":[684.0,37.0],"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"circle","radius":4.5,"stroke":[1.5,"#5f5f5fff"]},
+        {"a":[687.18,40.18],"b":[690.68,43.68],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.5,"#5f5f5fff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[703.0,30.25,874.0,45.78],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [703.0,30.25],
+          "rows": [
+            {
+              "rect": [0.0,0.0,74.34,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#10101099","family":"proportional","size":13.0,"text":"Filter rules…","underline":[0.0,"#00000000"],"x":[0.0,73.95]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [702.0,29.25,778.34,46.25],
+          "k": "text",
+          "pos": [703.0,30.25],
+          "rows": [
+            {"rect":[0.0,0.0,0.0,16.0],"runs":[]}
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"a":[0.0,57.5],"b":[900.0,57.5],"clip":[0.0,0.0,900.0,600.0],"k":"line","stroke":[1.0,"#e5e5e5ff"]},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[0.0,64.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2308052e","k":"rect","radius":[6,6,6,6],"rect":[20.0,78.0,545.78,130.0],"stroke":[1.0,"#c42b1cff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [33.0,87.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,121.66,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#c42b1cff","family":"proportional","size":13.0,"text":"Rule change rejected","underline":[0.0,"#00000000"],"x":[0.0,121.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [33.0,108.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,499.78,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#1b1b1bff","family":"proportional","size":11.5,"text":"Rule `No github token` changed since the Rules view loaded it; reload the Rules view and try again","underline":[0.0,"#00000000"],"x":[0.0,499.54]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f6f6f6ff","k":"rect","radius":[4,4,4,4],"rect":[20.0,146.0,846.72,269.0],"stroke":[1.0,"#0034658c"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#0011212e","k":"rect","radius":[6,6,6,6],"rect":[35.0,161.0,129.69,185.0],"stroke":[1.0,"#005fb8ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [43.0,169.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#005fb8ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [52.22,166.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,69.47,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#005fb8ff","family":"proportional","size":11.0,"text":"programmatic","underline":[0.0,"#00000000"],"x":[0.0,69.06]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [145.69,164.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,175.81,17.0],
+              "runs": [
+                {"baseline":14.0,"color":"#1b1b1bff","family":"proportional","size":15.0,"text":"Write a programmatic rule","underline":[0.0,"#00000000"],"x":[0.0,175.22]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [35.0,195.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,796.72,13.0],
+              "runs": [
+                {"baseline":11.0,"color":"#5f5f5fff","family":"proportional","size":11.5,"text":"The primary way to author auto-approvals: a sandboxed decide(ctx) function with the full power of code. Scaffold a starter project and open it in your editor.","underline":[0.0,"#00000000"],"x":[0.0,796.83]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#005fb8ff","k":"rect","radius":[4,4,4,4],"rect":[35.0,224.0,134.63,254.0],"stroke":[1.0,"#d1d1d1ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [45.0,232.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,79.63,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#ffffffff","family":"proportional","size":12.5,"text":"Scaffold a rule","underline":[0.0,"#00000000"],"x":[0.0,78.85]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#ffffffff","k":"rect","radius":[4,4,4,4],"rect":[20.0,287.0,102.38,314.0],"stroke":[1.0,"#d1d1d1ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [30.0,293.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,62.38,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#1b1b1bff","family":"proportional","size":13.0,"text":"+ New rule","underline":[0.0,"#00000000"],"x":[0.0,62.12]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,0.0,900.0,600.0],
+          "k": "text",
+          "pos": [118.38,294.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,577.94,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#5f5f5fff","family":"proportional","size":11.0,"text":"Or add a simple declarative rule. Rules fire before the consent prompt. Deny rules win; most-specific approve wins ties.","underline":[0.0,"#00000000"],"x":[0.0,577.71]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,329.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,332.0,880.0,497.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [20.0,334.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,53.94,14.0],
+              "runs": [
+                {"baseline":11.0,"color":"#5f5f5fff","family":"proportional","size":12.0,"text":"Your rules","underline":[0.0,"#00000000"],"x":[0.0,53.14]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,329.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[821.31,332.0,880.0,357.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [830.31,337.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,40.69,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#1b1b1bff","family":"proportional","size":13.0,"text":"Recent","underline":[0.0,"#00000000"],"x":[0.0,40.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,329.0,900.0,589.0],"fill":"#00214059","k":"rect","radius":[4,4,4,4],"rect":[733.28,332.0,813.31,359.0],"stroke":[1.0,"#d1d1d1ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [743.28,338.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,60.03,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#1b1b1bff","family":"proportional","size":13.0,"text":"Most used","underline":[0.0,"#00000000"],"x":[0.0,59.58]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [725.28,339.0],
+          "rows": [
+            {
+              "rect": [-20.0,0.0,0.25,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#9b9b9bff","family":"proportional","size":11.0,"text":"Sort","underline":[0.0,"#00000000"],"x":[0.0,20.26]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,329.0,900.0,589.0],"fill":"#f6f6f6ff","k":"rect","radius":[4,4,4,4],"rect":[20.0,373.0,880.0,483.0],"stroke":[1.0,"#e5e5e5ff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,329.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[33.0,386.0,51.0,404.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [51.0,387.5],
+          "rows": [
+            {"rect":[0.0,0.0,0.0,15.0],"runs":[]}
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,329.0,900.0,589.0],"fill":"#ffffffff","k":"rect","radius":[4,4,4,4],"rect":[33.0,388.0,47.0,402.0],"stroke":[1.0,"#d1d1d1ff"],"stroke_kind":"Inside"},
+        {"clip":[0.0,329.0,900.0,589.0],"k":"path"},
+        {"blur":0.0,"clip":[0.0,329.0,900.0,589.0],"fill":"#2308052e","k":"rect","radius":[6,6,6,6],"rect":[59.0,386.0,108.13,410.0],"stroke":[1.0,"#c42b1cff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [67.0,394.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,4.22,8.0],
+              "runs": [
+                {"baseline":6.0,"color":"#c42b1cff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [76.22,391.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,23.91,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#c42b1cff","family":"proportional","size":11.0,"text":"deny","underline":[0.0,"#00000000"],"x":[0.0,23.21]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [124.13,390.5],
+          "rows": [
+            {
+              "rect": [0.0,0.0,94.19,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#1b1b1bff","family":"proportional","size":13.0,"text":"No github token","underline":[0.0,"#00000000"],"x":[0.0,93.4]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,329.0,900.0,589.0],"fill":"#ffffffff","k":"rect","radius":[4,4,4,4],"rect":[808.16,386.0,867.0,413.0],"stroke":[1.0,"#d1d1d1ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [818.16,392.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,38.84,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#1b1b1bff","family":"proportional","size":13.0,"text":"Delete","underline":[0.0,"#00000000"],"x":[0.0,38.12]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {"blur":0.0,"clip":[0.0,329.0,900.0,589.0],"fill":"#ffffffff","k":"rect","radius":[4,4,4,4],"rect":[757.25,386.0,800.16,413.0],"stroke":[1.0,"#d1d1d1ff"],"stroke_kind":"Inside"},
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [767.25,392.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,22.91,15.0],
+              "runs": [
+                {"baseline":12.0,"color":"#1b1b1bff","family":"proportional","size":13.0,"text":"Edit","underline":[0.0,"#00000000"],"x":[0.0,23.03]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [33.0,423.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,264.34,13.0],
+              "runs": [
+                {"baseline":10.0,"color":"#5f5f5fff","family":"proportional","size":11.0,"text":"wrap: gh · argv: 'gh auth token' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,263.64]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [33.0,442.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,74.47,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#9b9b9bff","family":"proportional","size":10.0,"text":"No auto-fires yet","underline":[0.0,"#00000000"],"x":[0.0,73.87]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        },
+        {
+          "clip": [0.0,329.0,900.0,589.0],
+          "k": "text",
+          "pos": [33.0,459.0],
+          "rows": [
+            {
+              "rect": [0.0,0.0,108.13,11.0],
+              "runs": [
+                {"baseline":9.0,"color":"#9b9b9bff","family":"proportional","size":10.0,"text":"trained: GITHUB_TOKEN","underline":[0.0,"#00000000"],"x":[0.0,108.09]}
+              ]
+            }
+          ],
+          "underline": [0.0,"#00000000"]
+        }
+      ],
+      "size": [900.0,600.0]
+    }
+  }
+}

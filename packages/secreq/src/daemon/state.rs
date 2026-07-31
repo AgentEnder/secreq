@@ -1789,97 +1789,155 @@ impl State {
     /// The guarded insert behind [`State::add_rule`] and
     /// [`State::add_wasm_rule`] (which enforces the empty-snapshot
     /// opt-in itself before calling in). On persist failure the
-    /// in-memory push and any module-map insert are rolled back — a
-    /// rule that never reached disk must not stay fireable in memory
-    /// until restart.
+    /// module-map insert is rolled back — a rule that never reached
+    /// disk must not stay fireable in memory until restart.
     fn admit_rule(&mut self, rule: Rule) -> Result<()> {
         if self.rules.iter().any(|r| r.id == rule.id) {
             anyhow::bail!("rule with id `{}` already exists", rule.id);
         }
         self.install_rule_module(&rule)?;
-        self.rules.push(rule);
-        if let Err(err) = self.persist_rules_and_refresh() {
-            let rule = self.rules.pop().expect("pushed above");
-            self.rule_modules.remove(&rule.id);
-            return Err(err);
+        if let Some(path) = self.rules_path.clone() {
+            if let Err(err) = rules::edit_rule(&path, rules::RuleEdit::Add(rule.clone())) {
+                self.rule_modules.remove(&rule.id);
+                return Err(err);
+            }
+            self.reload_rules_after_edit(&path)?;
+        } else {
+            self.rules.push(rule);
         }
         self.broadcast_consent_update();
         Ok(())
     }
 
-    /// Replace the rule whose id matches `rule.id`. Errors if no such
-    /// rule exists. Used by the UI's edit-form save path. On persist
-    /// failure the previous rule, its compiled-module entry, and its
-    /// refusal state are all restored — an update that never reached
-    /// disk must not change what can fire in memory.
-    ///
-    /// Refuses a glob the loader will refuse, like [`State::add_rule`] —
-    /// see [`State::refuse_broken_patterns`]. Checked before the
-    /// existence lookup would matter, so a refused edit leaves the
-    /// stored rule exactly as it was.
+    /// Replace a rule using the daemon's current copy as the optimistic
+    /// concurrency token. Direct callers use this convenience path; the wire
+    /// protocol calls [`State::update_rule_if_unchanged`] with the exact rule
+    /// the client rendered.
     pub fn update_rule(&mut self, rule: Rule) -> Result<()> {
-        Self::refuse_broken_patterns(&rule)?;
-        if !self.rules.iter().any(|r| r.id == rule.id) {
+        let Some(expected) = self
+            .rules
+            .iter()
+            .find(|candidate| candidate.id == rule.id)
+            .cloned()
+        else {
             anyhow::bail!("no rule with id `{}`", rule.id);
+        };
+        self.update_rule_if_unchanged(expected, rule)
+    }
+
+    /// Replace `expected` with `rule`, rejecting a hot reload or hand edit of
+    /// that same rule. Edits to other ids merge in [`rules::edit_rule`].
+    pub fn update_rule_if_unchanged(&mut self, expected: Rule, rule: Rule) -> Result<()> {
+        Self::refuse_broken_patterns(&rule)?;
+        if expected.id != rule.id {
+            anyhow::bail!("cannot change rule id `{}` to `{}`", expected.id, rule.id);
         }
+        self.ensure_cached_rule_is_current(&expected)?;
         let prev_refusal = self
             .wasm_refusals
             .iter()
             .find(|r| r.rule_id == rule.id)
             .cloned();
         self.install_rule_module(&rule)?;
-        // Swap through a `&mut` we hold rather than an index we remember: the
-        // `position()` this used to carry stayed valid only because nothing
-        // between here and the rollback removes from `self.rules`, which is
-        // true and invisible. The id is unchanged by the swap, so the
-        // rollback below re-finds the same slot.
-        let Some(slot) = self.rules.iter_mut().find(|r| r.id == rule.id) else {
-            anyhow::bail!("no rule with id `{}`", rule.id);
-        };
-        let prev = std::mem::replace(slot, rule);
-        if let Err(err) = self.persist_rules_and_refresh() {
-            // Roll back. Reinstall recompiles the previous rule's
-            // module from disk; if that module no longer loads (it was
-            // refused before the update), drop the entry so nothing
-            // stale can fire and restore the recorded refusal.
-            if let Err(reinstall) = self.install_rule_module(&prev) {
-                self.rule_modules.remove(&prev.id);
-                super::log::log_at(
-                    "state",
-                    format_args!(
-                        "WARN: rollback could not reinstall module for rule `{}` \
-                         (id {}): {reinstall:#}",
-                        prev.name, prev.id
-                    ),
-                );
+        if let Some(path) = self.rules_path.clone() {
+            if let Err(err) = rules::edit_rule(
+                &path,
+                rules::RuleEdit::Update {
+                    expected: expected.clone(),
+                    replacement: Box::new(rule),
+                },
+            ) {
+                self.restore_rule_module_after_failed_edit(&expected, prev_refusal);
+                return Err(err);
             }
-            if let Some(refusal) = prev_refusal {
-                self.wasm_refusals.push(refusal);
-            }
-            if let Some(slot) = self.rules.iter_mut().find(|r| r.id == prev.id) {
-                *slot = prev;
-            }
-            return Err(err);
+            self.reload_rules_after_edit(&path)?;
+        } else if let Some(slot) = self.rules.iter_mut().find(|r| r.id == expected.id) {
+            *slot = rule;
         }
         self.broadcast_consent_update();
         Ok(())
     }
 
-    /// Delete the rule with this id. Errors if no such rule exists.
-    /// If the rule's wasm module lives in the canonical store
-    /// (`rules/<id>.wasm` — where `add_wasm_rule` put it), the module
-    /// file is removed too so deletions don't accumulate orphans; a
-    /// module at any other path (hand-registered) is the user's file
-    /// and is left alone.
+    fn restore_rule_module_after_failed_edit(
+        &mut self,
+        previous: &Rule,
+        previous_refusal: Option<rules::WasmRefusal>,
+    ) {
+        if let Err(reinstall) = self.install_rule_module(previous) {
+            self.rule_modules.remove(&previous.id);
+            super::log::log_at(
+                "state",
+                format_args!(
+                    "WARN: rollback could not reinstall module for rule `{}` \
+                     (id {}): {reinstall:#}",
+                    previous.name, previous.id
+                ),
+            );
+        }
+        if let Some(refusal) = previous_refusal {
+            self.wasm_refusals.push(refusal);
+        }
+    }
+
+    fn ensure_cached_rule_is_current(&self, expected: &Rule) -> Result<()> {
+        let Some(actual) = self.rules.iter().find(|rule| rule.id == expected.id) else {
+            anyhow::bail!(
+                "rule `{}` (id {}) was deleted since the Rules view loaded it; \
+                 reload the Rules view and try again",
+                expected.name,
+                expected.id
+            );
+        };
+        if actual != expected {
+            anyhow::bail!(
+                "rule `{}` (id {}) changed since the Rules view loaded it; \
+                 reload the Rules view and try again",
+                expected.name,
+                expected.id
+            );
+        }
+        Ok(())
+    }
+
+    /// Reload after a successful ID-scoped edit so unrelated rules merged
+    /// from disk immediately become part of daemon evaluation and snapshots.
+    fn reload_rules_after_edit(&mut self, path: &Path) -> Result<()> {
+        let loaded = rules::load_rules(path)?;
+        log_rule_refusals(&loaded.refusals);
+        self.rules = loaded.rules;
+        self.rule_modules = loaded.modules;
+        self.wasm_refusals = loaded.refusals.wasm;
+        self.rules_loaded_at = loaded.mtime;
+        Ok(())
+    }
+
+    /// Delete the rule currently cached under `id`.
     pub fn delete_rule(&mut self, id: &str) -> Result<()> {
-        let Some(pos) = self.rules.iter().position(|r| r.id == id) else {
+        let Some(expected) = self.rules.iter().find(|rule| rule.id == id).cloned() else {
             anyhow::bail!("no rule with id `{id}`");
         };
-        let rule = self.rules.remove(pos);
-        self.rule_modules.remove(id);
-        self.wasm_refusals.retain(|r| r.rule_id != id);
-        self.persist_rules_and_refresh()?;
-        self.remove_stored_module(&rule);
+        self.delete_rule_if_unchanged(expected)
+    }
+
+    /// Delete exactly the rule the client rendered. A same-id edit made after
+    /// that render is a conflict, not permission to delete the new policy.
+    pub fn delete_rule_if_unchanged(&mut self, expected: Rule) -> Result<()> {
+        self.ensure_cached_rule_is_current(&expected)?;
+        if let Some(path) = self.rules_path.clone() {
+            rules::edit_rule(
+                &path,
+                rules::RuleEdit::Delete {
+                    expected: expected.clone(),
+                },
+            )?;
+            self.reload_rules_after_edit(&path)?;
+        } else {
+            self.rules.retain(|rule| rule.id != expected.id);
+            self.rule_modules.remove(&expected.id);
+            self.wasm_refusals
+                .retain(|refusal| refusal.rule_id != expected.id);
+        }
+        self.remove_stored_module(&expected);
         self.broadcast_consent_update();
         Ok(())
     }
@@ -2069,11 +2127,27 @@ impl State {
     /// Toggle the `enabled` bit on this rule. Cheaper-path equivalent
     /// of an update for the common "pause this rule" affordance.
     pub fn set_rule_enabled(&mut self, id: &str, enabled: bool) -> Result<()> {
-        let Some(rule) = self.rules.iter_mut().find(|r| r.id == id) else {
+        let Some(expected) = self.rules.iter().find(|rule| rule.id == id).cloned() else {
             anyhow::bail!("no rule with id `{id}`");
         };
-        rule.enabled = enabled;
-        self.persist_rules_and_refresh()?;
+        self.set_rule_enabled_if_unchanged(expected, enabled)
+    }
+
+    /// Toggle exactly the rule the client rendered, rejecting a stale row.
+    pub fn set_rule_enabled_if_unchanged(&mut self, expected: Rule, enabled: bool) -> Result<()> {
+        self.ensure_cached_rule_is_current(&expected)?;
+        if let Some(path) = self.rules_path.clone() {
+            rules::edit_rule(
+                &path,
+                rules::RuleEdit::SetEnabled {
+                    expected: expected.clone(),
+                    enabled,
+                },
+            )?;
+            self.reload_rules_after_edit(&path)?;
+        } else if let Some(rule) = self.rules.iter_mut().find(|rule| rule.id == expected.id) {
+            rule.enabled = enabled;
+        }
         self.broadcast_consent_update();
         Ok(())
     }
@@ -2109,21 +2183,6 @@ impl State {
     /// interactive-approval path.
     pub fn in_flight_arc(&self) -> Arc<InFlightMap> {
         self.in_flight.clone()
-    }
-
-    /// Write `self.rules` to the rules file and stamp the new mtime.
-    /// Internal helper used by every CRUD path so freshness state
-    /// stays consistent with the disk.
-    fn persist_rules_and_refresh(&mut self) -> Result<()> {
-        let Some(path) = self.rules_path.clone() else {
-            // No path configured (test path or the legacy
-            // `State::new()` constructor). Mutation succeeds in
-            // memory; nothing to write.
-            return Ok(());
-        };
-        rules::save_rules(&path, &self.rules)?;
-        self.rules_loaded_at = rules::file_mtime(&path);
-        Ok(())
     }
 }
 
@@ -5377,6 +5436,138 @@ mod tests {
 
         state.set_rule_enabled("01", true).expect("re-enable");
         assert!(state.rules_snapshot()[0].enabled);
+    }
+
+    /// Exercise the exact manager-window lifetime behind #423: the window
+    /// opens over one mixed snapshot, then a hand edit adds a protective deny
+    /// before the window sends one ID-scoped mutation. Every mutation must
+    /// merge against the live file instead of treating the snapshot-backed
+    /// `State::rules` vector as the whole policy.
+    fn assert_manager_mutation_preserves_external_deny(
+        mutate: impl FnOnce(&mut State, &Rule, &Rule),
+    ) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.toml");
+        let approve = mk_rule("approve", "gh", RuleDecision::Approve, Some("gh api"));
+        let wasm = wasm_rule_with_module(dir.path(), "wasm");
+        crate::rules::save_rules(&path, &[approve.clone(), wasm.clone()]).expect("seed");
+
+        // Opening the Rules view snapshots these two rules into daemon state.
+        let mut state = State::with_rules_path(path.clone());
+
+        // An operator adds the deny while that view remains open. The comment
+        // is part of the regression contract too: untouched policy stays
+        // byte-semantically present, not merely reconstructed from typed data.
+        let deny = mk_rule(
+            "no-github-token",
+            "gh",
+            RuleDecision::Deny,
+            Some("gh auth token"),
+        );
+        crate::rules::save_rules(&path, &[approve.clone(), deny.clone(), wasm.clone()])
+            .expect("external hand edit");
+        let text = std::fs::read_to_string(&path).expect("read external edit");
+        let text = text.replace(
+            "id = \"no-github-token\"",
+            "# fired 24,394 times — credential release guard\nid = \"no-github-token\"",
+        );
+        std::fs::write(&path, text).expect("annotate external deny");
+
+        mutate(&mut state, &approve, &wasm);
+
+        let written = std::fs::read_to_string(&path).expect("read mutation");
+        assert!(
+            written.contains("# fired 24,394 times — credential release guard"),
+            "an untouched deny and its operator-authored comment disappeared:\n{written}"
+        );
+        let loaded = crate::rules::load_rules(&path).expect("load mutation");
+        assert!(
+            loaded.rules.contains(&deny),
+            "the external deny disappeared: {:?}",
+            loaded.rules
+        );
+        assert!(
+            loaded.rules.iter().any(|rule| rule.id == wasm.id),
+            "the untouched wasm rule disappeared"
+        );
+    }
+
+    #[test]
+    fn manager_add_preserves_an_external_declarative_deny() {
+        assert_manager_mutation_preserves_external_deny(|state, _, _| {
+            state
+                .add_rule(mk_rule(
+                    "new-ui-rule",
+                    "npm",
+                    RuleDecision::Approve,
+                    Some("npm view"),
+                ))
+                .expect("add");
+        });
+    }
+
+    #[test]
+    fn manager_update_preserves_an_external_declarative_deny() {
+        assert_manager_mutation_preserves_external_deny(|state, approve, _| {
+            let mut edited = approve.clone();
+            edited.name = "edited in manager".to_owned();
+            state.update_rule(edited).expect("update");
+        });
+    }
+
+    #[test]
+    fn manager_delete_preserves_an_external_declarative_deny() {
+        assert_manager_mutation_preserves_external_deny(|state, approve, _| {
+            state.delete_rule(&approve.id).expect("delete");
+        });
+    }
+
+    #[test]
+    fn manager_toggle_preserves_an_external_declarative_deny() {
+        assert_manager_mutation_preserves_external_deny(|state, _, wasm| {
+            state.set_rule_enabled(&wasm.id, false).expect("disable");
+        });
+    }
+
+    #[test]
+    fn stale_update_of_the_same_rule_is_rejected_loudly() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.toml");
+        let original = mk_rule(
+            "no-github-token",
+            "gh",
+            RuleDecision::Deny,
+            Some("gh auth token"),
+        );
+        crate::rules::save_rules(&path, std::slice::from_ref(&original)).expect("seed");
+        let mut state = State::with_rules_path(path.clone());
+
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let mut external = original.clone();
+        external.name = "operator tightened this rule".to_owned();
+        crate::rules::save_rules(&path, std::slice::from_ref(&external))
+            .expect("external hand edit");
+        state.reload_rules_if_changed();
+        assert_eq!(
+            state.rules_snapshot(),
+            vec![external.clone()],
+            "the daemon hot-reloaded the operator's version"
+        );
+
+        let mut stale_ui_edit = original.clone();
+        stale_ui_edit.name = "stale manager edit".to_owned();
+        let err = state
+            .update_rule_if_unchanged(original, stale_ui_edit)
+            .expect_err("same-rule stale write must fail");
+        assert!(
+            format!("{err:#}").contains("changed since the Rules view loaded it"),
+            "{err:#}"
+        );
+        assert_eq!(
+            crate::rules::load_rules(&path).expect("reload").rules,
+            vec![external],
+            "the hand edit must remain authoritative after the rejected mutation"
+        );
     }
 
     #[test]

@@ -128,6 +128,9 @@ pub fn run(kind: WindowKind, always_on_top: bool) -> Result<i32> {
     // wall-clock time we received it. Only the prompt renders it; the
     // manager's reader stores-and-ignores.
     let auto_deny_toast: Arc<Mutex<Option<AutoDenyToastState>>> = Arc::new(Mutex::new(None));
+    // Streaming rule-mutation acknowledgement. A stale-write rejection must
+    // be visible in the Rules view, not only in daemon.log.
+    let rule_mutation_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let exit_requested = Arc::new(AtomicBool::new(false));
     // The egui context is filled in once eframe's CreationContext runs.
     let egui_ctx: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
@@ -136,6 +139,7 @@ pub fn run(kind: WindowKind, always_on_top: bool) -> Result<i32> {
         read_stream,
         snapshot.clone(),
         auto_deny_toast.clone(),
+        rule_mutation_error.clone(),
         egui_ctx.clone(),
     )?;
 
@@ -153,6 +157,7 @@ pub fn run(kind: WindowKind, always_on_top: bool) -> Result<i32> {
         kind,
         snapshot,
         auto_deny_toast,
+        rule_mutation_error,
         writer: writer.clone(),
         exit_requested: exit_requested.clone(),
         ui_state,
@@ -313,6 +318,7 @@ fn spawn_reader(
     stream: UnixStream,
     snapshot: Arc<Mutex<WireSnapshot>>,
     auto_deny_toast: Arc<Mutex<Option<AutoDenyToastState>>>,
+    rule_mutation_error: Arc<Mutex<Option<String>>>,
     egui_ctx: Arc<Mutex<Option<egui::Context>>>,
 ) -> Result<()> {
     thread::Builder::new()
@@ -391,11 +397,21 @@ fn spawn_reader(
                         });
                         wake(&egui_ctx);
                     }
-                    DaemonMsg::Ok
-                    | DaemonMsg::Hello { .. }
+                    DaemonMsg::Ok => {
+                        *rule_mutation_error.lock().expect("rule error mutex") = None;
+                        wake(&egui_ctx);
+                    }
+                    DaemonMsg::Err { message } => {
+                        super::log::log_at(
+                            "child",
+                            format_args!("← rule mutation rejected: {message}"),
+                        );
+                        *rule_mutation_error.lock().expect("rule error mutex") = Some(message);
+                        wake(&egui_ctx);
+                    }
+                    DaemonMsg::Hello { .. }
                     | DaemonMsg::WindowOpened { .. }
                     | DaemonMsg::Decision { .. }
-                    | DaemonMsg::Err { .. }
                     | DaemonMsg::RulesList(_)
                     | DaemonMsg::RuleAdded { .. } => {
                         // Belong to the one-shot path; ignore quietly.
@@ -433,6 +449,7 @@ struct ChildApp {
     kind: WindowKind,
     snapshot: Arc<Mutex<WireSnapshot>>,
     auto_deny_toast: Arc<Mutex<Option<AutoDenyToastState>>>,
+    rule_mutation_error: Arc<Mutex<Option<String>>>,
     writer: Arc<Mutex<UnixStream>>,
     exit_requested: Arc<AtomicBool>,
     ui_state: ChildUiState,
@@ -565,6 +582,12 @@ impl eframe::App for ChildApp {
                 // updates its in-memory ruleset, and the result shows
                 // up in the next `ConsentUpdate` broadcast.
                 let mut rule_actions = Vec::new();
+                let mutation_error = self
+                    .rule_mutation_error
+                    .lock()
+                    .expect("rule error mutex")
+                    .clone();
+                manager_state.set_rule_mutation_error(mutation_error);
                 manager_ui::render_manager_panel(
                     &ctx,
                     ui,
@@ -577,10 +600,18 @@ impl eframe::App for ChildApp {
                 for act in rule_actions {
                     let msg = match act {
                         super::ui::RuleAction::Add(rule) => ClientMsg::AddRule { rule },
-                        super::ui::RuleAction::Update(rule) => ClientMsg::UpdateRule { rule },
-                        super::ui::RuleAction::Delete(id) => ClientMsg::DeleteRule { id },
-                        super::ui::RuleAction::SetEnabled { id, enabled } => {
-                            ClientMsg::SetRuleEnabled { id, enabled }
+                        super::ui::RuleAction::Update {
+                            expected,
+                            replacement,
+                        } => ClientMsg::UpdateRule {
+                            expected,
+                            replacement,
+                        },
+                        super::ui::RuleAction::Delete { expected } => {
+                            ClientMsg::DeleteRule { expected }
+                        }
+                        super::ui::RuleAction::SetEnabled { expected, enabled } => {
+                            ClientMsg::SetRuleEnabled { expected, enabled }
                         }
                     };
                     if let Err(err) = send_msg(&self.writer, &msg) {

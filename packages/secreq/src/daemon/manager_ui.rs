@@ -94,6 +94,8 @@ pub struct ManagerWindowState {
     /// daemon's `viewer_mode`, and the first snapshot that carries it
     /// lands the manager on the Audit view exactly once.
     last_viewer_mode: bool,
+    /// Latest streaming rule-mutation rejection, shown above the Rules view.
+    rule_mutation_error: Option<String>,
 }
 
 impl ManagerWindowState {
@@ -111,6 +113,7 @@ impl ManagerWindowState {
             rules_filter: String::new(),
             audit: AuditCache::new(),
             last_viewer_mode: false,
+            rule_mutation_error: None,
         }
     }
 
@@ -205,6 +208,11 @@ impl ManagerWindowState {
     pub fn open_scaffold_dropdown(&mut self) {
         self.scaffold.open_dropdown_for_test();
     }
+
+    /// Set or clear the daemon's latest rule-mutation rejection.
+    pub fn set_rule_mutation_error(&mut self, message: Option<String>) {
+        self.rule_mutation_error = message;
+    }
 }
 
 impl Default for ManagerWindowState {
@@ -256,6 +264,10 @@ pub fn render_manager_panel(
         .inner_margin(body_inset)
         .show(ui, |ui| match state.view {
             ManagerView::Rules => {
+                if let Some(message) = state.rule_mutation_error.as_deref() {
+                    render_rule_mutation_error(ui, message);
+                    ui.add_space(10.0);
+                }
                 render_rules_body(ui, rules, refusals, state, rule_actions_out);
             }
             ManagerView::Audit => render_audit_page(
@@ -267,6 +279,23 @@ pub fn render_manager_panel(
                 &state.audit_search,
                 &mut state.expanded_bursts,
             ),
+        });
+}
+
+fn render_rule_mutation_error(ui: &mut egui::Ui, message: &str) {
+    let th = Theme::of(ui.ctx());
+    egui::Frame::new()
+        .fill(super::ui::soft_fill(th.danger))
+        .stroke(egui::Stroke::new(1.0, th.danger))
+        .corner_radius(egui::CornerRadius::same(6))
+        .inner_margin(egui::Margin::symmetric(12, 8))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("Rule change rejected")
+                    .strong()
+                    .color(th.danger),
+            );
+            ui.label(egui::RichText::new(message).color(th.fg).size(11.5));
         });
 }
 

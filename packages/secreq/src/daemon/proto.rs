@@ -225,14 +225,19 @@ pub enum ClientMsg {
         #[serde(default)]
         allow_all_secrets: bool,
     },
-    /// "Replace the rule with this `id` with the supplied content."
-    /// Replies `Ok` on success, `Err` if the id is unknown.
-    UpdateRule { rule: Rule },
-    /// "Remove the rule with this `id`."
-    DeleteRule { id: String },
+    /// Replace `expected` with `replacement`. The expected copy is the
+    /// optimistic-concurrency token from the Rules view; a same-id hand edit
+    /// or hot reload is rejected instead of silently overwritten.
+    UpdateRule {
+        expected: Rule,
+        replacement: Box<Rule>,
+    },
+    /// Remove exactly the version of the rule the caller observed.
+    DeleteRule { expected: Rule },
     /// "Toggle the enabled bit on this rule." Cheaper-and-clearer than
-    /// `UpdateRule` for the common "pause this rule" UI affordance.
-    SetRuleEnabled { id: String, enabled: bool },
+    /// `UpdateRule` for the common "pause this rule" UI affordance. Carries
+    /// the observed rule for the same stale-write protection.
+    SetRuleEnabled { expected: Rule, enabled: bool },
 }
 
 impl ClientMsg {

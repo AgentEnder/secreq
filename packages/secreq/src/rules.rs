@@ -1185,10 +1185,12 @@ pub fn load_rules(path: &Path) -> Result<LoadedRules> {
     })
 }
 
-/// Atomically update the rules file to contain `rules`. Used by the
-/// AddRule / UpdateRule / DeleteRule / SetRuleEnabled IPC paths. The
-/// daemon owns all writes; users hand-edit only when the daemon is
-/// stopped.
+/// Atomically update the rules file to contain exactly `rules`.
+///
+/// This whole-model operation is for explicit full replacements and fixtures.
+/// Interactive AddRule / UpdateRule / DeleteRule / SetRuleEnabled paths use
+/// [`edit_rule`] so an old UI snapshot can never become the authority for
+/// entries it did not contain.
 ///
 /// **Why this goes through `atomic::replace`.** The two things
 /// that module exists to prevent were both live here: a fixed
@@ -1259,6 +1261,211 @@ pub fn save_rules(path: &Path, rules: &[Rule]) -> Result<()> {
     toml::from_str::<RulesFileWire>(&text)
         .context("internal: edited auto-rules file doesn't re-parse")?;
     crate::atomic::replace(path, text.as_bytes(), crate::atomic::Mode::Like(path))
+}
+
+/// One ID-scoped edit to the rules file.
+///
+/// The daemon's Rules view emits exactly these operations. Keeping the edit
+/// explicit is the preservation boundary: a client that opened over an old
+/// snapshot never gets to describe the whole ruleset, so it cannot delete a
+/// rule it did not know about.
+#[derive(Debug, Clone)]
+pub(crate) enum RuleEdit {
+    Add(Rule),
+    Update {
+        expected: Rule,
+        replacement: Box<Rule>,
+    },
+    Delete {
+        expected: Rule,
+    },
+    SetEnabled {
+        expected: Rule,
+        enabled: bool,
+    },
+}
+
+/// Apply one [`RuleEdit`] to the current file, preserving every untouched rule
+/// table exactly as `toml_edit` parsed it.
+///
+/// `expected` is the target rule as the caller last observed it. Unrelated
+/// hand edits merge naturally because their tables are never touched; a hand
+/// edit to the same rule is a stale-write conflict and is rejected. The final
+/// byte comparison catches another writer changing the file while this edit is
+/// being prepared.
+pub(crate) fn edit_rule(path: &Path, edit: RuleEdit) -> Result<()> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        crate::paths::ensure_private_dir(parent)
+            .with_context(|| format!("create dir {}", parent.display()))?;
+    }
+    let existing = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            format!("#:schema {AUTO_RULES_SCHEMA_URL}\n")
+        }
+        Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
+    };
+    let mut doc: toml_edit::DocumentMut = existing
+        .parse()
+        .with_context(|| format!("{} is not valid TOML", path.display()))?;
+    let current: RulesFile = toml::from_str(&existing)
+        .with_context(|| format!("parse auto-rules file: {}", path.display()))?;
+
+    apply_rule_edit(&mut doc, &current.rules, edit)?;
+
+    let text = doc.to_string();
+    toml::from_str::<RulesFileWire>(&text)
+        .context("internal: edited auto-rules file doesn't re-parse")?;
+
+    let live = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && current.rules.is_empty() => {
+            existing.clone()
+        }
+        Err(e) => return Err(e).with_context(|| format!("re-read {}", path.display())),
+    };
+    if live != existing {
+        bail!(
+            "{} changed while the Rules view mutation was being prepared; \
+             reload the Rules view and try again",
+            path.display()
+        );
+    }
+    crate::atomic::replace(path, text.as_bytes(), crate::atomic::Mode::Like(path))
+}
+
+fn apply_rule_edit(
+    doc: &mut toml_edit::DocumentMut,
+    current: &[Rule],
+    edit: RuleEdit,
+) -> Result<()> {
+    use toml_edit::{ArrayOfTables, Item};
+
+    match edit {
+        RuleEdit::Add(rule) => {
+            if current.iter().any(|candidate| candidate.id == rule.id) {
+                bail!("rule with id `{}` already exists", rule.id);
+            }
+            let table = serialized_rule_table(&rule)?;
+            let item = doc
+                .entry("rules")
+                .or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()));
+            if item
+                .as_value()
+                .and_then(toml_edit::Value::as_array)
+                .is_some_and(toml_edit::Array::is_empty)
+            {
+                *item = Item::ArrayOfTables(ArrayOfTables::new());
+            }
+            item.as_array_of_tables_mut()
+                .context("`rules` must be an array of tables")?
+                .push(table);
+        }
+        RuleEdit::Update {
+            expected,
+            replacement,
+        } => {
+            if expected.id != replacement.id {
+                bail!(
+                    "cannot change rule id `{}` to `{}`",
+                    expected.id,
+                    replacement.id
+                );
+            }
+            ensure_rule_is_current(current, &expected)?;
+            let tables = rule_tables_mut(doc)?;
+            let index = rule_table_index(tables, &expected.id)?;
+            let existing = tables
+                .get_mut(index)
+                .context("rule table disappeared during update")?;
+            let mut replacement = serialized_rule_table(&replacement)?;
+            shape_rule_table_like(&mut replacement, existing);
+            merge_rule_table(existing, &replacement);
+        }
+        RuleEdit::Delete { expected } => {
+            ensure_rule_is_current(current, &expected)?;
+            let tables = rule_tables_mut(doc)?;
+            let index = rule_table_index(tables, &expected.id)?;
+            tables.remove(index);
+            if tables.is_empty() {
+                crate::rule_scaffold::set_preserving_decor(
+                    doc.as_table_mut(),
+                    "rules",
+                    Item::Value(toml_edit::Value::Array(toml_edit::Array::new())),
+                );
+            }
+        }
+        RuleEdit::SetEnabled { expected, enabled } => {
+            ensure_rule_is_current(current, &expected)?;
+            let tables = rule_tables_mut(doc)?;
+            let index = rule_table_index(tables, &expected.id)?;
+            let table = tables
+                .get_mut(index)
+                .context("rule table disappeared during toggle")?;
+            let enabled_item = table
+                .get_mut("enabled")
+                .context("rule table has no `enabled` field")?;
+            let old = enabled_item
+                .as_value_mut()
+                .context("rule `enabled` field is not a value")?;
+            let mut replacement: toml_edit::Value = enabled.into();
+            *replacement.decor_mut() = old.decor().clone();
+            *old = replacement;
+        }
+    }
+    Ok(())
+}
+
+fn serialized_rule_table(rule: &Rule) -> Result<toml_edit::Table> {
+    let target = toml_edit::ser::to_document(&RulesFile {
+        rules: vec![rule.clone()],
+    })
+    .context("serialize rule as TOML")?;
+    let tables = target
+        .get("rules")
+        .cloned()
+        .context("internal: serialized rule has no `rules` key")?
+        .into_array_of_tables()
+        .map_err(|_| anyhow::anyhow!("internal: serialized rule is not a table array"))?;
+    let mut table = tables
+        .get(0)
+        .cloned()
+        .context("internal: serialized rule has no table")?;
+    shape_rule_table(&mut table);
+    Ok(table)
+}
+
+fn ensure_rule_is_current(current: &[Rule], expected: &Rule) -> Result<()> {
+    let Some(actual) = current.iter().find(|rule| rule.id == expected.id) else {
+        bail!(
+            "rule `{}` (id {}) was deleted since the Rules view loaded it; \
+             reload the Rules view and try again",
+            expected.name,
+            expected.id
+        );
+    };
+    if actual != expected {
+        bail!(
+            "rule `{}` (id {}) changed since the Rules view loaded it; \
+             reload the Rules view and try again",
+            expected.name,
+            expected.id
+        );
+    }
+    Ok(())
+}
+
+fn rule_tables_mut(doc: &mut toml_edit::DocumentMut) -> Result<&mut toml_edit::ArrayOfTables> {
+    doc.get_mut("rules")
+        .and_then(toml_edit::Item::as_array_of_tables_mut)
+        .context("`rules` must be an array of tables")
+}
+
+fn rule_table_index(tables: &toml_edit::ArrayOfTables, id: &str) -> Result<usize> {
+    tables
+        .iter()
+        .position(|table| table.get("id").and_then(toml_edit::Item::as_str) == Some(id))
+        .with_context(|| format!("rule with id `{id}` has no TOML table"))
 }
 
 /// Reconcile the one mutable key in the document while preserving the parsed
