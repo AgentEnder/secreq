@@ -1023,28 +1023,36 @@ fn a_fresh_init_leaves_no_directory_others_can_write_under_the_root() {
     }
 }
 
-/// The window opens before `init` does. `cli::run` runs the pending
-/// migrations first, and on a fresh install that is what creates the root —
-/// so a user whose first command is `secreq wrap gh` never reaches `init`'s
-/// hardening. The mode the migration runner leaves is the mode the root has.
+/// `cli::run` runs pending migrations before dispatching any command, and on
+/// a fresh install that is what creates the root — so a user whose first
+/// command is `secreq wraps` never reaches `init`'s hardening. The mode the
+/// migration runner leaves is the mode the root has.
+///
+/// The hostile umask clears owner write and execute. A bare
+/// `DirBuilder::mode(0o700)` therefore creates a 0400 root, and the very next
+/// operation cannot open the migration lock inside it. Setting the umask in
+/// `pre_exec` confines this process-global setting to the child.
 #[test]
-fn the_root_a_first_command_creates_is_owner_only() {
+fn a_first_command_succeeds_and_creates_an_owner_only_root_whatever_the_umask() {
     let sb = Sandbox::new();
     let root = sb.path().join("fresh-root");
 
-    let mut cmd = sb.cmd(&["check"]);
+    let mut cmd = sb.cmd(&["wraps"]);
     cmd.env("SECREQ_HOME", &root);
     // SAFETY: `umask` is async-signal-safe and touches only the child.
     unsafe {
         use std::os::unix::process::CommandExt;
         cmd.pre_exec(|| {
-            libc::umask(0);
+            libc::umask(0o300);
             Ok(())
         });
     }
-    // Whether `check` itself succeeds without a config is beside the point:
-    // the root is created before any command sees control.
-    cmd.output().unwrap();
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "wraps failed under a hostile umask:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     assert!(
         root.is_dir(),

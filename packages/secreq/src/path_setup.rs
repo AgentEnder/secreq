@@ -199,12 +199,24 @@ pub fn apply(plan: &Plan) -> Result<bool> {
 /// user already had keep their mode: `~/.config` is shared with everything
 /// else that follows the XDG layout, and narrowing it is not ours to do.
 fn ensure_config_dir(dir: &Path) -> Result<()> {
-    use std::os::unix::fs::DirBuilderExt as _;
+    use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
+
+    if dir.is_dir() {
+        return Ok(());
+    }
+    if let Some(parent) = dir.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        if !parent.is_dir() {
+            ensure_config_dir(parent)?;
+        }
+    }
+
     fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(dir)
-        .with_context(|| format!("could not create {}", dir.display()))
+        .with_context(|| format!("could not create {}", dir.display()))?;
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+        .with_context(|| format!("could not set mode 0700 on {}", dir.display()))
 }
 
 /// `haystack.contains(needle)` for bytes — `[u8]` has no `contains` for a
