@@ -428,6 +428,32 @@ enum RulesAction {
     /// One-line listing of every rule with its decide direction and
     /// enabled state. Default action for `secreq rules`.
     List,
+    /// Validate the installed ruleset and replay it over historical audit
+    /// asks using the same evaluator and wasm host as live requests.
+    Stats {
+        /// Include rows at or after this UTC date (`YYYY-MM-DD`) or Unix
+        /// timestamp.
+        #[arg(long, value_name = "DATE")]
+        since: Option<String>,
+        /// Replay only rows for this exact wrap.
+        #[arg(long)]
+        wrap: Option<String>,
+        /// Maximum prompt-shape rows in each ranked breakdown.
+        #[arg(long, default_value_t = 15)]
+        top: usize,
+        /// Read this audit file instead of `~/.secreq/audit.log`.
+        #[arg(long, value_name = "PATH")]
+        audit: Option<std::path::PathBuf>,
+        /// Emit the stable machine-readable report schema.
+        #[arg(long)]
+        json: bool,
+        /// Check eligible historical auto decisions for evaluator drift.
+        /// Also exits non-zero for refused modules/patterns, invalid live
+        /// scope, or malformed audit records. Runtime wasm failures are
+        /// reported; ordinary uncovered prompts are not failures.
+        #[arg(long)]
+        verify: bool,
+    },
     /// Show one rule in full (every match field, trained_secrets,
     /// deny_message, created_at). `target` matches by id, falling
     /// back to exact name.
@@ -858,6 +884,22 @@ pub fn run() -> i32 {
         Some(Command::View) => commands::view(),
         Some(Command::Rules { action }) => match action {
             None | Some(RulesAction::List) => commands::rules_list(),
+            Some(RulesAction::Stats {
+                since,
+                wrap,
+                top,
+                audit,
+                json,
+                verify,
+            }) => commands::rules_stats(
+                config,
+                since.as_deref(),
+                wrap.as_deref(),
+                top,
+                audit.as_deref(),
+                json,
+                verify,
+            ),
             Some(RulesAction::Show { target }) => commands::rules_show(&target),
             Some(RulesAction::Enable { target }) => commands::rules_set_enabled(&target, true),
             Some(RulesAction::Disable { target }) => commands::rules_set_enabled(&target, false),

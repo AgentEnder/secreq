@@ -3,6 +3,10 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "projectType": "library",
   "targets": {
+    "test": {
+      "command": "node --test packages/secreq-rule/testing/runner.test.js",
+      "inputs": ["js", "^js"]
+    },
     "lint": {
       "command": "oxlint packages/secreq-rule",
       "inputs": ["js"],

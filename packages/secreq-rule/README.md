@@ -8,7 +8,7 @@ secreq daemon runs it before the consent prompt.
 
 A rule is a single AssemblyScript file exporting `decide`:
 
-```ts
+```ts path=assembly/rule.ts
 import { RuleCtx, Decision, approve, pass, deny } from 'secreq-rule';
 
 export function decide(ctx: RuleCtx): Decision {
@@ -47,9 +47,65 @@ Kept in lock-step with `src/wasm_rules.rs`:
   `decide(ptr: usize, len: i32) -> u64`;
 - host JSON-encodes the ctx (UTF-8), copies it into `alloc(len)`, calls
   `decide`, and unpacks the returned `(ptr << 32) | len` to read UTF-8
-  decision JSON: `"approve"`, `"pass"`, or `{"deny": "reason"}`.
+  decision JSON: `"approve"`, `"pass"`, `{"prompt": "reason"}`, or
+  `{"deny": "reason"}`.
 
 You never deal with this directly — `secreq-rule-build` generates the glue.
+
+## Testing
+
+AssemblyScript specs import builders and assertions from the test-only entry
+point, leaving the deployed rule dependent only on `secreq-rule`:
+
+```ts path=assembly/__tests__/rule.spec.ts
+import {
+  assertDecision,
+  caller,
+  expectApprove,
+  expectDeny,
+  expectPass,
+  ruleCtx,
+} from 'secreq-rule/testing/assembly';
+import { decide } from '../rule';
+
+const shell = [caller('zsh', '-zsh', '/bin/zsh')];
+assertDecision(
+  decide(ruleCtx('gh', 'gh api --get /user', '/work', shell, ['GITHUB_TOKEN'])),
+  expectApprove(),
+);
+assertDecision(decide(ruleCtx('npm', 'npm test')), expectPass());
+assertDecision(
+  decide(ruleCtx('gh', 'gh repo delete acme/app')),
+  expectDeny('repo deletes are never auto-approved'),
+);
+```
+
+For the built artifact, `secreq-rule/testing` loads `.wasm`, writes the host's
+real snake_case context JSON, calls the packed pointer/length ABI, and compares
+table rows with all four decision shapes:
+
+```js
+const { runCases } = require('secreq-rule/testing');
+
+runCases('./rule.wasm', [
+  {
+    name: 'approve',
+    context: { wrap: 'gh', joinedArgv: 'gh api --get /user' },
+    expected: 'approve',
+  },
+  { name: 'pass', context: { wrap: 'npm', joinedArgv: 'npm test' }, expected: 'pass' },
+  {
+    name: 'deny',
+    context: { wrap: 'gh', joinedArgv: 'gh repo delete x' },
+    expected: { deny: 'blocked' },
+  },
+]);
+```
+
+The runner mirrors the host's abort-only imports, fresh instance per case,
+64 MiB memory cap, and 64 KiB decision cap. Node WebAssembly cannot meter fuel;
+the daemon and `secreq rules stats --verify` remain authoritative for runaway
+modules.
 
 ## Publishing (maintainers)
 
@@ -63,7 +119,8 @@ npm publish            # runs from a clean checkout; needs npm auth
 ```
 
 The `files` allowlist in `package.json` pins exactly what ships
-(`assembly/`, `bin/`, `index.ts`, `asconfig.json`; npm always adds
+(`assembly/`, `bin/`, the two `testing/` entry points, `index.ts`,
+`asconfig.json`; npm always adds
 `package.json` + `README.md`). `tests/sdk_publish.rs` guards that the
 allowlist still covers everything `secreq-rule-build` reaches for at
 consume time, so a new imported file can't silently drop out of the

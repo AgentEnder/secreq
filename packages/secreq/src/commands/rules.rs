@@ -12,6 +12,204 @@ use anyhow::{Context, Result};
 use crate::daemon::client as daemon_client;
 use crate::rule_scaffold;
 
+/// `secreq rules stats` — load the current config/rules through production
+/// parsers and replay historical asks without touching the daemon, providers,
+/// consent cache, or secret resolution.
+#[allow(clippy::too_many_arguments)]
+pub fn rules_stats(
+    config_path: Option<&Path>,
+    since: Option<&str>,
+    wrap: Option<&str>,
+    top: usize,
+    audit_path: Option<&Path>,
+    json: bool,
+    verify: bool,
+) -> Result<i32> {
+    let config_path = match config_path {
+        Some(path) => path.to_path_buf(),
+        None => crate::paths::wraps_path()?,
+    };
+    let config = crate::wraps::WrapsConfig::load(&config_path).with_context(|| {
+        format!(
+            "load current config for rule validation: {}",
+            config_path.display()
+        )
+    })?;
+    let rules_path = crate::paths::rules_path()?;
+    let loaded = crate::rules::load_rules(&rules_path)?;
+    let scope_findings = crate::rule_health::validate_rule_scopes(&config, &loaded.rules);
+    let audit_path = audit_path
+        .map(Path::to_path_buf)
+        .map_or_else(crate::paths::audit_log_path, Ok)?;
+    let options = crate::rule_stats::ReplayOptions {
+        since_unix: since.map(parse_since).transpose()?,
+        wrap: wrap.map(str::to_owned),
+        top,
+        verify,
+    };
+    let report = crate::rule_stats::replay_audit(&audit_path, &loaded, scope_findings, &options)?;
+    let failed = verify
+        && (!report.verification.failures.is_empty()
+            || !report.health.refusals.wasm.is_empty()
+            || !report.health.refusals.patterns.is_empty()
+            || report
+                .health
+                .scope_findings
+                .iter()
+                .any(|finding| finding.severity == crate::rule_health::ScopeSeverity::Error)
+            || report.rows.malformed > 0);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print_stats_report(&report, &rules_path);
+    }
+    Ok(i32::from(failed))
+}
+
+fn print_stats_report(report: &crate::rule_stats::StatsReport, rules_path: &Path) {
+    println!(
+        "ruleset: {} rule(s) from {}",
+        report.health.loaded_rules,
+        rules_path.display()
+    );
+    println!(
+        "rows replayed: {} ({} filtered, {} scoped-agent, {} malformed)",
+        report.rows.replayed, report.rows.filtered, report.rows.scoped_agent, report.rows.malformed
+    );
+    println!("\nsimulated outcome");
+    println!(
+        "  auto-approve : {} ({:.2}%)",
+        report.outcomes.auto_approve.count, report.outcomes.auto_approve.percent
+    );
+    println!(
+        "  auto-deny    : {} ({:.2}%)",
+        report.outcomes.auto_deny.count, report.outcomes.auto_deny.percent
+    );
+    println!(
+        "  prompt       : {} ({:.2}%; {} mandated, {} uncovered)",
+        report.outcomes.prompt.count,
+        report.outcomes.prompt.percent,
+        report.outcomes.prompt.mandated,
+        report.outcomes.prompt.uncovered
+    );
+    println!("\nby rule");
+    for item in &report.attribution {
+        println!(
+            "  {:>7} asks  {:<7} {} ({}) [{} subject approval(s)]",
+            item.asks, item.decision, item.rule_name, item.rule_id, item.approved_subjects
+        );
+    }
+    println!("\nprompts by shape (top {})", report.filters.top);
+    for item in &report.prompt_shapes {
+        println!("  {:>7}  {}", item.count, item.label);
+    }
+    println!("\nrecorded decisions for rows that now prompt");
+    for item in &report.prompt_recorded {
+        println!("  {:>7}  {:?}  {}", item.count, item.traffic, item.decision);
+    }
+    println!(
+        "\nhistorically costly rows: {} ({} now automated, {} still prompting)",
+        report.costly.total, report.costly.now_automated, report.costly.still_prompting
+    );
+    if !report.health.scope_findings.is_empty()
+        || !report.health.refusals.wasm.is_empty()
+        || !report.health.refusals.patterns.is_empty()
+        || !report.runtime_failures.is_empty()
+    {
+        println!("\nrule health");
+        for finding in &report.health.scope_findings {
+            println!(
+                "  {:?} {} ({}): {}",
+                finding.severity, finding.rule_name, finding.rule_id, finding.message
+            );
+        }
+        for refusal in &report.health.refusals.wasm {
+            println!("  ERROR {}: {}", refusal.rule_id, refusal.reason);
+        }
+        for refusal in &report.health.refusals.patterns {
+            println!("  ERROR {}: {}", refusal.rule_id, refusal.reason);
+        }
+        for failure in &report.runtime_failures {
+            println!(
+                "  ERROR {} ({}): runtime evaluation failed for {} replayed row(s)",
+                failure.rule_name, failure.rule_id, failure.count
+            );
+        }
+    }
+    if report.verification.enabled {
+        println!("\nverification");
+        println!(
+            "  eligible: {}  agree: {}  disagreements: {}",
+            report.verification.eligible,
+            report.verification.agree,
+            report.verification.failures.len()
+        );
+        println!(
+            "  classified: {} deleted/replaced, {} pre-creation, {} scoped-agent, {} missing rule id",
+            report.verification.deleted_rule,
+            report.verification.pre_creation,
+            report.verification.scoped_agent,
+            report.verification.missing_rule_id
+        );
+        for failure in &report.verification.failures {
+            println!(
+                "  MISMATCH ts={} wrap={} argv={:?} subjects={:?}\n    recorded: {}\n    replayed: {}",
+                failure.timestamp,
+                failure.wrap,
+                failure.joined_argv,
+                failure.subjects,
+                failure.recorded,
+                failure.replayed
+            );
+        }
+    }
+}
+
+fn parse_since(raw: &str) -> Result<u64> {
+    if !raw.contains('-') {
+        return raw.parse::<u64>().with_context(|| {
+            format!("invalid --since value `{raw}` (expected YYYY-MM-DD or Unix timestamp)")
+        });
+    }
+    let mut parts = raw.split('-');
+    let year = parts.next().and_then(|part| part.parse::<i64>().ok());
+    let month = parts.next().and_then(|part| part.parse::<u32>().ok());
+    let day = parts.next().and_then(|part| part.parse::<u32>().ok());
+    if parts.next().is_some() {
+        anyhow::bail!("invalid --since date `{raw}` (expected YYYY-MM-DD)");
+    }
+    let (Some(year), Some(month), Some(day)) = (year, month, day) else {
+        anyhow::bail!("invalid --since date `{raw}` (expected YYYY-MM-DD)");
+    };
+    let month_days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    };
+    if year < 1970 || day == 0 || day > month_days {
+        anyhow::bail!(
+            "invalid --since date `{raw}` (expected a real UTC date at/after 1970-01-01)"
+        );
+    }
+    let adjusted_year = year - i64::from(month <= 2);
+    let era = adjusted_year.div_euclid(400);
+    let year_of_era = adjusted_year - era * 400;
+    let shifted_month = i64::from(month) + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * shifted_month + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    u64::try_from(days)
+        .ok()
+        .and_then(|days| days.checked_mul(86_400))
+        .with_context(|| format!("--since date `{raw}` is outside the supported range"))
+}
+
+fn is_leap_year(year: i64) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
 /// `secreq rules` (with no subcommand or with `list`): one-line table
 /// of every configured rule.
 pub fn rules_list() -> Result<i32> {
@@ -562,5 +760,19 @@ mod tests {
                 .expect_err("must fail on the missing file")
         );
         assert!(err.contains("not readable"), "{err}");
+    }
+
+    #[test]
+    fn stats_since_accepts_unix_timestamps_and_real_utc_dates() {
+        assert_eq!(parse_since("0").expect("epoch timestamp"), 0);
+        assert_eq!(parse_since("1970-01-01").expect("epoch date"), 0);
+        assert_eq!(parse_since("2024-02-29").expect("leap date"), 1_709_164_800);
+    }
+
+    #[test]
+    fn stats_since_rejects_impossible_dates() {
+        for raw in ["2023-02-29", "2024-13-01", "2024-01-32", "1969-12-31"] {
+            assert!(parse_since(raw).is_err(), "accepted invalid date {raw}");
+        }
     }
 }

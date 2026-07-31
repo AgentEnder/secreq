@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -559,35 +559,76 @@ pub fn audit_log_mtime() -> Option<SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
 }
 
-/// Stream the audit log into memory, newest-last. Corrupt lines (anything
-/// that doesn't parse as `AuditEntry`) are skipped silently — the audit
-/// log spans daemon versions, and a single bad line shouldn't blank the
-/// history view. Missing file returns an empty vec, not an error.
-pub fn read_history(limit: Option<usize>) -> Result<Vec<AuditEntry>> {
-    let path = crate::paths::audit_log_path()?;
+/// Counts produced while streaming an audit file.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AuditReadSummary {
+    pub entries: usize,
+    /// Physical lines whose remaining bytes could not be decoded as another
+    /// [`AuditEntry`]. A line may contain several concatenated top-level JSON
+    /// objects; successfully decoded objects before the bad bytes still count.
+    pub malformed: usize,
+}
+
+/// Stream every decodable audit entry from `path` without assuming JSONL.
+///
+/// Old clients occasionally appended two complete JSON objects before the
+/// newline write landed, so one physical line can be `}{`-concatenated. A
+/// serde stream deserializer recognizes that shape while retaining the
+/// append-only log's useful failure isolation: malformed bytes discard the
+/// remainder of their physical line, not the rest of the file.
+pub fn visit_history(
+    path: &std::path::Path,
+    mut visit: impl FnMut(AuditEntry) -> Result<()>,
+) -> Result<AuditReadSummary> {
     if !path.exists() {
-        return Ok(Vec::new());
+        return Ok(AuditReadSummary::default());
     }
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("read audit log {}", path.display()))?;
-    let mut entries: Vec<AuditEntry> = text
-        .lines()
-        .filter_map(|l| {
-            let t = l.trim();
-            if t.is_empty() {
-                None
+    let file =
+        std::fs::File::open(path).with_context(|| format!("open audit log {}", path.display()))?;
+    let mut summary = AuditReadSummary::default();
+    for line in BufReader::new(file).lines() {
+        let line = line.with_context(|| format!("read audit log {}", path.display()))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let stream = serde_json::Deserializer::from_str(&line).into_iter::<AuditEntry>();
+        for entry in stream {
+            if let Ok(entry) = entry {
+                visit(entry)?;
+                summary.entries += 1;
             } else {
-                serde_json::from_str::<AuditEntry>(t).ok()
+                summary.malformed += 1;
+                break;
             }
-        })
-        .collect();
+        }
+    }
+    Ok(summary)
+}
+
+fn read_history_path(
+    path: &std::path::Path,
+    limit: Option<usize>,
+) -> Result<(Vec<AuditEntry>, usize)> {
+    let mut entries = Vec::new();
+    let summary = visit_history(path, |entry| {
+        entries.push(entry);
+        Ok(())
+    })?;
     if let Some(max) = limit {
         if entries.len() > max {
             let drop_n = entries.len() - max;
             entries.drain(..drop_n);
         }
     }
-    Ok(entries)
+    Ok((entries, summary.malformed))
+}
+
+/// Stream the audit log into memory, newest-last. Corrupt physical lines are
+/// skipped — the audit log spans versions, and one bad record must not blank
+/// history. Missing file returns an empty vec, not an error.
+pub fn read_history(limit: Option<usize>) -> Result<Vec<AuditEntry>> {
+    let path = crate::paths::audit_log_path()?;
+    read_history_path(&path, limit).map(|(entries, _)| entries)
 }
 
 fn now_unix() -> u64 {
@@ -625,7 +666,7 @@ pub(crate) fn with_temp_log<R>(f: impl FnOnce() -> R) -> R {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::path::Path;
 
     fn write_log(text: &str) -> tempfile::NamedTempFile {
         use std::io::Write as _;
@@ -635,27 +676,24 @@ mod tests {
         f
     }
 
-    fn read_path(path: &PathBuf, limit: Option<usize>) -> Vec<AuditEntry> {
-        // Internal variant of read_history that doesn't depend on XDG paths.
-        let text = std::fs::read_to_string(path).unwrap_or_default();
-        let mut entries: Vec<AuditEntry> = text
-            .lines()
-            .filter_map(|l| {
-                let t = l.trim();
-                if t.is_empty() {
-                    None
-                } else {
-                    serde_json::from_str::<AuditEntry>(t).ok()
-                }
-            })
-            .collect();
-        if let Some(max) = limit {
-            if entries.len() > max {
-                let drop_n = entries.len() - max;
-                entries.drain(..drop_n);
-            }
-        }
-        entries
+    fn read_path(path: &Path, limit: Option<usize>) -> Vec<AuditEntry> {
+        read_history_path(path, limit)
+            .expect("read audit fixture")
+            .0
+    }
+
+    #[test]
+    fn history_reader_accepts_concatenated_top_level_objects() {
+        let first = r#"{"ts_unix":1,"cwd":"/a","wrap":"gh","args":[],"callers":[],"secrets":["TOKEN"],"decision":"approve"}"#;
+        let second = r#"{"ts_unix":2,"cwd":"/b","wrap":"npm","args":["publish"],"callers":[],"secrets":["NPM_TOKEN"],"decision":"deny"}"#;
+        let log = write_log(&format!("{first}{second}\n"));
+
+        let (entries, malformed) = read_history_path(log.path(), None).expect("read fixture");
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].wrap, "gh");
+        assert_eq!(entries[1].wrap, "npm");
+        assert_eq!(malformed, 0);
     }
 
     #[test]
@@ -1343,7 +1381,7 @@ not json at all
 {\"ts_unix\":200,\"cwd\":\"/b\",\"wrap\":\"aws\",\"args\":[],\"callers\":[{\"pid\":222,\"name\":\"npm\",\"command\":\"npm test\"}],\"secrets\":[\"AWS_KEY\"],\"decision\":\"deny\"}
 ";
         let f = write_log(log);
-        let entries = read_path(&f.path().to_path_buf(), None);
+        let entries = read_path(f.path(), None);
         assert_eq!(entries.len(), 2, "two valid entries, garbage dropped");
         assert_eq!(entries[0].wrap, "gh");
         assert_eq!(entries[0].args, vec!["pr", "view", "42"]);
@@ -1361,7 +1399,7 @@ not json at all
 {\"ts_unix\":3,\"cwd\":\"\",\"wrap\":\"c\",\"args\":[],\"callers\":[],\"secrets\":[],\"decision\":\"approve\"}
 ";
         let f = write_log(log);
-        let entries = read_path(&f.path().to_path_buf(), Some(2));
+        let entries = read_path(f.path(), Some(2));
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].wrap, "b");
         assert_eq!(entries[1].wrap, "c");

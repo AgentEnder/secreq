@@ -2499,3 +2499,102 @@ fn a_scaffolded_project_is_readable_whatever_the_umask() {
         "the manifest must name the SDK dependency"
     );
 }
+
+// ── rules stats ──────────────────────────────────────────────────────────
+
+fn write_stats_rules(sb: &Sandbox) {
+    fs::write(
+        sb.root().join("auto-rules.toml"),
+        r#"{
+          rules: [{
+            id: "approve-gh",
+            name: "approve gh reads",
+            enabled: true,
+            decide: "approve",
+            match: { wrap: "gh", argv: "gh api" },
+            trained_secrets: ["GITHUB_TOKEN"],
+            created_at_unix: 10
+          }]
+        }"#,
+    )
+    .unwrap();
+}
+
+#[test]
+fn rules_stats_json_replays_an_alternate_concatenated_audit_and_verifies() {
+    let sb = Sandbox::new();
+    sb.stamp_migrations();
+    sb.write_config(
+        r#"
+            [wraps.gh.env]
+            GITHUB_TOKEN = "secret://op/GitHub/token"
+        "#,
+    );
+    write_stats_rules(&sb);
+    let audit = sb.path().join("fixture-audit.log");
+    fs::write(
+        &audit,
+        concat!(
+            r#"{"ts_unix":20,"cwd":"/work","wrap":"gh","args":["api","/user"],"callers":[],"secrets":["GITHUB_TOKEN"],"decision":"approve+auto","rule_id":"approve-gh"}"#,
+            r#"{"ts_unix":21,"cwd":"/work","wrap":"npm","args":["publish"],"callers":[],"secrets":["NPM_TOKEN"],"decision":"approve+remember"}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+
+    let out = sb.run(&[
+        "rules",
+        "stats",
+        "--audit",
+        audit.to_str().unwrap(),
+        "--json",
+        "--verify",
+    ]);
+    assert!(
+        out.status.success(),
+        "stderr: {}\nstdout: {}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["rows"]["replayed"], 2);
+    assert_eq!(report["outcomes"]["auto_approve"]["count"], 1);
+    assert_eq!(report["outcomes"]["prompt"]["count"], 1);
+    assert_eq!(report["verification"]["eligible"], 1);
+    assert_eq!(report["verification"]["agree"], 1);
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("secret value"));
+}
+
+#[test]
+fn rules_stats_verify_exits_nonzero_and_prints_reproduction_context_on_drift() {
+    let sb = Sandbox::new();
+    sb.stamp_migrations();
+    sb.write_config(
+        r#"
+            [wraps.gh.env]
+            GITHUB_TOKEN = "secret://op/GitHub/token"
+        "#,
+    );
+    write_stats_rules(&sb);
+    let audit = sb.path().join("drift-audit.log");
+    fs::write(
+        &audit,
+        r#"{"ts_unix":20,"cwd":"/work","wrap":"gh","args":["api","--method","DELETE"],"callers":[],"secrets":["GITHUB_TOKEN"],"decision":"deny+auto","rule_id":"approve-gh"}
+"#,
+    )
+    .unwrap();
+
+    let out = sb.run(&[
+        "rules",
+        "stats",
+        "--audit",
+        audit.to_str().unwrap(),
+        "--verify",
+    ]);
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("MISMATCH"), "stdout: {stdout}");
+    assert!(stdout.contains("DELETE"), "stdout: {stdout}");
+    assert!(stdout.contains("GITHUB_TOKEN"), "stdout: {stdout}");
+}

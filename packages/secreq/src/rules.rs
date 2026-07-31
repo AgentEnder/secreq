@@ -34,6 +34,7 @@
 //! caller in `daemon::server` builds an [`EvalCtx`] from an `Ask` and
 //! passes it in.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -1282,6 +1283,28 @@ pub struct EvalCtx<'a> {
     /// Names of the secrets requested. Checked against the rule's
     /// `trained_secrets` guard.
     pub secrets: &'a [&'a str],
+}
+
+/// Convert the subjects carried by an ask into the exact names the evaluator
+/// scopes against. Wrap asks normally provide env keys. Ask kinds that release
+/// no provider value still need a non-vacuous subject: an SSH identity is
+/// already spelled `ssh:<key_id>`, while a gate-only wrap becomes
+/// `wrap:<name>`.
+///
+/// Shared by live daemon asks and audit replay so a new subject shape cannot
+/// silently acquire two interpretations.
+pub fn evaluation_subjects<'a>(
+    wrap: &'a str,
+    secret_names: impl IntoIterator<Item = &'a str>,
+) -> Vec<Cow<'a, str>> {
+    let names: Vec<Cow<'a, str>> = secret_names.into_iter().map(Cow::Borrowed).collect();
+    if !names.is_empty() {
+        names
+    } else if wrap.starts_with("ssh:") {
+        vec![Cow::Borrowed(wrap)]
+    } else {
+        vec![Cow::Owned(format!("wrap:{wrap}"))]
+    }
 }
 
 /// One caller as a rule sees it.

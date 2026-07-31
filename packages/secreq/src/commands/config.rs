@@ -221,6 +221,7 @@ pub fn wraps_list(config_path: Option<&Path>) -> Result<i32> {
             println!("    {summary}");
         }
     }
+
     Ok(0)
 }
 
@@ -288,11 +289,48 @@ pub fn check(config_path: Option<&Path>) -> Result<i32> {
         }
     }
 
+    let rules_path = crate::paths::rules_path()?;
+    let loaded = crate::rules::load_rules(&rules_path)?;
+    if !loaded.rules.is_empty()
+        || !loaded.refusals.wasm.is_empty()
+        || !loaded.refusals.patterns.is_empty()
+    {
+        println!("Rules:  {}", rules_path.display());
+    }
+    for refusal in loaded
+        .refusals
+        .wasm
+        .iter()
+        .map(|refusal| refusal.reason.as_str())
+        .chain(
+            loaded
+                .refusals
+                .patterns
+                .iter()
+                .map(|refusal| refusal.reason.as_str()),
+        )
+    {
+        println!("  ✗ {refusal}");
+        problems += 1;
+    }
+    for finding in crate::rule_health::validate_rule_scopes(&config, &loaded.rules) {
+        match finding.severity {
+            crate::rule_health::ScopeSeverity::Error => {
+                println!("  ✗ {}: {}", finding.rule_name, finding.message);
+                problems += 1;
+            }
+            crate::rule_health::ScopeSeverity::Warning => {
+                println!("  ! {}: {}", finding.rule_name, finding.message);
+            }
+        }
+    }
+
     if problems == 0 {
         println!(
-            "✓ config OK: {} wrap(s), {} provider(s)",
+            "✓ config OK: {} wrap(s), {} provider(s), {} rule(s)",
             config.wraps.len(),
-            config.providers.len()
+            config.providers.len(),
+            loaded.rules.len()
         );
         Ok(0)
     } else {

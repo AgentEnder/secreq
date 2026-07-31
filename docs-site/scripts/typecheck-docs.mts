@@ -305,7 +305,12 @@ function checkDoc(docPath: string): { findings: Finding[]; fragments: number; sk
     // nothing worth having.
     skipLibCheck: false,
     baseUrl: root,
-    paths: { 'secreq-rule': [SDK_ENTRY] },
+    paths: {
+      'secreq-rule': [SDK_ENTRY],
+      'secreq-rule/testing/assembly': [
+        join(REPO_ROOT, 'packages', 'secreq-rule', 'testing', 'assembly.ts'),
+      ],
+    },
   };
 
   const program = ts.createProgram([...files.keys()], options, createHost(options, files, root));

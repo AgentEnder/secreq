@@ -1633,9 +1633,9 @@ impl State {
         // Written as a match on the two kinds that *may* reach the engine, so
         // a fourth kind of ask has to state which side of this line it is on
         // instead of defaulting onto the permissive one.
-        let (callers, secrets, cwd, ssh) = match &ask.subject {
-            AskSubject::Wrap(w) => (&w.callers, w.secrets.as_slice(), w.cwd.as_str(), None),
-            AskSubject::SshSign(s) => (&s.callers, [].as_slice(), s.cwd.as_str(), Some(&s.info)),
+        let (callers, secrets, cwd) = match &ask.subject {
+            AskSubject::Wrap(w) => (&w.callers, w.secrets.as_slice(), w.cwd.as_str()),
+            AskSubject::SshSign(s) => (&s.callers, [].as_slice(), s.cwd.as_str()),
             AskSubject::ScopedAgent(_) => return None,
         };
         if self.rules.is_empty() {
@@ -1671,15 +1671,11 @@ impl State {
         // close, and the fix landed only on the SSH branch. Name the wrap
         // itself, so `--secret wrap:op` scopes a rule to it and a rule
         // trained on anything else stops being consulted.
-        let subject = ssh.map(|s| format!("ssh:{}", s.key_id)).or_else(|| {
-            secrets
-                .is_empty()
-                .then(|| format!("wrap:{}", ask.dedupe_key.wrap))
-        });
-        let requested: Vec<&str> = match &subject {
-            Some(subject) => vec![subject.as_str()],
-            None => secrets.iter().map(|s| s.name.as_str()).collect(),
-        };
+        let subjects = rules::evaluation_subjects(
+            &ask.dedupe_key.wrap,
+            secrets.iter().map(|secret| secret.name.as_str()),
+        );
+        let requested: Vec<&str> = subjects.iter().map(AsRef::as_ref).collect();
         let ctx = EvalCtx {
             wrap: &ask.dedupe_key.wrap,
             joined_argv: &joined_argv,
@@ -1735,6 +1731,7 @@ impl State {
     /// [`State::refuse_broken_patterns`].
     pub fn add_rule(&mut self, rule: Rule) -> Result<()> {
         Self::refuse_broken_patterns(&rule)?;
+        Self::refuse_invalid_scope(&rule)?;
         if rule.is_wasm() && rule.trained_secrets.is_empty() {
             anyhow::bail!(
                 "refusing wasm rule `{}` with an empty trained-secrets snapshot: \
@@ -1786,6 +1783,31 @@ impl State {
         );
     }
 
+    /// Refuse registration-time scope errors through the same validator used
+    /// by `secreq check` and `rules stats`. A missing config is tolerated so
+    /// migration and isolated state tests can still manipulate the rules
+    /// store; once a live config exists, a subject no ask can declare is an
+    /// admission error rather than a silently dead rule.
+    fn refuse_invalid_scope(rule: &Rule) -> Result<()> {
+        let config_path = crate::paths::wraps_path()?;
+        if !config_path.is_file() {
+            return Ok(());
+        }
+        let config = crate::wraps::WrapsConfig::load(&config_path)?;
+        let findings =
+            crate::rule_health::validate_rule_scopes(&config, std::slice::from_ref(rule));
+        let errors: Vec<&str> = findings
+            .iter()
+            .filter(|finding| finding.severity == crate::rule_health::ScopeSeverity::Error)
+            .map(|finding| finding.message.as_str())
+            .collect();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            anyhow::bail!("refusing invalid rule scope: {}", errors.join("; "))
+        }
+    }
+
     /// The guarded insert behind [`State::add_rule`] and
     /// [`State::add_wasm_rule`] (which enforces the empty-snapshot
     /// opt-in itself before calling in). On persist failure the
@@ -1819,6 +1841,7 @@ impl State {
     /// stored rule exactly as it was.
     pub fn update_rule(&mut self, rule: Rule) -> Result<()> {
         Self::refuse_broken_patterns(&rule)?;
+        Self::refuse_invalid_scope(&rule)?;
         if !self.rules.iter().any(|r| r.id == rule.id) {
             anyhow::bail!("no rule with id `{}`", rule.id);
         }
@@ -2054,6 +2077,10 @@ impl State {
                 sha256: rules::sha256_hex(module_bytes),
             }),
         };
+        if let Err(err) = Self::refuse_invalid_scope(&rule) {
+            let _ = std::fs::remove_file(&store);
+            return Err(err);
+        }
         // `admit_rule`, not `add_rule`: the empty-snapshot opt-in was
         // already enforced above, with the flag to prove it.
         if let Err(err) = self.admit_rule(rule.clone()) {

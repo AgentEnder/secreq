@@ -6,79 +6,99 @@
 // own test suite covers). secreq never runs this spec: you test locally,
 // secreq only ever loads the compiled `rule.wasm`.
 
-import { RuleCtx, Caller, DecisionKind } from 'secreq-rule';
+import {
+  assertDecision,
+  caller,
+  expectApprove,
+  expectDeny,
+  expectPass,
+  ruleCtx,
+} from 'secreq-rule/testing/assembly';
 import { decide } from '../rule';
 
-function caller(name: string, command: string): Caller {
-  const c = new Caller();
-  c.name = name;
-  c.command = command;
-  return c;
-}
-
-function ctx(wrap: string, joinedArgv: string, cwd: string): RuleCtx {
-  const c = new RuleCtx();
-  c.wrap = wrap;
-  c.joinedArgv = joinedArgv;
-  c.cwd = cwd;
-  c.callers = [caller('zsh', '-zsh')];
-  c.secrets = ['NPM_TOKEN'];
-  return c;
-}
+const shell = [caller('zsh', '-zsh', '/bin/zsh')];
 
 describe('npm-publish-guard', () => {
   it('approves a publish from inside the publish root', () => {
-    const d = decide(ctx('npm', 'npm publish', '/home/me/oss/my-lib'));
-    expect(d.kind).toBe(DecisionKind.Approve);
+    assertDecision(
+      decide(ruleCtx('npm', 'npm publish', '/home/me/oss/my-lib', shell, ['NPM_TOKEN'])),
+      expectApprove(),
+    );
   });
 
   it('approves at the publish root itself', () => {
-    const d = decide(ctx('npm', 'npm publish --access public', '/home/me/oss'));
-    expect(d.kind).toBe(DecisionKind.Approve);
+    assertDecision(
+      decide(ruleCtx('npm', 'npm publish --access public', '/home/me/oss', shell, ['NPM_TOKEN'])),
+      expectApprove(),
+    );
   });
 
   it('passes on a publish from outside the publish root', () => {
-    const d = decide(ctx('npm', 'npm publish', '/tmp/scratch-clone'));
-    expect(d.kind).toBe(DecisionKind.Pass);
+    assertDecision(
+      decide(ruleCtx('npm', 'npm publish', '/tmp/scratch-clone', shell, ['NPM_TOKEN'])),
+      expectPass(),
+    );
   });
 
   it('does not treat a prefix-sibling directory as inside the root', () => {
     // /home/me/oss-scratch shares the string prefix but not the subtree.
-    const d = decide(ctx('npm', 'npm publish', '/home/me/oss-scratch'));
-    expect(d.kind).toBe(DecisionKind.Pass);
+    assertDecision(
+      decide(ruleCtx('npm', 'npm publish', '/home/me/oss-scratch', shell, ['NPM_TOKEN'])),
+      expectPass(),
+    );
   });
 
   it('passes on npm commands that are not a publish', () => {
-    const d = decide(ctx('npm', 'npm install', '/home/me/oss/my-lib'));
-    expect(d.kind).toBe(DecisionKind.Pass);
+    assertDecision(
+      decide(ruleCtx('npm', 'npm install', '/home/me/oss/my-lib', shell, ['NPM_TOKEN'])),
+      expectPass(),
+    );
   });
 
   it('does not match `npm publish-please` on the prefix', () => {
-    const d = decide(ctx('npm', 'npm publish-please', '/home/me/oss/my-lib'));
-    expect(d.kind).toBe(DecisionKind.Pass);
+    assertDecision(
+      decide(ruleCtx('npm', 'npm publish-please', '/home/me/oss/my-lib', shell, ['NPM_TOKEN'])),
+      expectPass(),
+    );
   });
 
   it('passes on other wraps entirely', () => {
-    const d = decide(ctx('gh', 'gh api /user', '/home/me/oss/my-lib'));
-    expect(d.kind).toBe(DecisionKind.Pass);
+    assertDecision(
+      decide(ruleCtx('gh', 'gh api /user', '/home/me/oss/my-lib', shell, ['NPM_TOKEN'])),
+      expectPass(),
+    );
   });
 
   it('denies a publish from an agent session, even inside the root', () => {
-    const c = ctx('npm', 'npm publish', '/home/me/oss/my-lib');
-    c.callers = [caller('node', 'node /usr/local/bin/claude'), caller('zsh', '-zsh')];
-    const d = decide(c);
-    expect(d.kind).toBe(DecisionKind.Deny);
-    expect(d.reason).toBe(
-      'npm publish from an AI-agent session is never auto-approved (caller: node)',
+    assertDecision(
+      decide(
+        ruleCtx(
+          'npm',
+          'npm publish',
+          '/home/me/oss/my-lib',
+          [caller('node', 'node /usr/local/bin/claude'), caller('zsh', '-zsh')],
+          ['NPM_TOKEN'],
+        ),
+      ),
+      expectDeny('npm publish from an AI-agent session is never auto-approved (caller: node)'),
     );
   });
 
   it('finds the agent anywhere in the caller chain, not just nearest', () => {
-    const c = ctx('npm', 'npm publish', '/home/me/oss/my-lib');
-    c.callers = [
-      caller('zsh', '-zsh'),
-      caller('Claude', '/Applications/Claude.app/Contents/MacOS/Claude'),
-    ];
-    expect(decide(c).kind).toBe(DecisionKind.Deny);
+    assertDecision(
+      decide(
+        ruleCtx(
+          'npm',
+          'npm publish',
+          '/home/me/oss/my-lib',
+          [
+            caller('zsh', '-zsh'),
+            caller('Claude', '/Applications/Claude.app/Contents/MacOS/Claude'),
+          ],
+          ['NPM_TOKEN'],
+        ),
+      ),
+      expectDeny('npm publish from an AI-agent session is never auto-approved (caller: Claude)'),
+    );
   });
 });

@@ -68,7 +68,12 @@ fn files_allowlist_ships_the_build_toolchain() {
     // itself, the package-root re-export (bare `import "secreq-rule"`
     // resolves here), and every `.ts` under assembly/ that the generated
     // ABI entry compiles through.
-    let mut required = vec!["bin/build.js".to_string(), "index.ts".to_string()];
+    let mut required = vec![
+        "bin/build.js".to_string(),
+        "index.ts".to_string(),
+        "testing/index.js".to_string(),
+        "testing/assembly.ts".to_string(),
+    ];
     for entry in std::fs::read_dir(format!("{PKG_DIR}/assembly"))
         .expect("assembly/ must exist")
         .flatten()
@@ -91,6 +96,16 @@ fn files_allowlist_ships_the_build_toolchain() {
              `npm install secreq-rule` would ship an incomplete package"
         );
     }
+}
+
+#[test]
+fn package_exports_both_testing_layers() {
+    let pkg = manifest();
+    assert_eq!(pkg["exports"]["./testing"], "./testing/index.js");
+    assert_eq!(
+        pkg["exports"]["./testing/assembly"],
+        "./testing/assembly.ts"
+    );
 }
 
 #[test]
