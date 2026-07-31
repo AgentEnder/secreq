@@ -43,6 +43,9 @@
 //!   into (AssemblyScript stub-runtime bump allocator; nothing is freed);
 //! - `decide(ptr: i32, len: i32) -> i64` — evaluate and return
 //!   `(ptr << 32) | len` pointing at UTF-8 decision JSON.
+//! - optionally, `subjects() -> i64` — return the same packed pointer/length
+//!   convention pointing at a UTF-8 JSON array of subjects the module asks
+//!   the operator to grant.
 //!
 //! Host flow: JSON-encode the ctx (UTF-8) → `alloc(len)` → write bytes
 //! into guest memory → `decide(ptr, len)` → unpack the packed `u64` →
@@ -55,6 +58,7 @@
 //! Decision JSON is the serde encoding of [`Decision`]:
 //! `"approve"` | `"pass"` | `{"deny": "reason"}` | `{"prompt": "reason"}`.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
@@ -93,6 +97,9 @@ pub const MAX_GUEST_MEMORY_BYTES: usize = 64 << 20;
 /// decision is a deny with a human-readable reason; 64 KiB is already
 /// absurdly generous.
 const MAX_DECISION_LEN: u32 = 64 * 1024;
+
+/// Cap on the optional declaration JSON returned at registration/load time.
+const MAX_SUBJECTS_LEN: u32 = 64 * 1024;
 
 /// What a wasm rule returned. The serde encoding is the wire format
 /// (externally tagged): `"approve"`, `"pass"`, `{"deny": "reason"}`, or
@@ -212,6 +219,43 @@ impl RuleModule {
             .with_context(|| format!("read wasm rule module: {}", path.display()))?;
         Self::from_binary(&bytes)
             .with_context(|| format!("load wasm rule module: {}", path.display()))
+    }
+
+    /// Read the module author's optional subject declaration.
+    ///
+    /// `None` means the module has no `subjects` export. `Some(empty)` stays
+    /// distinct so registration can reject a declaration that would otherwise
+    /// look like the trained-secrets guard had been deliberately disabled.
+    pub fn declared_subjects(&self) -> Result<Option<BTreeSet<String>>> {
+        let (mut store, instance) = self.instantiate()?;
+        if instance.get_export(&mut store, "subjects").is_none() {
+            return Ok(None);
+        }
+        let memory = instance
+            .get_memory(&mut store, "memory")
+            .context("rule module does not export `memory`")?;
+        let subjects = instance
+            .get_typed_func::<(), u64>(&mut store, "subjects")
+            .wasm_context("rule module `subjects` export has wrong type")?;
+        let packed = subjects
+            .call(&mut store, ())
+            .wasm_context("guest subjects declaration trapped")?;
+        let declaration_ptr = (packed >> 32) as u32;
+        let declaration_len = (packed & 0xffff_ffff) as u32;
+        if declaration_len > MAX_SUBJECTS_LEN {
+            bail!("guest returned an oversized subjects declaration ({declaration_len} bytes)");
+        }
+
+        let mut declaration_bytes = vec![0u8; declaration_len as usize];
+        memory
+            .read(&store, declaration_ptr as usize, &mut declaration_bytes)
+            .context("guest returned an out-of-bounds subjects pointer")?;
+        let declaration_text = std::str::from_utf8(&declaration_bytes)
+            .context("guest subjects declaration is not valid UTF-8")?;
+        let subjects = serde_json::from_str(declaration_text).with_context(|| {
+            format!("guest returned malformed subjects JSON: {declaration_text:?}")
+        })?;
+        Ok(Some(subjects))
     }
 
     /// Run the module's `decide` against `ctx`. Any guest misbehavior
@@ -342,11 +386,13 @@ fn check_abi_exports(module: &Module) -> Result<()> {
     let mut memory_ok = false;
     let mut alloc_ok = false;
     let mut decide_ok = false;
+    let mut subjects_ok = None;
     for export in module.exports() {
         match export.name() {
             "memory" => memory_ok = matches!(export.ty(), ExternType::Memory(_)),
             "alloc" => alloc_ok = func_shape_is(&export.ty(), &[i32_ty], i32_ty),
             "decide" => decide_ok = func_shape_is(&export.ty(), &[i32_ty, i32_ty], i64_ty),
+            "subjects" => subjects_ok = Some(func_shape_is(&export.ty(), &[], i64_ty)),
             _ => {}
         }
     }
@@ -358,6 +404,12 @@ fn check_abi_exports(module: &Module) -> Result<()> {
     }
     if !decide_ok {
         bail!("wasm rule module does not export `decide(ptr: i32, len: i32) -> i64`");
+    }
+    if subjects_ok == Some(false) {
+        bail!(
+            "wasm rule module exports `subjects` with the wrong type; \
+             expected `subjects() -> i64`"
+        );
     }
     Ok(())
 }
@@ -373,6 +425,8 @@ mod tests {
     // rebuild.sh (checked in so `cargo test` needs no node toolchain).
     const ALWAYS_PASS: &[u8] = include_bytes!("../tests/fixtures/wasm_rules/always_pass.wasm");
     const APPROVE_IF: &[u8] = include_bytes!("../tests/fixtures/wasm_rules/approve_if.wasm");
+    const NPM_PUBLISH_GUARD: &[u8] =
+        include_bytes!("../../secreq-rule/examples/npm-publish-guard/rule.wasm");
     const DENY_ECHO: &[u8] = include_bytes!("../tests/fixtures/wasm_rules/deny_echo.wasm");
     const BAD_DECISION: &[u8] = include_bytes!("../tests/fixtures/wasm_rules/bad_decision.wasm");
     const ABORTS: &[u8] = include_bytes!("../tests/fixtures/wasm_rules/aborts.wasm");
@@ -574,6 +628,68 @@ mod tests {
         assert!(
             format!("{err:#}").contains("does not export"),
             "error should name the missing export: {err:#}"
+        );
+    }
+
+    #[test]
+    fn reads_the_optional_subject_declaration() {
+        let bytes = wat::parse_str(
+            r#"
+            (module
+              (memory (export "memory") 1)
+              (func (export "alloc") (param i32) (result i32) i32.const 1024)
+              (func (export "decide") (param i32 i32) (result i64)
+                i64.const 549755813894)
+              (func (export "subjects") (result i64)
+                i64.const 29)
+              (data (i32.const 0) "[\"GITHUB_TOKEN\",\"ssh:deploy\"]")
+              (data (i32.const 128) "\"pass\""))
+            "#,
+        )
+        .expect("assemble wat");
+        let module = RuleModule::from_binary(&bytes).expect("load");
+
+        assert_eq!(
+            module.declared_subjects().expect("read declaration"),
+            Some(
+                ["GITHUB_TOKEN".to_owned(), "ssh:deploy".to_owned()]
+                    .into_iter()
+                    .collect()
+            )
+        );
+    }
+
+    #[test]
+    fn sdk_build_wrapper_exports_the_authors_subjects() {
+        let module = RuleModule::from_binary(NPM_PUBLISH_GUARD).expect("load example");
+        assert_eq!(
+            module.declared_subjects().expect("read declaration"),
+            Some(["NPM_TOKEN".to_owned()].into_iter().collect())
+        );
+    }
+
+    #[test]
+    fn a_module_without_subjects_has_no_declaration() {
+        let module = RuleModule::from_binary(ALWAYS_PASS).expect("load");
+        assert_eq!(module.declared_subjects().expect("read declaration"), None);
+    }
+
+    #[test]
+    fn a_subjects_export_with_the_wrong_signature_is_rejected() {
+        let bytes = wat::parse_str(
+            r#"
+            (module
+              (memory (export "memory") 1)
+              (func (export "alloc") (param i32) (result i32) i32.const 0)
+              (func (export "decide") (param i32 i32) (result i64) i64.const 0)
+              (func (export "subjects") (param i32) (result i64) i64.const 0))
+            "#,
+        )
+        .expect("assemble wat");
+        let err = RuleModule::from_binary(&bytes).expect_err("must reject");
+        assert!(
+            format!("{err:#}").contains("subjects() -> i64"),
+            "error should name the malformed export: {err:#}"
         );
     }
 

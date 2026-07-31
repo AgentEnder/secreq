@@ -600,12 +600,12 @@ Then register the module — the daemon vets it, copies it under the secreq
 root, and pins it by sha256:
 
 ```sh
-secreq rules add-wasm rule.wasm --name "{name}" --secret SOME_TOKEN
+secreq rules add-wasm rule.wasm --name "{name}" --accept-declared
 ```
 
-`--secret` is the trained-secrets guard: the rule is never consulted for an
-ask requesting a name outside that set. Pass one per env var the rule may
-decide.
+The starter's `subjects()` requests `SOME_TOKEN`; replace it with the env keys,
+SSH identities, or gate-only wraps this rule understands. Registration shows
+that request and `--accept-declared` confirms it non-interactively.
 
 ## Layout
 
@@ -637,13 +637,20 @@ const RULE_TS: &str = r#"// A programmable secreq auto-rule.
 //     npm install        # once
 //     npm test           # as-pect, against assembly/__tests__/
 //     npm run build      # → rule.wasm
-//     secreq rules add-wasm rule.wasm --secret SOME_TOKEN
+//     secreq rules add-wasm rule.wasm --accept-declared
 //
 // AssemblyScript is a *subset* of TypeScript: strings, arrays and plain
 // loops behave as you expect; regexes, closures and most of the JavaScript
 // standard library are not available.
 
 import { RuleCtx, Decision, pass } from 'secreq-rule';
+
+// This is the module author's request, not its grant. Registration validates
+// each name against config.toml and asks the operator to confirm the effective
+// trained-secrets snapshot.
+export function subjects(): string[] {
+  return ['SOME_TOKEN'];
+}
 
 // Add the decisions you use to the import above:
 //

@@ -44,5 +44,5 @@ Then register the module (the daemon vets it, copies it into
 `~/.secreq/rules/`, and pins it by sha256):
 
 ```sh
-secreq rules add-wasm rule.wasm --name "npm publish guard" --secret NPM_TOKEN
+secreq rules add-wasm rule.wasm --name "npm publish guard" --accept-declared
 ```

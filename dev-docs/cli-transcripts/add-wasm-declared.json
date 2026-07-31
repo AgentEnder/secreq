@@ -1,0 +1,67 @@
+{
+  "caption": "A module can request its own subjects, but it cannot grant them. Registration prints the validated set and waits for the operator; use <code>--accept-declared</code> only when that confirmation has already happened out of band.",
+  "cols": 80,
+  "command": "secreq rules add-wasm rule.wasm",
+  "id": "add-wasm-declared",
+  "steps": [
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "t": "module declares: NPM_TOKEN"
+          }
+        ],
+        [
+          {
+            "t": "◆  Register with these subjects?"
+          }
+        ],
+        [
+          {
+            "t": "│  ○ Yes  / ● No"
+          }
+        ],
+        [
+          {
+            "t": "└"
+          }
+        ]
+      ]
+    },
+    {
+      "key": "n",
+      "kind": "key"
+    },
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "t": "module declares: NPM_TOKEN"
+          }
+        ],
+        [
+          {
+            "t": "◇  Register with these subjects?"
+          }
+        ],
+        [
+          {
+            "t": "│  No"
+          }
+        ],
+        [
+          {
+            "t": "│"
+          }
+        ],
+        [
+          {
+            "t": "wasm rule was not registered"
+          }
+        ]
+      ]
+    }
+  ]
+}

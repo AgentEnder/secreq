@@ -7,6 +7,8 @@
 //     the UTF-8 ctx JSON into.
 //   - export `decide(ptr: usize, len: i32) -> u64`: parse the ctx, run the
 //     rule, return `(ptr << 32) | len` pointing at UTF-8 decision JSON.
+//   - optional export `subjects() -> u64`: return the same packed pointer/len
+//     pointing at a UTF-8 JSON string array.
 //   - decision JSON: `"approve"` | `"pass"` | `{"deny": "reason"}`
 //     | `{"prompt": "reason"}`.
 //
@@ -40,6 +42,22 @@ export function encodeDecision(d: Decision): u64 {
   } else {
     json = '{"deny":' + quoteJson(d.reason) + '}';
   }
+  return encodeJson(json);
+}
+
+/** Encode a module-authored subject declaration as packed UTF-8 JSON. */
+export function encodeSubjects(subjects: string[]): u64 {
+  let json = '[';
+  for (let i = 0; i < subjects.length; i++) {
+    if (i > 0) json += ',';
+    json += quoteJson(subjects[i]);
+  }
+  json += ']';
+  return encodeJson(json);
+}
+
+/** Put UTF-8 JSON in guest memory and pack its pointer/length. */
+function encodeJson(json: string): u64 {
   const buf = String.UTF8.encode(json);
   const ptr = changetype<usize>(buf);
   const len = buf.byteLength;

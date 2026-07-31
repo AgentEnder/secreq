@@ -18,6 +18,10 @@ const PUBLISH_ROOT = '/home/me/oss/';
 /** Case-insensitive needle for agent sessions in the caller chain. */
 const AGENT_NEEDLE = 'claude';
 
+export function subjects(): string[] {
+  return ['NPM_TOKEN'];
+}
+
 export function decide(ctx: RuleCtx): Decision {
   // Only the npm wrap, only `npm publish …`. Anything else is not this
   // rule's call to make.

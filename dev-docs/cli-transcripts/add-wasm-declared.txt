@@ -1,0 +1,7 @@
+$ secreq rules add-wasm rule.wasm
+
+module declares: NPM_TOKEN
+◇  Register with these subjects?
+│  No
+│
+wasm rule was not registered

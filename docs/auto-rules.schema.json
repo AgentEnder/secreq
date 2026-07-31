@@ -8,12 +8,23 @@
       "description": "One auto-decision rule. Exactly one of two shapes: declarative (`decide` + `match`, `wasm` absent) or wasm (`wasm` alone — the compiled module returns approve/pass/deny at evaluation time, so `decide` and `deny_message` must be absent).",
       "oneOf": [
         {
+          "allOf": [
+            {
+              "not": {
+                "required": [
+                  "wasm"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "declared_secrets"
+                ]
+              }
+            }
+          ],
           "description": "Declarative rule: static decide + match clause.",
-          "not": {
-            "required": [
-              "wasm"
-            ]
-          },
           "required": [
             "decide",
             "match"
@@ -43,7 +54,7 @@
               }
             }
           ],
-          "description": "Wasm rule: the module decides. `decide`/`match`/`deny_message` are forbidden — the decision (and any deny reason) is the module's return value.",
+          "description": "Wasm rule: the module decides and may carry its confirmed `declared_secrets` request. `decide`/`match`/`deny_message` are forbidden — the decision (and any deny reason) is the module's return value.",
           "required": [
             "wasm"
           ]
@@ -67,6 +78,17 @@
             }
           ],
           "description": "Direction a declarative rule fires when it matches. Among matching rules, any deny wins; otherwise the most-specific approve wins (a wasm rule that returns a decision counts as maximally specific). Forbidden on wasm rules."
+        },
+        "declared_secrets": {
+          "description": "Subjects requested by a wasm module's `subjects()` export when the operator registered it. A request, not a grant: `trained_secrets` is the effective permission snapshot. Forbidden on declarative rules.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ],
+          "uniqueItems": true
         },
         "deny_message": {
           "description": "Message printed to stderr on auto-deny and shown in the consent window's toast. Belongs to `decide: deny`: an approve rule refuses nobody, so a `deny_message` beside `decide: approve` is ignored, warned about by rule name in the daemon log, and removed the next time secreq writes the file. Forbidden outright on wasm rules — the module returns its own reason.",

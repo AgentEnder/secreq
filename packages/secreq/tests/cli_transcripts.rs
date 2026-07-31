@@ -1477,6 +1477,37 @@ fn wrap_interactive_gate_only() {
     ));
 }
 
+/// A module-authored subject request at registration time. The operator sees
+/// the exact set before granting it; this fixture declines so the recording
+/// stays deterministic (a successful registration would print a random id).
+#[test]
+#[ignore = "records a docs transcript; run with --ignored"]
+fn add_wasm_confirms_declared_subjects() {
+    let (sb, bin_dir) = recording_sandbox();
+    std::fs::write(
+        recording_root().join("config.toml"),
+        "[wraps.npm.env]\nNPM_TOKEN = \"secret://op/Personal/npm/credential\"\n",
+    )
+    .expect("seed recording config");
+    let module = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../secreq-rule/examples/npm-publish-guard/rule.wasm");
+    let mut rec = Recorder::new(spawn_recording(
+        &sb,
+        &bin_dir,
+        &["rules", "add-wasm", module.to_str().unwrap()],
+    ));
+
+    rec.expect("Register with these subjects?").answer(false);
+    rec.finish(Transcript::new(
+        "add-wasm-declared",
+        "secreq rules add-wasm rule.wasm",
+        "A module can request its own subjects, but it cannot grant them. \
+         Registration prints the validated set and waits for the operator; \
+         use <code>--accept-declared</code> only when that confirmation has \
+         already happened out of band.",
+    ));
+}
+
 /// A wrapped command actually blocking on consent — the moment the whole
 /// product is about, and the only recording here that is not a
 /// configuration flow.

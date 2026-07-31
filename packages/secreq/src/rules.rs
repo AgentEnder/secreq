@@ -282,6 +282,11 @@ pub(crate) struct RuleWire {
     r#match: Option<RuleMatch>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     wasm: Option<WasmRule>,
+    /// Subjects requested by a wasm module's `subjects()` export when the
+    /// operator registered it. A request, not a grant: `trained_secrets` is
+    /// the effective permission snapshot. Forbidden on declarative rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    declared_secrets: Option<BTreeSet<String>>,
     /// Snapshot of env-var names the rule was created against. Declarative
     /// approvals require every requested name to be in this set. Wasm rules
     /// run when at least one requested name overlaps and can approve only
@@ -323,7 +328,7 @@ impl TryFrom<RuleWire> for Rule {
                 "{label} has neither a `match` clause nor a `wasm` module — a \
                  rule must be declarative (`decide` + `match`) or wasm (`wasm`)"
             ),
-            (Some(wasm), None) => {
+            (Some(mut wasm), None) => {
                 if wire.decide.is_some() {
                     bail!(
                         "{label} is a wasm rule but sets `decide` — a wasm rule's \
@@ -338,9 +343,16 @@ impl TryFrom<RuleWire> for Rule {
                          `deny_message`"
                     );
                 }
+                wasm.declared_secrets = wire.declared_secrets;
                 RuleBody::Wasm(wasm)
             }
             (None, Some(r#match)) => {
+                if wire.declared_secrets.is_some() {
+                    bail!(
+                        "{label} is declarative but sets `declared_secrets` — only a wasm \
+                         module can export a subject declaration; remove the field"
+                    );
+                }
                 let Some(decide) = wire.decide else {
                     bail!("{label} has a `match` clause but no `decide` (approve or deny)");
                 };
@@ -373,14 +385,19 @@ impl TryFrom<RuleWire> for Rule {
 
 impl From<Rule> for RuleWire {
     fn from(rule: Rule) -> RuleWire {
-        let (decide, r#match, wasm, deny_message) = match rule.body {
+        let (decide, r#match, wasm, declared_secrets, deny_message) = match rule.body {
             RuleBody::Declarative { r#match, decide } => match decide {
-                StaticDecision::Approve => (Some(RuleDecision::Approve), Some(r#match), None, None),
+                StaticDecision::Approve => {
+                    (Some(RuleDecision::Approve), Some(r#match), None, None, None)
+                }
                 StaticDecision::Deny { message } => {
-                    (Some(RuleDecision::Deny), Some(r#match), None, message)
+                    (Some(RuleDecision::Deny), Some(r#match), None, None, message)
                 }
             },
-            RuleBody::Wasm(wasm) => (None, None, Some(wasm), None),
+            RuleBody::Wasm(wasm) => {
+                let declared_secrets = wasm.declared_secrets.clone();
+                (None, None, Some(wasm), declared_secrets, None)
+            }
         };
         RuleWire {
             id: rule.id,
@@ -390,6 +407,7 @@ impl From<Rule> for RuleWire {
             decide,
             r#match,
             wasm,
+            declared_secrets,
             trained_secrets: rule.trained_secrets,
             deny_message,
             created_at_unix: rule.created_at_unix,
@@ -412,10 +430,13 @@ pub(crate) fn rule_one_of() -> serde_json::Value {
         {
             "description": "Declarative rule: static decide + match clause.",
             "required": ["decide", "match"],
-            "not": { "required": ["wasm"] }
+            "allOf": [
+                { "not": { "required": ["wasm"] } },
+                { "not": { "required": ["declared_secrets"] } }
+            ]
         },
         {
-            "description": "Wasm rule: the module decides. `decide`/`match`/`deny_message` are forbidden — the decision (and any deny reason) is the module's return value.",
+            "description": "Wasm rule: the module decides and may carry its confirmed `declared_secrets` request. `decide`/`match`/`deny_message` are forbidden — the decision (and any deny reason) is the module's return value.",
             "required": ["wasm"],
             "allOf": [
                 { "not": { "required": ["decide"] } },
@@ -457,6 +478,146 @@ pub struct WasmRule {
     /// loud daemon-log error; other rules keep working.
     #[cfg_attr(feature = "schema", schemars(regex(pattern = r"^[0-9a-fA-F]{64}$")))]
     pub sha256: String,
+    /// Subjects requested by the module's optional `subjects()` export at
+    /// registration time. This is the author's request, not the operator's
+    /// grant; [`Rule::trained_secrets`] remains the effective bound on what an
+    /// approval may bless. When present, the live export must still match this
+    /// snapshot or the rule is refused until it is registered and confirmed
+    /// again.
+    #[serde(skip)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub declared_secrets: Option<BTreeSet<String>>,
+}
+
+/// The complete set of subject strings an ask can present for one config,
+/// plus the named-secret metadata needed for the targeted "env key vs
+/// declaration name" diagnostic.
+#[derive(Debug, Default)]
+struct SubjectUniverse {
+    valid: BTreeSet<String>,
+    named: BTreeSet<String>,
+    named_bindings: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl SubjectUniverse {
+    fn from_config(config: &crate::wraps::WrapsConfig) -> SubjectUniverse {
+        let mut universe = SubjectUniverse::default();
+        universe.named.extend(config.secrets.keys().cloned());
+
+        for (wrap_name, wrap) in &config.wraps {
+            if wrap.env.is_empty() {
+                universe.valid.insert(format!("wrap:{wrap_name}"));
+            }
+            for (env_key, raw) in &wrap.env {
+                universe.valid.insert(env_key.clone());
+                if let Ok(resolved) = config.resolve_ref(raw) {
+                    if let Some(name) = resolved.declared_as {
+                        universe
+                            .named_bindings
+                            .entry(name)
+                            .or_default()
+                            .insert(env_key.clone());
+                    }
+                }
+            }
+        }
+        universe
+            .valid
+            .extend(config.ssh.keys().map(|id| format!("ssh:{id}")));
+        universe
+    }
+}
+
+/// Validate subject names against what asks built from `config` can carry.
+///
+/// `[secrets.<name>]` entries are deliberately not candidates: they define a
+/// value, while rule matching sees the env key a wrap binds that value to.
+/// Each returned string is ready for a CLI error line and contains no secret
+/// values.
+pub fn subject_validation_errors(
+    config: &crate::wraps::WrapsConfig,
+    subjects: &BTreeSet<String>,
+) -> Vec<String> {
+    let universe = SubjectUniverse::from_config(config);
+    subjects
+        .iter()
+        .filter_map(|subject| {
+            if universe.valid.contains(subject) {
+                return None;
+            }
+            if universe.named.contains(subject) {
+                let bindings = universe
+                    .named_bindings
+                    .get(subject)
+                    .cloned()
+                    .unwrap_or_default();
+                return Some(if bindings.is_empty() {
+                    format!(
+                        "'{subject}' is a named secret that no wrap binds to an env key; \
+                         no ask can ever declare it"
+                    )
+                } else {
+                    let choices = bindings
+                        .iter()
+                        .map(|binding| format!("'{binding}'"))
+                        .collect::<Vec<_>>()
+                        .join(" or ");
+                    format!(
+                        "'{subject}' is a named secret, but asks declare the env key \
+                         — did you mean {choices}?"
+                    )
+                });
+            }
+            let suggestion = closest_subject(subject, &universe.valid);
+            Some(format!(
+                "'{subject}' matches no env key, ssh identity, or gate-only wrap{}",
+                suggestion
+                    .map(|candidate| format!(" — did you mean '{candidate}'?"))
+                    .unwrap_or_default()
+            ))
+        })
+        .collect()
+}
+
+fn closest_subject<'a>(subject: &str, candidates: &'a BTreeSet<String>) -> Option<&'a str> {
+    candidates
+        .iter()
+        .map(|candidate| {
+            (
+                candidate.as_str(),
+                levenshtein_ascii(
+                    subject.to_ascii_lowercase().as_bytes(),
+                    candidate.to_ascii_lowercase().as_bytes(),
+                ),
+            )
+        })
+        .filter(|(candidate, distance)| *distance <= std::cmp::max(2, candidate.len() / 3))
+        .min_by_key(|(_, distance)| *distance)
+        .map(|(candidate, _)| candidate)
+}
+
+/// Subject syntax is intentionally ASCII-ish (env keys and configured ids),
+/// so a byte-level Levenshtein implementation is both sufficient and keeps
+/// this validation off the runtime dependency graph.
+fn levenshtein_ascii(a: &[u8], b: &[u8]) -> usize {
+    let mut previous: Vec<usize> = (0..=b.len()).collect();
+    let mut current = Vec::with_capacity(b.len() + 1);
+    for (i, left) in a.iter().enumerate() {
+        current.clear();
+        current.push(i + 1);
+        for (j, right) in b.iter().enumerate() {
+            let insertion = current.last().copied().unwrap_or_default() + 1;
+            let deletion = previous.get(j + 1).copied().unwrap_or_default() + 1;
+            let substitution =
+                previous.get(j).copied().unwrap_or_default() + usize::from(left != right);
+            current.push(std::cmp::min(
+                std::cmp::min(insertion, deletion),
+                substitution,
+            ));
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous.last().copied().unwrap_or(a.len())
 }
 
 /// Why a wasm rule was refused, coarse enough for a one-word list
@@ -471,6 +632,9 @@ pub enum WasmRefusalCategory {
     /// The module bytes hash to something other than the recorded
     /// sha256 — the module changed since registration.
     Sha256Mismatch,
+    /// The module's live `subjects()` declaration differs from the set the
+    /// operator confirmed at registration.
+    DeclarationMismatch,
     /// The module was read and hash-verified but the sandbox rejected
     /// it (bad imports, wrong abort signature, oversized memory,
     /// missing exports, …).
@@ -483,6 +647,7 @@ impl WasmRefusalCategory {
         match self {
             WasmRefusalCategory::MissingModule => "module missing",
             WasmRefusalCategory::Sha256Mismatch => "sha256 mismatch",
+            WasmRefusalCategory::DeclarationMismatch => "declaration changed",
             WasmRefusalCategory::ModuleRejected => "module rejected",
         }
     }
@@ -908,6 +1073,39 @@ pub fn load_rule_module(
             category: WasmRefusalCategory::ModuleRejected,
             source,
         })?;
+    if let Some(expected) = &wasm.declared_secrets {
+        let actual = module
+            .declared_subjects()
+            .with_context(|| {
+                format!(
+                    "read subjects declaration for rule `{}` (id {}): {}",
+                    rule.name,
+                    rule.id,
+                    path.display()
+                )
+            })
+            .map_err(|source| WasmLoadError {
+                category: WasmRefusalCategory::ModuleRejected,
+                source,
+            })?;
+        if actual.as_ref() != Some(expected) {
+            return Err(WasmLoadError {
+                category: WasmRefusalCategory::DeclarationMismatch,
+                source: anyhow::anyhow!(
+                    "subjects declaration changed for wasm rule `{}` (id {}): \
+                     the rules file records [{}], but the module now declares [{}] — \
+                     refusing to load this rule until the declaration is re-confirmed",
+                    rule.name,
+                    rule.id,
+                    expected.iter().cloned().collect::<Vec<_>>().join(", "),
+                    actual.as_ref().map_or_else(
+                        || "(no subjects export)".to_owned(),
+                        |subjects| subjects.iter().cloned().collect::<Vec<_>>().join(", "),
+                    ),
+                ),
+            });
+        }
+    }
     Ok(Some(module))
 }
 
@@ -2256,6 +2454,66 @@ mod tests {
         id.to_owned()
     }
 
+    fn subject_config() -> crate::wraps::WrapsConfig {
+        crate::wraps::WrapsConfig::parse(
+            r#"
+            [secrets.ZAI_TOKEN]
+            ref = "secret://op/Work/zai"
+
+            [wraps.claude.env]
+            ANTHROPIC_AUTH_TOKEN = "secret://ZAI_TOKEN"
+            GITHUB_TOKEN = "secret://op/Work/github"
+
+            [wraps.op]
+
+            [ssh.deploy]
+            public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1 deploy"
+            private_key = "secret://op/Work/deploy"
+            "#,
+            "test config",
+        )
+        .expect("parse config")
+    }
+
+    #[test]
+    fn subject_validation_accepts_every_ask_subject_kind() {
+        let subjects = [
+            "ANTHROPIC_AUTH_TOKEN".to_owned(),
+            "GITHUB_TOKEN".to_owned(),
+            "ssh:deploy".to_owned(),
+            "wrap:op".to_owned(),
+        ]
+        .into_iter()
+        .collect();
+        assert!(subject_validation_errors(&subject_config(), &subjects).is_empty());
+    }
+
+    #[test]
+    fn subject_validation_names_the_env_key_bound_to_a_named_secret() {
+        let subjects = ["ZAI_TOKEN".to_owned()].into_iter().collect();
+        assert_eq!(
+            subject_validation_errors(&subject_config(), &subjects),
+            vec![
+                "'ZAI_TOKEN' is a named secret, but asks declare the env key \
+                 — did you mean 'ANTHROPIC_AUTH_TOKEN'?"
+                    .to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn subject_validation_suggests_the_closest_declarable_subject() {
+        let subjects = ["GITHUB_TOKNE".to_owned()].into_iter().collect();
+        assert_eq!(
+            subject_validation_errors(&subject_config(), &subjects),
+            vec![
+                "'GITHUB_TOKNE' matches no env key, ssh identity, or gate-only wrap \
+                 — did you mean 'GITHUB_TOKEN'?"
+                    .to_owned()
+            ]
+        );
+    }
+
     fn mk_rule(id: &str, name: &str, decide: RuleDecision, m: RuleMatch, trained: &[&str]) -> Rule {
         Rule {
             id: rule_id(id),
@@ -2285,6 +2543,7 @@ mod tests {
             body: RuleBody::Wasm(WasmRule {
                 path: format!("{id}.wasm"),
                 sha256: "unverified-in-eval-tests".to_owned(),
+                declared_secrets: None,
             }),
         }
     }
@@ -4113,6 +4372,7 @@ sha256 = "00"
             WasmRule {
                 path: "mod.wasm".to_owned(),
                 sha256: sha256_hex(APPROVE_IF),
+                declared_secrets: None,
             },
         );
         let loaded = load_with_module(rule.clone(), "mod.wasm", APPROVE_IF);
@@ -4150,6 +4410,7 @@ sha256 = "00"
             WasmRule {
                 path: "mod.wasm".to_owned(),
                 sha256: sha256_hex(APPROVE_IF).to_uppercase(),
+                declared_secrets: None,
             },
         );
         let loaded = load_with_module(rule, "mod.wasm", APPROVE_IF);
@@ -4176,6 +4437,7 @@ sha256 = "00"
             WasmRule {
                 path: "mod.wasm".to_owned(),
                 sha256: sha256_hex(b"different bytes entirely"),
+                declared_secrets: None,
             },
         );
         let deny = mk_rule(
@@ -4207,6 +4469,35 @@ sha256 = "00"
     }
 
     #[test]
+    fn changed_subject_declaration_refuses_the_rule_until_reconfirmed() {
+        let mut rule = mk_wasm_rule("01", "scope changed", &["GITHUB_TOKEN"]);
+        set_wasm(
+            &mut rule,
+            WasmRule {
+                path: "mod.wasm".to_owned(),
+                sha256: sha256_hex(APPROVE_IF),
+                declared_secrets: Some(["GITHUB_TOKEN".to_owned()].into_iter().collect()),
+            },
+        );
+
+        // APPROVE_IF predates the declaration ABI and has no `subjects`
+        // export. That is a scope change from the snapshot above just as
+        // surely as returning a different array is.
+        let loaded = load_with_module(rule, "mod.wasm", APPROVE_IF);
+        assert!(loaded.modules.is_empty());
+        assert_eq!(loaded.refusals.wasm.len(), 1);
+        let refusal = &loaded.refusals.wasm[0];
+        assert_eq!(refusal.category, WasmRefusalCategory::DeclarationMismatch);
+        assert!(
+            refusal.reason.contains("re-confirmed")
+                && refusal.reason.contains("GITHUB_TOKEN")
+                && refusal.reason.contains("no subjects export"),
+            "{}",
+            refusal.reason
+        );
+    }
+
+    #[test]
     fn missing_module_file_is_a_per_rule_error_naming_rule_and_path() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("auto-rules.toml");
@@ -4216,6 +4507,7 @@ sha256 = "00"
             WasmRule {
                 path: "nonexistent.wasm".to_owned(),
                 sha256: sha256_hex(APPROVE_IF),
+                declared_secrets: None,
             },
         );
         save_rules(&path, &[rule]).expect("save");

@@ -155,6 +155,7 @@ fn every_rule_secreq_writes_validates_against_the_published_schema() {
                 body: RuleBody::Wasm(WasmRule {
                     path: "rules/0a1b2c3d4e5f.wasm".to_owned(),
                     sha256: "b".repeat(64),
+                    declared_secrets: Some(["NPM_TOKEN".to_owned()].into_iter().collect()),
                 }),
             },
         ),
@@ -250,6 +251,14 @@ fn the_schema_refuses_the_rule_shapes_the_loader_refuses() {
             json!({
                 "id": "01", "name": "r", "enabled": true,
                 "match": { "wrap": "gh" }
+            }),
+        ),
+        (
+            "a declarative rule with a module declaration",
+            json!({
+                "id": "01", "name": "r", "enabled": true, "decide": "approve",
+                "match": { "wrap": "gh" },
+                "declared_secrets": ["GITHUB_TOKEN"]
             }),
         ),
     ];

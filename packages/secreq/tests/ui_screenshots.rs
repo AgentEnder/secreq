@@ -2976,6 +2976,7 @@ fn rules_tab_wasm_refused() {
         body: RuleBody::Wasm(WasmRule {
             path: format!("rules/{id}.wasm"),
             sha256: sha.to_owned(),
+            declared_secrets: None,
         }),
     };
 

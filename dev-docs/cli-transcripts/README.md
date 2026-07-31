@@ -44,6 +44,7 @@ fixture's `layout.json` holds it beside the renders.)
 | `wrap-gh` | `wrap_interactive_inject_secrets` | `secreq wrap gh` with no flags: provider picker, env var name, locator, and the resolvability check that runs before the wrap is written. |
 | `wrap-declared-secret` | `wrap_interactive_injects_a_declaration_under_its_own_name` | Selecting a declaration and accepting its own name, which writes `env_secrets` without retyping the env var. |
 | `wrap-gate-only` | `wrap_interactive_gate_only` | The gate-only branch of `secreq wrap`: consent required, nothing injected. |
+| `add-wasm-declared` | `add_wasm_confirms_declared_subjects` | `rules add-wasm` showing a module-authored subject request and waiting for the operator's grant. |
 | `ssh-setup` | `ssh_setup_guided` | `secreq ssh setup` wiring SSH clients at the agent socket, showing the managed block and the file first. |
 | `run-gh` | `run_gh_blocking_on_consent` | A wrapped `gh repo list` actually blocking on consent: the wait indicator while the window is up, then the real command running with the token injected. The only fixture here that is not a configuration flow, and the only one with `gui` markers. |
 | `run-gh-denied` | `run_gh_denied_with_reason` | A wrapped destructive command denied with an optional explanation; the client prints the reason and does not run the command. |
