@@ -297,16 +297,19 @@ pub fn read(refs: &[String], config_path: Option<&Path>) -> Result<i32> {
         .context("daemon consent request failed")?;
     let _ = audit::append(
         &AuditEntry::new("read", &command, &chain, &seen, outcome.decision)
+            .with_reason(outcome.reason.clone())
             .with_rule_id(outcome.rule_id.clone()),
     );
 
     if !outcome.decision.approved() {
         if outcome.decision == Decision::DenyAuto {
             let rule_name = outcome.rule_name.as_deref().unwrap_or("(unknown)");
-            match outcome.deny_message.as_deref() {
+            match outcome.reason.as_deref() {
                 Some(msg) => eprintln!("secreq: denied by rule '{rule_name}': {msg}"),
                 None => eprintln!("secreq: denied by rule '{rule_name}'"),
             }
+        } else if let Some(reason) = outcome.reason.as_deref() {
+            eprintln!("secreq: denied: {reason}");
         } else {
             eprintln!("secreq: denied");
         }

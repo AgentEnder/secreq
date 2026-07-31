@@ -45,6 +45,7 @@ fixture's `layout.json` holds it beside the renders.)
 | `wrap-gate-only` | `wrap_interactive_gate_only` | The gate-only branch of `secreq wrap`: consent required, nothing injected. |
 | `ssh-setup` | `ssh_setup_guided` | `secreq ssh setup` wiring SSH clients at the agent socket, showing the managed block and the file first. |
 | `run-gh` | `run_gh_blocking_on_consent` | A wrapped `gh repo list` actually blocking on consent: the wait indicator while the window is up, then the real command running with the token injected. The only fixture here that is not a configuration flow, and the only one with `gui` markers. |
+| `run-gh-denied` | `run_gh_denied_with_reason` | A wrapped destructive command denied with an optional explanation; the client prints the reason and does not run the command. |
 
 ## The `gui` marker, for the half that isn't in the terminal
 

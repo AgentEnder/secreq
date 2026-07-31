@@ -108,6 +108,8 @@ pub enum WaiterReply {
     Decision {
         decision: Decision,
         secrets: HashMap<String, String>,
+        /// Optional explanation for a denial. Never contains secret material.
+        reason: Option<String>,
     },
     Err {
         message: String,
@@ -1229,6 +1231,7 @@ impl State {
         &mut self,
         key: &DedupeKey,
         decision: Decision,
+        reason: Option<String>,
         scope: Option<ProcessIdentity>,
         shared: &SharedState,
     ) {
@@ -1341,7 +1344,11 @@ impl State {
                     }
                     let reply = match failure {
                         Some(message) => WaiterReply::Err { message },
-                        None => WaiterReply::Decision { decision, secrets },
+                        None => WaiterReply::Decision {
+                            decision,
+                            secrets,
+                            reason: None,
+                        },
                     };
                     let _ = w.sender.send(reply);
                 }
@@ -1360,6 +1367,7 @@ impl State {
             let reply = WaiterReply::Decision {
                 decision,
                 secrets: HashMap::new(),
+                reason,
             };
             for w in &entry.waiters {
                 let _ = w.sender.send(reply.clone());
@@ -2130,9 +2138,14 @@ impl State {
 impl WaiterReply {
     pub(super) fn map_decision<F: FnOnce(Decision) -> Decision>(self, f: F) -> WaiterReply {
         match self {
-            WaiterReply::Decision { decision, secrets } => WaiterReply::Decision {
+            WaiterReply::Decision {
+                decision,
+                secrets,
+                reason,
+            } => WaiterReply::Decision {
                 decision: f(decision),
                 secrets,
+                reason,
             },
             err @ WaiterReply::Err { .. } => err,
         }
@@ -2483,6 +2496,7 @@ pub(super) fn resolve_for_ask(
         return WaiterReply::Decision {
             decision: Decision::Approve,
             secrets,
+            reason: None,
         };
     }
 
@@ -2527,6 +2541,7 @@ pub(super) fn resolve_for_ask(
             WaiterReply::Decision {
                 decision: Decision::Approve,
                 secrets,
+                reason: None,
             }
         }
         Err(err) => {
@@ -3001,7 +3016,13 @@ mod tests {
         {
             let mut guard = shared.lock().expect("state mutex");
             guard.submit_ask(ssh_ask, tx);
-            guard.resolve(&ssh_key, Decision::ApproveRemember, Some(scope), &shared);
+            guard.resolve(
+                &ssh_key,
+                Decision::ApproveRemember,
+                None,
+                Some(scope),
+                &shared,
+            );
             assert!(
                 guard.approvals.is_empty(),
                 "an SSH ask must not write the wrap approvals cache"
@@ -3015,7 +3036,13 @@ mod tests {
         {
             let mut guard = shared.lock().expect("state mutex");
             guard.submit_ask(wrap_ask, tx);
-            guard.resolve(&wrap_key, Decision::ApproveRemember, Some(scope), &shared);
+            guard.resolve(
+                &wrap_key,
+                Decision::ApproveRemember,
+                None,
+                Some(scope),
+                &shared,
+            );
             assert_eq!(
                 guard.approvals.len(),
                 1,
@@ -3043,7 +3070,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
         let mut guard = shared.lock().expect("state mutex");
         guard.submit_ask(ask, tx);
-        guard.resolve(&key, Decision::ApproveRemember, Some(scope), &shared);
+        guard.resolve(&key, Decision::ApproveRemember, None, Some(scope), &shared);
         assert!(
             guard.approvals.is_empty(),
             "a run ask must not persist an approval even on ApproveRemember"
@@ -3095,6 +3122,7 @@ mod tests {
             guard.resolve(
                 &key,
                 Decision::Deny,
+                None,
                 Some(ProcessIdentity {
                     pid: 100,
                     start_time: 1_700_000_000,
@@ -3269,7 +3297,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
         let mut guard = shared.lock().expect("state mutex");
         guard.submit_ask(ask, tx);
-        guard.resolve(&key, Decision::ApproveRemember, None, &shared);
+        guard.resolve(&key, Decision::ApproveRemember, None, None, &shared);
         assert!(
             guard.approvals.is_empty(),
             "with no scope there is nothing to write an approval against"
@@ -3932,7 +3960,9 @@ mod tests {
             start_time: 9999,
         });
         match super::resolve_for_ask(&ask, cache, in_flight) {
-            WaiterReply::Decision { decision, secrets } => {
+            WaiterReply::Decision {
+                decision, secrets, ..
+            } => {
                 assert_eq!(decision, Decision::Approve);
                 assert_eq!(
                     secrets.get("GITHUB_TOKEN").map(String::as_str),
@@ -4014,7 +4044,9 @@ mod tests {
         // waiter should see Failed or empty.
         for reply in &replies {
             match reply {
-                WaiterReply::Decision { decision, secrets } => {
+                WaiterReply::Decision {
+                    decision, secrets, ..
+                } => {
                     assert_eq!(*decision, Decision::Approve);
                     assert_eq!(
                         secrets.get("GITHUB_TOKEN").map(String::as_str),
@@ -4395,6 +4427,7 @@ mod tests {
             guard.resolve(
                 &key,
                 Decision::Approve,
+                None,
                 // A session row offers no scope, which is what the prompt
                 // sends for one — `AskAnchor::RunSession` has no
                 // `ProcessIdentity` to hand over.
@@ -4450,6 +4483,7 @@ mod tests {
             guard.resolve(
                 &key,
                 Decision::Approve,
+                None,
                 // A session row offers no scope, which is what the prompt
                 // sends for one — `AskAnchor::RunSession` has no
                 // `ProcessIdentity` to hand over.
@@ -4487,6 +4521,7 @@ mod tests {
             guard.resolve(
                 &key,
                 Decision::Approve,
+                None,
                 // A session row offers no scope, which is what the prompt
                 // sends for one — `AskAnchor::RunSession` has no
                 // `ProcessIdentity` to hand over.
@@ -5482,6 +5517,7 @@ mod tests {
             guard.resolve(
                 &key,
                 Decision::Deny,
+                None,
                 Some(ProcessIdentity {
                     pid: 100,
                     start_time: 1_700_000_000,
@@ -5502,6 +5538,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn manual_denial_broadcasts_its_reason_to_the_waiting_client() {
+        let shared: SharedState = Arc::new(Mutex::new(State::new()));
+        let ask = mk_ask("gh", vec![(100, 1_700_000_000)]);
+        let key = ask.dedupe_key.clone();
+        let (tx, rx) = mpsc::channel();
+        {
+            let mut guard = shared.lock().expect("state mutex");
+            guard.submit_ask(ask, tx);
+            guard.resolve(
+                &key,
+                Decision::Deny,
+                Some("wrong repository".to_owned()),
+                None,
+                &shared,
+            );
+        }
+
+        match rx.recv().expect("denial reply") {
+            WaiterReply::Decision {
+                decision, reason, ..
+            } => {
+                assert_eq!(decision, Decision::Deny);
+                assert_eq!(reason.as_deref(), Some("wrong repository"));
+            }
+            WaiterReply::Err { message } => panic!("unexpected error reply: {message}"),
+        }
+    }
+
     /// The manager window must never receive the prompt's exit signal
     /// on drain — it's a browsing surface the user closes themselves.
     #[test]
@@ -5518,6 +5583,7 @@ mod tests {
             guard.resolve(
                 &key,
                 Decision::Deny,
+                None,
                 Some(ProcessIdentity {
                     pid: 100,
                     start_time: 1_700_000_000,

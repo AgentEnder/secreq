@@ -609,11 +609,20 @@ impl Recorder {
 
     /// Wait for the command to exit cleanly, photograph the final screen,
     /// and write the recording out.
-    fn finish(mut self, transcript: Transcript) {
+    fn finish(self, transcript: Transcript) {
+        self.finish_with_success(transcript, true);
+    }
+
+    /// Finish a recording whose command is expected to be refused.
+    fn finish_denied(self, transcript: Transcript) {
+        self.finish_with_success(transcript, false);
+    }
+
+    fn finish_with_success(mut self, transcript: Transcript, expect_success: bool) {
         let status = self.run.wait_exit(STEP_TIMEOUT);
         assert!(
-            status.success(),
-            "`{}` exited with {status:?}; screen was:\n{}",
+            status.success() == expect_success,
+            "`{}` exited with {status:?}; expected success={expect_success}; screen was:\n{}",
             transcript.command,
             self.run.screen().contents()
         );
@@ -939,28 +948,42 @@ struct StubDaemon {
     asked: Receiver<()>,
     /// Releases the parked ask. A real daemon does this when the user
     /// clicks Approve.
-    approve: Sender<()>,
+    respond: Sender<()>,
 }
 
 impl StubDaemon {
     fn listening() -> StubDaemon {
+        Self::with_decision(Decision::Approve, None)
+    }
+
+    fn denying(reason: &str) -> StubDaemon {
+        Self::with_decision(Decision::Deny, Some(reason.to_owned()))
+    }
+
+    fn with_decision(decision: Decision, reason: Option<String>) -> StubDaemon {
         let socket = recording_socket_dir().join("consent.sock");
         let _ = std::fs::remove_file(&socket);
         let listener = UnixListener::bind(&socket).expect("bind stub consent socket");
 
         let (ask_tx, asked) = std::sync::mpsc::channel();
-        let (approve, approve_rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || serve_stub(listener, ask_tx, approve_rx));
-        StubDaemon { asked, approve }
+        let (respond, respond_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || serve_stub(listener, ask_tx, respond_rx, decision, reason));
+        StubDaemon { asked, respond }
     }
 
-    /// Let the parked ask through, the way a click on Approve would.
-    fn approve(&self) {
-        self.approve.send(()).expect("stub daemon stopped serving");
+    /// Let the parked ask through, the way a click on a decision would.
+    fn respond(&self) {
+        self.respond.send(()).expect("stub daemon stopped serving");
     }
 }
 
-fn serve_stub(listener: UnixListener, asked: Sender<()>, approve: Receiver<()>) {
+fn serve_stub(
+    listener: UnixListener,
+    asked: Sender<()>,
+    respond: Receiver<()>,
+    decision: Decision,
+    reason: Option<String>,
+) {
     // One connection at a time is enough: a single client takes three in
     // sequence (a liveness probe, the `Hello` handshake, then the ask), and
     // never two at once.
@@ -979,20 +1002,23 @@ fn serve_stub(listener: UnixListener, asked: Sender<()>, approve: Receiver<()>) 
             ClientMsg::Hello { build_id } => DaemonMsg::Hello { build_id },
             ClientMsg::Ask(ask) => {
                 asked.send(()).expect("recorder stopped listening");
-                approve.recv().expect("recorder never approved the ask");
+                respond.recv().expect("recorder never answered the ask");
                 DaemonMsg::Decision {
-                    decision: Decision::Approve,
+                    decision,
                     // Answer exactly what was asked for, rather than a
                     // hardcoded name: the reply then stays correct if the
                     // fixture's wrap ever declares a different variable.
-                    secrets: ask
-                        .secrets()
-                        .iter()
-                        .map(|secret| (secret.name.clone(), STUB_TOKEN.to_owned()))
-                        .collect(),
+                    secrets: if decision.approved() {
+                        ask.secrets()
+                            .iter()
+                            .map(|secret| (secret.name.clone(), STUB_TOKEN.to_owned()))
+                            .collect()
+                    } else {
+                        std::collections::HashMap::new()
+                    },
                     rule_id: None,
                     rule_name: None,
-                    deny_message: None,
+                    reason: reason.clone(),
                     declared_by: None,
                     // A manual approve has no rule behind it, so nothing
                     // to attribute per secret.
@@ -1464,7 +1490,7 @@ fn run_gh_blocking_on_consent() {
     rec.await_ask(&daemon);
     rec.gui_show(CONSENT_FIXTURE);
     rec.expect_spinner(&SPINNER_BEATS, WAIT_LINE_TAIL);
-    daemon.approve();
+    daemon.respond();
     rec.gui_hide(CONSENT_FIXTURE);
 
     rec.finish(Transcript::new(
@@ -1474,5 +1500,31 @@ fn run_gh_blocking_on_consent() {
          stops and waits while secreq asks you — and the moment you approve, \
          the real <code>gh</code> runs with the token already in its \
          environment. Nothing was exported, and nothing stayed behind.",
+    ));
+}
+
+#[test]
+#[ignore = "records a docs transcript; run with --ignored"]
+fn run_gh_denied_with_reason() {
+    let (sb, bin_dir) = run_sandbox();
+    let daemon = StubDaemon::denying("Wrong repository");
+    let mut rec = Recorder::new(spawn_recording_env(
+        &sb,
+        &bin_dir,
+        &["x", "gh", "repo", "delete", "acme/api"],
+        &[(secreq::daemon::client::NO_DAEMON_ENV, "")],
+    ));
+
+    rec.await_ask(&daemon);
+    rec.gui_show("51-pending-denial-reason");
+    rec.expect_spinner(&SPINNER_BEATS, WAIT_LINE_TAIL);
+    daemon.respond();
+    rec.gui_hide("51-pending-denial-reason");
+
+    rec.finish_denied(Transcript::new(
+        "run-gh-denied",
+        "gh repo delete acme/api",
+        "A denial can explain itself. The reason returns to the wrap client, \
+         appears in the terminal, and is recorded in the audit log.",
     ));
 }

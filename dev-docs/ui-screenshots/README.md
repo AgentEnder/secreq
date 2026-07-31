@@ -177,6 +177,7 @@ a snapshot blessed in one hour doesn't fail in another.
 |---|---|---|
 | `01-empty-all-clear` | `empty_state` | Prompt with no asks: centred app icon + "No pending requests."; the manager link stays reachable in the footer. |
 | `02-single-pending` | `single_pending` | One wrap, one secret: the canonical prompt: header summary, evidence well (SECRET / ASKED BY / IN), the pinned HISTORY block, macOS footer pair with mnemonic underlines. |
+| `51-pending-denial-reason` | `pending_with_denial_reason` | The optional denial-reason input populated beside the decision controls; leaving it blank still permits a one-click denial. |
 | `03-nested-tree` | `nested_tree` | An ask with a deeper ancestry: the ASKED BY tree shows each ancestor with its argv and pid, the asking leaf in accent. |
 | `04-multi-root` | `multi_root` | Two queued asks from independent roots: the prompt focuses the oldest; the other appears only as "1 more waiting". |
 | `05-folded-run` | `folded_run` | A `gh→gh→gh→gh` self-exec chain: the coalesced ask's chain renders once per distinct process. |
@@ -204,7 +205,7 @@ a snapshot blessed in one hour doesn't fail in another.
 | Fixture id | Test fn | What it exercises |
 |---|---|---|
 | `01b-empty-all-clear-viewer` | `empty_state_viewer` | `secreq view` with no history: the manager opens on the Audit view (viewer-mode rising edge) and shows its empty state. |
-| `07-audit-tab` | `audit_tab_populated` | Audit view populated with a mix of decisions: hairline-separated rows, dot+text verdicts, per-OS header with the search field. |
+| `07-audit-tab` | `audit_tab_populated` | Audit view populated with a mix of decisions, including a denial explanation: hairline-separated rows, dot+text verdicts, per-OS header with the search field. |
 | `08-rules-tab-empty` | `rules_tab_empty` | Rules view with no rules → "No rules yet" empty state. |
 | `09-rules-tab-list` | `rules_tab_list_populated` | Rules list: enabled approve, enabled deny with deny-message, disabled rule; usage footnotes and the Most used / Recent sort toggle. |
 | `10-rules-form-new` | `rules_form_new` | Blank rule form opened via "+ New rule". |

@@ -62,6 +62,7 @@ impl Gate for FakeGate {
     fn consent(&self, _: &Scope, _: &Reference, _: &GuestChain) -> Result<Consented> {
         Ok(Consented {
             decision: self.decision,
+            reason: None,
             declared_by: ScopeDeclarant::NotRead,
         })
     }
@@ -432,6 +433,7 @@ fn the_client_sends_its_own_process_chain_as_a_claim() {
                 .push(chain.display().map(str::to_owned));
             Ok(Consented {
                 decision: Decision::Approve,
+                reason: None,
                 declared_by: ScopeDeclarant::NotRead,
             })
         }

@@ -111,19 +111,23 @@ pub fn wrap_run(
         let env_names: Vec<String> = wrap.env.keys().cloned().collect();
         let _ = audit::append(
             &AuditEntry::new(binary, args, &chain, &env_names, outcome.decision)
+                .with_reason(outcome.reason.clone())
                 .with_rule_id(outcome.rule_id.clone())
                 .with_approvers(outcome.approvers.clone()),
         );
         if !outcome.decision.approved() {
             // Auto-deny: surface the rule's configured message (or a
             // minimal "denied by rule X" fallback) before exiting 1.
-            // Plain manual deny keeps the existing terse message.
+            // A manual deny without an explanation keeps the existing terse
+            // message.
             if outcome.decision == Decision::DenyAuto {
                 let rule_name = outcome.rule_name.as_deref().unwrap_or("(unknown)");
-                match outcome.deny_message.as_deref() {
+                match outcome.reason.as_deref() {
                     Some(msg) => eprintln!("secreq: denied by rule '{rule_name}': {msg}"),
                     None => eprintln!("secreq: denied by rule '{rule_name}'"),
                 }
+            } else if let Some(reason) = outcome.reason.as_deref() {
+                eprintln!("secreq: denied: {reason} — `{binary}` not run");
             } else {
                 eprintln!("secreq: denied — `{binary}` not run");
             }
@@ -359,6 +363,7 @@ pub fn run(
             .context("daemon consent request failed")?;
         let _ = audit::append(
             &AuditEntry::new("run", command, &chain, &names, outcome.decision)
+                .with_reason(outcome.reason.clone())
                 .with_rule_id(outcome.rule_id.clone())
                 .with_approvers(outcome.approvers.clone()),
         );
@@ -366,10 +371,12 @@ pub fn run(
             // Mirror `wrap_run`'s deny messaging.
             if outcome.decision == Decision::DenyAuto {
                 let rule_name = outcome.rule_name.as_deref().unwrap_or("(unknown)");
-                match outcome.deny_message.as_deref() {
+                match outcome.reason.as_deref() {
                     Some(msg) => eprintln!("secreq: denied by rule '{rule_name}': {msg}"),
                     None => eprintln!("secreq: denied by rule '{rule_name}'"),
                 }
+            } else if let Some(reason) = outcome.reason.as_deref() {
+                eprintln!("secreq: denied: {reason} — command not run");
             } else {
                 eprintln!("secreq: denied — command not run");
             }

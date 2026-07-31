@@ -1,0 +1,68 @@
+{
+  "caption": "A denial can explain itself. The reason returns to the wrap client, appears in the terminal, and is recorded in the audit log.",
+  "cols": 80,
+  "command": "gh repo delete acme/api",
+  "id": "run-gh-denied",
+  "steps": [
+    {
+      "action": "show",
+      "id": "51-pending-denial-reason",
+      "kind": "gui"
+    },
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "t": "⠋ secreq: waiting for approval of `gh` — approve in the popup window"
+          }
+        ]
+      ]
+    },
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "t": "⠙ secreq: waiting for approval of `gh` — approve in the popup window"
+          }
+        ]
+      ]
+    },
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "t": "⠹ secreq: waiting for approval of `gh` — approve in the popup window"
+          }
+        ]
+      ]
+    },
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "t": "⠸ secreq: waiting for approval of `gh` — approve in the popup window"
+          }
+        ]
+      ]
+    },
+    {
+      "action": "hide",
+      "id": "51-pending-denial-reason",
+      "kind": "gui"
+    },
+    {
+      "kind": "frame",
+      "lines": [
+        [
+          {
+            "t": "secreq: denied: Wrong repository — `gh` not run"
+          }
+        ]
+      ]
+    }
+  ]
+}

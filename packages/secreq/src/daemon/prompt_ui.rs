@@ -37,6 +37,9 @@ pub use super::proto::ManagerFocus;
 /// small: the prompt is a transient surface, not a browsing one.
 pub struct PromptWindowState {
     pub(crate) audit: AuditCache,
+    /// Optional explanation attached to a denial of the currently displayed
+    /// ask. Cleared when focus advances to another ask.
+    denial_reason: String,
     /// Set when the secrets list is expanded past its collapsed cap.
     secrets_expanded: bool,
     /// The ask the expansion applies to; reset when the ask changes.
@@ -47,9 +50,16 @@ impl PromptWindowState {
     pub fn new() -> Self {
         PromptWindowState {
             audit: AuditCache::new(),
+            denial_reason: String::new(),
             secrets_expanded: false,
             expanded_for: None,
         }
+    }
+
+    /// Pre-fill the optional denial reason. Primarily useful to the
+    /// screenshot harness, but also a legitimate production state seam.
+    pub fn set_denial_reason(&mut self, reason: impl Into<String>) {
+        self.denial_reason = reason.into();
     }
 }
 
@@ -98,6 +108,9 @@ pub fn render_prompt_panel(
     // Reset the many-secrets expansion when the displayed ask changes.
     if state.expanded_for.as_ref() != current.map(|r| &r.key) {
         state.secrets_expanded = false;
+        if state.expanded_for.is_some() {
+            state.denial_reason.clear();
+        }
         state.expanded_for = current.map(|r| r.key.clone());
     }
 
@@ -107,13 +120,18 @@ pub fn render_prompt_panel(
     if let Some(row) = current {
         if row.status == super::proto::RowStatus::Awaiting {
             let scope = row_scope(row);
+            let no_text_input_focused = ctx.memory(|m| m.focused().is_none());
             ctx.input(|i| {
+                if !no_text_input_focused {
+                    return;
+                }
                 if i.modifiers.is_none()
                     && (i.key_pressed(egui::Key::A) || i.key_pressed(egui::Key::Enter))
                 {
                     actions_out.push(PendingAction {
                         key: row.key.clone(),
                         decision: approve_decision(row),
+                        reason: None,
                         scope,
                     });
                 } else if i.modifiers.is_none()
@@ -122,6 +140,7 @@ pub fn render_prompt_panel(
                     actions_out.push(PendingAction {
                         key: row.key.clone(),
                         decision: Decision::Deny,
+                        reason: denial_reason(state),
                         scope,
                     });
                 }
@@ -253,6 +272,11 @@ fn approve_decision(row: &QueueRow) -> Decision {
     } else {
         Decision::Approve
     }
+}
+
+fn denial_reason(state: &PromptWindowState) -> Option<String> {
+    let reason = state.denial_reason.trim();
+    (!reason.is_empty()).then(|| reason.to_owned())
 }
 
 // ── Header ───────────────────────────────────────────────────────────────
@@ -768,6 +792,7 @@ fn render_agent_session_grant(
             actions_out.push(PendingAction {
                 key: row.key.clone(),
                 decision: Decision::ApproveAgentSession,
+                reason: None,
                 scope: row_scope(row),
             });
         }
@@ -1248,6 +1273,7 @@ fn render_ssh_session_grants(
             actions_out.push(PendingAction {
                 key: row.key.clone(),
                 decision: Decision::ApproveSshSession,
+                reason: None,
                 scope,
             });
         }
@@ -1255,6 +1281,7 @@ fn render_ssh_session_grants(
             actions_out.push(PendingAction {
                 key: row.key.clone(),
                 decision: Decision::ApproveSshSessionAll,
+                reason: None,
                 scope,
             });
         }
@@ -1398,6 +1425,7 @@ fn render_decision_band(
                     }
                     AskSubject::Wrap(_) => {}
                 }
+                render_denial_reason_input(ui, th, state);
             }
         });
     }
@@ -1450,6 +1478,25 @@ fn measure_decision_band(
     probe.min_rect().height()
 }
 
+/// Optional explanation attached to Deny. It is always present so a denial
+/// with no explanation remains one click / one shortcut; typing is available
+/// when the extra audit context is worth it.
+fn render_denial_reason_input(ui: &mut egui::Ui, th: &Theme, state: &mut PromptWindowState) {
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new("Reason (optional)")
+                .size(th.body_size - 1.0)
+                .color(th.dim),
+        );
+        ui.add(
+            egui::TextEdit::singleline(&mut state.denial_reason)
+                .hint_text("Why deny?")
+                .desired_width(ui.available_width()),
+        );
+    });
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_footer(
     ui: &mut egui::Ui,
@@ -1460,7 +1507,6 @@ fn render_footer(
     actions_out: &mut Vec<PendingAction>,
     out: &mut PromptOutput,
 ) {
-    let _ = state;
     let awaiting = current.is_some_and(|r| r.status == super::proto::RowStatus::Awaiting);
     let more_waiting = snapshot.entries.len().saturating_sub(1);
 
@@ -1541,6 +1587,7 @@ fn render_footer(
                                     actions_out.push(PendingAction {
                                         key: row.key.clone(),
                                         decision: approve_decision(row),
+                                        reason: None,
                                         scope: row_scope(row),
                                     });
                                 }
@@ -1548,6 +1595,7 @@ fn render_footer(
                                     actions_out.push(PendingAction {
                                         key: row.key.clone(),
                                         decision: Decision::Deny,
+                                        reason: denial_reason(state),
                                         scope: row_scope(row),
                                     });
                                 }
@@ -1579,6 +1627,7 @@ fn render_footer(
                                 actions_out.push(PendingAction {
                                     key: row.key.clone(),
                                     decision: approve_decision(row),
+                                    reason: None,
                                     scope: row_scope(row),
                                 });
                             }
@@ -1586,6 +1635,7 @@ fn render_footer(
                                 actions_out.push(PendingAction {
                                     key: row.key.clone(),
                                     decision: Decision::Deny,
+                                    reason: denial_reason(state),
                                     scope: row_scope(row),
                                 });
                             }
@@ -1685,6 +1735,7 @@ fn render_footer(
                             actions_out.push(PendingAction {
                                 key: row.key.clone(),
                                 decision: Decision::Deny,
+                                reason: denial_reason(state),
                                 scope: row_scope(row),
                             });
                         }
@@ -1692,6 +1743,7 @@ fn render_footer(
                             actions_out.push(PendingAction {
                                 key: row.key.clone(),
                                 decision: approve_decision(row),
+                                reason: None,
                                 scope: row_scope(row),
                             });
                         }
