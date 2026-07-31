@@ -114,6 +114,16 @@ wasmtime = { version = "46.0.1", default-features = false, features = [
 textwrap = "0.16"
 console = "0.15"
 
+# A synchronous, thread-per-connection HTTP/1.1 server for the `secreq link`
+# LAN listener. Sync and thread-based is the point: the daemon is already
+# thread-per-connection (`daemon/server.rs`), so this needs no async runtime and
+# no colouring of the surrounding code.
+#
+# Hand-rolling was considered and rejected. Request smuggling, header injection
+# and chunked-encoding edge cases are exactly the class of bug a security tool
+# should not be writing from scratch for four endpoints.
+tiny_http = "0.12"
+
 # Derives `docs/wraps.schema.json` and `docs/auto-rules.schema.json` from the
 # types that read those files, so a field cannot reach disk without reaching
 # the published schema. See `src/schema.rs`.

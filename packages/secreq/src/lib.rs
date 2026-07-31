@@ -13,6 +13,7 @@
 //! - [`provenance`]— walk the parent process tree for the consent prompt.
 //! - [`consent`]   — `Decision` enum + persistent approvals cache I/O.
 //! - [`daemon`]    — long-running consent daemon (socket + queue + egui UI).
+//! - [`link`]      — LAN listener and linked-device approval support.
 //! - [`scoped_agent`] — scoped, ephemeral socket serving `secret://` refs to
 //!   a guest VM, bounded by a host-declared allowlist.
 //! - [`audit`]     — append-only JSONL audit log (names only, never values).
