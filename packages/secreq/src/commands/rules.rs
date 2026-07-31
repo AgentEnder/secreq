@@ -41,6 +41,12 @@ pub fn rules_stats(
     let audit_path = audit_path
         .map(Path::to_path_buf)
         .map_or_else(crate::paths::audit_log_path, Ok)?;
+    if verify && !audit_path.is_file() {
+        anyhow::bail!(
+            "cannot verify rules: audit file does not exist or is not a regular file: {}",
+            audit_path.display()
+        );
+    }
     let options = crate::rule_stats::ReplayOptions {
         since_unix: since.map(parse_since).transpose()?,
         wrap: wrap.map(str::to_owned),
@@ -49,7 +55,8 @@ pub fn rules_stats(
     };
     let report = crate::rule_stats::replay_audit(&audit_path, &loaded, scope_findings, &options)?;
     let failed = verify
-        && (!report.verification.failures.is_empty()
+        && (report.verification.disagreements > 0
+            || report.verification.eligible == 0
             || !report.health.refusals.wasm.is_empty()
             || !report.health.refusals.patterns.is_empty()
             || report
@@ -57,6 +64,7 @@ pub fn rules_stats(
                 .scope_findings
                 .iter()
                 .any(|finding| finding.severity == crate::rule_health::ScopeSeverity::Error)
+            || !report.runtime_failures.is_empty()
             || report.rows.malformed > 0);
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -142,8 +150,11 @@ fn print_stats_report(report: &crate::rule_stats::StatsReport, rules_path: &Path
             "  eligible: {}  agree: {}  disagreements: {}",
             report.verification.eligible,
             report.verification.agree,
-            report.verification.failures.len()
+            report.verification.disagreements
         );
+        if report.verification.eligible == 0 {
+            println!("  ERROR: no eligible historical auto decisions were verified");
+        }
         println!(
             "  classified: {} deleted/replaced, {} pre-creation, {} scoped-agent, {} missing rule id",
             report.verification.deleted_rule,
@@ -160,6 +171,28 @@ fn print_stats_report(report: &crate::rule_stats::StatsReport, rules_path: &Path
                 failure.subjects,
                 failure.recorded,
                 failure.replayed
+            );
+        }
+        if report.verification.failures_omitted > 0 {
+            println!(
+                "  … {} additional disagreement(s) omitted",
+                report.verification.failures_omitted
+            );
+        }
+        println!(
+            "  attribution changed on {} agreeing row(s) (informational)",
+            report.verification.attribution_changed
+        );
+        for change in &report.verification.attribution_changes {
+            println!(
+                "  ATTRIBUTION ts={} wrap={} recorded={:?} replayed={:?}",
+                change.timestamp, change.wrap, change.recorded, change.replayed
+            );
+        }
+        if report.verification.attribution_changes_omitted > 0 {
+            println!(
+                "  … {} additional attribution change(s) omitted",
+                report.verification.attribution_changes_omitted
             );
         }
     }

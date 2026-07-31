@@ -643,7 +643,7 @@ const RULE_TS: &str = r#"// A programmable secreq auto-rule.
 // loops behave as you expect; regexes, closures and most of the JavaScript
 // standard library are not available.
 
-import { RuleCtx, Decision, approve, pass, deny } from 'secreq-rule';
+import { RuleCtx, Decision, approve, pass, prompt, deny } from 'secreq-rule';
 
 // Add the decisions you use to the import above:
 //
@@ -669,6 +669,9 @@ export function decide(ctx: RuleCtx): Decision {
   //
   if (ctx.wrap != 'gh') return pass();
   if (ctx.joinedArgv.startsWith('gh api --get ')) return approve();
+  if (ctx.joinedArgv.startsWith('gh api --method POST ')) {
+    return prompt('write requests require review');
+  }
   if (ctx.joinedArgv.startsWith('gh repo delete')) {
     return deny('repo deletes are never auto-approved');
   }
@@ -691,12 +694,13 @@ import {
   expectApprove,
   expectDeny,
   expectPass,
+  expectPrompt,
   ruleCtx,
 } from 'secreq-rule/testing/assembly';
 import { decide } from '../rule';
 
 describe('rule', () => {
-  it('covers approve, pass, and deny with readable contexts', () => {
+  it('covers approve, pass, prompt, and deny with readable contexts', () => {
     const shell = [caller('zsh', '-zsh', '/bin/zsh')];
     assertDecision(
       decide(ruleCtx('gh', 'gh api --get /user', '/home/me/code/app', shell, ['SOME_TOKEN'])),
@@ -707,6 +711,19 @@ describe('rule', () => {
       decide(ruleCtx('npm', 'npm test', '/home/me/code/app', shell, ['SOME_TOKEN'])),
       expectPass(),
       'other wrap',
+    );
+    assertDecision(
+      decide(
+        ruleCtx(
+          'gh',
+          'gh api --method POST /repos/acme/app/issues',
+          '/home/me/code/app',
+          shell,
+          ['SOME_TOKEN'],
+        ),
+      ),
+      expectPrompt('write requests require review'),
+      'write API request',
     );
     assertDecision(
       decide(ruleCtx('gh', 'gh repo delete acme/app', '/home/me/code/app', shell, ['SOME_TOKEN'])),

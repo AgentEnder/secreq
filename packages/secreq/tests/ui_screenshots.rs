@@ -509,6 +509,7 @@ fn audit_line(
         cwd: "~/repos/acme".to_owned(),
         wrap: wrap.to_owned(),
         args: vec![],
+        command: None,
         callers: vec![secreq::audit::AuditCaller {
             pid: 1000,
             name: caller_name.to_owned(),
@@ -577,6 +578,7 @@ fn audit_line_traced(
         cwd: "~/repos/acme".to_owned(),
         wrap: wrap.to_owned(),
         args: args.iter().map(|s| (*s).to_owned()).collect(),
+        command: None,
         callers: chain
             .iter()
             .map(|(pid, name, cmd)| secreq::audit::AuditCaller {
@@ -696,6 +698,7 @@ fn audit_auto_fire(secs_ago: u64, rule_id: &str, decision: &str) -> AuditEntry {
         cwd: "~/repos/acme".to_owned(),
         wrap: "gh".to_owned(),
         args: vec!["api".to_owned()],
+        command: None,
         callers: vec![secreq::audit::AuditCaller {
             pid: 4242,
             name: "Cursor.app".to_owned(),

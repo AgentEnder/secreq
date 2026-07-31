@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use crate::rules::{Rule, RuleBody, RuleDecision};
+use crate::rules::{self, Rule, RuleBody, RuleDecision};
 use crate::wraps::WrapsConfig;
 
 /// Whether a scope finding makes the live ruleset invalid or is a risky but
@@ -52,18 +52,15 @@ impl SubjectUniverse {
     fn from_config(config: &WrapsConfig) -> SubjectUniverse {
         let mut out = SubjectUniverse::default();
         for (wrap_name, wrap) in &config.wraps {
-            if wrap.env.is_empty() {
+            for subject in
+                rules::evaluation_subjects(wrap_name, wrap.env.keys().map(String::as_str))
+            {
                 out.reaches
-                    .entry(format!("wrap:{wrap_name}"))
+                    .entry(subject.into_owned())
                     .or_default()
                     .insert(wrap_name.clone());
-                continue;
             }
             for (env_name, raw) in &wrap.env {
-                out.reaches
-                    .entry(env_name.clone())
-                    .or_default()
-                    .insert(wrap_name.clone());
                 if let Ok(resolved) = config.resolve_ref(raw) {
                     if let Some(name) = resolved.declared_as {
                         out.named_bindings
@@ -76,10 +73,22 @@ impl SubjectUniverse {
         }
         for key_id in config.ssh.keys() {
             let subject = format!("ssh:{key_id}");
-            out.reaches
-                .entry(subject.clone())
-                .or_default()
-                .insert(subject);
+            for evaluated in rules::evaluation_subjects(&subject, std::iter::empty()) {
+                out.reaches
+                    .entry(evaluated.into_owned())
+                    .or_default()
+                    .insert(subject.clone());
+            }
+        }
+        // `secreq read <name>` puts a declared name itself into SecretAsk;
+        // it is not limited to env keys used by configured wraps.
+        for name in config.secrets.keys() {
+            for subject in rules::evaluation_subjects("read", std::iter::once(name.as_str())) {
+                out.reaches
+                    .entry(subject.into_owned())
+                    .or_default()
+                    .insert("read".to_owned());
+            }
         }
         out
     }
@@ -113,33 +122,55 @@ pub fn validate_rule_scopes(config: &WrapsConfig, rules: &[Rule]) -> Vec<ScopeFi
         let mut reachable_wraps = BTreeSet::new();
         let mut invalid = false;
         for subject in &rule.trained_secrets {
+            if config.secrets.contains_key(subject) {
+                if let RuleBody::Declarative { r#match, decide } = &rule.body {
+                    let directly_declared_for_wrap = universe
+                        .reaches
+                        .get(subject)
+                        .is_some_and(|wraps| wraps.contains(&r#match.wrap));
+                    if r#match.wrap != "read"
+                        && !directly_declared_for_wrap
+                        && decide.decision() == RuleDecision::Approve
+                    {
+                        let bindings = universe.named_bindings.get(subject);
+                        let message = match bindings {
+                            Some(bindings) if !bindings.is_empty() => format!(
+                                "`{subject}` is a valid `secreq read` subject, but wrap `{}` asks declare env keys; use {} for this approval",
+                                r#match.wrap,
+                                quoted(bindings)
+                            ),
+                            _ => format!(
+                                "`{subject}` is a valid `secreq read` subject, but no `{}` ask declares it",
+                                r#match.wrap
+                            ),
+                        };
+                        findings.push(finding(
+                            rule,
+                            ScopeSeverity::Error,
+                            ScopeFindingCode::NamedSecretIsNotSubject,
+                            Some(subject.clone()),
+                            message,
+                        ));
+                        invalid = true;
+                        continue;
+                    }
+                }
+            }
             if let Some(wraps) = universe.reaches.get(subject) {
                 reachable_wraps.extend(wraps.iter().cloned());
                 continue;
             }
             invalid = true;
-            if config.secrets.contains_key(subject) {
-                let bindings = universe.named_bindings.get(subject);
-                let message = match bindings {
-                    Some(bindings) if !bindings.is_empty() => format!(
-                        "`{subject}` is a named secret declaration, but asks declare env keys; use {}",
-                        quoted(bindings)
-                    ),
-                    _ => format!(
-                        "`{subject}` is a named secret declaration that no wrap binds to an env key; no ask can declare it"
-                    ),
-                };
-                findings.push(finding(
-                    rule,
-                    ScopeSeverity::Error,
-                    ScopeFindingCode::NamedSecretIsNotSubject,
-                    Some(subject.clone()),
-                    message,
-                ));
-                continue;
-            }
-
-            let suggestion = closest(subject, &candidates)
+            let suggestion_candidates: Vec<&str> = if subject.starts_with("ssh:") {
+                candidates
+                    .iter()
+                    .copied()
+                    .filter(|candidate| candidate.starts_with("ssh:"))
+                    .collect()
+            } else {
+                candidates.clone()
+            };
+            let suggestion = closest(subject, &suggestion_candidates)
                 .map(|candidate| format!("; did you mean `{candidate}`?"))
                 .unwrap_or_default();
             let (code, message) = if subject.starts_with("ssh:") {
@@ -151,13 +182,17 @@ pub fn validate_rule_scopes(config: &WrapsConfig, rules: &[Rule]) -> Vec<ScopeFi
                 (
                     ScopeFindingCode::UnknownSubject,
                     format!(
-                        "`{subject}` matches no wrap env key, SSH identity, or gate-only wrap{suggestion}"
+                        "`{subject}` matches no configured wrap env key, SSH identity, named read subject, or gate-only wrap{suggestion}; it may still be supplied by `secreq run`"
                     ),
                 )
             };
             findings.push(finding(
                 rule,
-                ScopeSeverity::Error,
+                if subject.starts_with("ssh:") {
+                    ScopeSeverity::Error
+                } else {
+                    ScopeSeverity::Warning
+                },
                 code,
                 Some(subject.clone()),
                 message,
@@ -233,13 +268,14 @@ fn quoted(values: &BTreeSet<String>) -> String {
 }
 
 fn closest<'a>(needle: &str, candidates: &[&'a str]) -> Option<&'a str> {
+    if needle.chars().count() > 128 {
+        return None;
+    }
+    let needle = needle.to_ascii_lowercase();
     candidates
         .iter()
         .filter_map(|candidate| {
-            let distance = edit_distance(
-                &needle.to_ascii_lowercase(),
-                &candidate.to_ascii_lowercase(),
-            );
+            let distance = edit_distance(&needle, &candidate.to_ascii_lowercase());
             let limit = 2_usize.max(candidate.chars().count() / 3);
             (distance <= limit).then_some((*candidate, distance))
         })
@@ -347,7 +383,7 @@ mod tests {
         assert!(findings.iter().any(|f| {
             f.code == ScopeFindingCode::UnknownSubject
                 && f.message.contains("GITHUB_TOKEN")
-                && f.severity == ScopeSeverity::Error
+                && f.severity == ScopeSeverity::Warning
         }));
         assert!(findings.iter().any(|f| {
             f.code == ScopeFindingCode::NamedSecretIsNotSubject
@@ -395,5 +431,41 @@ mod tests {
         assert!(!findings
             .iter()
             .any(|finding| finding.code == ScopeFindingCode::NeverConsulted));
+    }
+
+    #[test]
+    fn declared_name_is_a_valid_read_subject() {
+        let rule = approve("read-named", "read", &["github_token"]);
+
+        assert!(validate_rule_scopes(&config(), &[rule]).is_empty());
+    }
+
+    #[test]
+    fn a_named_secret_that_is_also_the_env_key_is_valid_for_that_wrap() {
+        let config = WrapsConfig::parse(
+            r#"
+                [secrets.GITHUB_TOKEN]
+                ref = "secret://op/GitHub/token"
+
+                [wraps.brain.env]
+                GITHUB_TOKEN = "secret://GITHUB_TOKEN"
+            "#,
+            "fixture",
+        )
+        .expect("valid config");
+        let rule = approve("brain", "brain", &["GITHUB_TOKEN"]);
+
+        assert!(validate_rule_scopes(&config, &[rule]).is_empty());
+    }
+
+    #[test]
+    fn run_subjects_are_open_ended_and_only_advisory() {
+        let rule = approve("run-ambient", "run", &["CI_JOB_TOKEN"]);
+        let findings = validate_rule_scopes(&config(), &[rule]);
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].code, ScopeFindingCode::UnknownSubject);
+        assert_eq!(findings[0].severity, ScopeSeverity::Warning);
+        assert!(findings[0].message.contains("secreq run"));
     }
 }

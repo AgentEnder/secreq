@@ -306,7 +306,7 @@ Validate the installed ruleset and replay it over historical audit asks using th
 | `--top <TOP>` | Maximum prompt-shape rows in each ranked breakdown |
 | `--audit <PATH>` | Read this audit file instead of `~/.secreq/audit.log` |
 | `--json` | Emit the stable machine-readable report schema |
-| `--verify` | Check eligible historical auto decisions for evaluator drift. Also exits non-zero for refused modules/patterns, invalid live scope, or malformed audit records. Runtime wasm failures are reported; ordinary uncovered prompts are not failures |
+| `--verify` | Check eligible historical auto decisions for evaluator drift. Also exits non-zero for refused modules/patterns, invalid live scope, malformed audit records, or runtime wasm failures. Ordinary uncovered prompts are not failures |
 
 ### `secreq rules show`
 
@@ -454,4 +454,3 @@ Exits 0 on a release, 3 when the host denies (reason on stderr, nothing on stdou
 | Flag | Meaning |
 | --- | --- |
 | `--list` | Print the ref names this socket may resolve, one per line, and exit. Free: listing never prompts and never releases a value |
-

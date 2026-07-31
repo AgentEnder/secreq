@@ -59,7 +59,7 @@ For an ask with `requested = {S1..Sn}`:
 - **Partial resolution (nice-to-have, not required):** if 2 of 3 secrets auto-approve, could we prompt for *only* the third? Depends on whether secreq's injection layer can grant an ask **partially** or whether an ask is atomic at the process boundary. If atomic → any uncovered secret means prompt-for-whole-ask. Verify before promising partial UX.
 - **Conflict resolution reuse:** the existing deny-beats-approve + `WASM_DECISION_SPECIFICITY` / most-specific-approve logic is re-expressed to run *per secret* then AND, rather than once over the whole ask.
 - **Cost:** every overlapping rule now runs (vs. the gate short-circuiting most), so more wasm instantiations per multi-secret ask. Rules are few and each eval is fuel-bounded, so expected negligible — but note it.
-- **Audit/UX win captured:** per-secret decisions are more auditable — the audit log records *which rule blessed which secret* (per-secret approver attribution on `approve+auto` rows). Surfacing this in the manager UI Rules tab is a follow-up.
+- **Audit/UX win captured:** per-secret decisions are more auditable — the audit log records *which rule blessed which secret* (per-secret approver attribution on `approve+auto` rows). Surfacing this in the manager UI Rules view is a follow-up.
 
 ## Code touch-points
 
@@ -67,4 +67,4 @@ For an ask with `requested = {S1..Sn}`:
 - `src/rules.rs` — `Rule.trained_secrets`.
 - `src/wasm_rules.rs` — the wasm ABI/eval (unchanged: modules still return a single `Decision`; only the host's *interpretation* of `Approve` changes).
 - `src/audit.rs`, `src/daemon/proto.rs`, `src/daemon/client.rs`, `src/daemon/server.rs`, `src/commands.rs` — carry per-secret approver attribution (`RuleHit.approvals` → `DaemonMsg::Decision.approvers` → `ConsentOutcome.approvers` → `AuditEntry.approvers`).
-- `src/daemon/ui.rs` — Rules tab per-secret provenance display: **deferred** (would require regenerating the wgpu screenshot fixtures).
+- `src/daemon/ui.rs` — Rules view per-secret provenance display: **deferred** (would require regenerating the wgpu screenshot fixtures).

@@ -92,7 +92,7 @@ pub const MAX_GUEST_MEMORY_BYTES: usize = 64 << 20;
 /// Cap on the decision JSON a guest may return. The largest legitimate
 /// decision is a deny with a human-readable reason; 64 KiB is already
 /// absurdly generous.
-const MAX_DECISION_LEN: u32 = 64 * 1024;
+pub const MAX_DECISION_LEN: u32 = 64 * 1024;
 
 /// What a wasm rule returned. The serde encoding is the wire format
 /// (externally tagged): `"approve"`, `"pass"`, `{"deny": "reason"}`, or

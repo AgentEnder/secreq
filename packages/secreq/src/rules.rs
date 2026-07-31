@@ -1307,6 +1307,31 @@ pub fn evaluation_subjects<'a>(
     }
 }
 
+/// Build the exact argv string passed to every rule evaluator.
+///
+/// Audit replay calls this with the command vector captured on the live ask,
+/// so whitespace and the ask-kind-specific argv shape have one production
+/// definition.
+pub fn joined_argv(command: &[String]) -> String {
+    command.join(" ")
+}
+
+/// Recover the command vector from an audit row written before the audit
+/// format carried `command` explicitly. This is compatibility decoding, not
+/// evaluation logic: current writers persist the live vector verbatim.
+pub fn legacy_audit_command(wrap: &str, args: &[String]) -> Vec<String> {
+    if matches!(wrap, "run" | "read" | "store") {
+        args.to_vec()
+    } else if let Some(key_id) = wrap.strip_prefix("ssh:") {
+        vec![format!("ssh-sign {key_id}")]
+    } else {
+        let mut command = Vec::with_capacity(args.len() + 1);
+        command.push(wrap.to_owned());
+        command.extend(args.iter().cloned());
+        command
+    }
+}
+
 /// One caller as a rule sees it.
 ///
 /// `exe` is the kernel's record of what was loaded. `name` and `command` are

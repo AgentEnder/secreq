@@ -4,7 +4,7 @@
 //! the caller chain, the secret **names** released, and the decision. Secret
 //! **values never appear** here — only names, per the threat model (§11).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::OpenOptionsExt;
@@ -34,6 +34,10 @@ pub struct AuditEntry {
     /// applicable.
     #[serde(default)]
     pub args: Vec<String>,
+    /// Exact command vector the live evaluator received. Rows written before
+    /// this field are decoded through `rules::legacy_audit_command`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<Vec<String>>,
     /// Caller process chain, nearest-first. Carries pid + command so the
     /// audit view can render the full process tree that triggered this
     /// request rather than just a stack of process names.
@@ -199,6 +203,8 @@ pub struct AuditCaller {
 pub struct AbandonedAsk<'a> {
     pub wrap: &'a str,
     pub args: &'a [String],
+    /// Exact command vector handed to the live rules evaluator.
+    pub command: &'a [String],
     /// The **requesting** process's working directory, not the daemon's.
     pub cwd: &'a str,
     pub callers: &'a [AuditCaller],
@@ -319,6 +325,19 @@ impl AuditCaller {
 }
 
 impl AuditEntry {
+    /// Exact command vector used by rule evaluation. New rows carry it
+    /// verbatim; old rows use the one compatibility decoder shared by every
+    /// history consumer.
+    pub fn evaluator_command(&self) -> Vec<String> {
+        self.command
+            .clone()
+            .unwrap_or_else(|| crate::rules::legacy_audit_command(&self.wrap, &self.args))
+    }
+
+    pub fn joined_argv(&self) -> String {
+        crate::rules::joined_argv(&self.evaluator_command())
+    }
+
     /// Assemble an entry from the pieces a `run` already has. Rule
     /// linkage is attached via [`AuditEntry::with_rule_id`] when the
     /// decision came from an auto-rule.
@@ -340,6 +359,7 @@ impl AuditEntry {
                 .unwrap_or_default(),
             wrap: wrap.to_owned(),
             args: args.to_vec(),
+            command: Some(crate::rules::legacy_audit_command(wrap, args)),
             callers: chain.frames.iter().map(AuditCaller::from_runtime).collect(),
             callers_truncated: Some(chain.truncated),
             secrets: secret_names.to_vec(),
@@ -392,6 +412,7 @@ impl AuditEntry {
             cwd: cwd.to_owned(),
             wrap: format!("ssh:{key_id}"),
             args: Vec::new(),
+            command: Some(vec![format!("ssh-sign {key_id}")]),
             callers: chain.frames.iter().map(AuditCaller::from_runtime).collect(),
             callers_truncated: Some(chain.truncated),
             secrets: Vec::new(),
@@ -445,6 +466,7 @@ impl AuditEntry {
             cwd: String::new(),
             wrap: format!("agent:{scope}"),
             args: Vec::new(),
+            command: None,
             callers: Vec::new(),
             // `Some(false)`, structurally, the same answer
             // `Ask::callers_truncated` gives a guest ask: there was no walk to
@@ -499,6 +521,7 @@ impl AuditEntry {
             cwd: ask.cwd.to_owned(),
             wrap: ask.wrap.to_owned(),
             args: ask.args.to_vec(),
+            command: Some(ask.command.to_vec()),
             callers: ask.callers.to_vec(),
             callers_truncated: Some(ask.callers_truncated),
             secrets: ask.secret_names.to_vec(),
@@ -586,12 +609,20 @@ pub fn visit_history(
     let file =
         std::fs::File::open(path).with_context(|| format!("open audit log {}", path.display()))?;
     let mut summary = AuditReadSummary::default();
-    for line in BufReader::new(file).lines() {
-        let line = line.with_context(|| format!("read audit log {}", path.display()))?;
-        if line.trim().is_empty() {
+    let mut reader = BufReader::new(file);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let bytes = reader
+            .read_until(b'\n', &mut line)
+            .with_context(|| format!("read audit log {}", path.display()))?;
+        if bytes == 0 {
+            break;
+        }
+        if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
-        let stream = serde_json::Deserializer::from_str(&line).into_iter::<AuditEntry>();
+        let stream = serde_json::Deserializer::from_slice(&line).into_iter::<AuditEntry>();
         for entry in stream {
             if let Ok(entry) = entry {
                 visit(entry)?;
@@ -608,27 +639,36 @@ pub fn visit_history(
 fn read_history_path(
     path: &std::path::Path,
     limit: Option<usize>,
-) -> Result<(Vec<AuditEntry>, usize)> {
-    let mut entries = Vec::new();
+) -> Result<(Vec<AuditEntry>, AuditReadSummary)> {
+    let mut entries = VecDeque::new();
     let summary = visit_history(path, |entry| {
-        entries.push(entry);
+        if limit == Some(0) {
+            return Ok(());
+        }
+        entries.push_back(entry);
+        if let Some(max) = limit {
+            if entries.len() > max {
+                entries.pop_front();
+            }
+        }
         Ok(())
     })?;
-    if let Some(max) = limit {
-        if entries.len() > max {
-            let drop_n = entries.len() - max;
-            entries.drain(..drop_n);
-        }
-    }
-    Ok((entries, summary.malformed))
+    Ok((entries.into(), summary))
 }
 
 /// Stream the audit log into memory, newest-last. Corrupt physical lines are
 /// skipped — the audit log spans versions, and one bad record must not blank
 /// history. Missing file returns an empty vec, not an error.
 pub fn read_history(limit: Option<usize>) -> Result<Vec<AuditEntry>> {
+    read_history_with_summary(limit).map(|(entries, _)| entries)
+}
+
+/// Read history and retain corruption accounting for reporting surfaces.
+pub fn read_history_with_summary(
+    limit: Option<usize>,
+) -> Result<(Vec<AuditEntry>, AuditReadSummary)> {
     let path = crate::paths::audit_log_path()?;
-    read_history_path(&path, limit).map(|(entries, _)| entries)
+    read_history_path(&path, limit)
 }
 
 fn now_unix() -> u64 {
@@ -693,7 +733,60 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].wrap, "gh");
         assert_eq!(entries[1].wrap, "npm");
-        assert_eq!(malformed, 0);
+        assert_eq!(malformed.malformed, 0);
+    }
+
+    #[test]
+    fn invalid_utf8_discards_only_its_physical_line() {
+        let first = br#"{"ts_unix":1,"cwd":"/a","wrap":"gh","args":[],"callers":[],"secrets":[],"decision":"approve"}
+"#;
+        let second = br#"{"ts_unix":2,"cwd":"/b","wrap":"npm","args":[],"callers":[],"secrets":[],"decision":"deny"}
+"#;
+        let mut log = tempfile::NamedTempFile::new().expect("audit fixture");
+        log.write_all(first).expect("first row");
+        log.write_all(b"broken-\xff-row\n").expect("invalid row");
+        log.write_all(second).expect("second row");
+        log.flush().expect("flush fixture");
+
+        let (entries, malformed) = read_history_path(log.path(), None).expect("read fixture");
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].wrap, "gh");
+        assert_eq!(entries[1].wrap, "npm");
+        assert_eq!(malformed.malformed, 1);
+    }
+
+    #[test]
+    fn current_rows_store_the_exact_evaluator_command_for_each_ask_path() {
+        let chain = CallerChain {
+            frames: Vec::new(),
+            truncated: false,
+        };
+        let cases = [
+            ("gh", vec!["api", "/user"], "gh api /user"),
+            ("run", vec!["npm", "publish"], "npm publish"),
+            ("read", vec!["read", "github_token"], "read github_token"),
+        ];
+        for (wrap, args, expected) in cases {
+            let args: Vec<String> = args.into_iter().map(str::to_owned).collect();
+            let entry = AuditEntry::new(wrap, &args, &chain, &[], Decision::Approve);
+            assert_eq!(
+                crate::rules::joined_argv(entry.command.as_deref().expect("new command field")),
+                expected
+            );
+        }
+        let ssh = AuditEntry::ssh_sign(
+            "work",
+            "SHA256:test",
+            &chain,
+            &test_anchor(SignAnchorKind::Session, 1, "zsh"),
+            "/work",
+            Decision::Approve,
+        );
+        assert_eq!(
+            crate::rules::joined_argv(ssh.command.as_deref().expect("ssh command field")),
+            "ssh-sign work"
+        );
     }
 
     #[test]
@@ -910,6 +1003,12 @@ mod tests {
         let entry = AuditEntry::abandoned(AbandonedAsk {
             wrap: "gh",
             args: &["pr".to_owned(), "view".to_owned(), "42".to_owned()],
+            command: &[
+                "gh".to_owned(),
+                "pr".to_owned(),
+                "view".to_owned(),
+                "42".to_owned(),
+            ],
             cwd: "/home/dev/project",
             callers: &callers,
             callers_truncated: false,
@@ -1157,6 +1256,7 @@ mod tests {
             AuditEntry::abandoned(AbandonedAsk {
                 wrap: "agent:brain-nx-t5",
                 args: &[],
+                command: &[],
                 cwd: "",
                 callers: &[],
                 callers_truncated: false,
@@ -1223,6 +1323,7 @@ mod tests {
             AuditEntry::abandoned(AbandonedAsk {
                 wrap: "ssh:ssh.deploy",
                 args: &[],
+                command: &["ssh-sign ssh.deploy".to_owned()],
                 cwd: "/w",
                 callers: &[],
                 callers_truncated: false,
@@ -1296,6 +1397,7 @@ mod tests {
             AuditEntry::abandoned(AbandonedAsk {
                 wrap: "gh",
                 args: &[],
+                command: &["gh".to_owned()],
                 cwd: "/w",
                 callers: &[],
                 callers_truncated: true,

@@ -449,8 +449,8 @@ enum RulesAction {
         json: bool,
         /// Check eligible historical auto decisions for evaluator drift.
         /// Also exits non-zero for refused modules/patterns, invalid live
-        /// scope, or malformed audit records. Runtime wasm failures are
-        /// reported; ordinary uncovered prompts are not failures.
+        /// scope, malformed audit records, or runtime wasm failures.
+        /// Ordinary uncovered prompts are not failures.
         #[arg(long)]
         verify: bool,
     },

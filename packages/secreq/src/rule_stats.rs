@@ -10,6 +10,8 @@ use crate::audit::AuditEntry;
 use crate::rule_health::ScopeFinding;
 use crate::rules::{self, EvalCaller, EvalCtx, LoadedRules, RuleDecision};
 
+const MAX_DECISION_CACHE_BYTES: usize = 16 * 1024 * 1024;
+
 #[derive(Debug, Clone)]
 pub struct ReplayOptions {
     pub since_unix: Option<u64>,
@@ -149,7 +151,12 @@ pub struct Verification {
     pub pre_creation: usize,
     pub scoped_agent: usize,
     pub missing_rule_id: usize,
+    pub disagreements: usize,
     pub failures: Vec<VerificationFailure>,
+    pub failures_omitted: usize,
+    pub attribution_changed: usize,
+    pub attribution_changes: Vec<AttributionChange>,
+    pub attribution_changes_omitted: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -160,6 +167,14 @@ pub struct VerificationFailure {
     pub subjects: Vec<String>,
     pub recorded: String,
     pub replayed: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AttributionChange {
+    pub timestamp: u64,
+    pub wrap: String,
+    pub recorded: BTreeMap<String, String>,
+    pub replayed: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,6 +228,7 @@ pub fn replay_audit(
         .map(|rule| (rule.id.as_str(), rule))
         .collect();
     let mut decision_cache: HashMap<String, Simulated> = HashMap::new();
+    let mut decision_cache_bytes: usize = 0;
 
     let summary = crate::audit::visit_history(audit_path, |entry| {
         if options
@@ -241,12 +257,17 @@ pub fn replay_audit(
         }
 
         rows.replayed += 1;
-        let joined_argv = joined_argv(&entry);
+        let joined_argv = entry.joined_argv();
         let subjects = replay_subjects(&entry);
+        let projected_callers: Vec<_> = entry
+            .callers
+            .iter()
+            .map(|caller| (&caller.name, &caller.command, &caller.exe))
+            .collect();
         let cache_key = serde_json::to_string(&(
             &entry.wrap,
             &joined_argv,
-            &entry.callers,
+            &projected_callers,
             &entry.cwd,
             &subjects,
         ))?;
@@ -309,7 +330,9 @@ pub fn replay_audit(
                         .collect(),
                 },
             };
-            if decision_cache.len() < 200_000 {
+            let cache_entry_bytes = cache_key.len() + std::mem::size_of::<Simulated>();
+            if decision_cache_bytes.saturating_add(cache_entry_bytes) <= MAX_DECISION_CACHE_BYTES {
+                decision_cache_bytes += cache_entry_bytes;
                 decision_cache.insert(cache_key, simulated.clone());
             }
             simulated
@@ -343,11 +366,11 @@ pub fn replay_audit(
         if options.verify {
             verify_row(
                 &entry,
-                &joined_argv,
                 &subjects,
                 &simulated,
                 &rules_by_id,
                 &mut verification,
+                options.top,
             );
         }
         Ok(())
@@ -477,11 +500,11 @@ fn record_outcome(
 
 fn verify_row(
     entry: &AuditEntry,
-    joined_argv: &str,
     subjects: &[String],
     simulated: &Simulated,
     rules_by_id: &HashMap<&str, &rules::Rule>,
     verification: &mut Verification,
+    max_details: usize,
 ) {
     let recorded_kind = match entry.decision.as_str() {
         "approve+auto" => Some(SimulatedKind::Approve),
@@ -504,18 +527,50 @@ fn verify_row(
         return;
     }
     verification.eligible += 1;
-    if simulated.kind == recorded_kind && simulated.rule_id.as_deref() == Some(rule_id) {
+    if simulated.kind == recorded_kind {
         verification.agree += 1;
+        let recorded_attribution = if entry.approvers.is_empty() {
+            BTreeMap::from([("representative".to_owned(), rule_id.to_owned())])
+        } else {
+            entry.approvers.clone()
+        };
+        let replayed_attribution = if entry.approvers.is_empty() {
+            simulated
+                .rule_id
+                .as_ref()
+                .map(|id| BTreeMap::from([("representative".to_owned(), id.clone())]))
+                .unwrap_or_default()
+        } else {
+            simulated.approvals.clone()
+        };
+        if recorded_attribution != replayed_attribution {
+            verification.attribution_changed += 1;
+            if verification.attribution_changes.len() < max_details {
+                verification.attribution_changes.push(AttributionChange {
+                    timestamp: entry.ts_unix,
+                    wrap: entry.wrap.clone(),
+                    recorded: recorded_attribution,
+                    replayed: replayed_attribution,
+                });
+            } else {
+                verification.attribution_changes_omitted += 1;
+            }
+        }
         return;
     }
-    verification.failures.push(VerificationFailure {
-        timestamp: entry.ts_unix,
-        wrap: entry.wrap.clone(),
-        joined_argv: joined_argv.to_owned(),
-        subjects: subjects.to_vec(),
-        recorded: format!("{} by rule {rule_id}", entry.decision),
-        replayed: simulated_label(simulated),
-    });
+    verification.disagreements += 1;
+    if verification.failures.len() < max_details {
+        verification.failures.push(VerificationFailure {
+            timestamp: entry.ts_unix,
+            wrap: entry.wrap.clone(),
+            joined_argv: prompt_shape(entry),
+            subjects: subjects.to_vec(),
+            recorded: format!("{} by rule {rule_id}", entry.decision),
+            replayed: simulated_label(simulated),
+        });
+    } else {
+        verification.failures_omitted += 1;
+    }
 }
 
 fn simulated_label(simulated: &Simulated) -> String {
@@ -545,31 +600,40 @@ fn replay_subjects(entry: &AuditEntry) -> Vec<String> {
         .collect()
 }
 
-fn joined_argv(entry: &AuditEntry) -> String {
-    if entry.args.is_empty() {
-        entry.wrap.clone()
-    } else {
-        format!("{} {}", entry.wrap, entry.args.join(" "))
-    }
+fn replay_command(entry: &AuditEntry) -> Vec<String> {
+    entry.evaluator_command()
 }
 
 fn prompt_shape(entry: &AuditEntry) -> String {
-    // A `read` row's next argument is normally a secret reference, not a
-    // command verb. Keep prompt-shape reports structural and value-free.
-    if entry.wrap == "read" {
+    // `read` arguments are secret references and `store` carries the child
+    // command rather than a structural subcommand. Neither belongs in a
+    // report intended for sharing.
+    if matches!(entry.wrap.as_str(), "read" | "store") || entry.wrap.starts_with("ssh:") {
         return entry.wrap.clone();
     }
-    let suffix = entry
-        .args
+    let command = replay_command(entry);
+    let skip = usize::from(command.first() == Some(&entry.wrap));
+    let suffix = command
         .iter()
+        .skip(skip)
         .take(2)
-        .map(String::as_str)
+        .map(|token| bounded(token, 80))
         .collect::<Vec<_>>()
         .join(" ");
     if suffix.is_empty() {
         entry.wrap.clone()
     } else {
         format!("{} {suffix}", entry.wrap)
+    }
+}
+
+fn bounded(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let prefix: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{prefix}…")
+    } else {
+        prefix
     }
 }
 
@@ -675,6 +739,7 @@ mod tests {
             cwd: "/home/me/oss/project".to_owned(),
             wrap: wrap.to_owned(),
             args: args.iter().map(|s| (*s).to_owned()).collect(),
+            command: None,
             callers: vec![AuditCaller {
                 pid: 1,
                 name: "Cursor".to_owned(),
@@ -720,7 +785,7 @@ mod tests {
             modules,
             ..LoadedRules::default()
         };
-        let mut rows = [
+        let rows = [
             row(
                 20,
                 "gh",
@@ -779,7 +844,6 @@ mod tests {
                 None,
             ),
         ];
-        rows[0].fingerprint = Some("SECRET_VALUE_MUST_NOT_APPEAR".to_owned());
         let mut log = tempfile::NamedTempFile::new().expect("audit fixture");
         for pair in rows.chunks(2) {
             for entry in pair {
@@ -854,7 +918,7 @@ mod tests {
             .into_iter()
             .collect()
         );
-        assert!(!json.to_string().contains("SECRET_VALUE_MUST_NOT_APPEAR"));
+        assert!(!json.to_string().contains("fingerprint"));
     }
 
     #[test]
@@ -893,12 +957,112 @@ mod tests {
         assert_eq!(report.verification.eligible, 1);
         assert_eq!(report.verification.agree, 0);
         assert_eq!(report.verification.failures.len(), 1);
-        assert!(report.verification.failures[0]
-            .joined_argv
-            .contains("DELETE"));
+        assert_eq!(
+            report.verification.failures[0].joined_argv,
+            "gh api --method"
+        );
         assert_eq!(
             report.verification.failures[0].subjects,
             vec!["GITHUB_TOKEN"]
         );
+    }
+
+    #[test]
+    fn legacy_rows_reconstruct_the_live_command_for_each_ask_path() {
+        let cases = [
+            ("gh", vec!["api", "/user"], "gh api /user"),
+            ("run", vec!["npm", "publish"], "npm publish"),
+            ("read", vec!["read", "github_token"], "read github_token"),
+            ("ssh:work", vec![], "ssh-sign work"),
+        ];
+
+        for (wrap, args, expected) in cases {
+            let entry = row(20, wrap, &args, &[], "approve", None);
+            assert_eq!(
+                crate::rules::joined_argv(&super::replay_command(&entry)),
+                expected,
+                "legacy {wrap} row"
+            );
+        }
+    }
+
+    #[test]
+    fn a_changed_approver_is_informational_when_the_decision_still_agrees() {
+        let loaded = LoadedRules {
+            rules: vec![
+                declarative("a-new", "gh", RuleDecision::Approve, &["TOKEN"]),
+                declarative("z-old", "gh", RuleDecision::Approve, &["TOKEN"]),
+            ],
+            ..LoadedRules::default()
+        };
+        let mut entry = row(
+            20,
+            "gh",
+            &["api"],
+            &["TOKEN"],
+            "approve+auto",
+            Some("z-old"),
+        );
+        entry
+            .approvers
+            .insert("TOKEN".to_owned(), "z-old".to_owned());
+        let mut log = tempfile::NamedTempFile::new().expect("audit fixture");
+        writeln!(log, "{}", serde_json::to_string(&entry).expect("serialize")).expect("write");
+
+        let report = replay_audit(
+            log.path(),
+            &loaded,
+            Vec::new(),
+            &ReplayOptions {
+                verify: true,
+                ..ReplayOptions::default()
+            },
+        )
+        .expect("replay attribution change");
+
+        assert_eq!(report.verification.eligible, 1);
+        assert_eq!(report.verification.agree, 1);
+        assert_eq!(report.verification.disagreements, 0);
+        assert_eq!(report.verification.attribution_changed, 1);
+        assert_eq!(report.verification.attribution_changes.len(), 1);
+    }
+
+    #[test]
+    fn verification_redacts_read_references_but_keeps_audit_subject_names() {
+        let loaded = LoadedRules {
+            rules: vec![declarative(
+                "approve",
+                "read",
+                RuleDecision::Approve,
+                &["SUBJECT_NAME_MARKER"],
+            )],
+            ..LoadedRules::default()
+        };
+        let entry = row(
+            20,
+            "read",
+            &["read", "REFERENCE_MARKER"],
+            &["SUBJECT_NAME_MARKER"],
+            "deny+auto",
+            Some("approve"),
+        );
+        let mut log = tempfile::NamedTempFile::new().expect("audit fixture");
+        writeln!(log, "{}", serde_json::to_string(&entry).expect("serialize")).expect("write");
+
+        let report = replay_audit(
+            log.path(),
+            &loaded,
+            Vec::new(),
+            &ReplayOptions {
+                verify: true,
+                ..ReplayOptions::default()
+            },
+        )
+        .expect("replay read mismatch");
+        let json = serde_json::to_string(&report).expect("serialize report");
+
+        assert!(!json.contains("REFERENCE_MARKER"));
+        assert!(json.contains("SUBJECT_NAME_MARKER"));
+        assert_eq!(report.verification.failures[0].joined_argv, "read");
     }
 }

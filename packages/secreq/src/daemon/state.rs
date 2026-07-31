@@ -279,6 +279,11 @@ pub struct State {
     /// constructor). Set by [`State::with_rules_path`] at daemon
     /// startup.
     rules_path: Option<PathBuf>,
+    /// Config snapshot used only for advisory scope findings on rule
+    /// mutations. The daemon startup constructor supplies it; isolated state
+    /// stores leave it `None`. Rule CRUD must never be bricked by an unrelated
+    /// config parse failure.
+    scope_config: Option<crate::wraps::WrapsConfig>,
     /// In-memory copy of the ruleset. Mutated by AddRule / UpdateRule /
     /// DeleteRule / SetRuleEnabled, kept in sync with the on-disk
     /// file by every mutation path that writes the file.
@@ -352,6 +357,7 @@ impl Default for State {
             // logic has a stable "started counting" anchor.
             queue_empty_since: Some(Instant::now()),
             rules_path: None,
+            scope_config: None,
             rules: Vec::new(),
             rule_modules: rules::RuleModules::new(),
             wasm_refusals: Vec::new(),
@@ -607,6 +613,13 @@ impl State {
     /// block consent" contract. The mtime is still recorded so the
     /// freshness check can detect when the user fixes the file.
     pub fn with_rules_path(rules_path: PathBuf) -> State {
+        State::with_rules_path_and_config(rules_path, None)
+    }
+
+    pub(crate) fn with_rules_path_and_config(
+        rules_path: PathBuf,
+        scope_config: Option<crate::wraps::WrapsConfig>,
+    ) -> State {
         let mut state = State::new();
         match rules::load_rules(&rules_path) {
             Ok(loaded) => {
@@ -630,6 +643,7 @@ impl State {
             }
         }
         state.rules_path = Some(rules_path);
+        state.scope_config = scope_config;
         state
     }
 
@@ -1136,7 +1150,7 @@ impl State {
         let is_new = !self.queue.contains_key(&key);
         // Command label stamped onto each merged secret's provenance. The
         // plan uses the full joined command; the UI truncates it.
-        let command_label = ask.command.join(" ");
+        let command_label = rules::joined_argv(&ask.command);
         let entry = self.queue.entry(key.clone()).or_insert_with(|| QueueEntry {
             key: key.clone(),
             // Build the representative's secrets by folding the creating
@@ -1392,6 +1406,7 @@ impl State {
         AuditEntry::abandoned(AbandonedAsk {
             wrap: &key.wrap,
             args,
+            command: &waiter.command,
             cwd: &waiter.cwd,
             callers: &callers,
             callers_truncated: waiter.callers_truncated,
@@ -1641,7 +1656,7 @@ impl State {
         if self.rules.is_empty() {
             return None;
         }
-        let joined_argv = ask.command.join(" ");
+        let joined_argv = rules::joined_argv(&ask.command);
         let callers: Vec<rules::EvalCaller<'_>> = callers
             .iter()
             .map(|c| rules::EvalCaller {
@@ -1731,7 +1746,7 @@ impl State {
     /// [`State::refuse_broken_patterns`].
     pub fn add_rule(&mut self, rule: Rule) -> Result<()> {
         Self::refuse_broken_patterns(&rule)?;
-        Self::refuse_invalid_scope(&rule)?;
+        self.log_scope_findings(&rule);
         if rule.is_wasm() && rule.trained_secrets.is_empty() {
             anyhow::bail!(
                 "refusing wasm rule `{}` with an empty trained-secrets snapshot: \
@@ -1783,28 +1798,19 @@ impl State {
         );
     }
 
-    /// Refuse registration-time scope errors through the same validator used
-    /// by `secreq check` and `rules stats`. A missing config is tolerated so
-    /// migration and isolated state tests can still manipulate the rules
-    /// store; once a live config exists, a subject no ask can declare is an
-    /// admission error rather than a silently dead rule.
-    fn refuse_invalid_scope(rule: &Rule) -> Result<()> {
-        let config_path = crate::paths::wraps_path()?;
-        if !config_path.is_file() {
-            return Ok(());
-        }
-        let config = crate::wraps::WrapsConfig::load(&config_path)?;
-        let findings =
-            crate::rule_health::validate_rule_scopes(&config, std::slice::from_ref(rule));
-        let errors: Vec<&str> = findings
-            .iter()
-            .filter(|finding| finding.severity == crate::rule_health::ScopeSeverity::Error)
-            .map(|finding| finding.message.as_str())
-            .collect();
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            anyhow::bail!("refusing invalid rule scope: {}", errors.join("; "))
+    fn log_scope_findings(&self, rule: &Rule) {
+        let Some(config) = &self.scope_config else {
+            return;
+        };
+        for finding in crate::rule_health::validate_rule_scopes(config, std::slice::from_ref(rule))
+        {
+            super::log::log_at(
+                "state",
+                format_args!(
+                    "WARN: advisory rule-scope finding for `{}` ({}): {}",
+                    finding.rule_name, finding.rule_id, finding.message
+                ),
+            );
         }
     }
 
@@ -1841,7 +1847,7 @@ impl State {
     /// stored rule exactly as it was.
     pub fn update_rule(&mut self, rule: Rule) -> Result<()> {
         Self::refuse_broken_patterns(&rule)?;
-        Self::refuse_invalid_scope(&rule)?;
+        self.log_scope_findings(&rule);
         if !self.rules.iter().any(|r| r.id == rule.id) {
             anyhow::bail!("no rule with id `{}`", rule.id);
         }
@@ -2018,6 +2024,32 @@ impl State {
                 store.display()
             );
         }
+        // Build and diagnose the registration before writing its module. The
+        // findings are advisory, but keeping every validation step ahead of
+        // the filesystem mutation preserves that boundary if diagnostics
+        // become stricter later.
+        let rules_dir = self
+            .rules_path
+            .as_deref()
+            .and_then(Path::parent)
+            .unwrap_or(Path::new(""));
+        let recorded_path = store
+            .strip_prefix(rules_dir)
+            .unwrap_or(&store)
+            .to_string_lossy()
+            .into_owned();
+        let rule = Rule {
+            id,
+            name: name.to_owned(),
+            enabled: true,
+            trained_secrets,
+            created_at_unix: rules::now_unix(),
+            body: crate::rules::RuleBody::Wasm(crate::rules::WasmRule {
+                path: recorded_path,
+                sha256: rules::sha256_hex(module_bytes),
+            }),
+        };
+        self.log_scope_findings(&rule);
         let store_dir = crate::paths::rule_wasm_dir()?;
         // `ensure_private_dir`, not `create_dir_all`, which takes the umask's
         // answer — measured at **0777** under the `umask 000` that container
@@ -2052,42 +2084,13 @@ impl State {
         crate::atomic::replace(&store, module_bytes, crate::atomic::Mode::Exactly(0o600))
             .with_context(|| format!("write wasm module {}", store.display()))?;
 
-        // Record the store path relative to the rules file's directory
-        // when it lives underneath it (the production layout: both
-        // under the secreq root), absolute otherwise.
-        let rules_dir = self
-            .rules_path
-            .as_deref()
-            .and_then(Path::parent)
-            .unwrap_or(Path::new(""));
-        let recorded_path = store
-            .strip_prefix(rules_dir)
-            .unwrap_or(&store)
-            .to_string_lossy()
-            .into_owned();
-
-        let rule = Rule {
-            id,
-            name: name.to_owned(),
-            enabled: true,
-            trained_secrets,
-            created_at_unix: rules::now_unix(),
-            body: crate::rules::RuleBody::Wasm(crate::rules::WasmRule {
-                path: recorded_path,
-                sha256: rules::sha256_hex(module_bytes),
-            }),
-        };
-        if let Err(err) = Self::refuse_invalid_scope(&rule) {
-            let _ = std::fs::remove_file(&store);
-            return Err(err);
-        }
         // `admit_rule`, not `add_rule`: the empty-snapshot opt-in was
         // already enforced above, with the flag to prove it.
         if let Err(err) = self.admit_rule(rule.clone()) {
             // Nothing was registered (admit_rule rolled back any
             // in-memory state); don't leave the copied module orphaned
             // in the store either.
-            let _ = std::fs::remove_file(&store);
+            self.remove_stored_module(&rule);
             return Err(err);
         }
         Ok(rule)
@@ -3923,6 +3926,36 @@ mod tests {
         let path = dir.path().join("nope.json5");
         let state = State::with_rules_path(path);
         assert!(state.rules_snapshot().is_empty());
+    }
+
+    #[test]
+    fn advisory_scope_validation_admits_a_named_read_subject() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.toml");
+        let config = crate::wraps::WrapsConfig::parse(
+            r#"
+                [secrets.github_token]
+                ref = "secret://op/GitHub/token"
+
+                [wraps.gh.env]
+                GITHUB_TOKEN = "secret://github_token"
+            "#,
+            "fixture",
+        )
+        .expect("valid config");
+        let mut state = State::with_rules_path_and_config(path.clone(), Some(config));
+        let mut rule = mk_rule("read-name", "read", RuleDecision::Approve, Some("read *"));
+        rule.trained_secrets = ["github_token".to_owned()].into_iter().collect();
+
+        state
+            .add_rule(rule.clone())
+            .expect("advisory scope admitted");
+
+        assert_eq!(state.rules_snapshot(), vec![rule.clone()]);
+        assert_eq!(
+            crate::rules::load_rules(&path).expect("reload").rules,
+            vec![rule]
+        );
     }
 
     #[test]

@@ -282,10 +282,13 @@ runCases('./rule.wasm', [
 ]);
 ```
 
-The Node runner vets the abort-only import surface, uses a fresh instance per
-case, enforces the host's 64 MiB memory and 64 KiB decision caps, and decodes
-Approve, Pass, Prompt, and Deny. Node's built-in WebAssembly engine has no fuel
-meter, so infinite-loop enforcement remains intentionally host-only.
+The Node runner vets the abort-only import names and kinds, uses a fresh
+instance per case, checks memory before and after calls, enforces the 64 KiB
+decision cap, and decodes Approve, Pass, Prompt, and Deny. Node's built-in
+WebAssembly engine cannot meter fuel or constrain an exported memory while a
+guest call is running, and its reflection API does not expose import function
+signatures. Those protections remain intentionally host-only; inspect
+`sandboxPosture` for the machine-readable differences.
 
 **secreq never runs your tests.** Testing happens entirely in your
 package, before you compile; the daemon only ever loads the compiled
@@ -369,15 +372,10 @@ attribution, prompt shapes, costly historical rows now automated, recorded
 decisions for rows that still prompt, scope findings, and refused modules or
 patterns. `--verify` compares eligible historical `approve+auto` and
 `deny+auto` rows with their current replay. It exits non-zero for drift,
-refused/tampered rules, invalid live scope, or malformed audit records. Runtime
-wasm failures are reported as rule-health data without turning historical rows
-into false verification failures. Ordinary uncovered prompts remain
-informational. Deleted-rule,
+refused/tampered rules, invalid live scope, malformed audit records, or runtime
+wasm failures. Ordinary uncovered prompts remain informational. Deleted-rule,
 pre-creation, and scoped-agent history is classified separately and is not an
 evaluator failure.
-
-The implementation corpus check on 2026-07-31 replayed 333,584 applicable
-rows and agreed with all 24,686 eligible historical auto decisions (100%).
 
 A healthy wasm rule shows:
 

@@ -206,11 +206,7 @@ pub fn suggest(entries: &[AuditEntry], rules: &[Rule], now_unix: u64) -> Vec<Sug
 }
 
 fn joined_argv(entry: &AuditEntry) -> String {
-    if entry.args.is_empty() {
-        entry.wrap.clone()
-    } else {
-        format!("{} {}", entry.wrap, entry.args.join(" "))
-    }
+    entry.joined_argv()
 }
 
 /// Would an enabled rule already fire (with the same side) for a
@@ -499,6 +495,7 @@ mod tests {
             cwd: cwd.to_owned(),
             wrap: wrap.to_owned(),
             args: args.iter().map(|s| (*s).to_owned()).collect(),
+            command: None,
             callers: vec![AuditCaller {
                 pid: 1,
                 name: ancestor.to_owned(),

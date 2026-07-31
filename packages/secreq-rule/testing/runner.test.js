@@ -68,7 +68,47 @@ test('context encoder uses the real snake_case ABI and preserves multiline argv'
     },
   );
   assert.equal(sandboxPosture.fuelMetered, false);
+  assert.equal(sandboxPosture.memoryConstrainedDuringCall, false);
+  assert.equal(sandboxPosture.importSignaturesChecked, false);
   assert.deepEqual(sandboxPosture.imports, ['env.abort']);
+});
+
+test('context encoder rejects misspelled ABI fields instead of silently dropping them', () => {
+  assert.throws(
+    () => contextJson({ wrap: 'gh', argv: 'gh api /user' }),
+    /rule context has unknown key\(s\): argv/,
+  );
+  assert.throws(
+    () => contextJson({ callers: [{ name: 'node', argv: 'node tool' }] }),
+    /caller has unknown key\(s\): argv/,
+  );
+});
+
+test('compiled runner gives host-shaped errors for guest aborts and invalid decisions', () => {
+  assert.throws(
+    () => runRule(path.join(FIXTURES, 'aborts.wasm'), { wrap: 'gh' }),
+    /rule decide failed: rule called abort\(\)/,
+  );
+  assert.throws(
+    () => runRule(path.join(FIXTURES, 'bad_decision.wasm'), { wrap: 'gh' }),
+    /unrecognized decision JSON: {"maybe":"perhaps"}/,
+  );
+});
+
+test('compiled runner names the required decide signature', () => {
+  // memory + alloc(i32)->i32 + deliberately-wrong decide(i32,i32)->i32.
+  const wrongDecideSignature = Uint8Array.from([
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0c, 0x02, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+    0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f, 0x03, 0x03, 0x02, 0x00, 0x01, 0x05, 0x03, 0x01, 0x00, 0x01,
+    0x07, 0x1b, 0x03, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x00, 0x05, 0x61, 0x6c, 0x6c,
+    0x6f, 0x63, 0x00, 0x00, 0x06, 0x64, 0x65, 0x63, 0x69, 0x64, 0x65, 0x00, 0x01, 0x0a, 0x0b, 0x02,
+    0x04, 0x00, 0x41, 0x00, 0x0b, 0x04, 0x00, 0x41, 0x00, 0x0b,
+  ]);
+
+  assert.throws(
+    () => runRule(wrongDecideSignature, {}),
+    /rule decide must have signature decide\(i32, i32\) -> i64/,
+  );
 });
 
 test('table failures name every case', () => {

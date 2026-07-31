@@ -2,15 +2,29 @@
 
 const fs = require('node:fs');
 
-const MAX_GUEST_MEMORY_BYTES = 64 << 20;
-const MAX_DECISION_BYTES = 64 * 1024;
+// Kept as decimal literals so the Rust publish guard can pin these values to
+// the host ABI constants across the language boundary.
+const MAX_GUEST_MEMORY_BYTES = 67108864;
+const MAX_DECISION_BYTES = 65536;
+
+function rejectUnknownKeys(value, allowed, label) {
+  const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (unknown.length) {
+    throw new TypeError(`${label} has unknown key(s): ${unknown.join(', ')}`);
+  }
+}
 
 /** Normalize an author-friendly JS context to the host's real snake_case JSON. */
 function contextJson(context) {
+  if (!context || typeof context !== 'object' || Array.isArray(context)) {
+    throw new TypeError('rule context must be an object');
+  }
+  rejectUnknownKeys(context, ['wrap', 'joinedArgv', 'callers', 'cwd', 'subjects'], 'rule context');
   return {
     wrap: context.wrap ?? '',
-    joined_argv: context.joinedArgv ?? context.joined_argv ?? '',
+    joined_argv: context.joinedArgv ?? '',
     callers: (context.callers ?? []).map((caller) => {
+      rejectUnknownKeys(caller, ['name', 'command', 'exe'], 'caller');
       const value = {
         name: caller.name ?? '',
         command: caller.command ?? '',
@@ -19,7 +33,7 @@ function contextJson(context) {
       return value;
     }),
     cwd: context.cwd ?? '',
-    secrets: context.subjects ?? context.secrets ?? [],
+    secrets: context.subjects ?? [],
   };
 }
 
@@ -94,7 +108,12 @@ function loadRule(source) {
       const instance = instantiate(module);
       const { alloc, decide, memory } = instance.exports;
       const input = Buffer.from(JSON.stringify(contextJson(context)), 'utf8');
-      const inputPointer = alloc(input.length);
+      let inputPointer;
+      try {
+        inputPointer = alloc(input.length);
+      } catch (error) {
+        throw new Error('rule alloc must have signature alloc(i32) -> i32', { cause: error });
+      }
       if (!Number.isInteger(inputPointer) || inputPointer < 0) {
         throw new Error(`rule alloc returned invalid pointer ${inputPointer}`);
       }
@@ -102,7 +121,16 @@ function loadRule(source) {
         throw new Error('rule memory grew beyond the host 64 MiB limit');
       }
       new Uint8Array(memory.buffer).set(input, inputPointer);
-      const packed = BigInt.asUintN(64, decide(inputPointer, input.length));
+      let rawDecision;
+      try {
+        rawDecision = decide(inputPointer, input.length);
+      } catch (error) {
+        throw new Error(`rule decide failed: ${error.message}`, { cause: error });
+      }
+      if (typeof rawDecision !== 'bigint') {
+        throw new Error('rule decide must have signature decide(i32, i32) -> i64');
+      }
+      const packed = BigInt.asUintN(64, rawDecision);
       const outputPointer = Number(packed >> 32n);
       const outputLength = Number(packed & 0xffffffffn);
       if (outputLength > MAX_DECISION_BYTES) {
@@ -116,7 +144,15 @@ function loadRule(source) {
       }
       const bytes = new Uint8Array(memory.buffer, outputPointer, outputLength);
       const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-      return decodeDecision(JSON.parse(text));
+      let decoded;
+      try {
+        decoded = JSON.parse(text);
+      } catch (error) {
+        throw new Error(`rule returned malformed decision JSON ${JSON.stringify(text)}`, {
+          cause: error,
+        });
+      }
+      return decodeDecision(decoded);
     },
   };
 }
@@ -154,10 +190,11 @@ function runCases(source, cases) {
 }
 
 /**
- * Node's built-in WebAssembly engine cannot meter fuel. The runner otherwise
- * mirrors the host's fresh-instance, abort-only-import, 64 MiB memory, 64 KiB
- * decision, packed-pointer ABI posture. Use `secreq rules stats --verify` for
- * the authoritative fuel-metered replay.
+ * Node's built-in WebAssembly engine cannot meter fuel or constrain growth of
+ * an exported memory during a call. The runner checks memory before and after
+ * calls, and mirrors the host's fresh-instance, abort-only-import, 64 KiB
+ * decision, packed-pointer ABI posture. Import names/kinds are checked, but
+ * JavaScript's WebAssembly reflection does not expose import signatures.
  */
 const sandboxPosture = Object.freeze({
   freshInstancePerCase: true,
@@ -165,6 +202,8 @@ const sandboxPosture = Object.freeze({
   maxMemoryBytes: MAX_GUEST_MEMORY_BYTES,
   maxDecisionBytes: MAX_DECISION_BYTES,
   fuelMetered: false,
+  memoryConstrainedDuringCall: false,
+  importSignaturesChecked: false,
 });
 
 module.exports = { contextJson, loadRule, runRule, runCases, sandboxPosture };

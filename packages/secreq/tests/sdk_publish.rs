@@ -123,3 +123,28 @@ fn declared_bin_exists_and_ships() {
         "the secreq-rule-build bin ({bin}) is not covered by the `files` allowlist"
     );
 }
+
+#[test]
+fn node_runner_limits_track_the_host_abi() {
+    let runner = std::fs::read_to_string(format!("{PKG_DIR}/testing/index.js"))
+        .expect("testing/index.js must exist");
+    let literal = |name: &str| -> usize {
+        let prefix = format!("const {name} = ");
+        runner
+            .lines()
+            .find_map(|line| line.strip_prefix(&prefix))
+            .and_then(|value| value.strip_suffix(';'))
+            .unwrap_or_else(|| panic!("testing/index.js must declare {name} as a decimal literal"))
+            .parse()
+            .unwrap_or_else(|_| panic!("{name} must be a decimal literal"))
+    };
+
+    assert_eq!(
+        literal("MAX_GUEST_MEMORY_BYTES"),
+        secreq::wasm_rules::MAX_GUEST_MEMORY_BYTES
+    );
+    assert_eq!(
+        literal("MAX_DECISION_BYTES"),
+        secreq::wasm_rules::MAX_DECISION_LEN as usize
+    );
+}

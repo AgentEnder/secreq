@@ -131,8 +131,27 @@ pub fn run() -> Result<i32> {
         return Ok(0);
     };
 
+    // Parse the config once for this daemon lifetime. Scope diagnostics and
+    // the SSH listener must describe the same configuration snapshot; a bad
+    // file disables those advisory/optional features but never bricks rule
+    // mutations or the consent socket.
+    let startup_config =
+        crate::paths::wraps_path().ok().and_then(
+            |config_path| match crate::wraps::WrapsConfig::load(&config_path) {
+                Ok(config) => Some(config),
+                Err(err) => {
+                    log::log(format_args!(
+                        "could not load config ({err:#}); scope diagnostics and SSH agent disabled"
+                    ));
+                    None
+                }
+            },
+        );
     let state: state::SharedState = match crate::paths::rules_path() {
-        Ok(path) => Arc::new(Mutex::new(state::State::with_rules_path(path))),
+        Ok(path) => Arc::new(Mutex::new(state::State::with_rules_path_and_config(
+            path,
+            startup_config.clone(),
+        ))),
         Err(_) => Arc::new(Mutex::new(state::State::new())),
     };
     let shutdown_flag = state.lock().expect("state mutex").shutdown_flag();
@@ -146,27 +165,18 @@ pub fn run() -> Result<i32> {
     // control listener; its accept thread exits when this drops. A missing
     // or unparseable config simply yields no agent (best-effort) — the
     // control socket and existing wrap flow are unaffected.
-    let _agent_listener = match crate::paths::wraps_path() {
-        Ok(config_path) => match crate::wraps::WrapsConfig::load(&config_path) {
-            Ok(mut config) if !config.ssh.is_empty() => {
-                // Overlay built-in providers so a private-key reference can
-                // name a built-in scheme (e.g. `secret://op/...`) without an
-                // explicit `providers` block — same resolution surface the
-                // wrap path gets via `load_config_or_default`.
-                config.merge_builtin_providers();
-                let agent_socket = server::default_agent_socket_path()?;
-                server::start_ssh_agent(agent_socket, &config, state.clone())
-                    .context("start ssh agent listener")?
-            }
-            Ok(_) => None,
-            Err(err) => {
-                log::log(format_args!(
-                    "ssh agent: could not load config ({err:#}); agent disabled"
-                ));
-                None
-            }
-        },
-        Err(_) => None,
+    let _agent_listener = match startup_config {
+        Some(mut config) if !config.ssh.is_empty() => {
+            // Overlay built-in providers so a private-key reference can
+            // name a built-in scheme (e.g. `secret://op/...`) without an
+            // explicit `providers` block — same resolution surface the
+            // wrap path gets via `load_config_or_default`.
+            config.merge_builtin_providers();
+            let agent_socket = server::default_agent_socket_path()?;
+            server::start_ssh_agent(agent_socket, &config, state.clone())
+                .context("start ssh agent listener")?
+        }
+        _ => None,
     };
 
     // Whether the SSH agent is serving on `agent.sock`. Fixed for the

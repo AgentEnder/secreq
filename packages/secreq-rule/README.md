@@ -102,10 +102,12 @@ runCases('./rule.wasm', [
 ]);
 ```
 
-The runner mirrors the host's abort-only imports, fresh instance per case,
-64 MiB memory cap, and 64 KiB decision cap. Node WebAssembly cannot meter fuel;
-the daemon and `secreq rules stats --verify` remain authoritative for runaway
-modules.
+The runner checks the host's abort-only import names and kinds, uses a fresh
+instance per case, checks memory before and after calls, and enforces the 64
+KiB decision cap. Node WebAssembly cannot meter fuel, constrain exported-memory
+growth during a call, or reflect import function signatures. The daemon and
+`secreq rules stats --verify` remain authoritative for those protections;
+`sandboxPosture` reports the intentional differences.
 
 ## Publishing (maintainers)
 

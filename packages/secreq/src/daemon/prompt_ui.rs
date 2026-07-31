@@ -265,7 +265,7 @@ fn render_header(ui: &mut egui::Ui, th: &Theme, row: &QueueRow) {
         ui.vertical(|ui| {
             ui.add(egui::Label::new(title_job(ui, th, row)).wrap());
             ui.add_space(2.0);
-            let cmdline = ask.command.join(" ");
+            let cmdline = crate::rules::joined_argv(&ask.command);
             let sub = match &ask.subject {
                 AskSubject::SshSign(s) => s.info.reason.clone().unwrap_or_else(|| cmdline.clone()),
                 AskSubject::Wrap(_) | AskSubject::ScopedAgent(_) => cmdline.clone(),
@@ -1006,7 +1006,7 @@ fn render_caller_tree(ui: &mut egui::Ui, th: &Theme, row: &QueueRow) {
         caller_overflow_row(ui, th, depth, hidden);
         depth += 1;
     }
-    let leaf_argv = ask.command.join(" ");
+    let leaf_argv = crate::rules::joined_argv(&ask.command);
     let leaf_name = ask.command.first().map_or_else(
         || row.key.wrap.clone(),
         |c| {
