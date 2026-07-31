@@ -425,12 +425,13 @@ impl From<SshMethod> for ssh_setup::Method {
 
 #[derive(Subcommand)]
 enum RulesAction {
-    /// One-line listing of every rule with its decide direction and
-    /// enabled state. Default action for `secreq rules`.
+    /// One-line listing of every rule with its decide direction, enabled
+    /// state, declarative wrap match, and consultation wrap scope. Default
+    /// action for `secreq rules`.
     List,
-    /// Show one rule in full (every match field, trained_secrets,
-    /// deny_message, created_at). `target` matches by id, falling
-    /// back to exact name.
+    /// Show one rule in full (consultation wrap scope, every match field,
+    /// trained_secrets, deny_message, created_at). `target` matches by id,
+    /// falling back to exact name.
     Show {
         /// The rule's id, or its exact name.
         target: String,

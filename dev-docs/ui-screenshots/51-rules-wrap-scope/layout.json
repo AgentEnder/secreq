@@ -1,8 +1,9 @@
 {
   "window": "manager",
+  "caption": "A rule's consultation scope is separate from its match. The scope chip says which asks may consult it at all; the summary keeps the declarative match wrap visible beside that gate.",
   "variants": {
     "gnome-dark": {
-      "digest": "5709dea8d1575a6cdb6fdcea8a161e0ab0098a844d11c088ead5153f3a6a6df6",
+      "digest": "7fe983eb459dd3f1dad028a387cac05e9608183e79095001f4251e695354dd07",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#383838ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#303030ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -170,7 +171,7 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,252.0,880.0,555.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,252.0,880.0,424.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,249.0,900.0,589.0],
           "k": "text",
@@ -185,11 +186,11 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#132e5059","k":"rect","radius":[6,6,6,6],"rect":[819.31,252.0,880.0,279.0],"stroke":[1.0,"#45454aff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[821.31,252.0,880.0,277.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,249.0,900.0,589.0],
           "k": "text",
-          "pos": [829.31,258.0],
+          "pos": [830.31,257.0],
           "rows": [
             {
               "rect": [0.0,0.0,40.69,15.0],
@@ -200,11 +201,11 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[733.28,253.0,811.31,278.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#132e5059","k":"rect","radius":[6,6,6,6],"rect":[733.28,252.0,813.31,279.0],"stroke":[1.0,"#45454aff"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,249.0,900.0,589.0],
           "k": "text",
-          "pos": [742.28,258.0],
+          "pos": [743.28,258.0],
           "rows": [
             {
               "rect": [0.0,0.0,60.03,15.0],
@@ -277,9 +278,9 @@
           "pos": [124.13,310.5],
           "rows": [
             {
-              "rect": [0.0,0.0,118.22,15.0],
+              "rect": [0.0,0.0,99.72,15.0],
               "runs": [
-                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"Deploy token denies","underline":[0.0,"#00000000"],"x":[0.0,117.56]}
+                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"GitHub API guard","underline":[0.0,"#00000000"],"x":[0.0,99.58]}
               ]
             }
           ],
@@ -321,9 +322,9 @@
           "pos": [33.0,343.0],
           "rows": [
             {
-              "rect": [0.0,0.0,352.41,13.0],
+              "rect": [0.0,0.0,320.69,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#9a9996ff","family":"proportional","size":11.0,"text":"scope: all · match wrap: gh · argv: 'gh secret set *' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,351.64]}
+                {"baseline":10.0,"color":"#9a9996ff","family":"proportional","size":11.0,"text":"scope: gh · match wrap: gh · argv: 'gh api *' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,320.64]}
               ]
             }
           ],
@@ -335,9 +336,9 @@
           "pos": [33.0,362.0],
           "rows": [
             {
-              "rect": [0.0,0.0,124.75,11.0],
+              "rect": [0.0,0.0,74.47,11.0],
               "runs": [
-                {"baseline":9.0,"color":"#9a9996ff","family":"proportional","size":10.0,"text":"2 auto-fires · last fired today","underline":[0.0,"#00000000"],"x":[0.0,124.74]}
+                {"baseline":9.0,"color":"#77767bff","family":"proportional","size":10.0,"text":"No auto-fires yet","underline":[0.0,"#00000000"],"x":[0.0,73.87]}
               ]
             }
           ],
@@ -349,9 +350,9 @@
           "pos": [33.0,382.5],
           "rows": [
             {
-              "rect": [0.0,0.0,40.94,11.0],
+              "rect": [0.0,0.0,42.16,11.0],
               "runs": [
-                {"baseline":9.0,"color":"#77767bff","family":"proportional","size":10.0,"text":"scope: all","underline":[0.0,"#00000000"],"x":[0.0,40.55]}
+                {"baseline":9.0,"color":"#77767bff","family":"proportional","size":10.0,"text":"scope: gh","underline":[0.0,"#00000000"],"x":[0.0,41.69]}
               ]
             }
           ],
@@ -360,149 +361,7 @@
         {
           "clip": [0.0,249.0,900.0,589.0],
           "k": "text",
-          "pos": [89.94,382.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,108.13,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#77767bff","family":"proportional","size":10.0,"text":"trained: GITHUB_TOKEN","underline":[0.0,"#00000000"],"x":[0.0,108.09]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#303030ff","k":"rect","radius":[12,12,12,12],"rect":[20.0,424.0,880.0,541.0],"stroke":[1.0,"#14141414"],"stroke_kind":"Inside"},
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[33.0,437.0,51.0,455.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [51.0,438.5],
-          "rows": [
-            {"rect":[0.0,0.0,0.0,15.0],"runs":[]}
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#45454aff","k":"rect","radius":[6,6,6,6],"rect":[33.0,439.0,47.0,453.0],"stroke":[1.0,"#45454aff"],"stroke_kind":"Inside"},
-        {"clip":[0.0,249.0,900.0,589.0],"k":"path"},
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#1a2b1e2e","k":"rect","radius":[6,6,6,6],"rect":[59.0,437.0,124.47,461.0],"stroke":[1.0,"#8ff0a4ff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [67.0,445.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,4.22,8.0],
-              "runs": [
-                {"baseline":6.0,"color":"#8ff0a4ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [76.22,442.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,40.25,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#8ff0a4ff","family":"proportional","size":11.0,"text":"approve","underline":[0.0,"#00000000"],"x":[0.0,40.03]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [140.47,441.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,109.59,15.0],
-              "runs": [
-                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"Cursor reads via gh","underline":[0.0,"#00000000"],"x":[0.0,109.4]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#45454aff","k":"rect","radius":[6,6,6,6],"rect":[808.16,437.0,867.0,464.0],"stroke":[1.0,"#45454aff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [818.16,443.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,38.84,15.0],
-              "runs": [
-                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"Delete","underline":[0.0,"#00000000"],"x":[0.0,38.12]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#45454aff","k":"rect","radius":[6,6,6,6],"rect":[757.25,437.0,800.16,464.0],"stroke":[1.0,"#45454aff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [767.25,443.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,22.91,15.0],
-              "runs": [
-                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"Edit","underline":[0.0,"#00000000"],"x":[0.0,23.03]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [33.0,474.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,412.31,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#9a9996ff","family":"proportional","size":11.0,"text":"scope: all · match wrap: gh · argv: 'gh api --get /repos/*/pulls*' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,411.64]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [33.0,493.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,151.81,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#9a9996ff","family":"proportional","size":10.0,"text":"12 auto-fires · last fired 5 days ago","underline":[0.0,"#00000000"],"x":[0.0,151.82]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [33.0,513.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,40.94,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#77767bff","family":"proportional","size":10.0,"text":"scope: all","underline":[0.0,"#00000000"],"x":[0.0,40.55]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [89.94,513.5],
+          "pos": [91.16,382.5],
           "rows": [
             {
               "rect": [0.0,0.0,108.13,11.0],
@@ -517,7 +376,7 @@
       "size": [900.0,600.0]
     },
     "gnome-light": {
-      "digest": "7f9f707481f1a5b7f412168adfeb84b3480c5b391cbc6eae7927ec794298ed22",
+      "digest": "5bc283818775a47cb2d182060573022ac3f9538369823e3db056c1e46877db57",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fafafaff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f0f0f0ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -685,7 +544,7 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,252.0,880.0,555.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,252.0,880.0,424.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,249.0,900.0,589.0],
           "k": "text",
@@ -700,11 +559,11 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#132e5059","k":"rect","radius":[6,6,6,6],"rect":[819.31,252.0,880.0,279.0],"stroke":[1.0,"#eaeaecff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[821.31,252.0,880.0,277.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,249.0,900.0,589.0],
           "k": "text",
-          "pos": [829.31,258.0],
+          "pos": [830.31,257.0],
           "rows": [
             {
               "rect": [0.0,0.0,40.69,15.0],
@@ -715,11 +574,11 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[733.28,253.0,811.31,278.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#132e5059","k":"rect","radius":[6,6,6,6],"rect":[733.28,252.0,813.31,279.0],"stroke":[1.0,"#eaeaecff"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,249.0,900.0,589.0],
           "k": "text",
-          "pos": [742.28,258.0],
+          "pos": [743.28,258.0],
           "rows": [
             {
               "rect": [0.0,0.0,60.03,15.0],
@@ -792,9 +651,9 @@
           "pos": [124.13,310.5],
           "rows": [
             {
-              "rect": [0.0,0.0,118.22,15.0],
+              "rect": [0.0,0.0,99.72,15.0],
               "runs": [
-                {"baseline":12.0,"color":"#26262bff","family":"proportional","size":13.0,"text":"Deploy token denies","underline":[0.0,"#00000000"],"x":[0.0,117.56]}
+                {"baseline":12.0,"color":"#26262bff","family":"proportional","size":13.0,"text":"GitHub API guard","underline":[0.0,"#00000000"],"x":[0.0,99.58]}
               ]
             }
           ],
@@ -836,9 +695,9 @@
           "pos": [33.0,343.0],
           "rows": [
             {
-              "rect": [0.0,0.0,352.41,13.0],
+              "rect": [0.0,0.0,320.69,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":11.0,"text":"scope: all · match wrap: gh · argv: 'gh secret set *' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,351.64]}
+                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":11.0,"text":"scope: gh · match wrap: gh · argv: 'gh api *' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,320.64]}
               ]
             }
           ],
@@ -850,9 +709,9 @@
           "pos": [33.0,362.0],
           "rows": [
             {
-              "rect": [0.0,0.0,124.75,11.0],
+              "rect": [0.0,0.0,74.47,11.0],
               "runs": [
-                {"baseline":9.0,"color":"#77767bff","family":"proportional","size":10.0,"text":"2 auto-fires · last fired today","underline":[0.0,"#00000000"],"x":[0.0,124.74]}
+                {"baseline":9.0,"color":"#a4a3a8ff","family":"proportional","size":10.0,"text":"No auto-fires yet","underline":[0.0,"#00000000"],"x":[0.0,73.87]}
               ]
             }
           ],
@@ -864,9 +723,9 @@
           "pos": [33.0,382.5],
           "rows": [
             {
-              "rect": [0.0,0.0,40.94,11.0],
+              "rect": [0.0,0.0,42.16,11.0],
               "runs": [
-                {"baseline":9.0,"color":"#a4a3a8ff","family":"proportional","size":10.0,"text":"scope: all","underline":[0.0,"#00000000"],"x":[0.0,40.55]}
+                {"baseline":9.0,"color":"#a4a3a8ff","family":"proportional","size":10.0,"text":"scope: gh","underline":[0.0,"#00000000"],"x":[0.0,41.69]}
               ]
             }
           ],
@@ -875,149 +734,7 @@
         {
           "clip": [0.0,249.0,900.0,589.0],
           "k": "text",
-          "pos": [89.94,382.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,108.13,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#a4a3a8ff","family":"proportional","size":10.0,"text":"trained: GITHUB_TOKEN","underline":[0.0,"#00000000"],"x":[0.0,108.09]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#ffffffff","k":"rect","radius":[12,12,12,12],"rect":[20.0,424.0,880.0,541.0],"stroke":[1.0,"#00000017"],"stroke_kind":"Inside"},
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[33.0,437.0,51.0,455.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [51.0,438.5],
-          "rows": [
-            {"rect":[0.0,0.0,0.0,15.0],"runs":[]}
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#eaeaecff","k":"rect","radius":[6,6,6,6],"rect":[33.0,439.0,47.0,453.0],"stroke":[1.0,"#eaeaecff"],"stroke_kind":"Inside"},
-        {"clip":[0.0,249.0,900.0,589.0],"k":"path"},
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#071d132e","k":"rect","radius":[6,6,6,6],"rect":[59.0,437.0,124.47,461.0],"stroke":[1.0,"#26a269ff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [67.0,445.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,4.22,8.0],
-              "runs": [
-                {"baseline":6.0,"color":"#26a269ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [76.22,442.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,40.25,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#26a269ff","family":"proportional","size":11.0,"text":"approve","underline":[0.0,"#00000000"],"x":[0.0,40.03]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [140.47,441.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,109.59,15.0],
-              "runs": [
-                {"baseline":12.0,"color":"#26262bff","family":"proportional","size":13.0,"text":"Cursor reads via gh","underline":[0.0,"#00000000"],"x":[0.0,109.4]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#eaeaecff","k":"rect","radius":[6,6,6,6],"rect":[808.16,437.0,867.0,464.0],"stroke":[1.0,"#eaeaecff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [818.16,443.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,38.84,15.0],
-              "runs": [
-                {"baseline":12.0,"color":"#26262bff","family":"proportional","size":13.0,"text":"Delete","underline":[0.0,"#00000000"],"x":[0.0,38.12]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#eaeaecff","k":"rect","radius":[6,6,6,6],"rect":[757.25,437.0,800.16,464.0],"stroke":[1.0,"#eaeaecff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [767.25,443.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,22.91,15.0],
-              "runs": [
-                {"baseline":12.0,"color":"#26262bff","family":"proportional","size":13.0,"text":"Edit","underline":[0.0,"#00000000"],"x":[0.0,23.03]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [33.0,474.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,412.31,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#77767bff","family":"proportional","size":11.0,"text":"scope: all · match wrap: gh · argv: 'gh api --get /repos/*/pulls*' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,411.64]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [33.0,493.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,151.81,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#77767bff","family":"proportional","size":10.0,"text":"12 auto-fires · last fired 5 days ago","underline":[0.0,"#00000000"],"x":[0.0,151.82]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [33.0,513.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,40.94,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#a4a3a8ff","family":"proportional","size":10.0,"text":"scope: all","underline":[0.0,"#00000000"],"x":[0.0,40.55]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [89.94,513.5],
+          "pos": [91.16,382.5],
           "rows": [
             {
               "rect": [0.0,0.0,108.13,11.0],
@@ -1032,7 +749,7 @@
       "size": [900.0,600.0]
     },
     "macos-dark": {
-      "digest": "13d41a9c5eeb6af0e6146d7d9f42fd39d108c82eb5597bcee5e9cf4732274739",
+      "digest": "e84b9dc128363fee191140967d4c276afe98c08615bc2bc177242e92aa077d51",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2dff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2dff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -1200,7 +917,7 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,252.0,880.0,555.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,252.0,880.0,424.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,249.0,900.0,589.0],
           "k": "text",
@@ -1215,11 +932,11 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#042e5959","k":"rect","radius":[6,6,6,6],"rect":[819.31,252.0,880.0,279.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[821.31,252.0,880.0,277.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,249.0,900.0,589.0],
           "k": "text",
-          "pos": [829.31,258.0],
+          "pos": [830.31,257.0],
           "rows": [
             {
               "rect": [0.0,0.0,40.69,15.0],
@@ -1230,11 +947,11 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[733.28,253.0,811.31,278.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#042e5959","k":"rect","radius":[6,6,6,6],"rect":[733.28,252.0,813.31,279.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,249.0,900.0,589.0],
           "k": "text",
-          "pos": [742.28,258.0],
+          "pos": [743.28,258.0],
           "rows": [
             {
               "rect": [0.0,0.0,60.03,15.0],
@@ -1307,9 +1024,9 @@
           "pos": [124.13,310.5],
           "rows": [
             {
-              "rect": [0.0,0.0,118.22,15.0],
+              "rect": [0.0,0.0,99.72,15.0],
               "runs": [
-                {"baseline":12.0,"color":"#e9e9ebff","family":"proportional","size":13.0,"text":"Deploy token denies","underline":[0.0,"#00000000"],"x":[0.0,117.56]}
+                {"baseline":12.0,"color":"#e9e9ebff","family":"proportional","size":13.0,"text":"GitHub API guard","underline":[0.0,"#00000000"],"x":[0.0,99.58]}
               ]
             }
           ],
@@ -1351,9 +1068,9 @@
           "pos": [33.0,343.0],
           "rows": [
             {
-              "rect": [0.0,0.0,352.41,13.0],
+              "rect": [0.0,0.0,320.69,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#98989dff","family":"proportional","size":11.0,"text":"scope: all · match wrap: gh · argv: 'gh secret set *' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,351.64]}
+                {"baseline":10.0,"color":"#98989dff","family":"proportional","size":11.0,"text":"scope: gh · match wrap: gh · argv: 'gh api *' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,320.64]}
               ]
             }
           ],
@@ -1365,9 +1082,9 @@
           "pos": [33.0,362.0],
           "rows": [
             {
-              "rect": [0.0,0.0,124.75,11.0],
+              "rect": [0.0,0.0,74.47,11.0],
               "runs": [
-                {"baseline":9.0,"color":"#98989dff","family":"proportional","size":10.0,"text":"2 auto-fires · last fired today","underline":[0.0,"#00000000"],"x":[0.0,124.74]}
+                {"baseline":9.0,"color":"#6a6a70ff","family":"proportional","size":10.0,"text":"No auto-fires yet","underline":[0.0,"#00000000"],"x":[0.0,73.87]}
               ]
             }
           ],
@@ -1379,9 +1096,9 @@
           "pos": [33.0,382.5],
           "rows": [
             {
-              "rect": [0.0,0.0,40.94,11.0],
+              "rect": [0.0,0.0,42.16,11.0],
               "runs": [
-                {"baseline":9.0,"color":"#6a6a70ff","family":"proportional","size":10.0,"text":"scope: all","underline":[0.0,"#00000000"],"x":[0.0,40.55]}
+                {"baseline":9.0,"color":"#6a6a70ff","family":"proportional","size":10.0,"text":"scope: gh","underline":[0.0,"#00000000"],"x":[0.0,41.69]}
               ]
             }
           ],
@@ -1390,149 +1107,7 @@
         {
           "clip": [0.0,249.0,900.0,589.0],
           "k": "text",
-          "pos": [89.94,382.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,108.13,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#6a6a70ff","family":"proportional","size":10.0,"text":"trained: GITHUB_TOKEN","underline":[0.0,"#00000000"],"x":[0.0,108.09]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#232325ff","k":"rect","radius":[8,8,8,8],"rect":[20.0,424.0,880.0,541.0],"stroke":[1.0,"#3a3a3eff"],"stroke_kind":"Inside"},
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[33.0,437.0,51.0,455.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [51.0,438.5],
-          "rows": [
-            {"rect":[0.0,0.0,0.0,15.0],"runs":[]}
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#48484cff","k":"rect","radius":[6,6,6,6],"rect":[33.0,439.0,47.0,453.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
-        {"clip":[0.0,249.0,900.0,589.0],"k":"path"},
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#1722132e","k":"rect","radius":[6,6,6,6],"rect":[59.0,437.0,124.47,461.0],"stroke":[1.0,"#7fbf6aff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [67.0,445.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,4.22,8.0],
-              "runs": [
-                {"baseline":6.0,"color":"#7fbf6aff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [76.22,442.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,40.25,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#7fbf6aff","family":"proportional","size":11.0,"text":"approve","underline":[0.0,"#00000000"],"x":[0.0,40.03]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [140.47,441.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,109.59,15.0],
-              "runs": [
-                {"baseline":12.0,"color":"#e9e9ebff","family":"proportional","size":13.0,"text":"Cursor reads via gh","underline":[0.0,"#00000000"],"x":[0.0,109.4]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#48484cff","k":"rect","radius":[6,6,6,6],"rect":[808.16,437.0,867.0,464.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [818.16,443.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,38.84,15.0],
-              "runs": [
-                {"baseline":12.0,"color":"#e9e9ebff","family":"proportional","size":13.0,"text":"Delete","underline":[0.0,"#00000000"],"x":[0.0,38.12]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#48484cff","k":"rect","radius":[6,6,6,6],"rect":[757.25,437.0,800.16,464.0],"stroke":[1.0,"#3c3c40ff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [767.25,443.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,22.91,15.0],
-              "runs": [
-                {"baseline":12.0,"color":"#e9e9ebff","family":"proportional","size":13.0,"text":"Edit","underline":[0.0,"#00000000"],"x":[0.0,23.03]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [33.0,474.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,412.31,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#98989dff","family":"proportional","size":11.0,"text":"scope: all · match wrap: gh · argv: 'gh api --get /repos/*/pulls*' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,411.64]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [33.0,493.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,151.81,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#98989dff","family":"proportional","size":10.0,"text":"12 auto-fires · last fired 5 days ago","underline":[0.0,"#00000000"],"x":[0.0,151.82]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [33.0,513.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,40.94,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#6a6a70ff","family":"proportional","size":10.0,"text":"scope: all","underline":[0.0,"#00000000"],"x":[0.0,40.55]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [89.94,513.5],
+          "pos": [91.16,382.5],
           "rows": [
             {
               "rect": [0.0,0.0,108.13,11.0],
@@ -1547,7 +1122,7 @@
       "size": [900.0,600.0]
     },
     "macos-light": {
-      "digest": "76b2532970ac183123bb784e223213fbcb9794ef4c867d3930f38fdc8fdecb1a",
+      "digest": "416fa882d806917c2180900da42999b5c63286c918efe1b517d562404d75be73",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f5f5f7ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#f5f5f7ff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,46.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -1715,7 +1290,7 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,252.0,880.0,555.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,252.0,880.0,424.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,249.0,900.0,589.0],
           "k": "text",
@@ -1730,11 +1305,11 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#002b5959","k":"rect","radius":[6,6,6,6],"rect":[819.31,252.0,880.0,279.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[821.31,252.0,880.0,277.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,249.0,900.0,589.0],
           "k": "text",
-          "pos": [829.31,258.0],
+          "pos": [830.31,257.0],
           "rows": [
             {
               "rect": [0.0,0.0,40.69,15.0],
@@ -1745,11 +1320,11 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[733.28,253.0,811.31,278.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#002b5959","k":"rect","radius":[6,6,6,6],"rect":[733.28,252.0,813.31,279.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,249.0,900.0,589.0],
           "k": "text",
-          "pos": [742.28,258.0],
+          "pos": [743.28,258.0],
           "rows": [
             {
               "rect": [0.0,0.0,60.03,15.0],
@@ -1822,9 +1397,9 @@
           "pos": [124.13,310.5],
           "rows": [
             {
-              "rect": [0.0,0.0,118.22,15.0],
+              "rect": [0.0,0.0,99.72,15.0],
               "runs": [
-                {"baseline":12.0,"color":"#1d1d1fff","family":"proportional","size":13.0,"text":"Deploy token denies","underline":[0.0,"#00000000"],"x":[0.0,117.56]}
+                {"baseline":12.0,"color":"#1d1d1fff","family":"proportional","size":13.0,"text":"GitHub API guard","underline":[0.0,"#00000000"],"x":[0.0,99.58]}
               ]
             }
           ],
@@ -1866,9 +1441,9 @@
           "pos": [33.0,343.0],
           "rows": [
             {
-              "rect": [0.0,0.0,352.41,13.0],
+              "rect": [0.0,0.0,320.69,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#6e6e73ff","family":"proportional","size":11.0,"text":"scope: all · match wrap: gh · argv: 'gh secret set *' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,351.64]}
+                {"baseline":10.0,"color":"#6e6e73ff","family":"proportional","size":11.0,"text":"scope: gh · match wrap: gh · argv: 'gh api *' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,320.64]}
               ]
             }
           ],
@@ -1880,9 +1455,9 @@
           "pos": [33.0,362.0],
           "rows": [
             {
-              "rect": [0.0,0.0,124.75,11.0],
+              "rect": [0.0,0.0,74.47,11.0],
               "runs": [
-                {"baseline":9.0,"color":"#6e6e73ff","family":"proportional","size":10.0,"text":"2 auto-fires · last fired today","underline":[0.0,"#00000000"],"x":[0.0,124.74]}
+                {"baseline":9.0,"color":"#9d9da3ff","family":"proportional","size":10.0,"text":"No auto-fires yet","underline":[0.0,"#00000000"],"x":[0.0,73.87]}
               ]
             }
           ],
@@ -1894,9 +1469,9 @@
           "pos": [33.0,382.5],
           "rows": [
             {
-              "rect": [0.0,0.0,40.94,11.0],
+              "rect": [0.0,0.0,42.16,11.0],
               "runs": [
-                {"baseline":9.0,"color":"#9d9da3ff","family":"proportional","size":10.0,"text":"scope: all","underline":[0.0,"#00000000"],"x":[0.0,40.55]}
+                {"baseline":9.0,"color":"#9d9da3ff","family":"proportional","size":10.0,"text":"scope: gh","underline":[0.0,"#00000000"],"x":[0.0,41.69]}
               ]
             }
           ],
@@ -1905,149 +1480,7 @@
         {
           "clip": [0.0,249.0,900.0,589.0],
           "k": "text",
-          "pos": [89.94,382.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,108.13,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#9d9da3ff","family":"proportional","size":10.0,"text":"trained: GITHUB_TOKEN","underline":[0.0,"#00000000"],"x":[0.0,108.09]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#ececefff","k":"rect","radius":[8,8,8,8],"rect":[20.0,424.0,880.0,541.0],"stroke":[1.0,"#dcdce1ff"],"stroke_kind":"Inside"},
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[33.0,437.0,51.0,455.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [51.0,438.5],
-          "rows": [
-            {"rect":[0.0,0.0,0.0,15.0],"runs":[]}
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#ffffffff","k":"rect","radius":[6,6,6,6],"rect":[33.0,439.0,47.0,453.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
-        {"clip":[0.0,249.0,900.0,589.0],"k":"path"},
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#0b19092e","k":"rect","radius":[6,6,6,6],"rect":[59.0,437.0,124.47,461.0],"stroke":[1.0,"#3f8b34ff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [67.0,445.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,4.22,8.0],
-              "runs": [
-                {"baseline":6.0,"color":"#3f8b34ff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [76.22,442.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,40.25,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#3f8b34ff","family":"proportional","size":11.0,"text":"approve","underline":[0.0,"#00000000"],"x":[0.0,40.03]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [140.47,441.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,109.59,15.0],
-              "runs": [
-                {"baseline":12.0,"color":"#1d1d1fff","family":"proportional","size":13.0,"text":"Cursor reads via gh","underline":[0.0,"#00000000"],"x":[0.0,109.4]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#ffffffff","k":"rect","radius":[6,6,6,6],"rect":[808.16,437.0,867.0,464.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [818.16,443.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,38.84,15.0],
-              "runs": [
-                {"baseline":12.0,"color":"#1d1d1fff","family":"proportional","size":13.0,"text":"Delete","underline":[0.0,"#00000000"],"x":[0.0,38.12]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,249.0,900.0,589.0],"fill":"#ffffffff","k":"rect","radius":[6,6,6,6],"rect":[757.25,437.0,800.16,464.0],"stroke":[1.0,"#d2d2d7ff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [767.25,443.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,22.91,15.0],
-              "runs": [
-                {"baseline":12.0,"color":"#1d1d1fff","family":"proportional","size":13.0,"text":"Edit","underline":[0.0,"#00000000"],"x":[0.0,23.03]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [33.0,474.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,412.31,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#6e6e73ff","family":"proportional","size":11.0,"text":"scope: all · match wrap: gh · argv: 'gh api --get /repos/*/pulls*' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,411.64]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [33.0,493.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,151.81,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#6e6e73ff","family":"proportional","size":10.0,"text":"12 auto-fires · last fired 5 days ago","underline":[0.0,"#00000000"],"x":[0.0,151.82]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [33.0,513.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,40.94,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#9d9da3ff","family":"proportional","size":10.0,"text":"scope: all","underline":[0.0,"#00000000"],"x":[0.0,40.55]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,249.0,900.0,589.0],
-          "k": "text",
-          "pos": [89.94,513.5],
+          "pos": [91.16,382.5],
           "rows": [
             {
               "rect": [0.0,0.0,108.13,11.0],
@@ -2062,7 +1495,7 @@
       "size": [900.0,600.0]
     },
     "windows-dark": {
-      "digest": "2777b60acb8b52dbfa8cf4c89ab7edeff05befb7ab2660f9763423156da9a321",
+      "digest": "9d927459b048b2bdb3ceb679acff02674c7e721b86371f45e2c9104257b1ba4b",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2bff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#2b2b2bff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,58.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -2255,7 +1688,7 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,264.0,880.0,567.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,264.0,880.0,436.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,261.0,900.0,589.0],
           "k": "text",
@@ -2270,11 +1703,11 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#22485959","k":"rect","radius":[4,4,4,4],"rect":[819.31,264.0,880.0,291.0],"stroke":[1.0,"#454545ff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[821.31,264.0,880.0,289.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,261.0,900.0,589.0],
           "k": "text",
-          "pos": [829.31,270.0],
+          "pos": [830.31,269.0],
           "rows": [
             {
               "rect": [0.0,0.0,40.69,15.0],
@@ -2285,11 +1718,11 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[733.28,265.0,811.31,290.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#22485959","k":"rect","radius":[4,4,4,4],"rect":[733.28,264.0,813.31,291.0],"stroke":[1.0,"#454545ff"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,261.0,900.0,589.0],
           "k": "text",
-          "pos": [742.28,270.0],
+          "pos": [743.28,270.0],
           "rows": [
             {
               "rect": [0.0,0.0,60.03,15.0],
@@ -2362,9 +1795,9 @@
           "pos": [124.13,322.5],
           "rows": [
             {
-              "rect": [0.0,0.0,118.22,15.0],
+              "rect": [0.0,0.0,99.72,15.0],
               "runs": [
-                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"Deploy token denies","underline":[0.0,"#00000000"],"x":[0.0,117.56]}
+                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"GitHub API guard","underline":[0.0,"#00000000"],"x":[0.0,99.58]}
               ]
             }
           ],
@@ -2406,9 +1839,9 @@
           "pos": [33.0,355.0],
           "rows": [
             {
-              "rect": [0.0,0.0,352.41,13.0],
+              "rect": [0.0,0.0,320.69,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#9d9d9dff","family":"proportional","size":11.0,"text":"scope: all · match wrap: gh · argv: 'gh secret set *' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,351.64]}
+                {"baseline":10.0,"color":"#9d9d9dff","family":"proportional","size":11.0,"text":"scope: gh · match wrap: gh · argv: 'gh api *' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,320.64]}
               ]
             }
           ],
@@ -2420,9 +1853,9 @@
           "pos": [33.0,374.0],
           "rows": [
             {
-              "rect": [0.0,0.0,124.75,11.0],
+              "rect": [0.0,0.0,74.47,11.0],
               "runs": [
-                {"baseline":9.0,"color":"#9d9d9dff","family":"proportional","size":10.0,"text":"2 auto-fires · last fired today","underline":[0.0,"#00000000"],"x":[0.0,124.74]}
+                {"baseline":9.0,"color":"#6d6d6dff","family":"proportional","size":10.0,"text":"No auto-fires yet","underline":[0.0,"#00000000"],"x":[0.0,73.87]}
               ]
             }
           ],
@@ -2434,9 +1867,9 @@
           "pos": [33.0,394.5],
           "rows": [
             {
-              "rect": [0.0,0.0,40.94,11.0],
+              "rect": [0.0,0.0,42.16,11.0],
               "runs": [
-                {"baseline":9.0,"color":"#6d6d6dff","family":"proportional","size":10.0,"text":"scope: all","underline":[0.0,"#00000000"],"x":[0.0,40.55]}
+                {"baseline":9.0,"color":"#6d6d6dff","family":"proportional","size":10.0,"text":"scope: gh","underline":[0.0,"#00000000"],"x":[0.0,41.69]}
               ]
             }
           ],
@@ -2445,149 +1878,7 @@
         {
           "clip": [0.0,261.0,900.0,589.0],
           "k": "text",
-          "pos": [89.94,394.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,108.13,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#6d6d6dff","family":"proportional","size":10.0,"text":"trained: GITHUB_TOKEN","underline":[0.0,"#00000000"],"x":[0.0,108.09]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#323232ff","k":"rect","radius":[4,4,4,4],"rect":[20.0,436.0,880.0,553.0],"stroke":[1.0,"#1f1f1fff"],"stroke_kind":"Inside"},
-        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[33.0,449.0,51.0,467.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,261.0,900.0,589.0],
-          "k": "text",
-          "pos": [51.0,450.5],
-          "rows": [
-            {"rect":[0.0,0.0,0.0,15.0],"runs":[]}
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#383838ff","k":"rect","radius":[4,4,4,4],"rect":[33.0,451.0,47.0,465.0],"stroke":[1.0,"#454545ff"],"stroke_kind":"Inside"},
-        {"clip":[0.0,261.0,900.0,589.0],"k":"path"},
-        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#1325112e","k":"rect","radius":[6,6,6,6],"rect":[59.0,449.0,124.47,473.0],"stroke":[1.0,"#6ccb5fff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,261.0,900.0,589.0],
-          "k": "text",
-          "pos": [67.0,457.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,4.22,8.0],
-              "runs": [
-                {"baseline":6.0,"color":"#6ccb5fff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,261.0,900.0,589.0],
-          "k": "text",
-          "pos": [76.22,454.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,40.25,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#6ccb5fff","family":"proportional","size":11.0,"text":"approve","underline":[0.0,"#00000000"],"x":[0.0,40.03]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,261.0,900.0,589.0],
-          "k": "text",
-          "pos": [140.47,453.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,109.59,15.0],
-              "runs": [
-                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"Cursor reads via gh","underline":[0.0,"#00000000"],"x":[0.0,109.4]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#383838ff","k":"rect","radius":[4,4,4,4],"rect":[808.16,449.0,867.0,476.0],"stroke":[1.0,"#454545ff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,261.0,900.0,589.0],
-          "k": "text",
-          "pos": [818.16,455.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,38.84,15.0],
-              "runs": [
-                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"Delete","underline":[0.0,"#00000000"],"x":[0.0,38.12]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#383838ff","k":"rect","radius":[4,4,4,4],"rect":[757.25,449.0,800.16,476.0],"stroke":[1.0,"#454545ff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,261.0,900.0,589.0],
-          "k": "text",
-          "pos": [767.25,455.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,22.91,15.0],
-              "runs": [
-                {"baseline":12.0,"color":"#ffffffff","family":"proportional","size":13.0,"text":"Edit","underline":[0.0,"#00000000"],"x":[0.0,23.03]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,261.0,900.0,589.0],
-          "k": "text",
-          "pos": [33.0,486.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,412.31,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#9d9d9dff","family":"proportional","size":11.0,"text":"scope: all · match wrap: gh · argv: 'gh api --get /repos/*/pulls*' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,411.64]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,261.0,900.0,589.0],
-          "k": "text",
-          "pos": [33.0,505.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,151.81,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#9d9d9dff","family":"proportional","size":10.0,"text":"12 auto-fires · last fired 5 days ago","underline":[0.0,"#00000000"],"x":[0.0,151.82]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,261.0,900.0,589.0],
-          "k": "text",
-          "pos": [33.0,525.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,40.94,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#6d6d6dff","family":"proportional","size":10.0,"text":"scope: all","underline":[0.0,"#00000000"],"x":[0.0,40.55]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,261.0,900.0,589.0],
-          "k": "text",
-          "pos": [89.94,525.5],
+          "pos": [91.16,394.5],
           "rows": [
             {
               "rect": [0.0,0.0,108.13,11.0],
@@ -2602,7 +1893,7 @@
       "size": [900.0,600.0]
     },
     "windows-light": {
-      "digest": "d2232873f5e46f507a4f2b70d2b7cd2be60c5833e93f7f0981bbe9b49d3f7b53",
+      "digest": "a6cf1221f07410dbe0c873da834c80a54fd3ee6a97eb637f716058eddca10d22",
       "shapes": [
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fbfbfbff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,600.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
         {"blur":0.0,"clip":[0.0,0.0,900.0,600.0],"fill":"#fbfbfbff","k":"rect","radius":[0,0,0,0],"rect":[0.0,0.0,900.0,58.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Outside"},
@@ -2795,7 +2086,7 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,264.0,880.0,567.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[20.0,264.0,880.0,436.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,261.0,900.0,589.0],
           "k": "text",
@@ -2810,11 +2101,11 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#00214059","k":"rect","radius":[4,4,4,4],"rect":[819.31,264.0,880.0,291.0],"stroke":[1.0,"#d1d1d1ff"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[821.31,264.0,880.0,289.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,261.0,900.0,589.0],
           "k": "text",
-          "pos": [829.31,270.0],
+          "pos": [830.31,269.0],
           "rows": [
             {
               "rect": [0.0,0.0,40.69,15.0],
@@ -2825,11 +2116,11 @@
           ],
           "underline": [0.0,"#00000000"]
         },
-        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[733.28,265.0,811.31,290.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
+        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#00214059","k":"rect","radius":[4,4,4,4],"rect":[733.28,264.0,813.31,291.0],"stroke":[1.0,"#d1d1d1ff"],"stroke_kind":"Inside"},
         {
           "clip": [0.0,261.0,900.0,589.0],
           "k": "text",
-          "pos": [742.28,270.0],
+          "pos": [743.28,270.0],
           "rows": [
             {
               "rect": [0.0,0.0,60.03,15.0],
@@ -2902,9 +2193,9 @@
           "pos": [124.13,322.5],
           "rows": [
             {
-              "rect": [0.0,0.0,118.22,15.0],
+              "rect": [0.0,0.0,99.72,15.0],
               "runs": [
-                {"baseline":12.0,"color":"#1b1b1bff","family":"proportional","size":13.0,"text":"Deploy token denies","underline":[0.0,"#00000000"],"x":[0.0,117.56]}
+                {"baseline":12.0,"color":"#1b1b1bff","family":"proportional","size":13.0,"text":"GitHub API guard","underline":[0.0,"#00000000"],"x":[0.0,99.58]}
               ]
             }
           ],
@@ -2946,9 +2237,9 @@
           "pos": [33.0,355.0],
           "rows": [
             {
-              "rect": [0.0,0.0,352.41,13.0],
+              "rect": [0.0,0.0,320.69,13.0],
               "runs": [
-                {"baseline":10.0,"color":"#5f5f5fff","family":"proportional","size":11.0,"text":"scope: all · match wrap: gh · argv: 'gh secret set *' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,351.64]}
+                {"baseline":10.0,"color":"#5f5f5fff","family":"proportional","size":11.0,"text":"scope: gh · match wrap: gh · argv: 'gh api *' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,320.64]}
               ]
             }
           ],
@@ -2960,9 +2251,9 @@
           "pos": [33.0,374.0],
           "rows": [
             {
-              "rect": [0.0,0.0,124.75,11.0],
+              "rect": [0.0,0.0,74.47,11.0],
               "runs": [
-                {"baseline":9.0,"color":"#5f5f5fff","family":"proportional","size":10.0,"text":"2 auto-fires · last fired today","underline":[0.0,"#00000000"],"x":[0.0,124.74]}
+                {"baseline":9.0,"color":"#9b9b9bff","family":"proportional","size":10.0,"text":"No auto-fires yet","underline":[0.0,"#00000000"],"x":[0.0,73.87]}
               ]
             }
           ],
@@ -2974,9 +2265,9 @@
           "pos": [33.0,394.5],
           "rows": [
             {
-              "rect": [0.0,0.0,40.94,11.0],
+              "rect": [0.0,0.0,42.16,11.0],
               "runs": [
-                {"baseline":9.0,"color":"#9b9b9bff","family":"proportional","size":10.0,"text":"scope: all","underline":[0.0,"#00000000"],"x":[0.0,40.55]}
+                {"baseline":9.0,"color":"#9b9b9bff","family":"proportional","size":10.0,"text":"scope: gh","underline":[0.0,"#00000000"],"x":[0.0,41.69]}
               ]
             }
           ],
@@ -2985,149 +2276,7 @@
         {
           "clip": [0.0,261.0,900.0,589.0],
           "k": "text",
-          "pos": [89.94,394.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,108.13,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#9b9b9bff","family":"proportional","size":10.0,"text":"trained: GITHUB_TOKEN","underline":[0.0,"#00000000"],"x":[0.0,108.09]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#f6f6f6ff","k":"rect","radius":[4,4,4,4],"rect":[20.0,436.0,880.0,553.0],"stroke":[1.0,"#e5e5e5ff"],"stroke_kind":"Inside"},
-        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#00000000","k":"rect","radius":[0,0,0,0],"rect":[33.0,449.0,51.0,467.0],"stroke":[0.0,"#00000000"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,261.0,900.0,589.0],
-          "k": "text",
-          "pos": [51.0,450.5],
-          "rows": [
-            {"rect":[0.0,0.0,0.0,15.0],"runs":[]}
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#ffffffff","k":"rect","radius":[4,4,4,4],"rect":[33.0,451.0,47.0,465.0],"stroke":[1.0,"#d1d1d1ff"],"stroke_kind":"Inside"},
-        {"clip":[0.0,261.0,900.0,589.0],"k":"path"},
-        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#0316032e","k":"rect","radius":[6,6,6,6],"rect":[59.0,449.0,124.47,473.0],"stroke":[1.0,"#0f7b0fff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,261.0,900.0,589.0],
-          "k": "text",
-          "pos": [67.0,457.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,4.22,8.0],
-              "runs": [
-                {"baseline":6.0,"color":"#0f7b0fff","family":"proportional","size":7.0,"text":"●","underline":[0.0,"#00000000"],"x":[0.0,4.21]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,261.0,900.0,589.0],
-          "k": "text",
-          "pos": [76.22,454.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,40.25,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#0f7b0fff","family":"proportional","size":11.0,"text":"approve","underline":[0.0,"#00000000"],"x":[0.0,40.03]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,261.0,900.0,589.0],
-          "k": "text",
-          "pos": [140.47,453.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,109.59,15.0],
-              "runs": [
-                {"baseline":12.0,"color":"#1b1b1bff","family":"proportional","size":13.0,"text":"Cursor reads via gh","underline":[0.0,"#00000000"],"x":[0.0,109.4]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#ffffffff","k":"rect","radius":[4,4,4,4],"rect":[808.16,449.0,867.0,476.0],"stroke":[1.0,"#d1d1d1ff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,261.0,900.0,589.0],
-          "k": "text",
-          "pos": [818.16,455.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,38.84,15.0],
-              "runs": [
-                {"baseline":12.0,"color":"#1b1b1bff","family":"proportional","size":13.0,"text":"Delete","underline":[0.0,"#00000000"],"x":[0.0,38.12]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {"blur":0.0,"clip":[0.0,261.0,900.0,589.0],"fill":"#ffffffff","k":"rect","radius":[4,4,4,4],"rect":[757.25,449.0,800.16,476.0],"stroke":[1.0,"#d1d1d1ff"],"stroke_kind":"Inside"},
-        {
-          "clip": [0.0,261.0,900.0,589.0],
-          "k": "text",
-          "pos": [767.25,455.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,22.91,15.0],
-              "runs": [
-                {"baseline":12.0,"color":"#1b1b1bff","family":"proportional","size":13.0,"text":"Edit","underline":[0.0,"#00000000"],"x":[0.0,23.03]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,261.0,900.0,589.0],
-          "k": "text",
-          "pos": [33.0,486.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,412.31,13.0],
-              "runs": [
-                {"baseline":10.0,"color":"#5f5f5fff","family":"proportional","size":11.0,"text":"scope: all · match wrap: gh · argv: 'gh api --get /repos/*/pulls*' · ancestor: 'Cursor.app'","underline":[0.0,"#00000000"],"x":[0.0,411.64]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,261.0,900.0,589.0],
-          "k": "text",
-          "pos": [33.0,505.0],
-          "rows": [
-            {
-              "rect": [0.0,0.0,151.81,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#5f5f5fff","family":"proportional","size":10.0,"text":"12 auto-fires · last fired 5 days ago","underline":[0.0,"#00000000"],"x":[0.0,151.82]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,261.0,900.0,589.0],
-          "k": "text",
-          "pos": [33.0,525.5],
-          "rows": [
-            {
-              "rect": [0.0,0.0,40.94,11.0],
-              "runs": [
-                {"baseline":9.0,"color":"#9b9b9bff","family":"proportional","size":10.0,"text":"scope: all","underline":[0.0,"#00000000"],"x":[0.0,40.55]}
-              ]
-            }
-          ],
-          "underline": [0.0,"#00000000"]
-        },
-        {
-          "clip": [0.0,261.0,900.0,589.0],
-          "k": "text",
-          "pos": [89.94,525.5],
+          "pos": [91.16,394.5],
           "rows": [
             {
               "rect": [0.0,0.0,108.13,11.0],

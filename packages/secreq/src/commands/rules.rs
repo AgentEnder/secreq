@@ -94,6 +94,18 @@ fn rule_show_text(rule: &crate::rules::Rule, refusals: &crate::rules::RuleRefusa
         |wraps| wraps.iter().cloned().collect::<Vec<_>>().join(", "),
     );
     let _ = writeln!(out, "wrap scope:     {wrap_scope}");
+    if let Some(refusal) = refusals
+        .scopes
+        .iter()
+        .find(|refusal| refusal.rule_id == rule.id)
+    {
+        let _ = writeln!(
+            out,
+            "scope status:   REFUSED ({}) — this rule cannot fire as written",
+            refusal.label()
+        );
+        let _ = writeln!(out, "refusal reason: {}", refusal.reason);
+    }
     let mut deny_message = None;
     match &rule.body {
         crate::rules::RuleBody::Declarative { r#match, decide } => {
@@ -219,16 +231,13 @@ pub fn rules_add_wasm(
         );
     }
     if !wraps.is_empty() {
-        let config_path = match config_path {
-            Some(path) => path.to_owned(),
-            None => crate::paths::wraps_path()?,
-        };
-        let config = crate::wraps::WrapsConfig::load(&config_path)
-            .with_context(|| format!("validate --wrap scope against {}", config_path.display()))?;
+        let config_path = super::resolve_config_path(config_path)?;
+        let config = super::load_config_or_default(config_path.as_path().into())?;
         for wrap in wraps {
-            if !config.wraps.contains_key(wrap) {
+            if !crate::rules::is_known_wrap_scope(&config, wrap) {
                 anyhow::bail!(
-                    "unknown --wrap `{wrap}`: no `[wraps.{wrap}]` is configured in {}",
+                    "unknown --wrap `{wrap}` in {}: expected `run`, `read`, a name \
+                     under `[wraps]`, or `ssh:<name>` backed by `[ssh.<name>]`",
                     config_path.display()
                 );
             }
@@ -488,6 +497,7 @@ mod tests {
                 reason: "sha256 mismatch for wasm rule `cursor gh reads` (id wasm01)".to_owned(),
             }],
             patterns: Vec::new(),
+            scopes: Vec::new(),
         }
     }
 
@@ -562,6 +572,28 @@ mod tests {
     }
 
     #[test]
+    fn rule_list_and_show_badge_an_unknown_wrap_scope() {
+        let rule = scoped_wasm_rule_fixture();
+        let refusals = crate::rules::RuleRefusals {
+            scopes: vec![crate::rules::WrapScopeRefusal {
+                rule_id: rule.id.clone(),
+                category: crate::rules::WrapScopeRefusalCategory::Unknown,
+                reason: "unknown wrap scope: gih".to_owned(),
+            }],
+            ..crate::rules::RuleRefusals::default()
+        };
+
+        let line = rule_list_line(&rule, &refusals);
+        assert!(line.contains("[REFUSED: unknown wrap scope]"), "{line}");
+        let shown = rule_show_text(&rule, &refusals);
+        assert!(
+            shown.contains("scope status:   REFUSED (unknown wrap scope)"),
+            "{shown}"
+        );
+        assert!(shown.contains("unknown wrap scope: gih"), "{shown}");
+    }
+
+    #[test]
     fn rule_show_text_calls_out_an_unscoped_wasm_rule() {
         let mut rule = wasm_rule_fixture();
         rule.trained_secrets.clear();
@@ -578,6 +610,7 @@ mod tests {
         let refusals = crate::rules::RuleRefusals {
             wasm: Vec::new(),
             patterns: crate::rules::pattern_refusals(std::slice::from_ref(&rule)),
+            scopes: Vec::new(),
         };
         let line = rule_list_line(&rule, &refusals);
         assert!(line.contains("[REFUSED: bad argv glob]"), "{line}");
@@ -594,6 +627,7 @@ mod tests {
         let refusals = crate::rules::RuleRefusals {
             wasm: Vec::new(),
             patterns: crate::rules::pattern_refusals(std::slice::from_ref(&rule)),
+            scopes: Vec::new(),
         };
         let out = rule_show_text(&rule, &refusals);
         // The pattern still reads back exactly as it was written…
@@ -676,10 +710,73 @@ mod tests {
             .expect_err("unknown wrap must fail")
         );
         assert!(err.contains("unknown --wrap `gih`"), "{err}");
-        assert!(err.contains("[wraps.gih]"), "{err}");
+        assert!(err.contains("[wraps]"), "{err}");
+        assert!(err.contains("[ssh.<name>]"), "{err}");
         assert!(
             !err.contains("wasm module not readable"),
             "scope validation must happen before module work: {err}"
+        );
+    }
+
+    #[test]
+    fn rules_add_wasm_accepts_every_wrap_identity_the_evaluator_can_receive() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = dir.path().join("config.toml");
+        std::fs::write(
+            &config,
+            r#"
+                [wraps.gh]
+                reason = "GitHub"
+
+                [ssh.github]
+                public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1 me@mac"
+                private_key = "secret://op/Private/gh/private key"
+            "#,
+        )
+        .expect("write config");
+
+        for wrap in ["gh", "run", "read", "ssh:github"] {
+            let err = format!(
+                "{:#}",
+                rules_add_wasm(
+                    Path::new("/nonexistent/rule.wasm"),
+                    None,
+                    &["GITHUB_TOKEN".to_owned()],
+                    &[wrap.to_owned()],
+                    false,
+                    Some(&config),
+                )
+                .expect_err("the valid scope must reach module validation")
+            );
+            assert!(
+                err.contains("wasm module not readable"),
+                "`{wrap}` is a real EvalCtx.wrap value and must pass scope validation: {err}"
+            );
+            assert!(!err.contains("unknown --wrap"), "{wrap}: {err}");
+        }
+    }
+
+    #[test]
+    fn rules_add_wasm_missing_config_reports_an_unknown_wrap_not_an_io_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing_config = dir.path().join("missing-config.toml");
+        let err = format!(
+            "{:#}",
+            rules_add_wasm(
+                Path::new("/nonexistent/rule.wasm"),
+                None,
+                &["GITHUB_TOKEN".to_owned()],
+                &["gh".to_owned()],
+                false,
+                Some(&missing_config),
+            )
+            .expect_err("an unconfigured wrap must fail")
+        );
+
+        assert!(err.contains("unknown --wrap `gh`"), "{err}");
+        assert!(
+            !err.contains("No such file or directory"),
+            "a missing config is the empty config, not an I/O failure: {err}"
         );
     }
 }

@@ -287,9 +287,9 @@ trained on:     NPM_TOKEN
 
 - `--wrap NAME` (repeatable) sets the rule's **consultation scope**.
   The rule is skipped for every other wrap, before a wasm module is
-  instantiated. Omit it to retain the unscoped behavior. The name must
-  exist under `[wraps]` in `config.toml`; an unknown name is an error at
-  registration.
+  instantiated. Omit it to retain the unscoped behavior. A name may be
+  `run`, `read`, a key under `[wraps]`, or `ssh:<name>` backed by
+  `[ssh.<name>]`; anything else is an error at registration.
 - `--secret NAME` (repeatable) sets the **trained-secrets snapshot**:
   the only env vars the rule may decide. The module is skipped unless
   the ask requests at least one of them, and an approval blesses only
@@ -328,6 +328,7 @@ A healthy wasm rule shows:
 
 ```
 wrap scope:     npm
+decide:         wasm (module decides per ask)
 wasm module:    rules/3f8a21c09b4d5e6f70a1b2c3.wasm
 wasm sha256:    9c0e0f6c…
 wasm status:    ok (module loaded and hash-verified)

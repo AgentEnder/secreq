@@ -133,14 +133,24 @@ browsing your history never blocks a waiting request:
 
 Rules answer for you. Each matches on the wrap, the argv and the ancestor
 process, and either approves or denies. Rows show how often a rule has
-fired, when it last fired, and which secrets it was trained on; a rule can
-be disabled without deleting it.
+fired, when it last fired, its consultation wrap scope, and which secrets it
+was trained on; a rule can be disabled without deleting it.
 
 ::shot{id=09-rules-tab-list}
+
+The consultation scope is an outer gate, separate from a declarative rule's
+wrap match. It is read-only in the declarative editor:
+
+::shot{id=51-rules-wrap-scope}
 
 New rules are written in a form here, or edited in place:
 
 ::shot{id=11-rules-form-edit-deny}
+
+An existing scoped rule cannot be edited into a match outside that scope.
+The form explains the conflict and refuses the save:
+
+::shot{id=52-rules-form-wrap-scope-conflict}
 
 secreq also watches what you keep approving and proposes the rule you were
 about to write, with the cluster of decisions it drew from. Saved rules

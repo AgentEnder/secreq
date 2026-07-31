@@ -99,7 +99,7 @@
         },
         "trained_secrets": {
           "default": [],
-          "description": "Snapshot of env-var names the rule was created against. The rule will NOT fire if the ask requests anything outside this set — the trained-secrets guard, applied to declarative and wasm rules alike (a wasm module is never even run for an out-of-snapshot ask). An empty array disables the guard, which is legitimate for a hand-edited rule.",
+          "description": "Snapshot of env-var names the rule was created against. Declarative approvals require every requested name to be in this set. Wasm rules run when at least one requested name overlaps and can approve only overlapping names. Denies are never trained-scoped. An empty array is unbounded and requires explicit opt-in when registering wasm.",
           "items": {
             "type": "string"
           },
@@ -121,6 +121,7 @@
           "items": {
             "type": "string"
           },
+          "minItems": 1,
           "type": [
             "array",
             "null"

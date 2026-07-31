@@ -1696,6 +1696,7 @@ mod tests {
         let module_src = dir.path().join("uploaded.wasm");
         std::fs::write(&module_src, APPROVE_IF).expect("write module");
         let rules_path = dir.path().join("auto-rules.toml");
+        std::fs::write(dir.path().join("config.toml"), "[wraps.gh]\n").expect("write config");
         let state: SharedState = Arc::new(Mutex::new(super::super::state::State::with_rules_path(
             rules_path,
         )));

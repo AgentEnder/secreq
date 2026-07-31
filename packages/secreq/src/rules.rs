@@ -21,11 +21,10 @@
 //!    [`crate::consent::Decision`] variants (`ApproveAuto` /
 //!    `DenyAuto`) with the firing rule's id, so the audit pill is
 //!    self-describing.
-//! 4. Each rule carries a `trained_secrets` snapshot of the env-var
-//!    names it was created against; the evaluator refuses to fire if
-//!    the live ask requests anything outside that set. This prevents
-//!    a rule from silently auto-releasing newly-added env vars when
-//!    the user edits a wrap.
+//! 4. Each rule carries a `trained_secrets` snapshot of the env-var names it
+//!    was created against. Declarative approvals require the whole ask to be
+//!    a subset of that snapshot. Wasm rules run on overlap and may approve
+//!    only requested names inside it. Denies are never trained-scoped.
 //!
 //! ## Layering
 //!
@@ -35,7 +34,7 @@
 //! passes it in.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
@@ -68,12 +67,11 @@ pub struct Rule {
     /// [`RuleMatch::wrap`]: this field decides whether to consult the rule at
     /// all, while the match field remains one clause in the rule's decision.
     pub wraps: Option<BTreeSet<String>>,
-    /// Env var names the rule was created against. The evaluator
-    /// refuses to fire if the live ask requests any name outside this
-    /// set — the trained-secrets guard. **Empty set means the guard
-    /// is disabled**, which is the legitimate behavior for hand-edited
-    /// rules where the user has explicitly opted out. UI-created rules
-    /// always populate it.
+    /// Env var names the rule was created against. Declarative approvals use
+    /// this as a whole-ask subset guard; wasm rules run when at least one
+    /// requested name overlaps and may approve only names in the snapshot.
+    /// Denies are not trained-scoped. **Empty means unbounded**, an explicit
+    /// opt-out used by hand-edited rules and `add-wasm --all-secrets`.
     pub trained_secrets: BTreeSet<String>,
     /// Seconds since the Unix epoch at creation time. Informational
     /// (lets the UI show "created 3 days ago").
@@ -81,6 +79,21 @@ pub struct Rule {
     /// What decides this rule: a match clause carrying a static
     /// decision, or a compiled module.
     pub body: RuleBody,
+}
+
+/// Whether `name` is one of the strings that can reach [`EvalCtx::wrap`].
+///
+/// Most asks use a configured `[wraps.<name>]` key, but three producers live
+/// outside that table: `secreq run`, `secreq read`, and SSH-agent signs
+/// (`ssh:<identity>`, backed by `[ssh.<identity>]`). Keep this domain shared
+/// by CLI admission, daemon admission, and load-time refusal checks so one
+/// door cannot accept a scope another silently treats as dead.
+pub fn is_known_wrap_scope(config: &crate::wraps::WrapsConfig, name: &str) -> bool {
+    matches!(name, "run" | "read")
+        || config.wraps.contains_key(name)
+        || name
+            .strip_prefix("ssh:")
+            .is_some_and(|identity| config.ssh.contains_key(identity))
 }
 
 /// The two rule kinds, and the fields that belong to each.
@@ -252,6 +265,7 @@ pub(crate) struct RuleWire {
     /// separate: `wraps` decides whether the rule is consulted at all, while
     /// `match.wrap` remains one clause in the rule's static match.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
     wraps: Option<BTreeSet<String>>,
     /// Direction a declarative rule fires when it matches. Among matching
     /// rules, any deny wins; otherwise the most-specific approve wins (a wasm
@@ -263,11 +277,11 @@ pub(crate) struct RuleWire {
     r#match: Option<RuleMatch>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     wasm: Option<WasmRule>,
-    /// Snapshot of env-var names the rule was created against. The rule will
-    /// NOT fire if the ask requests anything outside this set — the
-    /// trained-secrets guard, applied to declarative and wasm rules alike (a
-    /// wasm module is never even run for an out-of-snapshot ask). An empty
-    /// array disables the guard, which is legitimate for a hand-edited rule.
+    /// Snapshot of env-var names the rule was created against. Declarative
+    /// approvals require every requested name to be in this set. Wasm rules
+    /// run when at least one requested name overlaps and can approve only
+    /// overlapping names. Denies are never trained-scoped. An empty array is
+    /// unbounded and requires explicit opt-in when registering wasm.
     #[serde(default)]
     trained_secrets: BTreeSet<String>,
     /// Message printed to stderr on auto-deny and shown in the consent
@@ -527,6 +541,42 @@ pub struct PatternRefusal {
     pub reason: String,
 }
 
+/// Why a rule's consultation allowlist cannot match as configured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WrapScopeRefusalCategory {
+    /// A present but empty allowlist can never consult the rule.
+    Empty,
+    /// At least one listed name is not in the domain of `EvalCtx.wrap`.
+    Unknown,
+}
+
+impl WrapScopeRefusalCategory {
+    pub fn label(self) -> &'static str {
+        match self {
+            WrapScopeRefusalCategory::Empty => "empty wrap scope",
+            WrapScopeRefusalCategory::Unknown => "unknown wrap scope",
+        }
+    }
+}
+
+/// One rule whose consultation allowlist cannot match as written.
+///
+/// Unlike wasm refusals, this depends only on the rule plus `config.toml`.
+/// The rule remains present so list/show/UI can explain why it cannot fire.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WrapScopeRefusal {
+    pub rule_id: String,
+    pub category: WrapScopeRefusalCategory,
+    pub reason: String,
+}
+
+impl WrapScopeRefusal {
+    pub fn label(&self) -> &'static str {
+        self.category.label()
+    }
+}
+
 impl PatternRefusal {
     /// Short human label for compact display (`rules list`, UI badge),
     /// in the same register as [`WasmRefusalCategory::label`].
@@ -605,12 +655,111 @@ pub fn pattern_refusals(rules: &[Rule]) -> Vec<PatternRefusal> {
     out
 }
 
+/// Every empty or unknown rule-level wrap scope.
+///
+/// `None` is deliberately absent from the result: it is the backward-
+/// compatible unscoped form. A present set is an allowlist and must contain
+/// at least one name that can actually reach [`EvalCtx::wrap`].
+pub fn wrap_scope_refusals(
+    rules: &[Rule],
+    config: &crate::wraps::WrapsConfig,
+) -> Vec<WrapScopeRefusal> {
+    let mut out = Vec::new();
+    for rule in rules {
+        let Some(wraps) = &rule.wraps else {
+            continue;
+        };
+        if wraps.is_empty() {
+            out.push(WrapScopeRefusal {
+                rule_id: rule.id.clone(),
+                category: WrapScopeRefusalCategory::Empty,
+                reason: format!(
+                    "rule `{}` (id {}) has an empty `wraps` allowlist, which matches no ask",
+                    rule.name, rule.id
+                ),
+            });
+            continue;
+        }
+        let unknown: Vec<&str> = wraps
+            .iter()
+            .filter(|wrap| !is_known_wrap_scope(config, wrap))
+            .map(String::as_str)
+            .collect();
+        if !unknown.is_empty() {
+            out.push(WrapScopeRefusal {
+                rule_id: rule.id.clone(),
+                category: WrapScopeRefusalCategory::Unknown,
+                reason: format!(
+                    "rule `{}` (id {}) names unknown wrap scope(s): {}",
+                    rule.name,
+                    rule.id,
+                    unknown.join(", ")
+                ),
+            });
+        }
+    }
+    out
+}
+
+/// `config.toml` whose wrap/SSH names define the consultation-scope domain
+/// for an `auto-rules.toml`.
+pub fn wrap_scope_config_path(rules_path: &Path) -> PathBuf {
+    rules_path
+        .parent()
+        .unwrap_or(Path::new(""))
+        .join("config.toml")
+}
+
+/// Load the scope domain beside a rules file. A missing config is the empty
+/// config, matching the wrap/run command paths; reserved `run` and `read`
+/// remain valid in that state.
+pub fn load_wrap_scope_config(rules_path: &Path) -> Result<crate::wraps::WrapsConfig> {
+    let path = wrap_scope_config_path(rules_path);
+    if path.is_file() {
+        crate::wraps::WrapsConfig::load(&path)
+            .with_context(|| format!("validate rule wrap scopes against {}", path.display()))
+    } else {
+        Ok(crate::wraps::WrapsConfig::default())
+    }
+}
+
+/// Scope refusals plus the config mtime they were computed from.
+///
+/// A malformed config cannot safely validate any scoped rule. Keep the rules
+/// load alive, but refuse each scoped rule with the config error in its reason
+/// so a protective deny becomes a prompt mandate rather than disappearing.
+pub fn wrap_scope_refusals_for_path(
+    rules: &[Rule],
+    rules_path: &Path,
+) -> (Vec<WrapScopeRefusal>, Option<SystemTime>) {
+    let config_path = wrap_scope_config_path(rules_path);
+    let mtime = file_mtime(&config_path);
+    match load_wrap_scope_config(rules_path) {
+        Ok(config) => (wrap_scope_refusals(rules, &config), mtime),
+        Err(err) => (
+            rules
+                .iter()
+                .filter(|rule| rule.wraps.is_some())
+                .map(|rule| WrapScopeRefusal {
+                    rule_id: rule.id.clone(),
+                    category: WrapScopeRefusalCategory::Unknown,
+                    reason: format!(
+                        "rule `{}` (id {}) has a wrap scope that cannot be validated: {err:#}",
+                        rule.name, rule.id
+                    ),
+                })
+                .collect(),
+            mtime,
+        ),
+    }
+}
+
 /// Every reason a rule in the current ruleset cannot fire as written.
 ///
-/// The two kinds travel together because every consumer wants both:
+/// The refusal kinds travel together because every consumer wants all of them:
 /// `rules list`, `rules show`, the `RulesList` reply, the wire snapshot
 /// and the Rules-tab badge each ask one question — "is there anything
-/// wrong with this rule?" — and answering it from two parallel slices is
+/// wrong with this rule?" — and answering it from parallel slices is
 /// how one of them ends up unrendered.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RuleRefusals {
@@ -621,14 +770,16 @@ pub struct RuleRefusals {
     /// Match patterns that would not compile as globs.
     #[serde(default)]
     pub patterns: Vec<PatternRefusal>,
+    /// Empty or unknown consultation allowlists.
+    #[serde(default)]
+    pub scopes: Vec<WrapScopeRefusal>,
 }
 
 impl RuleRefusals {
     /// Everything recorded against one rule, as `(label, reason)` pairs
-    /// ready for a badge. A declarative rule can only produce pattern
-    /// refusals and a wasm rule only a wasm refusal, so in practice this
-    /// yields one kind or the other — but the caller should not have to
-    /// know that to render it.
+    /// ready for a badge. Pattern refusals belong only to declarative
+    /// rules and wasm refusals only to wasm rules; either kind can also
+    /// carry a consultation-scope refusal.
     pub fn for_rule(&self, rule_id: &str) -> Vec<(String, &str)> {
         self.wasm
             .iter()
@@ -640,21 +791,27 @@ impl RuleRefusals {
                     .filter(|r| r.rule_id == rule_id)
                     .map(|r| (r.label(), r.reason.as_str())),
             )
+            .chain(
+                self.scopes
+                    .iter()
+                    .filter(|r| r.rule_id == rule_id)
+                    .map(|r| (r.label().to_owned(), r.reason.as_str())),
+            )
             .collect()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.wasm.is_empty() && self.patterns.is_empty()
+        self.wasm.is_empty() && self.patterns.is_empty() && self.scopes.is_empty()
     }
 }
 
 /// The ruleset as a reader sees it: the rules themselves plus every
 /// refusal recorded against them.
 ///
-/// Named because it is the reply to `rules list` and the two halves are
-/// not interchangeable — a bare `(Vec<Rule>, Vec<WasmRefusal>)` return
-/// says nothing about which is which, and it grew a third member the
-/// moment patterns could be refused too.
+/// Named because it is the reply to `rules list` and the parts are not
+/// interchangeable. Keeping refusal categories inside `RuleRefusals`
+/// lets consumers ask one question without dropping a newly-added
+/// category.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RuleListing {
     pub rules: Vec<Rule>,
@@ -1082,6 +1239,8 @@ pub struct LoadedRules {
     pub rules: Vec<Rule>,
     /// `None` if the file didn't exist.
     pub mtime: Option<SystemTime>,
+    /// `config.toml` mtime used to validate rule-level wrap scopes.
+    pub scope_config_mtime: Option<SystemTime>,
     /// Compiled + hash-verified modules for the wasm rules in `rules`.
     pub modules: RuleModules,
     /// Everything wrong with the rules in `rules`, which stay in the
@@ -1130,11 +1289,18 @@ pub struct LoadedRules {
 ///   reason to stop consulting the rest of the file. What it *is* a
 ///   reason to do is take the ask to the human when the typo is on a
 ///   deny; see [`evaluate`].
+/// - **Per-rule scope**: an empty or unknown consultation scope refuses
+///   that rule, recorded in [`RuleRefusals::scopes`]. The scope domain is
+///   recomputed from the sibling `config.toml`, so deleting a wrap cannot
+///   silently turn a protective deny into no opinion.
 pub fn load_rules(path: &Path) -> Result<LoadedRules> {
     let meta = match std::fs::metadata(path) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(LoadedRules::default());
+            return Ok(LoadedRules {
+                scope_config_mtime: file_mtime(&wrap_scope_config_path(path)),
+                ..LoadedRules::default()
+            });
         }
         Err(e) => {
             return Err(anyhow::Error::from(e))
@@ -1185,13 +1351,16 @@ pub fn load_rules(path: &Path) -> Result<LoadedRules> {
             }),
         }
     }
+    let (scope_refusals, scope_config_mtime) = wrap_scope_refusals_for_path(&rules, path);
     let refusals = RuleRefusals {
         patterns: pattern_refusals(&rules),
         wasm: wasm_refusals,
+        scopes: scope_refusals,
     };
     Ok(LoadedRules {
         rules,
         mtime,
+        scope_config_mtime,
         modules,
         refusals,
         stray_deny_messages,
@@ -1475,6 +1644,22 @@ struct Candidate<'r> {
 ///   refused module does, and is reported in
 ///   [`Evaluation::wasm_failures`] for the caller to log.
 pub fn evaluate(rules: &[Rule], modules: &RuleModules, ctx: &EvalCtx) -> Evaluation {
+    evaluate_with_refusals(rules, modules, &RuleRefusals::default(), ctx)
+}
+
+/// Evaluate with load-time refusal context.
+///
+/// The public three-argument [`evaluate`] remains the pure seam used by
+/// callers whose rules are already known-valid. The daemon supplies refusals
+/// here so an empty or dangling consultation scope is unavailable rather than
+/// a silent no-match: a potentially protective rule then mandates the human
+/// prompt instead of letting a competing approve carry the ask.
+pub fn evaluate_with_refusals(
+    rules: &[Rule],
+    modules: &RuleModules,
+    refusals: &RuleRefusals,
+    ctx: &EvalCtx,
+) -> Evaluation {
     let mut best_deny: Option<Candidate> = None;
     // The most-specific rule that approved each requested secret, keyed
     // by the secret name (borrowed from `ctx.secrets`).
@@ -1495,7 +1680,27 @@ pub fn evaluate(rules: &[Rule], modules: &RuleModules, ctx: &EvalCtx) -> Evaluat
     };
 
     for rule in rules {
-        if !rule.enabled || !wrap_in_scope(rule, ctx.wrap) {
+        if !rule.enabled {
+            continue;
+        }
+        if let Some(refusal) = refusals.scopes.iter().find(|r| r.rule_id == rule.id) {
+            match &rule.body {
+                RuleBody::Wasm(_) => {
+                    if wasm_overlaps(rule, ctx) {
+                        mandate(rule, refusal.reason.clone());
+                    }
+                }
+                RuleBody::Declarative { r#match, decide } => {
+                    if clause_outcome(r#match, ctx) != ClauseOutcome::NoMatch
+                        && decide.decision() == RuleDecision::Deny
+                    {
+                        mandate(rule, refusal.reason.clone());
+                    }
+                }
+            }
+            continue;
+        }
+        if !wrap_in_scope(rule, ctx.wrap) {
             continue;
         }
         match &rule.body {
@@ -2590,6 +2795,32 @@ mod tests {
         assert!(loaded.mtime.is_some());
     }
 
+    #[test]
+    fn load_records_a_dangling_wrap_scope_as_a_rule_refusal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auto-rules.toml");
+        std::fs::write(dir.path().join("config.toml"), "[wraps.gh]\n").expect("config");
+        let rule = with_wrap_scope(
+            mk_rule(
+                "01",
+                "typo",
+                RuleDecision::Deny,
+                match_for("gh", None, None, None),
+                &["GITHUB_TOKEN"],
+            ),
+            &["gih"],
+        );
+        save_rules(&path, &[rule]).expect("save");
+
+        let loaded = load_rules(&path).expect("load");
+        assert_eq!(loaded.refusals.scopes.len(), 1);
+        assert_eq!(
+            loaded.refusals.scopes[0].category,
+            WrapScopeRefusalCategory::Unknown
+        );
+        assert!(loaded.refusals.scopes[0].reason.contains("gih"));
+    }
+
     // ── The rules file's mode and staging (finding A8) ────────────────
 
     fn mode_of(path: &Path) -> u32 {
@@ -2696,9 +2927,14 @@ mod tests {
     fn load_returns_empty_when_file_missing() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("nonexistent.json5");
+        std::fs::write(dir.path().join("config.toml"), "[wraps.gh]\n").expect("config");
         let loaded = load_rules(&path).expect("missing file is not an error");
         assert!(loaded.rules.is_empty());
         assert!(loaded.mtime.is_none());
+        assert!(
+            loaded.scope_config_mtime.is_some(),
+            "the config watermark prevents a reload loop before rules exist"
+        );
     }
 
     #[test]
@@ -2911,6 +3147,82 @@ mod tests {
             .expect("out-of-scope deny must not suppress an approve");
         assert_eq!(hit.decide, RuleDecision::Approve);
         assert_eq!(hit.rule_id, "03");
+    }
+
+    #[test]
+    fn empty_and_unknown_wrap_scopes_are_visible_refusals() {
+        let config =
+            crate::wraps::WrapsConfig::parse("[wraps.gh]\n", "test config").expect("config");
+        let empty = with_wrap_scope(
+            mk_rule(
+                "01",
+                "empty scope",
+                RuleDecision::Deny,
+                match_for("gh", None, None, None),
+                &["GITHUB_TOKEN"],
+            ),
+            &[],
+        );
+        let unknown = with_wrap_scope(
+            mk_wasm_rule("02", "typo scope", &["GITHUB_TOKEN"]),
+            &["gih"],
+        );
+        let known = with_wrap_scope(
+            mk_wasm_rule("03", "known scope", &["GITHUB_TOKEN"]),
+            &["gh", "run"],
+        );
+
+        let scopes = wrap_scope_refusals(&[empty, unknown, known], &config);
+        assert_eq!(scopes.len(), 2);
+        assert_eq!(scopes[0].label(), "empty wrap scope");
+        assert!(scopes[0].reason.contains("matches no ask"), "{scopes:?}");
+        assert_eq!(scopes[1].label(), "unknown wrap scope");
+        assert!(scopes[1].reason.contains("gih"), "{scopes:?}");
+
+        let refusals = RuleRefusals {
+            scopes,
+            ..RuleRefusals::default()
+        };
+        assert_eq!(
+            refusals.for_rule("02")[0].0,
+            "unknown wrap scope",
+            "list/show/UI consume the new refusal through the common surface"
+        );
+    }
+
+    #[test]
+    fn a_refused_wrap_scope_cannot_fail_open_past_a_matching_deny() {
+        let deny = with_wrap_scope(
+            mk_rule(
+                "01",
+                "deny gh",
+                RuleDecision::Deny,
+                match_for("gh", None, None, None),
+                &["GITHUB_TOKEN"],
+            ),
+            &["gih"],
+        );
+        let approve = mk_rule(
+            "02",
+            "approve gh",
+            RuleDecision::Approve,
+            match_for("gh", None, None, None),
+            &["GITHUB_TOKEN"],
+        );
+        let config =
+            crate::wraps::WrapsConfig::parse("[wraps.gh]\n", "test config").expect("config");
+        let refusals = RuleRefusals {
+            scopes: wrap_scope_refusals(std::slice::from_ref(&deny), &config),
+            ..RuleRefusals::default()
+        };
+        let c = ctx("gh", "gh api /user", &[], "/x", &["GITHUB_TOKEN"]);
+
+        let out = evaluate_with_refusals(&[deny, approve], &RuleModules::new(), &refusals, &c);
+        assert_eq!(out.hit, None, "a competing approve must not carry the ask");
+        assert!(
+            out.mandated_prompt.is_some(),
+            "an unconsultable scoped deny must fall through to the human"
+        );
     }
 
     #[test]
@@ -3707,13 +4019,17 @@ mod tests {
 
     #[test]
     fn a_wasm_rule_serializes_to_exactly_this_object() {
-        let rule = mk_wasm_rule("0a1b2c3d4e5f", "npm publish guard", &["NPM_TOKEN"]);
+        let rule = with_wrap_scope(
+            mk_wasm_rule("0a1b2c3d4e5f", "npm publish guard", &["NPM_TOKEN"]),
+            &["npm"],
+        );
         assert_eq!(
             serde_json::to_value(&rule).expect("serialize"),
             serde_json::json!({
                 "id": "0a1b2c3d4e5f",
                 "name": "npm publish guard",
                 "enabled": true,
+                "wraps": ["npm"],
                 "wasm": {
                     "path": "0a1b2c3d4e5f.wasm",
                     "sha256": "unverified-in-eval-tests"
@@ -3741,6 +4057,7 @@ mod tests {
             &["GITHUB_TOKEN"],
         );
         set_deny_message(&mut rule, Some("no"));
+        rule.wraps = Some(["gh".to_owned()].into_iter().collect());
         let text = serde_json::to_string_pretty(&rule).expect("serialize");
         let keys: Vec<&str> = text
             .lines()
@@ -3753,6 +4070,7 @@ mod tests {
                 "id",
                 "name",
                 "enabled",
+                "wraps",
                 "decide",
                 "match",
                 "trained_secrets",

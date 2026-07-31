@@ -189,12 +189,32 @@ fn rule_wrap_scope_is_accepted_by_both_loader_and_published_schema() {
         "created_at_unix": 1_700_000_000,
     });
 
-    let _: Rule = serde_json::from_value(scoped.clone()).expect("loader accepts wraps");
+    let rule: Rule = serde_json::from_value(scoped.clone()).expect("loader accepts wraps");
+    assert_eq!(
+        rule.wraps,
+        Some(["gh".to_owned()].into_iter().collect()),
+        "the loader must retain the field rather than merely ignore it"
+    );
     let (schemas, index) = auto_rules_schema();
     let file = json!({ "rules": [scoped] });
     if let Err(err) = schemas.validate(&file, index) {
         panic!("docs/auto-rules.schema.json rejects a rule-level wraps scope:\n{err}");
     }
+
+    let empty = json!({ "rules": [{
+        "id": "0a1b2c3d4e5f",
+        "name": "dead scope",
+        "enabled": true,
+        "wraps": [],
+        "trained_secrets": [],
+        "decide": "deny",
+        "match": { "wrap": "gh" },
+        "created_at_unix": 1_700_000_000,
+    }] });
+    assert!(
+        schemas.validate(&empty, index).is_err(),
+        "the published schema must reject a permanently dead empty allowlist"
+    );
 }
 
 /// A rule the loader refuses must not be one the schema calls valid.

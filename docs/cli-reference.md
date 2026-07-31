@@ -289,7 +289,7 @@ Manage auto-approve / auto-deny rules. Declarative rules are created from the ma
 secreq rules list
 ```
 
-One-line listing of every rule with its decide direction and enabled state. Default action for `secreq rules`
+One-line listing of every rule with its decide direction, enabled state, declarative wrap match, and consultation wrap scope. Default action for `secreq rules`
 
 ### `secreq rules show`
 
@@ -297,7 +297,7 @@ One-line listing of every rule with its decide direction and enabled state. Defa
 secreq rules show <TARGET>
 ```
 
-Show one rule in full (every match field, trained_secrets, deny_message, created_at). `target` matches by id, falling back to exact name
+Show one rule in full (consultation wrap scope, every match field, trained_secrets, deny_message, created_at). `target` matches by id, falling back to exact name
 
 | Argument | Meaning |
 | --- | --- |
