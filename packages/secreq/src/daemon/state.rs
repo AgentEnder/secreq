@@ -633,10 +633,10 @@ struct LinkSubscriber {
 ///
 /// A browser that stops reading must not turn state changes into unbounded
 /// memory growth. Each subscriber therefore has room for only a small bounded
-/// number of pending snapshots; while it is full, intermediate snapshots are
-/// discarded. The stream is a
-/// snapshot protocol rather than a delta protocol, so the next successful
-/// send brings the client fully current.
+/// number of pending snapshots. A full queue drops the subscriber instead of
+/// dropping the newest state: closing the stream makes EventSource reconnect
+/// and receive a fresh initial snapshot, so a stalled client cannot remain
+/// attached while permanently under-reporting pending asks.
 struct LinkSubscriberGroup {
     subscribers: Vec<LinkSubscriber>,
     next_id: u64,
@@ -683,8 +683,8 @@ impl LinkSubscriberGroup {
     fn broadcast(&mut self, msg: super::proto::DaemonMsg) {
         self.subscribers
             .retain(|subscriber| match subscriber.tx.try_send(msg.clone()) {
-                Ok(()) | Err(mpsc::TrySendError::Full(_)) => true,
-                Err(mpsc::TrySendError::Disconnected(_)) => false,
+                Ok(()) => true,
+                Err(mpsc::TrySendError::Full(_) | mpsc::TrySendError::Disconnected(_)) => false,
             });
     }
 }
@@ -6637,6 +6637,31 @@ mod tests {
         state.put_cached_for_test(&ask, "value");
         wrap_of(&mut ask).nested_run = false;
         assert!(!state.nested_run_may_skip_window(&ask));
+    }
+
+    #[test]
+    fn a_full_link_snapshot_queue_detaches_instead_of_staying_stale() {
+        let mut state = State::new();
+        let (events_tx, events_rx) = mpsc::sync_channel(1);
+        state.attach_link_events(events_tx);
+
+        state.broadcast_consent_update();
+        assert_eq!(state.link_subscriber_count(), 1);
+
+        // The first snapshot still occupies the only channel slot. A second
+        // state transition cannot be queued, so the subscriber is removed;
+        // after the reader drains that stale frame it observes disconnect and
+        // EventSource reconnects from a fresh snapshot.
+        state.broadcast_consent_update();
+        assert_eq!(state.link_subscriber_count(), 0);
+        assert!(matches!(
+            events_rx.recv().unwrap(),
+            super::super::proto::DaemonMsg::ConsentUpdate { .. }
+        ));
+        assert!(
+            events_rx.recv().is_err(),
+            "the saturated subscriber must close rather than stay stale"
+        );
     }
 
     #[test]
