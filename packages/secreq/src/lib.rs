@@ -4,7 +4,7 @@
 //! masks any secret value that leaks to the child's output.
 //!
 //! Module map:
-//! - [`manifest`]  — JSON5 config model: groups, providers, per-secret settings, merge.
+//! - [`manifest`]  — provider config model and built-in provider definitions.
 //! - [`reference`] — `secret://<provider>/<locator>` parsing.
 //! - [`secret`]    — zeroizing secret value type (never enters a GC heap).
 //! - [`provider`]  — Tier-1 declarative read execution.

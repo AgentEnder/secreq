@@ -192,10 +192,6 @@
   },
   "description": "Persisted auto-approve / auto-deny rules for `secreq` (`~/.secreq/auto-rules.toml`, or `$SECREQ_HOME/auto-rules.toml`). Owned by the consent daemon; clients normally don't edit the file directly.",
   "properties": {
-    "$schema": {
-      "description": "URL or path of this JSON Schema. Ignored by `secreq`.",
-      "type": "string"
-    },
     "rules": {
       "default": [],
       "description": "Ordered list of rules. Order does not affect precedence (deny-wins, then most-specific approve), but is preserved on read/write so hand-edits stay stable.",

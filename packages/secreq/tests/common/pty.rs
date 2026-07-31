@@ -156,7 +156,7 @@ impl PtyRun {
     /// Replace `from` with `to` in the output *before* it is rendered.
     ///
     /// The sandbox lives under a tempdir, so a recorded session is full of
-    /// `/var/folders/…/.tmpS8cwq4/secreq/wraps.json5` where a reader's
+    /// `/var/folders/…/.tmpS8cwq4/secreq/config.toml` where a reader's
     /// machine would say something human. Substituting on the byte stream
     /// rather than the rendered screen means the emulator lays out the
     /// *substituted* text, so wrapping lands where it would have on a real

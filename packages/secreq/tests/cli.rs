@@ -359,7 +359,7 @@ fn x_sq_config_selects_the_config_file() {
     let bin_dir = sb.path().join("realbin");
     let shim_dir = sb.path().join("shims");
     install_fake_gh(&bin_dir);
-    let alt = sb.path().join("alt-wraps.json5");
+    let alt = sb.path().join("alt-config.toml");
     write_config(&alt, &echo_provider_config(&shim_dir));
     let out = run_x(
         &sb,
@@ -954,7 +954,7 @@ fn dirs_under(root: &Path) -> Vec<PathBuf> {
 /// `paths::ensure_private_dir` narrows the root, but it was only ever reached
 /// from the audit writer, the daemon's log and the socket bind — so the
 /// narrowing was *lazy*. Everything that ran before one of those (the
-/// migration runner, `init` writing `wraps.json5`) created the root with a
+/// migration runner, `init` writing `config.toml`) created the root with a
 /// bare `create_dir_all`, which takes the umask's answer: 0755 under the
 /// common 022 and **0777** under the `umask 000` that CI and container images
 /// routinely set. That directory holds the audit log, the auto-rules and the
@@ -1153,7 +1153,7 @@ fn a_rules_file_the_daemon_writes_under_a_lax_umask_is_owner_only() {
     assert_eq!(mode, 0o600, "{} is {mode:o}", rules_file.display());
 }
 
-/// The same defect on the config that is the bigger prize. `wraps.json5`
+/// The same defect on the config that is the bigger prize. `config.toml`
 /// carries the `providers` block, and a provider is a **shell command secreq
 /// runs** to fetch a secret — so a world-writable one is arbitrary code
 /// execution as the user on the next resolve, not merely a disclosure of which
@@ -1246,6 +1246,13 @@ fn the_config_secreq_edit_seeds_under_a_lax_umask_is_owner_only() {
     );
     let mode = fs::metadata(&config).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600, "{} is {mode:o}", config.display());
+    let seeded = fs::read_to_string(&config).unwrap();
+    assert!(
+        seeded.starts_with("#:schema "),
+        "a fresh config should point Taplo at its schema: {seeded:?}"
+    );
+    secreq::wraps::WrapsConfig::parse(&seeded, &config.display().to_string())
+        .expect("the editor seed must be valid config.toml");
 }
 
 /// The same registration writes a second thing the same way, one function

@@ -82,8 +82,10 @@
 //! unset case, and every other value is a *shortening* of it, declared
 //! per secret in the config's `secrets` block:
 //!
-//! ```json5
-//! secrets: { github_token: { ref: "secret://op/…/token", ttl: "15m" } }
+//! ```toml
+//! [secrets.github_token]
+//! ref = "secret://op/…/token"
+//! ttl = "15m"
 //! ```
 //!
 //! A *global* cap was tried and is why the default has to be the
