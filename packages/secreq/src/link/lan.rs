@@ -232,16 +232,15 @@ fn handle_events(
 
     loop {
         match rx.recv_timeout(SSE_HEARTBEAT_INTERVAL) {
-            Ok(crate::daemon::proto::DaemonMsg::ConsentUpdate { snapshot }) => {
+            Ok(super::projection::LinkEvent::Snapshot(snapshot)) => {
                 write_sse_snapshot(&mut writer, &snapshot)?;
             }
-            Ok(crate::daemon::proto::DaemonMsg::ConsentExitPlease)
+            Ok(super::projection::LinkEvent::ExitPlease)
             | Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 writer.write_all(b": keep-alive\n\n")?;
                 writer.flush()?;
             }
-            Ok(_) => {}
         }
     }
 }
@@ -261,7 +260,7 @@ impl Drop for LinkSubscription {
 
 fn write_sse_snapshot(
     writer: &mut dyn Write,
-    snapshot: &crate::daemon::proto::WireSnapshot,
+    snapshot: &super::projection::LinkSnapshot,
 ) -> std::io::Result<()> {
     let json = serde_json::to_string(snapshot).map_err(std::io::Error::other)?;
     writeln!(writer, "data: {json}\n")?;

@@ -5,22 +5,26 @@ import {
   newAwaitingRequestIds,
   resolvingCopy,
   updateResolvingAnchors,
-  type WireQueueRow,
+  type LinkQueueRow,
 } from './snapshot';
 
-function row(requestId: string, status: WireQueueRow['status'] = 'Awaiting'): WireQueueRow {
+function row(requestId: string, status: LinkQueueRow['status'] = 'Awaiting'): LinkQueueRow {
   return {
     request_id: requestId,
     ask_hash_hex: 'a'.repeat(64),
     representative: {
       command: ['deploy'],
-      dedupe_key: { wrap: 'deploy' },
-      subject: { kind: 'wrap', cwd: '/srv/app', callers: [], secrets: [] },
+      subject: {
+        kind: 'wrap',
+        wrap: 'deploy',
+        cwd: '/srv/app',
+        callers: [],
+        secrets: [],
+        allow_remember: false,
+      },
     },
     status,
     resolving_since: status === 'Resolving' ? 1_000 : undefined,
-    waiter_count: 1,
-    first_seen_secs_ago: 0,
   };
 }
 

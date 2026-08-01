@@ -1,7 +1,9 @@
 //! Canonical bytes for the ask shown to a linked device.
 
-use crate::daemon::proto::{Ask, AskSubject, Caller, SecretAsk};
+use crate::daemon::proto::Ask;
 use crate::provenance::SignAnchorKind;
+
+use super::projection::{LinkAsk, LinkAskSubject, LinkCaller, LinkSecretAsk};
 
 /// Length-prefixed concatenation of string fields.
 ///
@@ -29,14 +31,19 @@ pub(crate) fn canonical_parts(parts: &[&str]) -> Vec<u8> {
 /// A displayed field outside this hash is a field an attacker can vary while
 /// the signature still verifies.
 pub fn canonical_bytes(ask: &Ask) -> Vec<u8> {
+    canonical_link_bytes(&LinkAsk::from(ask))
+}
+
+/// Canonical bytes computed from the exact projection sent to linked clients.
+pub fn canonical_link_bytes(ask: &LinkAsk) -> Vec<u8> {
     let mut writer = CanonicalWriter::default();
     writer.part("secreq-link-ask-v1");
     writer.strings("command", &ask.command);
 
     match &ask.subject {
-        AskSubject::Wrap(wrap) => {
+        LinkAskSubject::Wrap(wrap) => {
             writer.part("wrap");
-            writer.field("wrap", &ask.dedupe_key.wrap);
+            writer.field("wrap", &wrap.wrap);
             writer.field("cwd", &wrap.cwd);
             writer.bool("callers_truncated", wrap.callers_truncated);
             writer.callers(&wrap.callers);
@@ -44,13 +51,11 @@ pub fn canonical_bytes(ask: &Ask) -> Vec<u8> {
             for secret in &wrap.secrets {
                 writer.secret(secret);
             }
-            // Whether the UI offers a persistent approval is itself part of
-            // what the approver sees and chooses between.
             writer.bool("allow_remember", wrap.allow_remember);
         }
-        AskSubject::SshSign(ssh) => {
+        LinkAskSubject::SshSign(ssh) => {
             writer.part("ssh_sign");
-            writer.field("wrap", &ask.dedupe_key.wrap);
+            writer.field("wrap", &ssh.wrap);
             writer.field("cwd", &ssh.cwd);
             writer.bool("callers_truncated", ssh.callers_truncated);
             writer.callers(&ssh.callers);
@@ -74,7 +79,7 @@ pub fn canonical_bytes(ask: &Ask) -> Vec<u8> {
                 None => writer.part("anchor_none"),
             }
         }
-        AskSubject::ScopedAgent(agent) => {
+        LinkAskSubject::ScopedAgent(agent) => {
             writer.part("scoped_agent");
             writer.field("scope", &agent.scope);
             writer.field("reference", &agent.reference);
@@ -97,6 +102,11 @@ pub fn canonical_bytes(ask: &Ask) -> Vec<u8> {
 /// Lowercase hexadecimal SHA-256 of [`canonical_bytes`].
 pub fn canonical_hash(ask: &Ask) -> String {
     crate::rules::sha256_hex(&canonical_bytes(ask))
+}
+
+/// Lowercase hexadecimal SHA-256 of [`canonical_link_bytes`].
+pub fn canonical_link_hash(ask: &LinkAsk) -> String {
+    crate::rules::sha256_hex(&canonical_link_bytes(ask))
 }
 
 #[derive(Default)]
@@ -146,7 +156,7 @@ impl CanonicalWriter {
         }
     }
 
-    fn callers(&mut self, callers: &[Caller]) {
+    fn callers(&mut self, callers: &[LinkCaller]) {
         self.count("callers", callers.len());
         for caller in callers {
             self.number("caller_pid", caller.pid);
@@ -156,7 +166,7 @@ impl CanonicalWriter {
         }
     }
 
-    fn secret(&mut self, secret: &SecretAsk) {
+    fn secret(&mut self, secret: &LinkSecretAsk) {
         self.field("secret_name", &secret.name);
         self.field("secret_provider", &secret.provider);
         self.field("secret_locator", &secret.locator);
@@ -239,5 +249,59 @@ mod tests {
         ask.wrap_mut().expect("a wrap ask").secrets[0].name = "OTHER_TOKEN".into();
 
         assert_ne!(before, canonical_hash(&ask));
+    }
+
+    #[test]
+    fn rust_matches_the_shared_cross_language_v1_fixture() {
+        #[derive(serde::Deserialize)]
+        struct Fixture {
+            contract: String,
+            cases: Vec<FixtureCase>,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct FixtureCase {
+            name: String,
+            ask: LinkAsk,
+            sha256: String,
+        }
+
+        let fixture: Fixture =
+            serde_json::from_str(include_str!("canonical-v1.fixture.json")).unwrap();
+        assert_eq!(fixture.contract, "secreq-link-ask-v1");
+        let actual: Vec<(&str, String)> = fixture
+            .cases
+            .iter()
+            .map(|case| (case.name.as_str(), canonical_link_hash(&case.ask)))
+            .collect();
+        let expected: Vec<(&str, String)> = fixture
+            .cases
+            .iter()
+            .map(|case| (case.name.as_str(), case.sha256.clone()))
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn remember_capability_is_part_of_the_existing_v1_contract() {
+        #[derive(serde::Deserialize)]
+        struct Fixture {
+            cases: Vec<FixtureCase>,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct FixtureCase {
+            ask: LinkAsk,
+        }
+
+        let fixture: Fixture =
+            serde_json::from_str(include_str!("canonical-v1.fixture.json")).unwrap();
+        let mut ask = fixture.cases.into_iter().next().unwrap().ask;
+        let before = canonical_link_hash(&ask);
+        let LinkAskSubject::Wrap(wrap) = &mut ask.subject else {
+            panic!("first fixture must be a wrap ask");
+        };
+        wrap.allow_remember = !wrap.allow_remember;
+        assert_ne!(before, canonical_link_hash(&ask));
     }
 }

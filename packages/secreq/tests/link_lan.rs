@@ -491,6 +491,27 @@ fn events_streams_a_snapshot_and_drops_the_subscriber_after_disconnect() {
     assert!(response.starts_with("HTTP/1.1 200 "), "{response:?}");
     assert!(response.contains("text/event-stream"), "{response:?}");
     assert!(response.contains(&request_id), "{response:?}");
+    assert!(response.contains("DEPLOY_TOKEN"), "{response:?}");
+    assert!(response.contains("publish the release"), "{response:?}");
+    assert!(
+        !response.contains("echo resolved-{locator}"),
+        "{response:?}"
+    );
+    for local_only_key in [
+        "providers",
+        "viewer_mode",
+        "rules",
+        "refusals",
+        "dedupe_key",
+        "subject_digest",
+        "start_time",
+        "default",
+        "ttl",
+        "nested_run",
+        "ignore_remembered",
+    ] {
+        assert!(!response.contains(local_only_key), "{response:?}");
+    }
     assert!(!response.contains("resolving_since"), "{response:?}");
     assert_eq!(state.lock().unwrap().link_subscriber_count(), 1);
 

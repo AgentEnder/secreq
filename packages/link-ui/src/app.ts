@@ -1,4 +1,5 @@
 import { bytesToBase64, generateCredential, signDecision, type Decision } from './crypto';
+import { verifiedAskHash } from './canonical';
 import {
   isAwaiting,
   newAwaitingRequestIds,
@@ -6,9 +7,9 @@ import {
   updateResolvingAnchors,
   type Ask,
   type Caller,
+  type LinkQueueRow,
+  type LinkSnapshot,
   type SecretAsk,
-  type WireQueueRow,
-  type WireSnapshot,
 } from './snapshot';
 import { loadCredential, saveCredential, type StoredCredential } from './storage';
 
@@ -138,8 +139,8 @@ export function renderQueue(root: HTMLElement, credential: StoredCredential): vo
   shell.append(header, banner, connection, error, list);
   root.append(shell);
 
-  let currentRows: WireQueueRow[] = [];
-  let currentError: WireSnapshot['link_error'];
+  let currentRows: LinkQueueRow[] = [];
+  let currentError: LinkSnapshot['link_error'];
   let hasSnapshot = false;
   const resolvingAnchors = new Map<string, number>();
   let flash: ReturnType<typeof window.setInterval> | undefined;
@@ -163,7 +164,7 @@ export function renderQueue(root: HTMLElement, credential: StoredCredential): vo
 
   const handleMessage = (event: MessageEvent<string>) => {
     try {
-      const snapshot = JSON.parse(event.data) as WireSnapshot;
+      const snapshot = JSON.parse(event.data) as LinkSnapshot;
       const arrivals = newAwaitingRequestIds(currentRows, snapshot.queue);
       updateResolvingAnchors(resolvingAnchors, snapshot.queue, Date.now(), !hasSnapshot);
       hasSnapshot = true;
@@ -238,7 +239,7 @@ export function renderQueue(root: HTMLElement, credential: StoredCredential): vo
 }
 
 function renderRow(
-  row: WireQueueRow,
+  row: LinkQueueRow,
   credential: StoredCredential,
   resolvingAnchors: ReadonlyMap<string, number>,
 ): HTMLElement {
@@ -283,13 +284,16 @@ function renderRow(
 }
 
 async function submitDecision(
-  row: WireQueueRow,
+  row: LinkQueueRow,
   privateKey: Uint8Array,
   decision: Decision,
 ): Promise<void> {
+  // Never sign the daemon's hash as an assertion. Recompute from exactly what
+  // this page rendered, require equality, then sign the browser's result.
+  const askHash = verifiedAskHash(row.representative, row.ask_hash_hex);
   const payload = await signDecision(privateKey, {
     request_id: row.request_id,
-    ask_hash_hex: row.ask_hash_hex,
+    ask_hash_hex: askHash,
     decision,
   });
   const response = await fetch('/decision', {
@@ -309,19 +313,25 @@ async function submitDecision(
 
 function renderAsk(ask: Ask): HTMLElement {
   const details = element('dl', 'request-details');
-  addDetail(details, 'Wrap', ask.dedupe_key.wrap);
   const subject = ask.subject;
   if (subject.kind === 'wrap') {
+    addDetail(details, 'Wrap', subject.wrap);
     addDetail(details, 'In', subject.cwd);
     addCallers(details, subject.callers, subject.callers_truncated);
     for (const secret of subject.secrets) addSecret(details, secret);
+    addDetail(details, 'Remember at host', subject.allow_remember ? 'Available' : 'Unavailable');
   } else if (subject.kind === 'ssh_sign') {
+    addDetail(details, 'Wrap', subject.wrap);
     addDetail(details, 'In', subject.cwd);
     addDetail(details, 'Key', subject.info.key_id);
     addDetail(details, 'Fingerprint', subject.info.fingerprint);
     if (subject.info.reason) addDetail(details, 'Reason', subject.info.reason);
     if (subject.info.anchor) {
-      addDetail(details, 'Session', `${subject.info.anchor.name} · ${subject.info.anchor.pid}`);
+      const anchor = subject.info.anchor;
+      const label = anchor.kind === 'forwarded_ssh' ? 'Forwarded SSH session' : 'Session';
+      const value = [`${anchor.name} · ${anchor.pid}`];
+      if (anchor.command) value.push(anchor.command);
+      addDetail(details, label, value.join(' · '));
     }
     addCallers(details, subject.callers, subject.callers_truncated);
   } else {
@@ -330,7 +340,9 @@ function renderAsk(ask: Ask): HTMLElement {
     if (subject.guest_chain)
       addDetail(details, 'Guest says', `${subject.guest_chain} · not verifiable`);
     if (subject.declared_by) {
-      addDetail(details, 'Declared by', `${subject.declared_by.name} · ${subject.declared_by.pid}`);
+      const declaredBy = [`${subject.declared_by.name} · ${subject.declared_by.pid}`];
+      if (subject.declared_by.exe) declaredBy.push(subject.declared_by.exe);
+      addDetail(details, 'Declared by', declaredBy.join(' · '));
     }
   }
   return details;
@@ -348,7 +360,11 @@ function addSecret(details: HTMLDListElement, secret: SecretAsk): void {
 function addCallers(details: HTMLDListElement, callers: Caller[], truncated = false): void {
   if (callers.length === 0) return;
   const chain = callers
-    .map((caller) => `${caller.name} (${caller.pid}) · ${caller.command}`)
+    .map((caller) => {
+      const frame = [`${caller.name} (${caller.pid})`, caller.command];
+      if (caller.exe) frame.push(caller.exe);
+      return frame.join(' · ');
+    })
     .join(' ← ');
   addDetail(details, 'Asked by', truncated ? `${chain} ← …` : chain);
 }

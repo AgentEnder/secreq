@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderQueue } from './app';
-import { RESOLVING_NUDGE_AFTER_MS, type WireQueueRow, type WireSnapshot } from './snapshot';
+import { RESOLVING_NUDGE_AFTER_MS, type LinkQueueRow, type LinkSnapshot } from './snapshot';
 
 class FakeEventSource extends EventTarget {
   static readonly CONNECTING = 0;
@@ -26,24 +26,28 @@ class FakeEventSource extends EventTarget {
   }
 }
 
-function row(status: WireQueueRow['status'], resolvingSince?: number): WireQueueRow {
+function row(status: LinkQueueRow['status'], resolvingSince?: number): LinkQueueRow {
   return {
     request_id: 'request-1',
     ask_hash_hex: 'a'.repeat(64),
     representative: {
       command: ['deploy'],
-      dedupe_key: { wrap: 'deploy' },
-      subject: { kind: 'wrap', cwd: '/srv/app', callers: [], secrets: [] },
+      subject: {
+        kind: 'wrap',
+        wrap: 'deploy',
+        cwd: '/srv/app',
+        callers: [],
+        secrets: [],
+        allow_remember: false,
+      },
     },
     status,
     resolving_since: resolvingSince,
-    waiter_count: 1,
-    first_seen_secs_ago: 0,
   };
 }
 
-function publish(source: FakeEventSource, queue: WireQueueRow[]): void {
-  const snapshot: WireSnapshot = { queue };
+function publish(source: FakeEventSource, queue: LinkQueueRow[]): void {
+  const snapshot: LinkSnapshot = { queue };
   source.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(snapshot) }));
 }
 
@@ -104,5 +108,21 @@ describe('live request rendering', () => {
 
     expect(FakeEventSource.instances).toHaveLength(2);
     expect(FakeEventSource.instances[1].url).toBe('/events');
+  });
+
+  it('refuses to sign or submit when the daemon hash does not match the rendered ask', async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    const page = root();
+    publish(FakeEventSource.instances[0], [row('Awaiting')]);
+
+    page.querySelector<HTMLButtonElement>('.button.primary')?.click();
+
+    await vi.waitFor(() => {
+      expect(page.querySelector('.decision-status')?.textContent).toContain(
+        'request details do not match',
+      );
+    });
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

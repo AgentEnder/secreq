@@ -6,38 +6,45 @@ export interface Caller {
   pid: number;
   name: string;
   command: string;
-  exe?: string;
+  exe?: string | null;
 }
 
 export interface SecretAsk {
   name: string;
   provider: string;
   locator: string;
-  description?: string;
-  reason?: string;
+  description?: string | null;
+  reason?: string | null;
   requested_by?: string[];
-  declared_as?: string;
+  declared_as?: string | null;
 }
 
 export interface WrapSubject {
   kind: 'wrap';
+  wrap: string;
   cwd: string;
   callers: Caller[];
   callers_truncated?: boolean;
   secrets: SecretAsk[];
-  allow_remember?: boolean;
+  allow_remember: boolean;
 }
 
 export interface SshSignSubject {
   kind: 'ssh_sign';
+  wrap: string;
   cwd: string;
   callers: Caller[];
   callers_truncated?: boolean;
   info: {
     key_id: string;
     fingerprint: string;
-    reason?: string;
-    anchor?: { name: string; pid: number; kind: string; command?: string };
+    reason?: string | null;
+    anchor?: {
+      name: string;
+      pid: number;
+      kind: 'session' | 'forwarded_ssh';
+      command?: string | null;
+    } | null;
   };
 }
 
@@ -45,36 +52,33 @@ export interface ScopedAgentSubject {
   kind: 'scoped_agent';
   scope: string;
   reference: string;
-  guest_chain?: string;
-  declared_by?: { pid: number; name: string; exe?: string };
+  guest_chain?: string | null;
+  declared_by?: { pid: number; name: string; exe?: string | null } | null;
 }
 
 export interface Ask {
   command: string[];
-  dedupe_key: { wrap: string };
   subject: WrapSubject | SshSignSubject | ScopedAgentSubject;
 }
 
-export interface WireQueueRow {
+export interface LinkQueueRow {
   request_id: string;
   ask_hash_hex: string;
   representative: Ask;
-  waiter_count: number;
-  first_seen_secs_ago: number;
   status: RowStatus;
   resolving_since?: number;
 }
 
-export interface WireSnapshot {
-  queue: WireQueueRow[];
-  link_error?: { request_id: string; message: string };
+export interface LinkSnapshot {
+  queue: LinkQueueRow[];
+  link_error?: { message: string };
 }
 
-export function isAwaiting(row: WireQueueRow): boolean {
+export function isAwaiting(row: LinkQueueRow): boolean {
   return row.status === 'Awaiting' || row.status === 'awaiting';
 }
 
-export function newAwaitingRequestIds(previous: WireQueueRow[], current: WireQueueRow[]): string[] {
+export function newAwaitingRequestIds(previous: LinkQueueRow[], current: LinkQueueRow[]): string[] {
   const previousIds = new Set(previous.map((row) => row.request_id));
   return current
     .filter((row) => isAwaiting(row) && !previousIds.has(row.request_id))
@@ -83,7 +87,7 @@ export function newAwaitingRequestIds(previous: WireQueueRow[], current: WireQue
 
 export function updateResolvingAnchors(
   anchors: Map<string, number>,
-  rows: WireQueueRow[],
+  rows: LinkQueueRow[],
   now: number,
   initialSnapshot: boolean,
 ): void {
@@ -106,7 +110,7 @@ export function updateResolvingAnchors(
 }
 
 export function resolvingCopy(
-  row: WireQueueRow,
+  row: LinkQueueRow,
   now = Date.now(),
   anchors?: ReadonlyMap<string, number>,
 ): string {
