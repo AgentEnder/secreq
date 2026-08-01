@@ -116,7 +116,9 @@ jobs:
       #                 is not byte-reproducible across GPUs. See
       #                 tests/screenshot_freshness.rs for the rest.
       #   typecheck     the link client's TypeScript; Vite and Vitest transpile
-      #                 it without checking types, so this is its compile gate
+      #                 it without checking types, so this is its compile gate.
+      #                 The root tsconfig satisfies @nx/js:typescript-sync;
+      #                 its references are generator-owned, not hand-maintained
       #   typecheck-docs  the TypeScript fragments in docs/wasm-rules.md and
       #                 the SDK README, compiled against the real typings
       #   vale          published prose; errors fail, warnings do not
