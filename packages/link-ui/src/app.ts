@@ -3,6 +3,7 @@ import {
   isAwaiting,
   newAwaitingRequestIds,
   resolvingCopy,
+  updateResolvingAnchors,
   type Ask,
   type Caller,
   type SecretAsk,
@@ -12,6 +13,8 @@ import {
 import { loadCredential, saveCredential, type StoredCredential } from './storage';
 
 const IDLE_TITLE = 'secreq link';
+const EVENT_RECONNECT_BASE_MS = 1_000;
+const EVENT_RECONNECT_MAX_MS = 30_000;
 
 export async function start(root: HTMLElement): Promise<void> {
   const token = decodeURIComponent(location.hash.slice(1));
@@ -105,7 +108,7 @@ function renderUnpaired(root: HTMLElement): void {
   root.append(card);
 }
 
-function renderQueue(root: HTMLElement, credential: StoredCredential): void {
+export function renderQueue(root: HTMLElement, credential: StoredCredential): void {
   root.replaceChildren();
   const shell = element('main', 'app-shell');
   const header = element('header', 'app-header');
@@ -137,9 +140,13 @@ function renderQueue(root: HTMLElement, credential: StoredCredential): void {
 
   let currentRows: WireQueueRow[] = [];
   let currentError: WireSnapshot['link_error'];
+  let hasSnapshot = false;
+  const resolvingAnchors = new Map<string, number>();
   let flash: ReturnType<typeof window.setInterval> | undefined;
   let stopFlash: ReturnType<typeof window.setTimeout> | undefined;
-  const events = new EventSource('/events');
+  let events: EventSource;
+  let reconnectAttempt = 0;
+  let reconnectTimer: ReturnType<typeof window.setTimeout> | undefined;
 
   const draw = () => {
     error.hidden = currentError === undefined;
@@ -151,21 +158,15 @@ function renderQueue(root: HTMLElement, credential: StoredCredential): void {
       list.append(empty);
       return;
     }
-    for (const row of currentRows) list.append(renderRow(row, credential));
+    for (const row of currentRows) list.append(renderRow(row, credential, resolvingAnchors));
   };
 
-  events.addEventListener('open', () => {
-    connection.textContent = 'Live with the host';
-    connection.classList.add('connected');
-  });
-  events.addEventListener('error', () => {
-    connection.textContent = 'Reconnecting to the host…';
-    connection.classList.remove('connected');
-  });
-  events.addEventListener('message', (event) => {
+  const handleMessage = (event: MessageEvent<string>) => {
     try {
       const snapshot = JSON.parse(event.data) as WireSnapshot;
       const arrivals = newAwaitingRequestIds(currentRows, snapshot.queue);
+      updateResolvingAnchors(resolvingAnchors, snapshot.queue, Date.now(), !hasSnapshot);
+      hasSnapshot = true;
       currentRows = snapshot.queue;
       currentError = snapshot.link_error;
       draw();
@@ -189,19 +190,58 @@ function renderQueue(root: HTMLElement, credential: StoredCredential): void {
     } catch {
       connection.textContent = 'The host sent an unreadable update; waiting for the next one…';
     }
-  });
+  };
+
+  const connectEvents = () => {
+    reconnectTimer = undefined;
+    const source = new EventSource('/events');
+    events = source;
+    source.addEventListener('open', () => {
+      if (events !== source) return;
+      reconnectAttempt = 0;
+      connection.textContent = 'Live with the host';
+      connection.classList.add('connected');
+    });
+    source.addEventListener('error', () => {
+      if (events !== source) return;
+      connection.classList.remove('connected');
+      if (source.readyState !== EventSource.CLOSED) {
+        connection.textContent = 'Reconnecting to the host…';
+        return;
+      }
+
+      connection.textContent =
+        'The host refused the live connection — too many linked devices are watching. Retrying…';
+      if (reconnectTimer !== undefined) return;
+      const delay = Math.min(
+        EVENT_RECONNECT_BASE_MS * 2 ** reconnectAttempt,
+        EVENT_RECONNECT_MAX_MS,
+      );
+      reconnectAttempt = Math.min(reconnectAttempt + 1, 5);
+      reconnectTimer = window.setTimeout(connectEvents, delay);
+    });
+    source.addEventListener('message', handleMessage);
+  };
+
+  connectEvents();
   window.setInterval(() => {
     for (const status of list.querySelectorAll<HTMLElement>('[data-resolving-request]')) {
       const row = currentRows.find(
-        (candidate) => candidate.request_id === status.dataset.requestId,
+        (candidate) => candidate.request_id === status.dataset.resolvingRequest,
       );
-      if (row !== undefined) status.textContent = resolvingCopy(row);
+      if (row !== undefined) {
+        status.textContent = resolvingCopy(row, Date.now(), resolvingAnchors);
+      }
     }
   }, 1_000);
   draw();
 }
 
-function renderRow(row: WireQueueRow, credential: StoredCredential): HTMLElement {
+function renderRow(
+  row: WireQueueRow,
+  credential: StoredCredential,
+  resolvingAnchors: ReadonlyMap<string, number>,
+): HTMLElement {
   const card = element('article', 'request-card');
   const top = element('div', 'request-top');
   const labels = element('div');
@@ -211,7 +251,9 @@ function renderRow(row: WireQueueRow, credential: StoredCredential): HTMLElement
   command.textContent = row.representative.command.join(' ');
   labels.append(kind, command);
   const status = element('span', isAwaiting(row) ? 'status awaiting' : 'status resolving');
-  status.textContent = isAwaiting(row) ? 'Awaiting decision' : resolvingCopy(row);
+  status.textContent = isAwaiting(row)
+    ? 'Awaiting decision'
+    : resolvingCopy(row, Date.now(), resolvingAnchors);
   if (!isAwaiting(row)) status.dataset.resolvingRequest = row.request_id;
   top.append(labels, status);
   card.append(top, renderAsk(row.representative));

@@ -133,6 +133,9 @@ importers:
         specifier: 2.2.0
         version: 2.2.0
     devDependencies:
+      jsdom:
+        specifier: ^30.0.1
+        version: 30.0.1(@noble/hashes@2.2.0)
       typescript:
         specifier: 6.0.3
         version: 6.0.3

@@ -1,9 +1,10 @@
 //! Browser client assets embedded in the `secreq` binary.
 //!
 //! Fixed filenames are pinned in `packages/link-ui/vite.config.ts`, so this
-//! needs no directory-embedding crate. The build mirrors its committed output
-//! under this crate's `dist/` because Cargo cannot package a sibling workspace
-//! directory; that keeps `cargo install secreq` independent of Node.
+//! needs no directory-embedding crate. Vite writes its committed output under
+//! this crate's `dist/` because Cargo cannot package a sibling workspace
+//! directory; that keeps `cargo install secreq` independent of Node and avoids
+//! committing two copies of the bundle.
 
 const INDEX_HTML: &str = include_str!("../../dist/link-ui/index.html");
 const APP_JS: &str = include_str!("../../dist/link-ui/app.js");

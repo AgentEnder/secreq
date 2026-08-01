@@ -1,3 +1,13 @@
+/**
+ * The P-256 private key stored here is raw, software-managed key material. It
+ * is readable by this page's JavaScript and claims no browser-enforced
+ * non-extractability. Signatures stop replay and keep an ordinary LAN peer
+ * from forging a decision, but plain HTTP cannot stop an active on-path LAN
+ * attacker from replacing the client JavaScript and reading or using this key.
+ * That attacker is outside the accepted home-LAN threat model.
+ *
+ * brain: areas/secreq/design/2026-07-27-secreq-link.md
+ */
 export interface StoredCredential {
   privateKey: Uint8Array<ArrayBuffer>;
   nickname: string;

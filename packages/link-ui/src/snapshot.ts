@@ -81,8 +81,37 @@ export function newAwaitingRequestIds(previous: WireQueueRow[], current: WireQue
     .map((row) => row.request_id);
 }
 
-export function resolvingCopy(row: WireQueueRow, now = Date.now()): string {
-  if (row.resolving_since === undefined || now - row.resolving_since < RESOLVING_NUDGE_AFTER_MS) {
+export function updateResolvingAnchors(
+  anchors: Map<string, number>,
+  rows: WireQueueRow[],
+  now: number,
+  initialSnapshot: boolean,
+): void {
+  const resolvingIds = new Set<string>();
+  for (const row of rows) {
+    if (isAwaiting(row)) continue;
+    resolvingIds.add(row.request_id);
+    if (!anchors.has(row.request_id)) {
+      // Once this page has seen the request waiting, client-local elapsed time
+      // is authoritative. Only an initial already-resolving row has no local
+      // transition to anchor, so it falls back to the daemon fact.
+      const startedAt =
+        initialSnapshot && row.resolving_since !== undefined ? row.resolving_since : now;
+      anchors.set(row.request_id, startedAt);
+    }
+  }
+  for (const requestId of anchors.keys()) {
+    if (!resolvingIds.has(requestId)) anchors.delete(requestId);
+  }
+}
+
+export function resolvingCopy(
+  row: WireQueueRow,
+  now = Date.now(),
+  anchors?: ReadonlyMap<string, number>,
+): string {
+  const startedAt = anchors?.get(row.request_id) ?? row.resolving_since;
+  if (startedAt === undefined || now - startedAt < RESOLVING_NUDGE_AFTER_MS) {
     return 'Resolving…';
   }
   return "still resolving; if this provider needs a fingerprint or a hardware key, it's waiting for you at the host.";
