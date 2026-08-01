@@ -961,6 +961,14 @@ impl State {
         self.link.count()
     }
 
+    /// Close every linked-device event stream. Final-device revocation uses
+    /// this so an already-connected browser cannot keep receiving request
+    /// metadata after the LAN listener stops accepting new connections.
+    pub(crate) fn close_link_events(&mut self) {
+        self.link
+            .broadcast(crate::link::projection::LinkEvent::ExitPlease);
+    }
+
     /// Replay store shared with the linked HTTP decision handler.
     pub(crate) fn link_nonce_store(&self) -> Arc<crate::link::nonce::NonceStore> {
         Arc::clone(&self.link_nonces)

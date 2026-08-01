@@ -98,6 +98,32 @@ impl Pairing {
         self.pair_at(request, Instant::now(), enrolled_at)
     }
 
+    /// Read the current registry while serializing against enrollment and
+    /// revocation writes.
+    pub fn devices(&self) -> Result<Vec<Device>, PairError> {
+        let _window = self.window.lock().map_err(|_| PairError::Unavailable)?;
+        super::devices::load(&self.registry_path).map_err(PairError::Registry)
+    }
+
+    /// Revoke the device named exactly `nickname`.
+    ///
+    /// The pairing-window mutex is also the registry writer lock. Pairing and
+    /// revocation can therefore never both read an old registry and have the
+    /// later atomic replace silently discard the earlier update.
+    pub fn remove(&self, nickname: &str) -> Result<Option<(Device, usize)>, PairError> {
+        let _window = self.window.lock().map_err(|_| PairError::Unavailable)?;
+        let mut devices = super::devices::load(&self.registry_path).map_err(PairError::Registry)?;
+        let Some(index) = devices
+            .iter()
+            .position(|device| device.nickname == nickname)
+        else {
+            return Ok(None);
+        };
+        let removed = devices.remove(index);
+        super::devices::save(&self.registry_path, &devices).map_err(PairError::Registry)?;
+        Ok(Some((removed, devices.len())))
+    }
+
     fn open_at(&self, token: String, now: Instant) -> Result<(), PairError> {
         *self.window.lock().map_err(|_| PairError::Unavailable)? = Some(Window {
             token,
@@ -424,5 +450,37 @@ mod tests {
         assert!(err.to_string().contains("phone"), "{err}");
         assert!(err.to_string().contains("public key"), "{err}");
         assert_eq!(devices::load(&path).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn revocation_is_exact_and_persisted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("devices.json");
+        devices::save(
+            &path,
+            &[
+                Device {
+                    nickname: "phone".into(),
+                    public_key_b64: "phone-key".into(),
+                    enrolled_at: 1,
+                    last_seen: None,
+                },
+                Device {
+                    nickname: "tablet".into(),
+                    public_key_b64: "tablet-key".into(),
+                    enrolled_at: 2,
+                    last_seen: None,
+                },
+            ],
+        )
+        .unwrap();
+        let pairing = Pairing::new(&path);
+
+        let (removed, remaining) = pairing.remove("phone").unwrap().unwrap();
+
+        assert_eq!(removed.nickname, "phone");
+        assert_eq!(remaining, 1);
+        assert_eq!(pairing.devices().unwrap()[0].nickname, "tablet");
+        assert!(pairing.remove("Phone").unwrap().is_none());
     }
 }

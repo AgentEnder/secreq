@@ -158,6 +158,34 @@ ssh -R /run/secreq.sock:"$HOME/.secreq/run/my-vm.sock" my-vm
 | `--allow <secret://…>…` | A `secret://provider/locator` ref this socket may resolve. Repeatable; at least one is required. Matched exactly: there is no prefix or wildcard form, by design |
 | `--sock <PATH>` | Where to bind the socket. Must not already exist. Defaults to `scope-<name>.sock` in secreq's socket dir (`$XDG_RUNTIME_DIR/secreq`, else `<$SECREQ_HOME>/run`), beside the consent and SSH-agent sockets. Pass this to bind elsewhere, e.g. at a path you are about to `ssh -R` into a guest. Pick a directory only you can write. The socket is owner-only from the moment it exists, but in a shared one like `/tmp` anyone can plant a file at the path first and break the bind. |
 
+## `secreq link`
+
+```
+secreq link <SUBCOMMAND>
+```
+
+Pair and manage devices that can approve pending requests over your private LAN. Bare `secreq link` opens a one-minute enrollment window and prints a QR code. The linked page uses plain HTTP: request names are visible on the LAN, while signed decisions prevent an ordinary LAN peer without an enrolled key from approving or denying them
+
+### `secreq link list`
+
+```
+secreq link list
+```
+
+List the nicknames of every paired device
+
+### `secreq link rm`
+
+```
+secreq link rm <NICKNAME>
+```
+
+Revoke one paired device immediately. An in-flight decision signed by that device is refused after this command returns
+
+| Argument | Meaning |
+| --- | --- |
+| `<NICKNAME>` | The exact nickname entered when the device was paired |
+
 ## `secreq check`
 
 ```

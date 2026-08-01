@@ -72,6 +72,13 @@ pub enum ClientMsg {
     /// mismatch from its side (it doesn't act on it — the CLI drives the
     /// restart).
     Hello { build_id: String },
+    /// Open a short-lived linked-device enrollment window. The daemon owns
+    /// both the token and LAN listener; the CLI only renders the returned URL.
+    LinkPair,
+    /// List the persisted linked-device credentials.
+    LinkList,
+    /// Revoke the linked device with this exact nickname.
+    LinkRemove { nickname: String },
     /// "Exit cleanly." Used by `secreq daemon stop` to forget the
     /// in-memory approvals cache (and free the singleton pidfile lock).
     /// Replies with `Ok` immediately; the actual exit happens shortly
@@ -266,6 +273,9 @@ impl ClientMsg {
         match self {
             ClientMsg::Ping => "Ping",
             ClientMsg::Hello { .. } => "Hello",
+            ClientMsg::LinkPair => "LinkPair",
+            ClientMsg::LinkList => "LinkList",
+            ClientMsg::LinkRemove { .. } => "LinkRemove",
             ClientMsg::ShowWindow => "ShowWindow",
             ClientMsg::ShowViewer => "ShowViewer",
             ClientMsg::Ask(_) => "Ask",
@@ -1058,6 +1068,14 @@ pub enum DaemonMsg {
     /// [`crate::BUILD_ID`]. The CLI compares it to its own to decide
     /// whether the running daemon is stale and should be restarted.
     Hello { build_id: String },
+    /// Enrollment URL whose fragment carries the one-time token. URL
+    /// fragments never cross the HTTP request line; the browser reads it
+    /// locally and posts it only to `/pair`.
+    LinkPairing { url: String },
+    /// Current paired-device registry for `secreq link list`.
+    LinkDevices {
+        devices: Vec<crate::link::devices::Device>,
+    },
     /// Reply to `ShowWindow` / `ShowViewer`. Carries the consent-window
     /// child's pid if one is already attached, so the CLI can call
     /// `NSRunningApplication.activate(...)` on it. `None` means the
@@ -1134,6 +1152,8 @@ impl DaemonMsg {
         match self {
             DaemonMsg::Ok => "Ok",
             DaemonMsg::Hello { .. } => "Hello",
+            DaemonMsg::LinkPairing { .. } => "LinkPairing",
+            DaemonMsg::LinkDevices { .. } => "LinkDevices",
             DaemonMsg::WindowOpened { child_pid } => match child_pid {
                 Some(_) => "WindowOpened(existing)",
                 None => "WindowOpened(spawning)",
@@ -1202,6 +1222,22 @@ impl std::fmt::Debug for DaemonMsg {
             DaemonMsg::Hello { build_id } => {
                 f.debug_struct("Hello").field("build_id", build_id).finish()
             }
+            DaemonMsg::LinkPairing { url } => {
+                // The fragment is a live enrollment credential. Logs and
+                // protocol-desync errors may name the reply but never print it.
+                let _ = url;
+                f.write_str("LinkPairing { url: [redacted] }")
+            }
+            DaemonMsg::LinkDevices { devices } => f
+                .debug_struct("LinkDevices")
+                .field(
+                    "nicknames",
+                    &devices
+                        .iter()
+                        .map(|device| device.nickname.as_str())
+                        .collect::<Vec<_>>(),
+                )
+                .finish(),
             DaemonMsg::WindowOpened { child_pid } => f
                 .debug_struct("WindowOpened")
                 .field("child_pid", child_pid)

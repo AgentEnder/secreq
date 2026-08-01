@@ -109,6 +109,16 @@ enum Command {
         action: AgentAction,
     },
 
+    /// Pair and manage devices that can approve pending requests over your
+    /// private LAN. Bare `secreq link` opens a one-minute enrollment window
+    /// and prints a QR code. The linked page uses plain HTTP: request names
+    /// are visible on the LAN, while signed decisions prevent an ordinary
+    /// LAN peer without an enrolled key from approving or denying them.
+    Link {
+        #[command(subcommand)]
+        action: Option<LinkAction>,
+    },
+
     /// Validate the config.
     Check,
 
@@ -345,6 +355,19 @@ enum AgentAction {
         /// plant a file at the path first and break the bind.
         #[arg(long, value_name = "PATH")]
         sock: Option<PathBuf>,
+    },
+}
+
+/// Subcommands under `secreq link …`. With no subcommand, pair a new device.
+#[derive(Subcommand)]
+enum LinkAction {
+    /// List the nicknames of every paired device.
+    List,
+    /// Revoke one paired device immediately. An in-flight decision signed by
+    /// that device is refused after this command returns.
+    Rm {
+        /// The exact nickname entered when the device was paired.
+        nickname: String,
     },
 }
 
@@ -865,6 +888,13 @@ pub fn run() -> i32 {
         Some(Command::Agent {
             action: AgentAction::Open { scope, allow, sock },
         }) => commands::agent_open(&scope, &allow, sock.as_deref(), config),
+        Some(Command::Link { action: None }) => commands::link_pair(),
+        Some(Command::Link {
+            action: Some(LinkAction::List),
+        }) => commands::link_list(),
+        Some(Command::Link {
+            action: Some(LinkAction::Rm { nickname }),
+        }) => commands::link_remove(&nickname),
         Some(Command::Unwrap { binary }) => commands::unwrap_cmd(&binary, config),
         Some(Command::Wraps) => commands::wraps_list(config),
         Some(Command::Check) => commands::check(config),
@@ -1043,6 +1073,29 @@ mod tests {
         };
         assert_eq!(wrap, ["gh", "git-switchboard"]);
         assert_eq!(secret, ["GITHUB_TOKEN"]);
+    }
+
+    #[test]
+    fn link_uses_subcommands_not_sq_passthrough_flags() {
+        let pair = Cli::try_parse_from(["secreq", "link"]).expect("pair");
+        assert!(matches!(pair.command, Some(Command::Link { action: None })));
+
+        let list = Cli::try_parse_from(["secreq", "link", "list"]).expect("list");
+        assert!(matches!(
+            list.command,
+            Some(Command::Link {
+                action: Some(LinkAction::List)
+            })
+        ));
+
+        let remove = Cli::try_parse_from(["secreq", "link", "rm", "Craig's iPhone"]).expect("rm");
+        assert!(matches!(
+            remove.command,
+            Some(Command::Link {
+                action: Some(LinkAction::Rm { nickname })
+            }) if nickname == "Craig's iPhone"
+        ));
+        assert!(Cli::try_parse_from(["secreq", "link", "--sq-list"]).is_err());
     }
 
     /// The long `--version` string must carry both the crate semver and the

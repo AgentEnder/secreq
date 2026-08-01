@@ -9,9 +9,7 @@
           "kind": "wrap",
           "wrap": "deploy",
           "cwd": "/srv/café",
-          "callers": [
-            { "pid": 42, "name": "zsh", "command": "zsh -l", "exe": "/bin/zsh" }
-          ],
+          "callers": [{ "pid": 42, "name": "zsh", "command": "zsh -l", "exe": "/bin/zsh" }],
           "callers_truncated": true,
           "allow_remember": true,
           "secrets": [

@@ -35,6 +35,7 @@ mod binaries;
 mod config;
 mod daemon;
 mod init;
+mod link;
 mod prompt;
 mod rules;
 mod run;
@@ -44,6 +45,7 @@ mod ssh;
 pub use config::{check, doctor, edit_cmd, unwrap_cmd, wrap, wraps_list, WrapArgs};
 pub use daemon::{daemon_install, daemon_log_path, daemon_status, daemon_stop, daemon_tail};
 pub use init::init;
+pub use link::{list as link_list, pair as link_pair, remove as link_remove};
 pub use rules::{
     rules_add_wasm, rules_list, rules_new_wasm, rules_rm, rules_set_enabled, rules_show,
     rules_stats,
