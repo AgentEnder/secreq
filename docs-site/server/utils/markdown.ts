@@ -10,6 +10,7 @@ import remarkRehype from 'remark-rehype';
 import { unified } from 'unified';
 import { DOC_SLUGS } from '../../docs.nav';
 import { flowHtml } from '../../flow-markup';
+import { screenFlowHtml } from '../../screen-flow-markup';
 import { termHtml } from '../../term-markup';
 import { applyBaseUrl } from '../../utils/base-url';
 import { windowHtml } from '../../window-markup';
@@ -263,8 +264,8 @@ function remarkTerm() {
 }
 
 /**
- * Remark plugin: turn `::flow{term=run-gh}` into the recording *and* the
- * consent window it blocked on, choreographed against each other.
+ * Remark plugin: render either a terminal/native-window flow or a browser
+ * screen recording.
  *
  * The two halves of that moment are recorded by two harnesses that know
  * nothing about each other, and this is the seam between them:
@@ -272,7 +273,7 @@ function remarkTerm() {
  *   ::flow{term=run-gh}
  *   ::flow{term=run-gh caption="Optional override"}
  *
- * The `term` attribute is the only one an author supplies, and there is
+ * For a terminal flow, `term` is the only attribute an author supplies, and there is
  * deliberately no way to name the window. Which fixture rises, and when, is
  * recorded in the transcript's own `gui` markers — repeating it here would
  * be a second place for it to be wrong, and the only one no test checks.
@@ -291,14 +292,16 @@ function remarkFlow() {
       if (!isDirective || node.name !== 'flow') return;
 
       const term = node.attributes?.term;
-      if (!term) {
+      const screen = node.attributes?.screen;
+      if ((term && screen) || (!term && !screen)) {
         throw new Error(
-          '[docs-site] ::flow directive is missing a transcript — use ::flow{term=…}',
+          '[docs-site] ::flow needs exactly one source — use ::flow{term=…} or ::flow{screen=…}',
         );
       }
 
       const caption = node.attributes?.caption ?? undefined;
-      const html = flowHtml(term, caption === undefined ? {} : { caption });
+      const options = caption === undefined ? {} : { caption };
+      const html = term ? flowHtml(term, options) : screenFlowHtml(screen!, options);
 
       node.type = 'html';
       (node as { value?: string }).value = html;

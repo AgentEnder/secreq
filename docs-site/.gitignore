@@ -3,6 +3,7 @@ dist
 .vike
 /public/schemas
 /public/ui
+/public/flows
 /.typedoc
 /.generated
 

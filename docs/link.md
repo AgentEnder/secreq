@@ -34,6 +34,23 @@ the linked page open when you want live requests: it receives updates through
 an event stream. A backgrounded page may miss the sound or title flash;
 background notifications are not part of this feature.
 
+## Approve a request
+
+The linked page starts empty and stays live with the host. When a request
+arrives, it raises a banner and shows the command, working directory, caller
+chain, secret reference, reason, and declaration provenance. Review those
+details just as you would in the local prompt, then choose **Approve** or
+**Deny**. The browser signs that decision with its device key; it never receives
+the secret value.
+
+::flow{screen=link-approval}
+
+After the host accepts the signature, the card changes to **Resolving** while
+the original provider completes, then leaves the queue. The local prompt stays
+available for the entire flow. A decision made in either place resolves the
+same pending request; the other surface observes the result rather than
+granting a second approval.
+
 ## List and revoke devices
 
 List the enrolled nicknames:

@@ -8,9 +8,11 @@
     "dev": "vite",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "lint": "oxlint src",
+    "lint": "oxlint src scripts",
     "preview": "vite preview",
-    "test": "vitest run",
+    "record:flows": "pnpm run build && node scripts/record-flow.mjs",
+    "recordings:check": "node scripts/check-recordings.mjs",
+    "test": "vitest run && pnpm run recordings:check",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -19,6 +21,7 @@
   },
   "devDependencies": {
     "jsdom": "^30.0.1",
+    "playwright": "1.62.1",
     "typescript": "6.0.3",
     "vite": "^7.3.1",
     "vitest": "^4.1.10"
@@ -29,6 +32,14 @@
         "outputs": [
           "{workspaceRoot}/packages/secreq/dist/link-ui"
         ]
+      },
+      "test": {
+        "inputs": [
+          "js",
+          "{workspaceRoot}/dev-docs/link-ui-recordings/**/*",
+          "{workspaceRoot}/packages/secreq/src/link/canonical-v1.fixture.json"
+        ],
+        "outputs": []
       }
     }
   }

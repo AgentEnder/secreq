@@ -1,0 +1,12 @@
+{
+  "id": "link-approval",
+  "title": "Approve a request from a linked device",
+  "caption": "Pair the browser, review the exact request details, and sign an approval while the local prompt remains authoritative.",
+  "width": 390,
+  "height": 844,
+  "video": "flow.webm",
+  "poster": "poster.png",
+  "source_sha256": "8f5460615e4176c2da142e399c4310a6d6b04f096938dab52a0e04a60b736409",
+  "video_sha256": "8ad2e4d00e5dddb4bc5c1b635d2cd38572ddc383d2226efc131c5d5c6716523e",
+  "poster_sha256": "c76cd29b2c59660910108e54e05c2ef04c9ef8e81292c6e95ba4945a62d5d881"
+}

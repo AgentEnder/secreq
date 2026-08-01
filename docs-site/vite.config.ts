@@ -41,6 +41,12 @@ import { defineConfig, type Plugin } from 'vite';
  *     URLs stay flat, because they are the site's public surface and a
  *     reorganisation of the repo is not a reason to break a link someone
  *     saved. Flattening happens here, in the one place that knows both shapes.
+ *
+ *   `dev-docs/link-ui-recordings/<id>/{flow.webm,poster.png}`
+ *                              -> `/flows/<id>-{flow.webm,poster.png}`
+ *     Browser-native flows recorded by Playwright against the production Link
+ *     UI bundle. Their metadata becomes `.generated/recordings.json`, so a
+ *     Markdown directive can only name an asset the harness actually emitted.
  */
 function copyRepoAssets(): Plugin {
   return {
@@ -124,8 +130,69 @@ function copyRepoAssets(): Plugin {
       writeShotIndex(shotSrc, renders);
       writeScenes(shotSrc, shotDest, renders);
       writeTermIndex(join(repoRoot, 'dev-docs', 'cli-transcripts'));
+      copyLinkRecordings(join(repoRoot, 'dev-docs', 'link-ui-recordings'), publicDir);
     },
   };
+}
+
+interface LinkRecording {
+  id: string;
+  title: string;
+  caption: string;
+  width: number;
+  height: number;
+  video: string;
+  poster: string;
+}
+
+/** Publish browser recordings and generate the build-time lookup table. */
+function copyLinkRecordings(recordingSrc: string, publicDir: string) {
+  const recordingDest = join(publicDir, 'flows');
+  mkdirSync(recordingDest, { recursive: true });
+  const index: Record<string, LinkRecording> = {};
+  const wanted = new Set<string>();
+
+  let entries: Dirent[] = [];
+  try {
+    entries = readdirSync(recordingSrc, { withFileTypes: true });
+  } catch {
+    console.warn('[docs-site] No linked-device recordings copied — screen flows will 404');
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const fixtureRoot = join(recordingSrc, entry.name);
+    try {
+      const metadata = JSON.parse(
+        readFileSync(join(fixtureRoot, 'recording.json'), 'utf8'),
+      ) as LinkRecording;
+      if (metadata.id !== entry.name) {
+        throw new Error(`metadata id is ${JSON.stringify(metadata.id)}`);
+      }
+      if ([metadata.video, metadata.poster].some((file) => file !== file.split('/').at(-1))) {
+        throw new Error('asset names must be plain filenames');
+      }
+
+      const video = `${metadata.id}-${metadata.video}`;
+      const poster = `${metadata.id}-${metadata.poster}`;
+      copyFileSync(join(fixtureRoot, metadata.video), join(recordingDest, video));
+      copyFileSync(join(fixtureRoot, metadata.poster), join(recordingDest, poster));
+      wanted.add(video);
+      wanted.add(poster);
+      index[metadata.id] = { ...metadata, video, poster };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`[docs-site] Could not publish recording ${entry.name}: ${message}`);
+    }
+  }
+
+  for (const stale of readdirSync(recordingDest)) {
+    if (!wanted.has(stale)) rmSync(join(recordingDest, stale), { force: true });
+  }
+
+  const outDir = join(process.cwd(), '.generated');
+  mkdirSync(outDir, { recursive: true });
+  writeFileSync(join(outDir, 'recordings.json'), `${JSON.stringify(index, null, 2)}\n`);
 }
 
 /**

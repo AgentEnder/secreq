@@ -75,6 +75,26 @@
    screenshot of the window, exactly as the guides show them separately.
    ════════════════════════════════════════════════════════════════════ */
 
+/* A browser-native flow is already one coherent screen, so it keeps the
+   phone-sized viewport the recorder used instead of entering the terminal +
+   native-window choreography below. The committed poster is also the complete
+   reduced-motion/no-playback state. */
+.screen-flow {
+  width: min(100%, 24.375rem);
+  margin: 2.25rem auto;
+}
+
+.screen-flow-video {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--sq-hairline-strong) 85%, transparent);
+  border-radius: 1.35rem;
+  background: #0b0e14;
+  box-shadow: 0 1.2rem 3rem rgb(0 0 0 / 24%);
+}
+
 .flow {
   margin: 2.25rem 0;
 }
