@@ -18,6 +18,7 @@ all three.
 | [wraps](./wraps.md)                       | Authoring `config.toml`. Also where approval scoping is explained. |
 | [providers](./providers.md)               | The built-in providers, and how to declare your own.               |
 | [consent-window](./consent-window.md)     | Both windows, and the audit log format.                            |
+| [link](./link.md)                         | Pairing and LAN approval, including the plain-HTTP tradeoff.       |
 | [ssh-agent](./ssh-agent.md)               | Serving your SSH keys, and the key-custody tradeoff.               |
 | [secret-agent](./secret-agent.md)         | Getting secrets into a VM without copying them in.                 |
 | [wasm-rules](./wasm-rules.md)             | Rules that need real logic: author, test, compile, register.       |

@@ -2,6 +2,7 @@
 
 pub mod assets;
 pub mod canonical;
+pub mod control;
 pub mod devices;
 pub mod lan;
 pub mod nonce;

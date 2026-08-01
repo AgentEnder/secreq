@@ -411,6 +411,8 @@ fn spawn_reader(
                         wake(&egui_ctx);
                     }
                     DaemonMsg::Hello { .. }
+                    | DaemonMsg::LinkPairing { .. }
+                    | DaemonMsg::LinkDevices { .. }
                     | DaemonMsg::WindowOpened { .. }
                     | DaemonMsg::Decision { .. }
                     | DaemonMsg::RulesList(_)

@@ -22,7 +22,11 @@ use super::state::{SharedState, WaiterId, WaiterReply};
 /// Returns the bound listener so the caller can keep it alive. The accept
 /// loop runs on a background thread that exits when the listener is
 /// dropped (the OS errors the accept).
-pub fn start(socket_path: PathBuf, state: SharedState) -> Result<UnixListener> {
+pub fn start(
+    socket_path: PathBuf,
+    state: SharedState,
+    link: std::sync::Arc<crate::link::control::LinkControl>,
+) -> Result<UnixListener> {
     if let Some(parent) = socket_path.parent() {
         crate::paths::ensure_private_dir(parent)
             .with_context(|| format!("create {}", parent.display()))?;
@@ -44,7 +48,7 @@ pub fn start(socket_path: PathBuf, state: SharedState) -> Result<UnixListener> {
     let listener_clone = listener.try_clone()?;
     thread::Builder::new()
         .name("secreqd-accept".to_owned())
-        .spawn(move || accept_loop(listener_clone, state))
+        .spawn(move || accept_loop(listener_clone, state, link))
         .context("spawn daemon accept thread")?;
 
     Ok(listener)
@@ -68,16 +72,21 @@ pub fn start_ssh_agent(
     super::ssh_agent::start(socket_path, config, state)
 }
 
-fn accept_loop(listener: UnixListener, state: SharedState) {
+fn accept_loop(
+    listener: UnixListener,
+    state: SharedState,
+    link: std::sync::Arc<crate::link::control::LinkControl>,
+) {
     for incoming in listener.incoming() {
         // A failed accept means the listener is closed or unrecoverably
         // broken; either way there is nothing left to serve.
         let Ok(stream) = incoming else { break };
         let state = state.clone();
+        let link = std::sync::Arc::clone(&link);
         thread::Builder::new()
             .name("secreqd-conn".to_owned())
             .spawn(move || {
-                if let Err(err) = handle_connection(stream, state) {
+                if let Err(err) = handle_connection(stream, state, link) {
                     eprintln!("secreqd: connection error: {err:#}");
                 }
             })
@@ -85,7 +94,11 @@ fn accept_loop(listener: UnixListener, state: SharedState) {
     }
 }
 
-fn handle_connection(stream: UnixStream, state: SharedState) -> Result<()> {
+fn handle_connection(
+    stream: UnixStream,
+    state: SharedState,
+    link: std::sync::Arc<crate::link::control::LinkControl>,
+) -> Result<()> {
     // Before a byte is parsed. The socket mode should already have excluded
     // a foreign uid; this covers the window where it did not (see
     // `peercred::peer_is_same_user`).
@@ -157,7 +170,7 @@ fn handle_connection(stream: UnixStream, state: SharedState) -> Result<()> {
     // on the Audit view.
     let spawn_prompt = matches!(&msg, ClientMsg::ShowWindow);
     let spawn_manager = matches!(&msg, ClientMsg::ShowViewer);
-    let reply = handle_message(msg, state.clone());
+    let reply = handle_message(msg, state.clone(), &link);
     let mut writer = stream;
     write_reply(&mut writer, &reply)?;
     if spawn_prompt {
@@ -644,7 +657,11 @@ fn handle_badge_window_connection(
     Ok(())
 }
 
-fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
+fn handle_message(
+    msg: ClientMsg,
+    state: SharedState,
+    link: &crate::link::control::LinkControl,
+) -> DaemonMsg {
     super::log::log_at("server", format_args!("← ClientMsg::{}", msg.tag()));
     // Pick up any external hand-edits to the auto-rules file before
     // processing this request. Cheap mtime check; reloads in place
@@ -674,6 +691,27 @@ fn handle_message(msg: ClientMsg, state: SharedState) -> DaemonMsg {
                 build_id: crate::BUILD_ID.to_owned(),
             }
         }
+        ClientMsg::LinkPair => match link.open_pairing(state.clone()) {
+            Ok(url) => DaemonMsg::LinkPairing { url },
+            Err(err) => DaemonMsg::Err {
+                message: format!("{err:#}"),
+            },
+        },
+        ClientMsg::LinkList => match link.devices() {
+            Ok(devices) => DaemonMsg::LinkDevices { devices },
+            Err(err) => DaemonMsg::Err {
+                message: format!("{err:#}"),
+            },
+        },
+        ClientMsg::LinkRemove { nickname } => match link.remove(&nickname, &state) {
+            Ok(Some(_)) => DaemonMsg::Ok,
+            Ok(None) => DaemonMsg::Err {
+                message: format!("no linked device named `{nickname}`"),
+            },
+            Err(err) => DaemonMsg::Err {
+                message: format!("{err:#}"),
+            },
+        },
         ClientMsg::ShowWindow => {
             let mut guard = state.lock().expect("state mutex");
             guard.show_window();
@@ -1516,8 +1554,15 @@ pub fn pidfile_exists(path: &Path) -> bool {
 mod tests {
     use super::*;
     use std::os::unix::net::UnixStream;
+    use std::sync::{Arc, Mutex};
 
     use super::super::proto::WrapSubject;
+
+    fn unused_link_control() -> crate::link::control::LinkControl {
+        crate::link::control::LinkControl::new(std::path::PathBuf::from(
+            "/unused/secreq-test-devices.json",
+        ))
+    }
 
     fn deny_reply() -> DaemonMsg {
         DaemonMsg::Decision {
@@ -1670,11 +1715,52 @@ mod tests {
                 build_id: "some-other-build +123".to_owned(),
             },
             state,
+            &unused_link_control(),
         );
         match reply {
             DaemonMsg::Hello { build_id } => assert_eq!(build_id, crate::BUILD_ID),
             other => panic!("expected Hello reply, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn link_list_and_remove_share_the_live_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("devices.json");
+        crate::link::devices::save(
+            &path,
+            &[crate::link::devices::Device {
+                nickname: "phone".to_owned(),
+                public_key_b64: "public-key".to_owned(),
+                enrolled_at: 1,
+                last_seen: None,
+            }],
+        )
+        .unwrap();
+        let link = crate::link::control::LinkControl::new(path.clone());
+        let state: SharedState = Arc::new(Mutex::new(super::super::state::State::new()));
+        let (events_tx, events_rx) = std::sync::mpsc::sync_channel(1);
+        state.lock().unwrap().attach_link_events(events_tx);
+
+        match handle_message(ClientMsg::LinkList, state.clone(), &link) {
+            DaemonMsg::LinkDevices { devices } => assert_eq!(devices[0].nickname, "phone"),
+            other => panic!("expected LinkDevices, got {other:?}"),
+        }
+        assert!(matches!(
+            handle_message(
+                ClientMsg::LinkRemove {
+                    nickname: "phone".to_owned()
+                },
+                state,
+                &link,
+            ),
+            DaemonMsg::Ok
+        ));
+        assert!(crate::link::devices::load(&path).unwrap().is_empty());
+        assert!(matches!(
+            events_rx.recv().unwrap(),
+            crate::link::projection::LinkEvent::ExitPlease
+        ));
     }
 
     #[test]
@@ -1775,6 +1861,7 @@ mod tests {
                 allow_all_secrets: false,
             },
             state.clone(),
+            &unused_link_control(),
         );
         match reply {
             DaemonMsg::Err { message } => {
@@ -1796,6 +1883,7 @@ mod tests {
                 allow_all_secrets: false,
             },
             state.clone(),
+            &unused_link_control(),
         );
         let rule = match reply {
             DaemonMsg::RuleAdded { rule } => *rule,
@@ -1812,7 +1900,7 @@ mod tests {
             crate::rules::sha256_hex(APPROVE_IF)
         );
 
-        match handle_message(ClientMsg::ListRules, state.clone()) {
+        match handle_message(ClientMsg::ListRules, state.clone(), &unused_link_control()) {
             DaemonMsg::RulesList(listing) => {
                 assert_eq!(listing.rules, vec![rule.clone()]);
                 assert!(listing.refusals.is_empty(), "{:?}", listing.refusals);

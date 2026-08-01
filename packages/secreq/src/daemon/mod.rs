@@ -163,8 +163,21 @@ pub fn run() -> Result<i32> {
     };
     let shutdown_flag = state.lock().expect("state mutex").shutdown_flag();
 
-    let _listener =
-        server::start(socket_path.clone(), state.clone()).context("start daemon socket server")?;
+    let link = Arc::new(crate::link::control::LinkControl::new(
+        crate::paths::devices_path()?,
+    ));
+    if let Err(err) = link.start_if_enrolled(state.clone()) {
+        // Remote approval is additive. A port collision or missing private
+        // route must never brick the local consent socket; `secreq link`
+        // reports the same error when the user next asks for the feature.
+        log::log_at(
+            "link",
+            format_args!("linked-device listener unavailable: {err:#}"),
+        );
+    }
+
+    let _listener = server::start(socket_path.clone(), state.clone(), Arc::clone(&link))
+        .context("start daemon socket server")?;
 
     // SSH agent listener. A second socket (`agent.sock`) speaking the SSH
     // agent protocol, started only when `config.toml` declares any `ssh`

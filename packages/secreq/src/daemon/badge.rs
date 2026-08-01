@@ -207,6 +207,8 @@ fn spawn_reader(
                     // chatter it never sees in practice.
                     DaemonMsg::Ok
                     | DaemonMsg::Hello { .. }
+                    | DaemonMsg::LinkPairing { .. }
+                    | DaemonMsg::LinkDevices { .. }
                     | DaemonMsg::WindowOpened { .. }
                     | DaemonMsg::Decision { .. }
                     | DaemonMsg::Err { .. }

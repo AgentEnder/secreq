@@ -55,10 +55,10 @@ setting.
 
 ## Wraps
 
-| Setting       | Type              | Meaning                                                                                                                                                                                                                     |
-| ------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `reason`      | string            | Rationale shown in the consent prompt.                                                                                                                                                                                      |
-| `env_secrets` | array (optional)  | [Declared secret](#declared-secrets) names to inject under those same environment-variable names. Names must match `[A-Za-z_][A-Za-z0-9_]*`; references and provider locators aren't accepted.                              |
+| Setting       | Type              | Meaning                                                                                                                                                                                                                                    |
+| ------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `reason`      | string            | Rationale shown in the consent prompt.                                                                                                                                                                                                     |
+| `env_secrets` | array (optional)  | [Declared secret](#declared-secrets) names to inject under those same environment-variable names. Names must match `[A-Za-z_][A-Za-z0-9_]*`; references and provider locators aren't accepted.                                             |
 | `env`         | object (optional) | Environment variables to inject. Each value is a `secret://provider/locator` reference or a `secret://<name>` naming a declared secret. Use this form for a different env name or an inline reference. Bare locators aren't accepted here. |
 
 A reference is `secret://<provider>/<locator>`: the provider is a scheme

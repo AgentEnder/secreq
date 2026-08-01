@@ -977,6 +977,46 @@ struct StubDaemon {
     respond: Sender<()>,
 }
 
+/// The narrower daemon double for the pairing transcript. It answers the
+/// normal liveness/build handshake and returns one deterministic enrollment
+/// URL; the real CLI still renders the real QR from it.
+struct PairingStub;
+
+impl PairingStub {
+    fn listening() -> Self {
+        let socket = recording_socket_dir().join("consent.sock");
+        let _ = std::fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket).expect("bind pairing stub socket");
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream.try_clone().expect("clone stub connection"));
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    continue;
+                }
+                let Ok(msg) = serde_json::from_str::<ClientMsg>(line.trim()) else {
+                    continue;
+                };
+                let reply = match msg {
+                    ClientMsg::Hello { build_id } => DaemonMsg::Hello { build_id },
+                    ClientMsg::LinkPair => DaemonMsg::LinkPairing {
+                        url: format!(
+                            "http://192.168.100.200:46371/pair#{}",
+                            "0123456789abcdef".repeat(4)
+                        ),
+                    },
+                    _ => DaemonMsg::Ok,
+                };
+                let mut writer = stream;
+                let body = serde_json::to_string(&reply).expect("serialize pairing stub reply");
+                let _ = writeln!(writer, "{body}");
+                let _ = writer.flush();
+            }
+        });
+        PairingStub
+    }
+}
+
 impl StubDaemon {
     fn listening() -> StubDaemon {
         Self::with_decision(Decision::Approve, None)
@@ -1104,6 +1144,30 @@ fn spawn_recording_env(
 }
 
 // ── Fixtures ──────────────────────────────────────────────────────────────
+
+/// The complete in-person trust event: the daemon supplies a short-lived URL
+/// and the real CLI renders the QR the phone scans.
+#[test]
+#[ignore = "records a docs transcript; run with --ignored"]
+fn link_pairing_qr() {
+    let (sb, bin_dir) = recording_sandbox();
+    let _daemon = PairingStub::listening();
+    let mut rec = Recorder::new(spawn_recording_env(
+        &sb,
+        &bin_dir,
+        &["link"],
+        &[(secreq::daemon::client::NO_DAEMON_ENV, "")],
+    ));
+
+    rec.expect("This one-time link expires in 60 seconds.");
+    rec.finish(Transcript::new(
+        "link-pair",
+        "secreq link",
+        "Pairing a phone in person. The one-time address is valid for 60 \
+         seconds; after enrollment, the device keeps its signing key and \
+         reconnects directly over your private LAN.",
+    ));
+}
 
 /// Not `#[ignore]`d: the width invariant is what keeps every recorded box
 /// and every wrapped line honest, and it is one string edit away from being

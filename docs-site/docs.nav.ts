@@ -49,6 +49,7 @@ export const DOCS_NAV: NavSection[] = [
       { slug: 'ssh-agent', label: 'SSH agent' },
       { slug: 'secret-agent', label: 'Secret agent' },
       { slug: 'consent-window', label: 'Consent window' },
+      { slug: 'link', label: 'Linked devices' },
     ],
   },
   {

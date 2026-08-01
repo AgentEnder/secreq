@@ -160,6 +160,9 @@ pub fn request_consent(ask: Ask, show_indicator: bool) -> Result<ConsentOutcome>
         DaemonMsg::RulesList(_) | DaemonMsg::RuleAdded { .. } => {
             bail!("daemon replied a rules message to an Ask (expected Decision)")
         }
+        DaemonMsg::LinkPairing { .. } | DaemonMsg::LinkDevices { .. } => {
+            bail!("daemon replied a link-management message to an Ask (expected Decision)")
+        }
         DaemonMsg::Hello { .. } => bail!("daemon replied Hello to an Ask (expected Decision)"),
     }
 }
@@ -235,7 +238,58 @@ fn expect_window_opened(reply: DaemonMsg) -> Result<()> {
         DaemonMsg::RulesList(_) | DaemonMsg::RuleAdded { .. } => {
             bail!("unexpected rules reply to ShowWindow/ShowViewer")
         }
+        DaemonMsg::LinkPairing { .. } | DaemonMsg::LinkDevices { .. } => {
+            bail!("unexpected link-management reply to ShowWindow/ShowViewer")
+        }
         DaemonMsg::Hello { .. } => bail!("unexpected Hello reply to ShowWindow/ShowViewer"),
+    }
+}
+
+/// Ask the daemon to start its LAN listener (if needed) and open a fresh
+/// one-minute enrollment window.
+pub fn open_link_pairing() -> Result<String> {
+    if daemon_disabled() {
+        bail!("{NO_DAEMON_ENV} is set; cannot open linked-device pairing. Unset it and try again.");
+    }
+    let socket = server::default_socket_path()?;
+    let stream = connect_or_spawn(&socket)?;
+    match send_and_recv(stream, ClientMsg::LinkPair)? {
+        DaemonMsg::LinkPairing { url } => Ok(url),
+        DaemonMsg::Err { message } => bail!("daemon error: {message}"),
+        other => bail!("unexpected reply to LinkPair: {other:?}"),
+    }
+}
+
+/// Read the daemon-serialized linked-device registry.
+pub fn list_link_devices() -> Result<Vec<crate::link::devices::Device>> {
+    if daemon_disabled() {
+        bail!("{NO_DAEMON_ENV} is set; cannot list linked devices. Unset it and try again.");
+    }
+    let socket = server::default_socket_path()?;
+    let stream = connect_or_spawn(&socket)?;
+    match send_and_recv(stream, ClientMsg::LinkList)? {
+        DaemonMsg::LinkDevices { devices } => Ok(devices),
+        DaemonMsg::Err { message } => bail!("daemon error: {message}"),
+        other => bail!("unexpected reply to LinkList: {other:?}"),
+    }
+}
+
+/// Revoke one linked device by exact nickname.
+pub fn remove_link_device(nickname: &str) -> Result<()> {
+    if daemon_disabled() {
+        bail!("{NO_DAEMON_ENV} is set; cannot revoke a linked device. Unset it and try again.");
+    }
+    let socket = server::default_socket_path()?;
+    let stream = connect_or_spawn(&socket)?;
+    match send_and_recv(
+        stream,
+        ClientMsg::LinkRemove {
+            nickname: nickname.to_owned(),
+        },
+    )? {
+        DaemonMsg::Ok => Ok(()),
+        DaemonMsg::Err { message } => bail!("daemon error: {message}"),
+        other => bail!("unexpected reply to LinkRemove: {other:?}"),
     }
 }
 
@@ -352,6 +406,9 @@ pub fn stop_daemon() -> Result<bool> {
         }
         DaemonMsg::RulesList(_) | DaemonMsg::RuleAdded { .. } => {
             bail!("daemon replied a rules message to Shutdown (expected Ok)")
+        }
+        DaemonMsg::LinkPairing { .. } | DaemonMsg::LinkDevices { .. } => {
+            bail!("daemon replied a link-management message to Shutdown (expected Ok)")
         }
         DaemonMsg::Hello { .. } => bail!("daemon replied Hello to Shutdown (expected Ok)"),
     }
