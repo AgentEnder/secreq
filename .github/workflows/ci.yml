@@ -85,6 +85,17 @@ jobs:
       - uses: pnpm/action-setup@v4
       - run: pnpm install --frozen-lockfile
 
+      # Vite's fixed-name output is byte-deterministic for identical sources
+      # (verified before adopting this check). It writes directly inside the
+      # crate because Cargo cannot package the sibling link-ui workspace.
+      # `git diff` catches stale tracked bytes; the status check also catches a
+      # new untracked chunk/font/map that the three-route server cannot serve.
+      - name: Check committed link client bundle is fresh
+        run: |
+          pnpm --filter @secreq/link-ui run build
+          git diff --exit-code packages/secreq/dist/link-ui
+          test -z "$(git status --porcelain --untracked-files=all packages/secreq/dist/link-ui)"
+
       # Derives NX_BASE / NX_HEAD, which `nx affected` reads with no flags.
       - uses: nrwl/nx-set-shas@v4
 
@@ -104,6 +115,10 @@ jobs:
       #                 Pixels are deliberately never compared — a wgpu render
       #                 is not byte-reproducible across GPUs. See
       #                 tests/screenshot_freshness.rs for the rest.
+      #   typecheck     the link client's TypeScript; Vite and Vitest transpile
+      #                 it without checking types, so this is its compile gate.
+      #                 The root tsconfig satisfies @nx/js:typescript-sync;
+      #                 its references are generator-owned, not hand-maintained
       #   typecheck-docs  the TypeScript fragments in docs/wasm-rules.md and
       #                 the SDK README, compiled against the real typings
       #   vale          published prose; errors fail, warnings do not
@@ -117,4 +132,4 @@ jobs:
       # trees as `{workspaceRoot}` inputs — which `nx affected` honours on its
       # own (a file owned by no project still marks every project declaring it
       # as an input). Removing both would silently un-gate this job.
-      - run: npx nx affected -t lint,format:check,test,typecheck-docs,vale,audit
+      - run: npx nx affected -t lint,format:check,test,typecheck,typecheck-docs,vale,audit

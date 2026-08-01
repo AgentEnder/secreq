@@ -626,7 +626,7 @@ impl<T: SubscriberExtra> SubscriberGroup<T> {
 
 struct LinkSubscriber {
     id: u64,
-    tx: mpsc::SyncSender<super::proto::DaemonMsg>,
+    tx: mpsc::SyncSender<crate::link::projection::LinkEvent>,
 }
 
 /// Bounded snapshot fan-out for LAN event streams.
@@ -650,7 +650,7 @@ impl LinkSubscriberGroup {
         }
     }
 
-    fn attach(&mut self, tx: mpsc::SyncSender<super::proto::DaemonMsg>) -> u64 {
+    fn attach(&mut self, tx: mpsc::SyncSender<crate::link::projection::LinkEvent>) -> u64 {
         let id = self.next_id;
         self.next_id = id.wrapping_add(1);
         self.subscribers.push(LinkSubscriber { id, tx });
@@ -680,9 +680,9 @@ impl LinkSubscriberGroup {
         self.subscribers.len()
     }
 
-    fn broadcast(&mut self, msg: super::proto::DaemonMsg) {
+    fn broadcast(&mut self, event: crate::link::projection::LinkEvent) {
         self.subscribers
-            .retain(|subscriber| match subscriber.tx.try_send(msg.clone()) {
+            .retain(|subscriber| match subscriber.tx.try_send(event.clone()) {
                 Ok(()) => true,
                 Err(mpsc::TrySendError::Full(_) | mpsc::TrySendError::Disconnected(_)) => false,
             });
@@ -799,7 +799,7 @@ impl State {
         self.badge
             .broadcast(super::proto::DaemonMsg::ConsentExitPlease);
         self.link
-            .broadcast(super::proto::DaemonMsg::ConsentExitPlease);
+            .broadcast(crate::link::projection::LinkEvent::ExitPlease);
     }
 
     // ── Consent-window subscriber API ────────────────────────────
@@ -943,12 +943,12 @@ impl State {
 
     /// Attach one HTTP event stream and return its detach id plus the
     /// snapshot that opens the stream.
-    pub fn attach_link_events(
+    pub(crate) fn attach_link_events(
         &mut self,
-        sender: mpsc::SyncSender<super::proto::DaemonMsg>,
-    ) -> (u64, super::proto::WireSnapshot) {
+        sender: mpsc::SyncSender<crate::link::projection::LinkEvent>,
+    ) -> (u64, crate::link::projection::LinkSnapshot) {
         let id = self.link.attach(sender);
-        (id, self.snapshot_for_wire())
+        (id, self.snapshot_for_link())
     }
 
     /// Detach an HTTP event stream after its response writer exits.
@@ -1184,14 +1184,22 @@ impl State {
     /// pruned out.
     pub fn broadcast_consent_update(&mut self) {
         let snapshot = self.snapshot_for_wire();
+        let link_snapshot = crate::link::projection::LinkSnapshot::from(&snapshot);
         let msg = super::proto::DaemonMsg::ConsentUpdate { snapshot };
-        // Same snapshot feeds all three surfaces: the prompt renders
-        // the queue, the manager needs the live rules + viewer-mode
-        // flag, and the badge just counts `Awaiting` rows.
+        // The desktop snapshot feeds all three local surfaces: the prompt
+        // renders the queue, the manager needs rules + viewer mode, and the
+        // badge counts `Awaiting` rows. The LAN gets a separately typed
+        // projection so local-only fields cannot cross by serde accident.
         self.consent.broadcast(msg.clone());
         self.manager.broadcast(msg.clone());
         self.badge.broadcast(msg.clone());
-        self.link.broadcast(msg);
+        self.link
+            .broadcast(crate::link::projection::LinkEvent::Snapshot(link_snapshot));
+    }
+
+    /// Build the only snapshot shape allowed onto the cleartext LAN stream.
+    pub fn snapshot_for_link(&self) -> crate::link::projection::LinkSnapshot {
+        crate::link::projection::LinkSnapshot::from(&self.snapshot_for_wire())
     }
 
     /// Build a wire-form snapshot for the consent UI.
@@ -6656,12 +6664,143 @@ mod tests {
         assert_eq!(state.link_subscriber_count(), 0);
         assert!(matches!(
             events_rx.recv().unwrap(),
-            super::super::proto::DaemonMsg::ConsentUpdate { .. }
+            crate::link::projection::LinkEvent::Snapshot(_)
         ));
         assert!(
             events_rx.recv().is_err(),
             "the saturated subscriber must close rather than stay stale"
         );
+    }
+
+    #[test]
+    fn link_snapshot_serialization_excludes_desktop_and_resolution_only_state() {
+        const PROVIDER_SENTINEL: &str = "provider-argv-sensitive-sentinel-317";
+        const RULE_SENTINEL: &str = "rule-sensitive-sentinel-317";
+        const REFUSAL_SENTINEL: &str = "refusal-sensitive-sentinel-317";
+        const SAFE_ERROR: &str = "safe top-level link error";
+
+        let mut state = State::new();
+        state.viewer_mode = true;
+        state.rules = vec![mk_rule(RULE_SENTINEL, "deploy", RuleDecision::Deny, None)];
+        state.scope_refusals = vec![crate::rules::WrapScopeRefusal {
+            rule_id: RULE_SENTINEL.to_owned(),
+            category: crate::rules::WrapScopeRefusalCategory::Unknown,
+            reason: REFUSAL_SENTINEL.to_owned(),
+        }];
+        state.link_error = Some(super::super::proto::LinkResolveError {
+            request_id: "failed-request".to_owned(),
+            message: SAFE_ERROR.to_owned(),
+        });
+
+        let mut ask = ask_with_secret("deploy", &["deploy", "--production"], "TOKEN");
+        let wrap = wrap_of(&mut ask);
+        wrap.providers = [(
+            "fake".to_owned(),
+            WireProvider {
+                name: "fake".to_owned(),
+                retrieve: vec![PROVIDER_SENTINEL.to_owned()],
+                retrieve_batch: None,
+            },
+        )]
+        .into_iter()
+        .collect();
+        wrap.secrets[0].default = Some("local-default-sensitive-sentinel-317".to_owned());
+        let (waiter_tx, _waiter_rx) = mpsc::channel();
+        state.submit_ask(ask, waiter_tx);
+
+        let json = serde_json::to_value(state.snapshot_for_link()).unwrap();
+        let encoded = serde_json::to_string(&json).unwrap();
+        for sentinel in [PROVIDER_SENTINEL, RULE_SENTINEL, REFUSAL_SENTINEL] {
+            assert!(!encoded.contains(sentinel), "leaked {sentinel}: {encoded}");
+        }
+        for forbidden_key in [
+            "viewer_mode",
+            "rules",
+            "refusals",
+            "key",
+            "dedupe_key",
+            "subject_digest",
+            "providers",
+            "default",
+            "ttl",
+            "nested_run",
+            "ignore_remembered",
+        ] {
+            assert!(
+                !json_contains_key(&json, forbidden_key),
+                "link JSON contains forbidden key {forbidden_key}: {encoded}"
+            );
+        }
+
+        let row = &json["queue"][0];
+        assert_json_object_keys(&json, &["link_error", "queue"]);
+        assert_json_object_keys(
+            row,
+            &["ask_hash_hex", "representative", "request_id", "status"],
+        );
+        assert!(row["request_id"].as_str().is_some_and(|id| !id.is_empty()));
+        assert!(row["ask_hash_hex"]
+            .as_str()
+            .is_some_and(|hash| hash.len() == 64));
+        assert_eq!(row["representative"]["command"][0], "deploy");
+        assert_json_object_keys(&row["representative"], &["command", "subject"]);
+        assert_eq!(row["representative"]["subject"]["wrap"], "deploy");
+        assert_json_object_keys(
+            &row["representative"]["subject"],
+            &[
+                "allow_remember",
+                "callers",
+                "callers_truncated",
+                "cwd",
+                "kind",
+                "secrets",
+                "wrap",
+            ],
+        );
+        assert_eq!(
+            row["representative"]["subject"]["secrets"][0]["name"],
+            "TOKEN"
+        );
+        assert_json_object_keys(
+            &row["representative"]["subject"]["secrets"][0],
+            &[
+                "declared_as",
+                "description",
+                "locator",
+                "name",
+                "provider",
+                "reason",
+                "requested_by",
+            ],
+        );
+        assert_eq!(json["link_error"]["message"], SAFE_ERROR);
+        assert_json_object_keys(&json["link_error"], &["message"]);
+    }
+
+    fn json_contains_key(value: &serde_json::Value, needle: &str) -> bool {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.contains_key(needle)
+                    || map.values().any(|value| json_contains_key(value, needle))
+            }
+            serde_json::Value::Array(values) => {
+                values.iter().any(|value| json_contains_key(value, needle))
+            }
+            _ => false,
+        }
+    }
+
+    fn assert_json_object_keys(value: &serde_json::Value, expected: &[&str]) {
+        let mut actual: Vec<&str> = value
+            .as_object()
+            .expect("JSON value must be an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        actual.sort_unstable();
+        let mut expected = expected.to_vec();
+        expected.sort_unstable();
+        assert_eq!(actual, expected);
     }
 
     #[test]
@@ -6701,7 +6840,7 @@ mod tests {
         let resolving = (0..8)
             .find_map(
                 |_| match events_rx.recv_timeout(Duration::from_secs(1)).ok()? {
-                    super::super::proto::DaemonMsg::ConsentUpdate { snapshot }
+                    crate::link::projection::LinkEvent::Snapshot(snapshot)
                         if snapshot
                             .queue
                             .iter()
@@ -6776,7 +6915,7 @@ mod tests {
         let error_snapshot = (0..12)
             .find_map(
                 |_| match events_rx.recv_timeout(Duration::from_secs(1)).ok()? {
-                    super::super::proto::DaemonMsg::ConsentUpdate { snapshot }
+                    crate::link::projection::LinkEvent::Snapshot(snapshot)
                         if snapshot.link_error.is_some() =>
                     {
                         Some(snapshot)

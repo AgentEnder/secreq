@@ -35,7 +35,10 @@
       "executor": "nx:run-commands",
       "options": {
         "parallel": false,
-        "commands": ["cargo fmt -p secreq -- --check", "oxfmt --check packages/secreq"]
+        "commands": [
+          "cargo fmt -p secreq -- --check",
+          "oxfmt --check packages/secreq '!packages/secreq/dist/**'"
+        ]
       },
       "inputs": ["rust"]
     },
@@ -43,7 +46,7 @@
       "executor": "nx:run-commands",
       "options": {
         "parallel": false,
-        "commands": ["cargo fmt -p secreq", "oxfmt packages/secreq"]
+        "commands": ["cargo fmt -p secreq", "oxfmt packages/secreq '!packages/secreq/dist/**'"]
       },
       "cache": false
     },

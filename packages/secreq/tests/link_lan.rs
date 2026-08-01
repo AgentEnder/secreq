@@ -201,6 +201,29 @@ fn listener_serves_healthz_on_an_ephemeral_port() {
 }
 
 #[test]
+fn listener_serves_the_embedded_client_and_fixed_assets() {
+    let dir = tempfile::tempdir().unwrap();
+    let (listener, _pairing) = start_listener(&dir.path().join("devices.json"));
+
+    for (path, content_type, marker) in [
+        ("/", "text/html", "<div id=\"app\"></div>"),
+        ("/pair", "text/html", "<div id=\"app\"></div>"),
+        ("/app.js", "text/javascript", "secreq-link"),
+        ("/app.css", "text/css", ".app-shell"),
+    ] {
+        let request =
+            format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+        let response = send(listener.local_addr(), request.as_bytes());
+        assert!(
+            response.starts_with("HTTP/1.1 200 "),
+            "{path}: {response:?}"
+        );
+        assert!(response.contains(content_type), "{path}: {response:?}");
+        assert!(response.contains(marker), "{path}: missing {marker:?}");
+    }
+}
+
+#[test]
 fn post_pair_enrolls_a_valid_p256_key_and_returns_no_content() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("devices.json");
@@ -314,6 +337,42 @@ fn a_valid_signed_approval_resolves_the_live_ask_and_names_the_device() {
             assert_eq!(deciding_device.as_deref(), Some("Craig's iPhone"));
         }
         other => panic!("expected resolved decision, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_valid_signed_denial_resolves_the_live_ask_and_names_the_device() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("devices.json");
+    let signing_key = SigningKey::random(&mut rand::thread_rng());
+    secreq::link::devices::save(&path, &[device(&signing_key, "Kitchen iPad")]).unwrap();
+    let (state, rx, request_id, ask_hash) = queued_state();
+    let (listener, _pairing) = start_synced_listener(&path, state);
+    let payload = signed_decision(
+        &signing_key,
+        &request_id,
+        &ask_hash,
+        "deny",
+        "fresh-denial-nonce",
+    );
+
+    let response = post_decision(listener.local_addr(), &payload);
+    assert!(response.starts_with("HTTP/1.1 204 "), "{response:?}");
+    match rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("denied reply")
+    {
+        secreq::daemon::state::WaiterReply::Decision {
+            decision,
+            secrets,
+            deciding_device,
+            ..
+        } => {
+            assert!(!decision.approved());
+            assert!(secrets.is_empty());
+            assert_eq!(deciding_device.as_deref(), Some("Kitchen iPad"));
+        }
+        other => panic!("expected denied decision, got {other:?}"),
     }
 }
 
@@ -432,6 +491,27 @@ fn events_streams_a_snapshot_and_drops_the_subscriber_after_disconnect() {
     assert!(response.starts_with("HTTP/1.1 200 "), "{response:?}");
     assert!(response.contains("text/event-stream"), "{response:?}");
     assert!(response.contains(&request_id), "{response:?}");
+    assert!(response.contains("DEPLOY_TOKEN"), "{response:?}");
+    assert!(response.contains("publish the release"), "{response:?}");
+    assert!(
+        !response.contains("echo resolved-{locator}"),
+        "{response:?}"
+    );
+    for local_only_key in [
+        "providers",
+        "viewer_mode",
+        "rules",
+        "refusals",
+        "dedupe_key",
+        "subject_digest",
+        "start_time",
+        "default",
+        "ttl",
+        "nested_run",
+        "ignore_remembered",
+    ] {
+        assert!(!response.contains(local_only_key), "{response:?}");
+    }
     assert!(!response.contains("resolving_since"), "{response:?}");
     assert_eq!(state.lock().unwrap().link_subscriber_count(), 1);
 

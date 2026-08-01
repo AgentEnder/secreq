@@ -8,7 +8,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use tiny_http::{Method, Request, Response, Server, StatusCode};
+use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 use super::nonce::NonceStore;
 use super::pair::{PairError, PairRequest, Pairing};
@@ -148,6 +148,7 @@ fn handle_request(request: Request, runtime: &Runtime) -> std::io::Result<()> {
         RouteDecision::Pair => handle_pair(request, &runtime.pairing),
         RouteDecision::Events => handle_events(request, Arc::clone(&runtime.state)),
         RouteDecision::Decision => handle_decision(request, runtime, &runtime.state),
+        RouteDecision::Asset(asset) => serve_asset(request, asset),
         RouteDecision::NotFound => request.respond(Response::empty(StatusCode(404))),
     }
 }
@@ -159,6 +160,7 @@ enum RouteDecision {
     Pair,
     Events,
     Decision,
+    Asset(super::assets::Asset),
     NotFound,
 }
 
@@ -178,7 +180,24 @@ fn route_decision(request: &Request) -> RouteDecision {
     if request.method() == &Method::Post && request.url() == "/decision" {
         return RouteDecision::Decision;
     }
+    if request.method() == &Method::Get {
+        if let Some(asset) = super::assets::get(request.url()) {
+            return RouteDecision::Asset(asset);
+        }
+    }
     RouteDecision::NotFound
+}
+
+fn serve_asset(request: Request, asset: super::assets::Asset) -> std::io::Result<()> {
+    let content_type = Header::from_bytes("Content-Type", asset.content_type)
+        .expect("static content type is a valid HTTP header");
+    let no_store = Header::from_bytes("Cache-Control", "no-store")
+        .expect("static cache policy is a valid HTTP header");
+    request.respond(
+        Response::from_string(asset.body)
+            .with_header(content_type)
+            .with_header(no_store),
+    )
 }
 
 fn handle_events(
@@ -213,16 +232,15 @@ fn handle_events(
 
     loop {
         match rx.recv_timeout(SSE_HEARTBEAT_INTERVAL) {
-            Ok(crate::daemon::proto::DaemonMsg::ConsentUpdate { snapshot }) => {
+            Ok(super::projection::LinkEvent::Snapshot(snapshot)) => {
                 write_sse_snapshot(&mut writer, &snapshot)?;
             }
-            Ok(crate::daemon::proto::DaemonMsg::ConsentExitPlease)
+            Ok(super::projection::LinkEvent::ExitPlease)
             | Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 writer.write_all(b": keep-alive\n\n")?;
                 writer.flush()?;
             }
-            Ok(_) => {}
         }
     }
 }
@@ -242,7 +260,7 @@ impl Drop for LinkSubscription {
 
 fn write_sse_snapshot(
     writer: &mut dyn Write,
-    snapshot: &crate::daemon::proto::WireSnapshot,
+    snapshot: &super::projection::LinkSnapshot,
 ) -> std::io::Result<()> {
     let json = serde_json::to_string(snapshot).map_err(std::io::Error::other)?;
     writeln!(writer, "data: {json}\n")?;

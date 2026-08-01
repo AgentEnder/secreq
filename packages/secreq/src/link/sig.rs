@@ -13,9 +13,9 @@ const INVALID_SIGNATURE: &str = "invalid decision signature";
 
 /// A linked device's signed response to one pending ask.
 ///
-/// The signature is WebCrypto's 64-byte IEEE P1363 (`r || s`) ECDSA output,
-/// encoded as standard padded Base64. `Device::public_key_b64` likewise holds
-/// the standard Base64 encoding of an uncompressed SEC1 P-256 public point.
+/// The signature is a 64-byte compact (`r || s`) ECDSA output, encoded as
+/// standard padded Base64. `Device::public_key_b64` likewise holds the
+/// standard Base64 encoding of a SEC1 P-256 public point.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignedDecision {
     pub request_id: String,

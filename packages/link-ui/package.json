@@ -1,0 +1,35 @@
+{
+  "name": "@secreq/link-ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "lint": "oxlint src",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@noble/curves": "2.2.0",
+    "@noble/hashes": "2.2.0"
+  },
+  "devDependencies": {
+    "jsdom": "^30.0.1",
+    "typescript": "6.0.3",
+    "vite": "^7.3.1",
+    "vitest": "^4.1.10"
+  },
+  "nx": {
+    "targets": {
+      "build": {
+        "outputs": [
+          "{workspaceRoot}/packages/secreq/dist/link-ui"
+        ]
+      }
+    }
+  }
+}

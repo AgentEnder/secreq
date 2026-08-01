@@ -1,0 +1,72 @@
+{
+  "contract": "secreq-link-ask-v1",
+  "cases": [
+    {
+      "name": "wrap-with-unicode-and-provenance",
+      "ask": {
+        "command": ["deploy", "--production", "λ"],
+        "subject": {
+          "kind": "wrap",
+          "wrap": "deploy",
+          "cwd": "/srv/café",
+          "callers": [
+            { "pid": 42, "name": "zsh", "command": "zsh -l", "exe": "/bin/zsh" }
+          ],
+          "callers_truncated": true,
+          "allow_remember": true,
+          "secrets": [
+            {
+              "name": "DEPLOY_TOKEN",
+              "provider": "op",
+              "locator": "Production/Deploy/token",
+              "description": "release credential",
+              "reason": "publish the release",
+              "requested_by": ["deploy --production", "release job"],
+              "declared_as": "deploy-token"
+            }
+          ]
+        }
+      },
+      "sha256": "f347a59b01633f4ac3f59b887e22b1c65834ad4597cbff5ccd854b7e0cb01684"
+    },
+    {
+      "name": "ssh-sign-with-forwarded-anchor",
+      "ask": {
+        "command": ["ssh-sign", "work"],
+        "subject": {
+          "kind": "ssh_sign",
+          "wrap": "ssh:work",
+          "cwd": "/Users/craig/repo",
+          "callers": [{ "pid": 77, "name": "git", "command": "git push", "exe": null }],
+          "callers_truncated": false,
+          "info": {
+            "key_id": "work",
+            "fingerprint": "SHA256:fixture",
+            "reason": null,
+            "anchor": {
+              "name": "ssh",
+              "pid": 76,
+              "kind": "forwarded_ssh",
+              "command": "ssh -A host"
+            }
+          }
+        }
+      },
+      "sha256": "9bb1964dc9ae52f1b8d5037c36dd22828d77a838d9b6fcc5d6d12811c17df563"
+    },
+    {
+      "name": "scoped-agent-with-declarant",
+      "ask": {
+        "command": ["agent-resolve", "secret://op/vault/item"],
+        "subject": {
+          "kind": "scoped_agent",
+          "scope": "build",
+          "reference": "secret://op/vault/item",
+          "guest_chain": "node → pnpm → postinstall",
+          "declared_by": { "pid": 99, "name": "secreq", "exe": null }
+        }
+      },
+      "sha256": "4c8379a72a2e26ad748296ad59c047a5fa7c14ab0ed378232bdc1323f4e473ee"
+    }
+  ]
+}
