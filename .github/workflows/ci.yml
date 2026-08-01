@@ -85,6 +85,15 @@ jobs:
       - uses: pnpm/action-setup@v4
       - run: pnpm install --frozen-lockfile
 
+      # Vite's fixed-name output is byte-deterministic for identical sources
+      # (verified before adopting this check). The second directory is the
+      # crate-local mirror Cargo needs because it cannot package the sibling
+      # link-ui workspace; both copies must move together.
+      - name: Check committed link client bundle is fresh
+        run: |
+          pnpm --filter @secreq/link-ui run build
+          git diff --exit-code packages/link-ui/dist packages/secreq/dist/link-ui
+
       # Derives NX_BASE / NX_HEAD, which `nx affected` reads with no flags.
       - uses: nrwl/nx-set-shas@v4
 

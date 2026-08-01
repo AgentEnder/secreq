@@ -10,10 +10,10 @@
 # `packages/secreq/tests/fixtures/wasm_rules/rebuild.sh` installs through pnpm:
 # an `npm install` in there would fight for the same directory.
 #
-# `packages/*` does not match `packages/secreq-rule/examples/*`, and that is
-# deliberate. The worked example resolves the SDK through
-# `"secreq-rule": "file:../.."` because being an ordinary external consumer is
-# the whole thing it demonstrates.
+# Workspace members are explicit rather than a `packages/*` glob. In
+# particular, the worked examples under `packages/secreq-rule/examples/` are
+# ordinary external consumers and must not be swept into pnpm.
 packages:
   - docs-site
-  - packages/*
+  - packages/secreq-rule
+  - packages/link-ui
