@@ -74,15 +74,14 @@ function renderPairing(root: HTMLElement, token: string): void {
 }
 
 async function pair(token: string, nickname: string): Promise<StoredCredential> {
-  const keyPair = await generateCredential();
-  const publicKey = await crypto.subtle.exportKey('raw', keyPair.publicKey);
+  const keyPair = generateCredential();
   const response = await fetch('/pair', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       token,
       nickname,
-      public_key_b64: bytesToBase64(new Uint8Array(publicKey)),
+      public_key_b64: bytesToBase64(keyPair.publicKey),
     }),
   });
   if (!response.ok) {
@@ -243,7 +242,7 @@ function renderRow(row: WireQueueRow, credential: StoredCredential): HTMLElement
 
 async function submitDecision(
   row: WireQueueRow,
-  privateKey: CryptoKey,
+  privateKey: Uint8Array,
   decision: Decision,
 ): Promise<void> {
   const payload = await signDecision(privateKey, {

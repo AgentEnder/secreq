@@ -1,4 +1,11 @@
+import { p256 } from '@noble/curves/nist.js';
+
 export type Decision = 'approve' | 'deny';
+
+export interface SoftwareCredential {
+  privateKey: Uint8Array<ArrayBuffer>;
+  publicKey: Uint8Array<ArrayBuffer>;
+}
 
 export interface DecisionFields {
   request_id: string;
@@ -11,15 +18,16 @@ export interface SignedDecision extends DecisionFields {
   signature_b64: string;
 }
 
-export async function generateCredential(): Promise<CryptoKeyPair> {
-  return crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, [
-    'sign',
-    'verify',
-  ]);
+export function generateCredential(): SoftwareCredential {
+  const privateKey = p256.utils.randomSecretKey();
+  return {
+    privateKey,
+    publicKey: p256.getPublicKey(privateKey, false),
+  };
 }
 
 export async function signDecision(
-  privateKey: CryptoKey,
+  privateKey: Uint8Array,
   fields: DecisionFields,
 ): Promise<SignedDecision> {
   const payload: SignedDecision = {
@@ -27,12 +35,10 @@ export async function signDecision(
     nonce: randomHex(32),
     signature_b64: '',
   };
-  const signature = await crypto.subtle.sign(
-    { name: 'ECDSA', hash: 'SHA-256' },
-    privateKey,
-    signedBytes(payload),
-  );
-  payload.signature_b64 = bytesToBase64(new Uint8Array(signature));
+  // Noble hashes the canonical bytes with SHA-256 and returns the 64-byte
+  // compact r || s form expected by Rust's p256 verifier. This is deliberately
+  // software-managed: Web Crypto is unavailable on the plain-HTTP LAN origin.
+  payload.signature_b64 = bytesToBase64(p256.sign(signedBytes(payload), privateKey));
   return payload;
 }
 

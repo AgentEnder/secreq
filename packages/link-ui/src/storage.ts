@@ -1,5 +1,5 @@
 export interface StoredCredential {
-  privateKey: CryptoKey;
+  privateKey: Uint8Array<ArrayBuffer>;
   nickname: string;
 }
 

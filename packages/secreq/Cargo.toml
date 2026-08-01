@@ -77,9 +77,9 @@ glob = "0.3"
 # the `ecdsa` feature only pulls the `sec1` encoding, while the actual
 # curve Signer impl is gated behind `p256`.
 ssh-key = { version = "0.6", features = ["ed25519", "rsa", "ecdsa", "p256"] }
-# ECDSA P-256 verification for `secreq link` decision signatures. WebCrypto
-# implements P-256 on every browser we care about, while its Ed25519 support is
-# newer and less even — so the curve is chosen by the client, not by taste.
+# ECDSA P-256 verification for `secreq link` decision signatures. The
+# plain-HTTP client signs with the matching software P-256 implementation in
+# `@noble/curves`; Web Crypto is unavailable on that LAN origin.
 #
 # Already in the tree via `ssh-key`'s `p256` feature, so the direct dependency
 # costs nothing extra to build.
