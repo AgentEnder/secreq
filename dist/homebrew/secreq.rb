@@ -7,27 +7,27 @@
 class Secreq < Formula
   desc "Per-binary CLI wrapper that injects credentials from your secret store"
   homepage "https://craigory.dev/secreq"
-  version "0.1.0"
+  version "0.2.0"
   license "MIT"
 
   on_macos do
     on_arm do
-      url "https://github.com/AgentEnder/secreq/releases/download/v0.1.0/secreq-0.1.0-aarch64-apple-darwin.tar.gz"
+      url "https://github.com/AgentEnder/secreq/releases/download/v0.2.0/secreq-0.2.0-aarch64-apple-darwin.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
     on_intel do
-      url "https://github.com/AgentEnder/secreq/releases/download/v0.1.0/secreq-0.1.0-x86_64-apple-darwin.tar.gz"
+      url "https://github.com/AgentEnder/secreq/releases/download/v0.2.0/secreq-0.2.0-x86_64-apple-darwin.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/AgentEnder/secreq/releases/download/v0.1.0/secreq-0.1.0-aarch64-unknown-linux-gnu.tar.gz"
+      url "https://github.com/AgentEnder/secreq/releases/download/v0.2.0/secreq-0.2.0-aarch64-unknown-linux-gnu.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
     on_intel do
-      url "https://github.com/AgentEnder/secreq/releases/download/v0.1.0/secreq-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
+      url "https://github.com/AgentEnder/secreq/releases/download/v0.2.0/secreq-0.2.0-x86_64-unknown-linux-gnu.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
   end
