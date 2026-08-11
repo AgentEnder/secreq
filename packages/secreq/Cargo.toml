@@ -100,7 +100,7 @@ rsa = { version = "0.9", features = ["sha2"] }
 # generally cannot parse both the current and the snapshot format (that is
 # the premise of a downgrade), so a parsed diff is impossible in the case
 # that actually needs the warning.
-similar = "2"
+similar = "3"
 
 # `.env` parsing for `secreq run --env-file` (quoting, escapes, `export`,
 # `${VAR}` substitution). We use its non-mutating `from_path_iter`, never
