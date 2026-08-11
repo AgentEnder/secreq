@@ -52,16 +52,27 @@ function pages() {
 /** Strip fenced code so prose checks don't fire on sample output. */
 const prose = (text) => text.replace(/```[\s\S]*?```/g, '');
 
-/** `id`s referenced by ::shot / ::term / ::flow, per kind. */
+/**
+ * `id`s referenced by ::shot / ::term / ::flow, per fixture kind.
+ *
+ * `::flow` has two spellings backed by two different fixture trees:
+ * `::flow{term=…}` stages a cli-transcript beside a window, while
+ * `::flow{screen=…}` plays a browser recording from
+ * `dev-docs/link-ui-recordings/`. Matching only `term=` made every screen
+ * recording invisible to this script — neither counted as shown nor checked
+ * for existence.
+ */
 function directiveRefs(texts) {
   const shot = new Set();
   const term = new Set();
+  const screen = new Set();
   for (const t of texts) {
-    for (const m of t.matchAll(/::(shot|term|flow)\{(?:id|term)=([\w-]+)/g)) {
-      (m[1] === 'shot' ? shot : term).add(m[2]);
+    for (const m of t.matchAll(/::(shot|term|flow)\{(id|term|screen)=([\w-]+)/g)) {
+      const bucket = m[2] === 'screen' ? screen : m[1] === 'shot' ? shot : term;
+      bucket.add(m[3]);
     }
   }
-  return { shot, term };
+  return { shot, term, screen };
 }
 
 const findings = {};
@@ -97,6 +108,32 @@ if (existsSync(termDir)) {
     [...refs.term].filter((id) => !recordings.includes(id)).sort(),
   );
 }
+
+const screenDir = join(ROOT, 'dev-docs/link-ui-recordings');
+if (existsSync(screenDir)) {
+  const flows = readdirSync(screenDir).filter((d) =>
+    existsSync(join(screenDir, d, 'recording.json')),
+  );
+  add('Browser recordings no page references', flows.filter((f) => !refs.screen.has(f)).sort());
+  add(
+    '::flow{screen=…} ids with no recording (build-breaking)',
+    [...refs.screen].filter((id) => !flows.includes(id)).sort(),
+  );
+}
+
+// ── A fence repeating what a recording already types ──────────────────────
+// `::term` renders with `prompt: true` (docs-site/server/utils/markdown.ts),
+// so the player draws the command as a typed shell line before the output.
+// A fenced block above the directive therefore prints that command twice.
+// Three of these shipped because the code blocks predate the prompt line.
+const echoedCommands = [];
+for (const [i, text] of texts.entries()) {
+  for (const m of text.matchAll(/```[\w]*\n([\s\S]*?)```\s*\n\s*\n?::(term|flow)\{/g)) {
+    const first = m[1].trim().split('\n')[0];
+    echoedCommands.push(`${rel(allPages[i])}: \`${first}\` above a ::${m[2]}`);
+  }
+}
+add('Code fence directly above a ::term/::flow (the recording types it)', echoedCommands);
 
 // ── Commands prose claims exist ───────────────────────────────────────────
 // `docs/cli-reference.md` is generated from clap, so it is the list of verbs
@@ -337,14 +374,32 @@ for (const [i, text] of texts.entries()) {
 }
 add('Bulleted paragraphs (cut the bullet down, do not unbullet it)', bulky);
 
-// ── Size ──────────────────────────────────────────────────────────────────
+// ── Volume ────────────────────────────────────────────────────────────────
+// Prose words, not lines — lines move when a paragraph becomes bullets, which
+// is exactly the reformatting that reads as editing and isn't. Measure a page
+// here before and after a cleanup: under ~10% and you rearranged it.
+//
+// The threshold is a reading budget, not a rule. A reader arrives at a guide
+// with a question; 1200 words is already several minutes before they can act.
+// Pages that blew past it did so by narrating a figure or by carrying a
+// section that belonged on another page.
+//
+// Only guides carry the budget. `cli-reference.md` is generated, and a
+// `dev-docs` README is a fixture catalogue whose length is one row per
+// fixture — flagging either trains you to ignore the column.
+const BUDGET = 1200;
+const budgeted = (p) => p.startsWith('docs/') && !p.endsWith('cli-reference.md');
+const volume = allPages
+  .map((p, i) => [rel(p), prose(texts[i]).split(/\s+/).filter(Boolean).length])
+  .sort((a, b) => b[1] - a[1]);
 add(
-  'Longest pages',
-  allPages
-    .map((p, i) => [rel(p), texts[i].split('\n').length])
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 6)
-    .map(([p, n]) => `${String(n).padStart(4)}  ${p}`),
+  `Prose words per page (a guide over ${BUDGET} needs a reason)`,
+  volume
+    .slice(0, 8)
+    .map(
+      ([p, n]) =>
+        `${String(n).padStart(5)}  ${p}${n > BUDGET && budgeted(p) ? '  ← over budget' : ''}`,
+    ),
 );
 
 // ── Report ────────────────────────────────────────────────────────────────

@@ -6,15 +6,16 @@ Never settle a factual question by comparing two pages. Go to the file that
 owns the answer. Each row below is a real defect that reached `docs/` and
 survived review.
 
-| Claim about…                        | Settled by                                              | Defect it produced                                                                          |
-| ----------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Where a file lives                  | `packages/secreq/src/paths.rs`                          | Two pages put `audit.log` under `$XDG_STATE_HOME`; it is `~/.secreq/audit.log`.             |
-| A command or flag existing          | `docs/cli-reference.md` (generated) or `src/cli.rs`     | `secreq import` / `secreq store` documented years after the verbs were removed.             |
-| A capability being unused           | Who calls it in `src/`                                  | `providers.md` called `store` "not exposed via the CLI"; `run --prompt-unresolved` uses it. |
-| Prebuilt binaries, release, signing | `.github/workflows/release.yml`                         | `platform-support.md` said none existed while `install.md` documented four.                 |
-| Who writes an audit row             | `commands.rs`, `daemon/ssh_agent.rs`, `daemon/state.rs` | —                                                                                           |
-| What a window actually shows        | The fixture PNG in `dev-docs/ui-screenshots/<id>/`      | Prose drifts from the UI; the render cannot.                                                |
-| Architecture, rationale, history    | **brain**, `areas/secreq/**` — not this repo            | —                                                                                           |
+| Claim about…                          | Settled by                                                  | Defect it produced                                                                                                                                 |
+| ------------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Where a file lives                    | `packages/secreq/src/paths.rs`                              | Two pages put `audit.log` under `$XDG_STATE_HOME`; it is `~/.secreq/audit.log`.                                                                    |
+| A command or flag existing            | `docs/cli-reference.md` (generated) or `src/cli.rs`         | `secreq import` / `secreq store` documented years after the verbs were removed.                                                                    |
+| A capability being unused             | Who calls it in `src/`                                      | `providers.md` called `store` "not exposed via the CLI"; `run --prompt-unresolved` uses it.                                                        |
+| Prebuilt binaries, release, signing   | `.github/workflows/release.yml`                             | `platform-support.md` said none existed while `install.md` documented four.                                                                        |
+| Who writes an audit row               | `commands.rs`, `daemon/ssh_agent.rs`, `daemon/state.rs`     | —                                                                                                                                                  |
+| What a window actually shows          | The fixture PNG in `dev-docs/ui-screenshots/<id>/`          | Prose drifts from the UI; the render cannot.                                                                                                       |
+| A platform or feature being ruled out | `#[cfg]` arms in `src/`, and brain for whether it is wanted | `platform-support.md` said Windows "depends on facilities Windows does not have". Each one has a counterpart; it is unimplemented, not impossible. |
+| Architecture, rationale, history      | **brain**, `areas/secreq/**` — not this repo                | —                                                                                                                                                  |
 
 Design docs live in brain. `brain read secreq`, `brain search "<topic>"`. If a
 docs change alters something a brain doc describes, update it there; there is
@@ -40,6 +41,12 @@ are not (why the audit script exists).
 **Nothing guards prose accuracy, cross-page redundancy, or fixture coverage.**
 That gap is this skill.
 
+**A clean Vale run is not evidence a page is right.** Vale matches tokens it
+was given. `Terminology.yml` swaps `rules tab`, `audit tab` and `pending tab`,
+so `CONTRIBUTING.md` kept describing "a tab" through a clean lint, naming a UI
+the reader cannot find. When a rename lands, grep for the bare noun as well as
+the phrase the rule knows.
+
 ## Regenerating
 
 ```sh
@@ -64,6 +71,31 @@ The layout guard already proves the others are unaffected; if it passes, they
 are. Re-wording a caption needs no GPU at all — `SECREQ_BLESS_SHOTS=layout`
 rewrites `layout.json`, which is what the site reads.
 
+## The figure directives
+
+Three fixture trees, three directives, and a page never embeds an image by
+hand. An `<img>` or an inline PNG in a guide is a defect: it is a picture of
+something the site can rebuild.
+
+| Directive          | Fixture tree                    | What the reader gets                                          |
+| ------------------ | ------------------------------- | ------------------------------------------------------------- |
+| `::shot{id=…}`     | `dev-docs/ui-screenshots/<id>/` | The window rebuilt as DOM, wrapping the PNG as its no-JS form |
+| `::term{id=…}`     | `dev-docs/cli-transcripts/`     | The recording replayed, command typed first (`prompt: true`)  |
+| `::flow{term=…}`   | `dev-docs/cli-transcripts/`     | A transcript staged beside the window it blocks on            |
+| `::flow{screen=…}` | `dev-docs/link-ui-recordings/`  | A captured browser recording, played as `webm`                |
+
+`docs-site/server/utils/markdown.ts` is the router; `shot-markup.ts`,
+`term-markup.ts`, `window-markup.ts`, `flow-markup.ts` and
+`screen-flow-markup.ts` are the renderers. `::shot` reaches the reconstruction
+through `windowHtml`, which wraps the figure `shotHtml` emits, so there is no
+second rendering path to drift.
+
+**Read a renderer's options before extending it.** A synthetic
+prompt-and-type prologue was added to the Rust transcript harness, the
+fixtures were regenerated, and then all of it was reverted:
+`TermMarkupOptions.prompt` already existed and `::flow` was already passing
+it. Reading the directive dispatch is not reading the renderer.
+
 ## Adding a fixture rather than describing one
 
 When a page needs a picture that does not exist yet:
@@ -75,9 +107,14 @@ When a page needs a picture that does not exist yet:
 - **Transcript** — add to `tests/cli_transcripts.rs` and **read the generated
   `.txt`**. That file exists to catch a leaked tempdir path or a spurious
   warning before it ships.
-- **`::flow`** — the expensive one. It needs `gui` markers recorded in the
-  transcript _and_ an entry in `docs-site/flow-defs.ts` naming which control
-  the reader pressed. Only recordings that block on consent can carry it.
+- **`::flow{term=…}`** — the expensive one. It needs `gui` markers recorded in
+  the transcript _and_ an entry in `docs-site/flow-defs.ts` naming which
+  control the reader pressed. Only recordings that block on consent can carry
+  it.
+- **`::flow{screen=…}`** — a browser recording, for a flow that is already a
+  web UI. Regenerate with `pnpm --filter @secreq/link-ui record:flows`.
+  Reconstructing the Link UI as a miniature app in the docs would be a second
+  implementation to keep in step; the harness records the production bundle.
 
 A caption is published documentation, written for someone using secreq. The
 README table is the contributor-facing description of the same image.
@@ -88,8 +125,10 @@ README table is the contributor-facing description of the same image.
   never holds values; `--sq-yes` skips consent) may be worth restating where a
   reader will act on it. Duplicated _explanation_ is the problem; a duplicated
   one-line warning usually is not.
-- **A long page is not automatically a bloated one.** `cli-reference.md` is the
-  longest file in the tree and every line is generated.
+- **A long page is not automatically a bloated one**, but a long _guide_ needs
+  a reason. `cli-reference.md` is the longest file in the tree and every line
+  is generated; a `dev-docs` README is one row per fixture. The script exempts
+  both from the word budget and holds `docs/*.md` to it.
 - **Prefer deleting to rewriting.** If a paragraph exists on the canonical page
   already, the edit is a link, not a paraphrase.
 - **Don't invent scope.** A docs audit that starts renaming commands has

@@ -1,18 +1,27 @@
 ---
 name: docs-audit
-description: Audit and clean up secreq's published prose — docs/*.md, README, CONTRIBUTING, the SDK README, and the dev-docs harness READMEs. Finds redundancy across pages, claims that contradict the source, and committed screenshot/transcript fixtures no page shows. Use when asked to review, trim, tidy, de-duplicate or fact-check the docs, when adding a page, or when a CLI/UI change needs the docs caught up.
+description: Audit and clean up secreq's published prose — docs/*.md, README, CONTRIBUTING, the SDK README, and the dev-docs harness READMEs. Finds pages longer than anyone will read, redundancy across pages, claims that contradict the source, and committed screenshot, transcript or browser-recording fixtures no page shows. Use when asked to review, trim, shorten, tidy, de-duplicate, de-slop or fact-check the docs, when prose reads as AI-written, when adding a page, or when a CLI/UI change needs the docs caught up.
 ---
 
 # Auditing secreq's docs
 
-Three failure modes recur here, in descending order of how much they cost a
+Five failure modes recur here, in descending order of how much they cost a
 reader:
 
 1. **A claim that is wrong.** Prose asserting a path, a platform, or a verb
-   that the source contradicts. Always the first thing to hunt.
+   that the source contradicts. Always the first thing to hunt. Overstating a
+   limitation counts: "Windows depends on facilities it does not have" was
+   false, since every facility has a counterpart. "Not yet" and "impossible"
+   are different claims.
 2. **A picture described in words.** A rendered, captioned, committed fixture
    exists and the page paraphrases it instead.
-3. **One topic explained on five pages.** Each copy then rots independently.
+3. **A page longer than anyone will read.** The most common complaint about
+   this tree, and the hardest to fix, because rearranging it feels like fixing
+   it. See "Cutting" below.
+4. **Content whose audience is elsewhere.** Contributor material on a user
+   page. Nobody who installed with `curl | sh` will run `cargo run`; that
+   paragraph belongs in `CONTRIBUTING.md`, and porting notes belong in brain.
+5. **One topic explained on five pages.** Each copy then rots independently.
 
 ## Quick start
 
@@ -41,10 +50,39 @@ claim.
 4. **Wire up unused fixtures.** For each one the script lists, find the page
    describing that state and put the fixture there. If nothing describes it,
    that is a documentation gap, not a spare image.
-5. **Cut, then check voice.** See "Voice" below, and run `npx nx run docs:vale`.
+5. **Cut, then check voice.** See "Cutting" and "Voice" below, and run
+   `npx nx run docs:vale`.
 6. **Verify.** `cargo test` (the guards in `REFERENCE.md`), then
    `npx nx build docs-site`, then
    `npx nx run docs-site:typecheck-docs`.
+
+## Cutting
+
+Reformatting reads as editing and is not. Unbulleting a list, splitting a
+sentence, swapping a dash for a comma: the page holds the same material
+afterwards. A pass that moved 72, 8 and 20 words across three pages was
+reported as a cleanup, and the reader would have noticed nothing.
+
+**Measure.** `npx nx run docs:audit` prints prose words per page. Record the
+number before and after. Under about 10% and you rearranged the page; the
+cuts that worked ran 22–32%.
+
+Volume lives in four places, and none of them is punctuation:
+
+- **A section narrating the figure beneath it.** The `::shot` or `::term` is
+  already showing the reader. Keep only what the picture cannot state.
+- **The same fact in two sections.** `ssh-agent.md` said "first sign prompts"
+  and "listing is free" under both "What it does" and "Behavior".
+- **Onboarding for a command the recording demonstrates.** 831 words of
+  launchd and op-discovery mechanics sat above a `::term` that ran the thing.
+- **A section written for a different audience.** Move it rather than delete
+  it, and see the warning about splitting a move below.
+
+**A move is one commit.** Cutting a paragraph from one page and adding it to
+another is two edits that must land together. Half of one landed once, and a
+warning that a dev build can corrupt `~/.secreq` existed nowhere in the repo
+until it was noticed. The same applies to a change spanning the Rust harness
+and the docs-site player.
 
 ## Never hand-write what a generator owns
 
@@ -53,6 +91,9 @@ claim.
 - `docs/wraps.schema.json`, `docs/auto-rules.schema.json` ← the Rust types.
 - A `::shot` / `::term` caption ← the fixture's own `layout.json` / recording
   JSON. Never restate a caption in the page body.
+- The command a `::term` ran ← the recording. `::term` renders with
+  `prompt: true`, so the player types the command as a shell line before the
+  output. A fenced block above the directive prints it twice.
 
 **The fix for a defect in generated prose is upstream.** A clumsy sentence in
 `cli-reference.md` is a doc comment in `packages/secreq/src/cli.rs`; editing
@@ -95,8 +136,7 @@ Full marker list, the sampled comparison, and worked rewrites:
 
 Contributor-facing notes (what a fixture exercises, why a guard exists) belong
 in `dev-docs/*/README.md`. The published caption and the guide belong to
-someone _using_ secreq. The two intentionally read differently — do not
-harmonise them.
+someone _using_ secreq. The two read differently; do not harmonise them.
 
 See [REFERENCE.md](REFERENCE.md) for the verification map, the existing
 guards, and the fixture traps.

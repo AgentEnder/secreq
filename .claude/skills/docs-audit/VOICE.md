@@ -70,10 +70,10 @@ list should bold the error. The problem is that each item has grown into a
 paragraph, so the section is delivering prose while presenting as a summary.
 
 **Do not fix this by deleting the hyphens.** Converting the bullets to
-paragraphs moves the same words around and changes nothing; measure the
-word count before and after and you will see it. These sections are long
-because they say too much. Find the fact each item exists to state, keep
-that, and drop the rest. Two useful questions:
+paragraphs moves the same words around and changes nothing. These sections are
+long because they say too much. Find the fact each item exists to state, keep
+that, and drop the rest — see "Cutting" in [SKILL.md](SKILL.md) for measuring
+whether you did. Two useful questions:
 
 - **Is it describing the screenshot below it?** The `::shot` is already
   showing the reader that. Cut the paraphrase, keep the fact the picture
@@ -85,6 +85,13 @@ that, and drop the rest. Two useful questions:
 **The safe conclusion.** A closing paragraph that summarises what was just
 said and commits to nothing. Real docs end at the last useful sentence, or on
 a link. Delete the recap.
+
+**Dramatised limits.** A model reaches for the strongest available word when
+it writes about something a tool cannot do, and lands on a claim nobody meant.
+"Windows depends on facilities it does not have" was written here; the
+facilities exist under other names, and the true statement was "not yet". Say
+what is missing and whether anyone intends to build it. This is a voice
+problem that produces a factual one, so it is worth catching in both passes.
 
 **Emotional flatline.** Uniformly upbeat and formal. Where something is
 genuinely a downgrade, a limitation, or a footgun, say so in the plain words
