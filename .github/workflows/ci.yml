@@ -43,7 +43,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       # `nx affected` diffs against the merge base, so it needs the history.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
