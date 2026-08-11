@@ -259,6 +259,23 @@ pub fn run() -> Result<i32> {
             );
         }
 
+        // Collect the exit status of every window child that has closed.
+        // Nothing else waits on them: the subscriber groups track a
+        // child's *socket* subscription, and pruning that on detach
+        // leaves the OS process entry behind as a zombie. Folded into
+        // this tick for the same reason as the prune above — it is the
+        // daemon tidying up after itself, on a timer it already has.
+        let reaped = guard.reap_exited_window_children();
+        if reaped > 0 {
+            log::log_at(
+                "spawn",
+                format_args!(
+                    "reaped {reaped} exited window child{}",
+                    if reaped == 1 { "" } else { "ren" }
+                ),
+            );
+        }
+
         let ui_attached =
             guard.consent_subscriber_count() > 0 || guard.manager_subscriber_count() > 0;
         if ui_attached {
@@ -348,6 +365,39 @@ pub fn run() -> Result<i32> {
     Ok(0)
 }
 
+/// Spawn one of the daemon's window children (`consent-window`,
+/// `manager-window`, `pending-badge`) and hand the handle to the state's
+/// reaper.
+///
+/// Every window spawn goes through here so that adopting the child is not
+/// something a new call site can forget. A dropped `std::process::Child`
+/// is not reaped — it is a zombie for the rest of the daemon's life — and
+/// all three call sites made exactly that mistake, once each, because
+/// each carried its own copy of the spawn boilerplate.
+///
+/// `args` is the child's argv (minus the program), and doubles as the
+/// spawn's log line so the invocation stays inspectable in `ps`.
+fn spawn_window_child(state: &state::SharedState, what: &str, args: &[&str]) -> Result<()> {
+    let exe = std::env::current_exe().context("locate current executable")?;
+    log::log_at(
+        "spawn",
+        format_args!(
+            "spawning {what} child: {} {}",
+            exe.display(),
+            args.join(" ")
+        ),
+    );
+    let child = std::process::Command::new(&exe)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .with_context(|| format!("spawn {what} child"))?;
+    state.lock().expect("state mutex").adopt_window_child(child);
+    Ok(())
+}
+
 /// Spawn a `secreq consent-window` child process if one isn't already
 /// attached and we aren't already mid-spawn. Called from the socket
 /// handler after any state mutation that the user should see (Ask
@@ -377,33 +427,13 @@ pub fn ensure_consent_window(state: &state::SharedState) -> Result<()> {
     // browsing surface (`secreq view`) is the manager window, which is
     // spawned by `ensure_manager_window` and never on top.
     let always_on_top = true;
-    let exe = std::env::current_exe().context("locate current executable")?;
-    log::log_at(
-        "spawn",
-        format_args!(
-            "spawning consent-window child: {} consent-window{}",
-            exe.display(),
-            if always_on_top {
-                " --always-on-top"
-            } else {
-                ""
-            }
-        ),
-    );
     guard.mark_consent_spawn_in_flight();
     drop(guard);
-    let mut command = std::process::Command::new(exe);
-    command.arg("consent-window");
+    let mut args = vec!["consent-window"];
     if always_on_top {
-        command.arg("--always-on-top");
+        args.push("--always-on-top");
     }
-    command
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .spawn()
-        .context("spawn consent-window child")?;
-    Ok(())
+    spawn_window_child(state, "consent-window", &args)
 }
 
 /// Spawn a `secreq manager-window` child process if one isn't already
@@ -435,33 +465,18 @@ pub fn ensure_manager_window(
     if guard.manager_spawn_in_flight() {
         return Ok(());
     }
-    let exe = std::env::current_exe().context("locate current executable")?;
     let view_arg = focus.map(|f| match f {
         proto::ManagerFocus::Rules => "rules",
         proto::ManagerFocus::Audit => "audit",
     });
-    log::log_at(
-        "spawn",
-        format_args!(
-            "spawning manager-window child: {} manager-window{}",
-            exe.display(),
-            view_arg.map(|v| format!(" --view {v}")).unwrap_or_default(),
-        ),
-    );
     guard.mark_manager_spawn_in_flight();
     drop(guard);
-    let mut command = std::process::Command::new(exe);
-    command.arg("manager-window");
+    let mut args = vec!["manager-window"];
     if let Some(v) = view_arg {
-        command.arg("--view").arg(v);
+        args.push("--view");
+        args.push(v);
     }
-    command
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .spawn()
-        .context("spawn manager-window child")?;
-    Ok(())
+    spawn_window_child(state, "manager-window", &args)
 }
 
 /// Whether the platform honours an always-on-top window. macOS and X11
@@ -507,24 +522,9 @@ pub fn ensure_badge_window(state: &state::SharedState) -> Result<()> {
     if guard.badge_spawn_in_flight() {
         return Ok(());
     }
-    let exe = std::env::current_exe().context("locate current executable")?;
-    log::log_at(
-        "spawn",
-        format_args!(
-            "spawning pending-badge child: {} pending-badge",
-            exe.display()
-        ),
-    );
     guard.mark_badge_spawn_in_flight();
     drop(guard);
-    std::process::Command::new(exe)
-        .arg("pending-badge")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .spawn()
-        .context("spawn pending-badge child")?;
-    Ok(())
+    spawn_window_child(state, "pending-badge", &["pending-badge"])
 }
 
 /// RAII guard for the daemon-singleton lock. Holds the locked pidfile

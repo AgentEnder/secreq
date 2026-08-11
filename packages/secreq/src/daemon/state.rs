@@ -287,6 +287,12 @@ pub struct State {
     // parallel means none of the consent-window focus / restart /
     // auto-hide logic accidentally tears the badge down.
     badge: SubscriberGroup<()>,
+    /// Spawned window children awaiting reaping. Deliberately *not* part
+    /// of the three `SubscriberGroup`s above: those track a child's
+    /// socket subscription, which a child that crashed before attaching
+    /// never had, and which is pruned on detach while the OS process
+    /// entry lives on. See [`ChildReaper`].
+    window_children: ChildReaper,
     /// Linked HTTP SSE subscribers. Separate from desktop windows because an
     /// HTTP client has no child pid, focus state, or spawn lifecycle.
     link: LinkSubscriberGroup,
@@ -399,6 +405,7 @@ impl Default for State {
             consent: SubscriberGroup::new("consent window"),
             manager: SubscriberGroup::new("manager window"),
             badge: SubscriberGroup::new("badge window"),
+            window_children: ChildReaper::default(),
             link: LinkSubscriberGroup::new(),
             link_nonces: Arc::new(crate::link::nonce::NonceStore::default()),
             link_error: None,
@@ -460,6 +467,57 @@ impl SpawnDebounce {
 /// pending" before assuming the spawn failed silently and allowing a
 /// new attempt.
 const CONSENT_SPAWN_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Holds every spawned window child until its exit status is collected.
+///
+/// `std::process::Child` does **not** reap on drop — Rust leaves that to
+/// the caller rather than blocking in a destructor — so a spawn whose
+/// handle is dropped on the floor leaves a zombie in the process table
+/// for the rest of the daemon's life. That life is long: with the SSH
+/// agent enabled the daemon never idle-exits, so nothing ever clears
+/// them. One zombie per consent prompt, badge and manager window ever
+/// opened; an 11-day-old daemon was found holding 437.
+///
+/// Setting `SIGCHLD` to `SIG_IGN` would make the kernel reap them for
+/// free, and is the wrong fix here: the daemon also resolves secrets
+/// through [`crate::provider::retrieve`], which collects the provider's
+/// output with `wait_with_output()`, and that call fails with `ECHILD`
+/// once `SIGCHLD` is ignored. So the handles are kept and swept.
+#[derive(Debug, Default)]
+struct ChildReaper(Vec<std::process::Child>);
+
+impl ChildReaper {
+    /// Take ownership of a freshly-spawned child.
+    fn adopt(&mut self, child: std::process::Child) {
+        self.0.push(child);
+    }
+
+    /// Collect every child that has already exited, and report how many.
+    /// Non-blocking — a child still running is left for a later sweep.
+    ///
+    /// A handle whose `try_wait` *errors* is dropped rather than retried:
+    /// the error means the status is unobtainable (the child was reaped
+    /// elsewhere, or the handle is broken), so keeping it would grow this
+    /// vector without bound — the very leak the type exists to prevent.
+    fn reap(&mut self) -> usize {
+        let before = self.0.len();
+        self.0
+            .retain_mut(|child| matches!(child.try_wait(), Ok(None)));
+        before - self.0.len()
+    }
+
+    /// How many children are still unreaped. Test-facing.
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether every adopted child has been reaped. Test-facing.
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
 
 /// One attached window child, with a stable ID so the streaming
 /// connection handler can detach itself precisely on exit instead of
@@ -983,6 +1041,22 @@ impl State {
             entry.request_id == request_id
                 && crate::link::canonical::canonical_hash(&entry.representative) == ask_hash_hex
         })
+    }
+
+    /// Take ownership of a window child the daemon has just spawned, so
+    /// its exit status is collected instead of leaking a zombie. Called
+    /// by `daemon::spawn_window_child`, which is the only place that
+    /// spawns one.
+    pub fn adopt_window_child(&mut self, child: std::process::Child) {
+        self.window_children.adopt(child);
+    }
+
+    /// Reap every window child that has exited, returning how many. Runs
+    /// on the main-loop tick — folded in there rather than given a thread
+    /// of its own, for the same reason as the cache prune: it is the
+    /// daemon tidying up after itself on a timer it already has.
+    pub fn reap_exited_window_children(&mut self) -> usize {
+        self.window_children.reap()
     }
 
     /// Should the daemon ensure a pending-badge child is running? True
@@ -6939,5 +7013,119 @@ mod tests {
             .link_error
             .as_ref()
             .is_some_and(|error| !error.message.is_empty()));
+    }
+
+    /// The daemon spawns a window child per consent prompt, badge and
+    /// manager window, and outlives all of them — for weeks, once the SSH
+    /// agent holds idle-exit off. Dropping the `Child` handle leaves each
+    /// one a zombie in the process table forever; one daemon was found
+    /// holding 437.
+    mod child_reaper {
+        use super::*;
+        use std::process::Command;
+
+        /// Does this pid still occupy a process-table slot?
+        ///
+        /// Signal 0 probes for existence without delivering anything, and
+        /// a **zombie still answers yes** — which is precisely what lets
+        /// this distinguish "the child exited" (not good enough; that is
+        /// the leak) from "the child was reaped".
+        fn occupies_a_pid_slot(pid: i32) -> bool {
+            unsafe { libc::kill(pid, 0) == 0 }
+        }
+
+        /// Sweep until something is reaped or `deadline` passes. Polling
+        /// rather than sleeping a fixed amount keeps this deterministic
+        /// on a loaded machine instead of racing the child's exit.
+        fn sweep_until_reaped(state: &mut State, deadline: Duration) -> usize {
+            let start = Instant::now();
+            loop {
+                let reaped = state.reap_exited_window_children();
+                if reaped > 0 || start.elapsed() >= deadline {
+                    return reaped;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+
+        fn spawn_probe(script: &str) -> std::process::Child {
+            Command::new("/bin/sh")
+                .arg("-c")
+                .arg(script)
+                .spawn()
+                .expect("spawn probe child")
+        }
+
+        #[test]
+        fn an_exited_window_child_is_reaped_not_left_a_zombie() {
+            let mut state = State::new();
+            let child = spawn_probe("exit 0");
+            let pid = child.id() as i32;
+            state.adopt_window_child(child);
+
+            assert_eq!(
+                sweep_until_reaped(&mut state, Duration::from_secs(5)),
+                1,
+                "the sweep never collected the exited child"
+            );
+            assert_eq!(
+                state.window_children.len(),
+                0,
+                "reaped child was left in the reaper"
+            );
+            assert!(
+                !occupies_a_pid_slot(pid),
+                "pid {pid} still holds a process-table slot — the handle was \
+                 dropped rather than waited on, which is the zombie leak"
+            );
+        }
+
+        #[test]
+        fn a_still_running_window_child_survives_the_sweep() {
+            let mut state = State::new();
+            let child = spawn_probe("sleep 30");
+            let pid = child.id() as i32;
+            state.adopt_window_child(child);
+
+            assert_eq!(
+                state.reap_exited_window_children(),
+                0,
+                "the sweep collected a child that is still running"
+            );
+            assert_eq!(state.window_children.len(), 1);
+
+            // Don't let the test leak the very thing it guards against.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+            assert_eq!(sweep_until_reaped(&mut state, Duration::from_secs(5)), 1);
+            assert!(!occupies_a_pid_slot(pid));
+        }
+
+        #[test]
+        fn the_reaper_drains_rather_than_growing_without_bound() {
+            let mut state = State::new();
+            let pids: Vec<i32> = (0..8)
+                .map(|_| {
+                    let child = spawn_probe("exit 0");
+                    let pid = child.id() as i32;
+                    state.adopt_window_child(child);
+                    pid
+                })
+                .collect();
+
+            let start = Instant::now();
+            while !state.window_children.is_empty() && start.elapsed() < Duration::from_secs(5) {
+                state.reap_exited_window_children();
+                std::thread::sleep(Duration::from_millis(5));
+            }
+
+            assert_eq!(
+                state.window_children.len(),
+                0,
+                "reaper retained handles after every child exited"
+            );
+            for pid in pids {
+                assert!(!occupies_a_pid_slot(pid), "pid {pid} left unreaped");
+            }
+        }
     }
 }
