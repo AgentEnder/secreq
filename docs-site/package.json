@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "typedoc --options typedoc.json && vike dev",
     "extract-docs": "typedoc --options typedoc.json",
+    "generate": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/generate.mts",
     "test": "vitest run",
     "typecheck-docs": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/typecheck-docs.mts",
     "build": "typedoc --options typedoc.json && vike build && pnpm exec pagefind --site dist/client",
@@ -74,8 +75,32 @@
         "command": "oxfmt docs-site",
         "cache": false
       },
+      "generate": {
+        "command": "pnpm --dir docs-site generate",
+        "cache": true,
+        "inputs": [
+          "{projectRoot}/vite.config.ts",
+          "{projectRoot}/scripts/generate.mts",
+          "{workspaceRoot}/dev-docs/**/*",
+          "{workspaceRoot}/docs/wraps.schema.json",
+          "{workspaceRoot}/docs/auto-rules.schema.json",
+          "{workspaceRoot}/dist/install.sh",
+          "{workspaceRoot}/packages/webfonts/dist/**/*"
+        ],
+        "outputs": [
+          "{projectRoot}/.generated",
+          "{projectRoot}/public/schemas",
+          "{projectRoot}/public/ui",
+          "{projectRoot}/public/flows",
+          "{projectRoot}/public/fonts",
+          "{projectRoot}/public/install.sh"
+        ]
+      },
       "test": {
         "command": "pnpm --dir docs-site test",
+        "dependsOn": [
+          "generate"
+        ],
         "inputs": [
           "js",
           "{workspaceRoot}/dev-docs/ui-screenshots/**/layout.json"

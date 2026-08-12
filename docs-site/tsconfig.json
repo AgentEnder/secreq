@@ -12,6 +12,7 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
     "noUncheckedSideEffectImports": false,
     "ignoreDeprecations": "6.0"
   },

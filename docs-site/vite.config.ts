@@ -48,7 +48,7 @@ import { defineConfig, type Plugin } from 'vite';
  *     UI bundle. Their metadata becomes `.generated/recordings.json`, so a
  *     Markdown directive can only name an asset the harness actually emitted.
  */
-function copyRepoAssets(): Plugin {
+export function copyRepoAssets(): Plugin {
   return {
     name: 'secreq-copy-repo-assets',
     buildStart() {
