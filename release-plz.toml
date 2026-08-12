@@ -39,6 +39,28 @@ git_tag_name = "v{{ version }}"
 [changelog]
 protect_breaking_commits = true
 
+# Render a commit's scope as `_(scope)_`, not release-plz's default `*(scope)*`.
+#
+# `CHANGELOG.md` sits at the repo root, so `workspace:format:check` runs oxfmt
+# over it, and oxfmt normalises markdown emphasis to underscores. The default
+# template's asterisks therefore failed that check on **every release PR** —
+# the same shape of bug as the committed Homebrew formula: a generated file
+# held to a check its generator does not satisfy, with a manual reformat as the
+# only remedy and nothing to stop it recurring next release.
+#
+# A postprocessor runs over the fully rendered changelog, so this fixes the
+# output at the source and leaves the formatter covering the file. The
+# alternative was overriding `body` wholesale, which means vendoring a copy of
+# release-plz's default Tera template — whitespace control and all — and
+# tracking its upstream changes, to win an asterisk-versus-underscore argument.
+#
+# Anchored to the list marker so it cannot touch `[**breaking**]` or any other
+# emphasis inside a commit message: oxfmt leaves `**strong**` alone and only
+# rewrites `*emphasis*`.
+postprocessors = [
+  { pattern = '(?m)^- \*\(([^)]+)\)\*', replace = "- _(${1})_" },
+]
+
 # release-plz writes a package's changelog beside its `Cargo.toml`, which for
 # this layout means `packages/secreq/CHANGELOG.md` — a second, empty-history
 # changelog nobody reads, while the real one at the root goes untouched.
