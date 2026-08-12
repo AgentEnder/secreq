@@ -127,7 +127,10 @@ fn dist_tarballs_are_ignored_but_tracked_dist_files_are_not() {
         ignored("dist/secreq-0.1.0-darwin-arm64.tar.gz"),
         "package-release.sh's tarballs must be gitignored so they aren't committed"
     );
-    for tracked in ["dist/install.sh", "dist/homebrew/secreq.rb"] {
+    // The Homebrew formula is deliberately absent: `dist/homebrew/gen-formula.sh`
+    // is its only copy, so a release-plz version bump has no checked-in `.rb` to
+    // leave stale. See the section comment in `tests/dist_channels.rs`.
+    for tracked in ["dist/install.sh", "dist/homebrew/gen-formula.sh"] {
         assert!(
             !ignored(tracked),
             "{tracked} is a tracked distribution file — .gitignore must not swallow it"
