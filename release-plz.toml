@@ -57,9 +57,7 @@ protect_breaking_commits = true
 # Anchored to the list marker so it cannot touch `[**breaking**]` or any other
 # emphasis inside a commit message: oxfmt leaves `**strong**` alone and only
 # rewrites `*emphasis*`.
-postprocessors = [
-  { pattern = '(?m)^- \*\(([^)]+)\)\*', replace = "- _(${1})_" },
-]
+postprocessors = [{ pattern = '(?m)^- \*\(([^)]+)\)\*', replace = "- _(${1})_" }]
 
 # release-plz writes a package's changelog beside its `Cargo.toml`, which for
 # this layout means `packages/secreq/CHANGELOG.md` — a second, empty-history
