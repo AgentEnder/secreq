@@ -124,7 +124,7 @@ wasmtime = { version = "46.0.1", default-features = false, features = [
   "anyhow",
 ] }
 textwrap = "0.16"
-console = "0.15"
+console = "0.16"
 
 # A synchronous, thread-per-connection HTTP/1.1 server for the `secreq link`
 # LAN listener. Sync and thread-based is the point: the daemon is already
