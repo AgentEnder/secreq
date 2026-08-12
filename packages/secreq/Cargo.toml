@@ -59,7 +59,7 @@ portable-pty = "0.8"
 sysinfo = "0.33"
 cliclack = "0.3"
 crossterm = "0.28"
-dirs = "5"
+dirs = "6"
 signal-hook = "0.3"
 libc = "0.2"
 eframe = { version = "0.34", default-features = false, features = [
