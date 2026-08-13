@@ -21,7 +21,6 @@
 //! lifecycle bug in eframe's glow + wgpu backends. A short-lived child
 //! per session is a real foreground app the OS understands.
 
-pub mod badge;
 pub mod cache;
 pub mod child;
 pub mod client;
@@ -319,29 +318,29 @@ pub fn run() -> Result<i32> {
             guard.request_shutdown();
         }
 
-        // Pending-badge lifecycle — independent of the consent window.
-        // The badge floats "N pending" over other apps while asks await
-        // a decision, so a backgrounded or closed consent window can't
-        // be forgotten with processes still hung. It vanishes the moment
-        // the queue drains, and is re-spawned here if it ever crashes
-        // while asks remain. Done as a separate block (not folded into
-        // the consent if/else above) precisely because the badge must
-        // outlive a closed consent window.
-        let ensure_badge = if guard.queue_is_empty() {
-            if guard.badge_subscriber_count() > 0 {
-                log::log_at("badge", format_args!("queue drained; dismissing badge"));
-                guard.broadcast_badge_exit_please();
-            }
-            false
-        } else {
-            guard.needs_badge_window() && !guard.badge_spawn_in_flight()
-        };
+        // Keep a prompt on screen while anything is genuinely awaiting a
+        // decision, rather than only spawning one when the ask arrives.
+        //
+        // Two holes close here. A prompt the user closed used to stay
+        // closed, stranding its callers with no surface and no timeout
+        // (there is none on a consent wait) — that is what the pending
+        // badge existed to cover, and re-raising covers it directly
+        // instead of with a second window. And an ask suppressed by
+        // `abandon_streaks` raises nothing when it arrives; once its quiet
+        // period lapses, nothing would ever reconsider it. This tick does.
+        //
+        // Re-raising is only tolerable because closing the prompt now
+        // denies (`ClientMsg::ConsentWindowDismissed`): the window comes
+        // back only while a question is genuinely outstanding, and
+        // dismissing it answers the question rather than deferring it.
+        // Opening inactive means a re-raise never steals focus either.
+        let ensure_consent = guard.needs_consent_window() && !guard.consent_spawn_in_flight();
         drop(guard);
-        if ensure_badge {
-            if let Err(err) = ensure_badge_window(&state) {
+        if ensure_consent {
+            if let Err(err) = ensure_consent_window(&state) {
                 log::log_at(
-                    "badge",
-                    format_args!("main-loop ensure_badge_window failed: {err:#}"),
+                    "spawn",
+                    format_args!("main-loop ensure_consent_window failed: {err:#}"),
                 );
             }
         }
@@ -356,9 +355,6 @@ pub fn run() -> Result<i32> {
     {
         let mut guard = state.lock().expect("state mutex");
         guard.broadcast_consent_exit_please();
-        // Same for any badge child that attached between the shutdown
-        // request and now.
-        guard.broadcast_badge_exit_please();
     }
     let _ = std::fs::remove_file(&socket_path);
     log::log(format_args!("daemon exiting cleanly"));
@@ -366,7 +362,7 @@ pub fn run() -> Result<i32> {
 }
 
 /// Spawn one of the daemon's window children (`consent-window`,
-/// `manager-window`, `pending-badge`) and hand the handle to the state's
+/// `manager-window`) and hand the handle to the state's
 /// reaper.
 ///
 /// Every window spawn goes through here so that adopting the child is not
@@ -483,7 +479,7 @@ pub fn ensure_manager_window(
 /// do; Wayland forbids override-redirect always-on-top, so we detect it
 /// and degrade to a normal window rather than promise a behaviour the
 /// compositor will silently ignore. Shared by the consent window
-/// (`child.rs`) and the pending badge (`badge.rs`).
+/// (`child.rs`).
 #[cfg(target_os = "macos")]
 pub(crate) fn always_on_top_supported() -> bool {
     true
@@ -492,39 +488,6 @@ pub(crate) fn always_on_top_supported() -> bool {
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn always_on_top_supported() -> bool {
     std::env::var_os("WAYLAND_DISPLAY").is_none()
-}
-
-/// Spawn a `secreq pending-badge` child if one is needed (queue
-/// non-empty) and none is attached or mid-spawn. The badge is the
-/// always-on-top "N pending" pill that floats over other apps so a
-/// backgrounded consent window can't be forgotten with processes still
-/// hung on a decision.
-///
-/// Skipped entirely where always-on-top isn't honoured (Wayland): a
-/// badge that can neither stay on top nor pin itself to a corner is just
-/// a redundant window, so it earns its keep only on platforms where it
-/// can actually float. The consent window still appears there — it's the
-/// real UI, not a redundant overlay.
-///
-/// Called both at submit time (so the badge appears immediately on the
-/// first pending ask) and from the daemon's main loop (so a crashed
-/// badge is re-spawned while the queue is still non-empty). The
-/// `needs_badge_window` / `badge_spawn_in_flight` guards make repeated
-/// calls idempotent.
-pub fn ensure_badge_window(state: &state::SharedState) -> Result<()> {
-    if !always_on_top_supported() {
-        return Ok(());
-    }
-    let mut guard = state.lock().expect("state mutex");
-    if !guard.needs_badge_window() {
-        return Ok(());
-    }
-    if guard.badge_spawn_in_flight() {
-        return Ok(());
-    }
-    guard.mark_badge_spawn_in_flight();
-    drop(guard);
-    spawn_window_child(state, "pending-badge", &["pending-badge"])
 }
 
 /// RAII guard for the daemon-singleton lock. Holds the locked pidfile

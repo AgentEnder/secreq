@@ -822,7 +822,6 @@ impl From<String> for Shot {
 enum ShotKind {
     Prompt,
     Manager,
-    Badge,
 }
 
 impl ShotKind {
@@ -830,7 +829,6 @@ impl ShotKind {
         match self {
             ShotKind::Prompt => "prompt",
             ShotKind::Manager => "manager",
-            ShotKind::Badge => "badge",
         }
     }
 }
@@ -1117,6 +1115,12 @@ fn render_prompt_fixture_full(
         size,
         || {
             let mut state = PromptWindowState::new();
+            // Fixtures document a window the user has arrived at, so the
+            // keyboard is armed — the same state a click produces in
+            // production, and the one every published screenshot should
+            // show. `keyboard_disarmed` is the single fixture that opts
+            // out to document the other half.
+            state.arm_keyboard();
             if let Some(setup) = &window_state {
                 setup(&mut state);
             }
@@ -1294,6 +1298,45 @@ fn pending_with_denial_reason() {
                 state,
                 "gh",
                 vec!["gh", "repo", "delete", "acme/api"],
+                vec![caller(7926, "zsh", 1_700_000_000)],
+                vec![secret(
+                    "GITHUB_TOKEN",
+                    "op",
+                    "op://Personal/GitHub/credential",
+                )],
+            )]
+        },
+    );
+}
+
+#[test]
+fn keyboard_disarmed_pending() {
+    // The prompt as it first appears: on top of everything, and holding
+    // no focus, because it opens inactive so it cannot swallow a sentence
+    // the user was part-way through typing somewhere else.
+    //
+    // In that state the shortcuts are inert and both key hints — Deny's
+    // underlined `D` and Approve's chord — are dimmed. Every other prompt
+    // fixture is armed, so this is the only place the difference is
+    // visible; the pair is the whole documentation of why a keystroke
+    // aimed at another window cannot decide anything here.
+    render_prompt_fixture_full(
+        Shot::new("57-keyboard-disarmed").caption(
+            "The prompt opens on top without taking focus, so it can't swallow what you \
+             were typing. Its shortcuts stay inert — key hints dimmed — until you focus \
+             it, and a click skips the wait.",
+        ),
+        PROMPT_SIZE,
+        vec![],
+        None,
+        Some(Box::new(|state| {
+            state.note_focus(false);
+        })),
+        |state| {
+            vec![submit(
+                state,
+                "gh",
+                vec!["gh", "pr", "merge", "acme/api#412"],
                 vec![caller(7926, "zsh", 1_700_000_000)],
                 vec![secret(
                     "GITHUB_TOKEN",
@@ -3551,57 +3594,6 @@ fn rules_tab_rules_and_suggestions() {
             )),
             ..ManagerExtras::default()
         },
-    );
-}
-
-// ── Pending-badge fixtures ────────────────────────────────────────────────
-
-/// The always-on-top pending badge renders in its own tiny borderless
-/// window (`secreq pending-badge`), not the prompt panel — so it gets a
-/// dedicated, much simpler harness path: no daemon state, no audit log.
-/// Just `render_badge` at the production badge size.
-fn render_badge_fixture(shot: impl Into<Shot>, count: usize) {
-    let shot = shot.into();
-    // Matches `daemon/badge.rs::BADGE_SIZE`.
-    let size = Vec2::new(184.0, 44.0);
-
-    run_cells(
-        &shot,
-        ShotKind::Badge,
-        size,
-        || (),
-        |ui, (), flavor, dark| {
-            let ctx = ui.ctx().clone();
-            // Pinned like every other fixture: the badge used to inherit the
-            // harness's fallback theme, which left its PNGs dependent on the
-            // host they were generated on.
-            apply_theme_pin(&ctx, flavor, dark);
-            secreq::daemon::ui::install_style(&ctx);
-            full_window_ui(ui, |ui| secreq::daemon::ui::render_badge(ui, count));
-        },
-    );
-}
-
-#[test]
-fn badge_one_pending() {
-    // Singular case — exercises the "1 pending" (not "1 pendings")
-    // branch in `render_badge`.
-    render_badge_fixture(
-        Shot::new("25-badge-one-pending").caption(
-            "One request waiting, shown as a badge when the prompt is not in front of you.",
-        ),
-        1,
-    );
-}
-
-#[test]
-fn badge_three_pending() {
-    // The common multi-request case: "3 pending" floating over other
-    // apps, indicator dot + count, the whole pill a click target.
-    render_badge_fixture(
-        Shot::new("26-badge-three-pending")
-            .caption("Three waiting. The count is the whole message."),
-        3,
     );
 }
 

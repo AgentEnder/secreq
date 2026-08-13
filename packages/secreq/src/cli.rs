@@ -202,13 +202,6 @@ enum Command {
         view: Option<String>,
     },
 
-    /// Internal: run the always-on-top pending-requests badge child.
-    /// The daemon spawns one of these whenever requests are awaiting a
-    /// decision, so a backgrounded consent window can't be forgotten.
-    /// Not meant to be invoked by users directly.
-    #[command(hide = true)]
-    PendingBadge,
-
     /// Run a wrapped binary through secreq: consent → inject secrets → exec
     /// the real binary with output masking. This is what the PATH shims call
     /// (`exec '<path to secreq>' x '<wrap>' "$@"` — the shim names secreq by
@@ -830,8 +823,7 @@ pub fn run() -> i32 {
             Command::Daemon { .. }
             | Command::Agent { .. }
             | Command::ConsentWindow { .. }
-            | Command::ManagerWindow { .. }
-            | Command::PendingBadge,
+            | Command::ManagerWindow { .. },
         ) => crate::migrate::verify_current(),
         // Everything else is a foreground command: apply pending migrations.
         _ => crate::migrate::run_pending(),
@@ -986,7 +978,6 @@ pub fn run() -> i32 {
                 false,
             )
         }
-        Some(Command::PendingBadge) => crate::daemon::badge::run(),
         // Plain `secreq x …` never gets here — `run` intercepts it before
         // clap. Reachable only as `secreq <global flags> x …`, and global
         // flags deliberately don't compose with `x`: a leading flag would be

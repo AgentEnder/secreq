@@ -13,7 +13,7 @@
 //! (affirmative first), full-width response row on GNOME. Buttons
 //! carry their hotkey as an underlined mnemonic character.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 
@@ -33,6 +33,18 @@ use crate::provenance::{ProcessIdentity, SignAnchorKind};
 /// [`super::proto`]; re-exported here for the renderer's callers.
 pub use super::proto::ManagerFocus;
 
+/// How long after the prompt gains focus before keyboard decisions are
+/// honoured.
+///
+/// The window opens **without** taking focus (`with_active(false)` in
+/// `child.rs`), so in the ordinary case keystrokes never reach it at all.
+/// This delay covers the rest: the user ⌘-tabs to the prompt, or a window
+/// manager hands it focus anyway, or the platform doesn't support opening
+/// inactive (X11/Wayland). Half a second is enough for a person to notice
+/// where their keys are now going, and long enough that the tail of a
+/// keystroke burst already in flight lands harmlessly.
+pub(crate) const KEYBOARD_ARM_DELAY: Duration = Duration::from_millis(500);
+
 /// Everything the prompt window remembers across frames. Deliberately
 /// small: the prompt is a transient surface, not a browsing one.
 pub struct PromptWindowState {
@@ -44,6 +56,12 @@ pub struct PromptWindowState {
     secrets_expanded: bool,
     /// The ask the expansion applies to; reset when the ask changes.
     expanded_for: Option<super::proto::DedupeKey>,
+    /// When the window most recently gained focus; `None` while unfocused.
+    /// Drives [`PromptWindowState::keyboard_armed`].
+    focus_since: Option<Instant>,
+    /// A click landed inside the window since it gained focus, so the
+    /// keyboard is live regardless of the delay.
+    armed_by_click: bool,
 }
 
 impl PromptWindowState {
@@ -53,6 +71,8 @@ impl PromptWindowState {
             denial_reason: String::new(),
             secrets_expanded: false,
             expanded_for: None,
+            focus_since: None,
+            armed_by_click: false,
         }
     }
 
@@ -60,6 +80,53 @@ impl PromptWindowState {
     /// screenshot harness, but also a legitimate production state seam.
     pub fn set_denial_reason(&mut self, reason: impl Into<String>) {
         self.denial_reason = reason.into();
+    }
+
+    /// Record this frame's focus state. Gaining focus starts the arming
+    /// delay; losing it disarms completely, so a blur-then-refocus starts
+    /// the delay over rather than resuming a part-served one.
+    ///
+    /// Called by the window child, which owns the real OS window — not by
+    /// the renderer. Keeping the clock and the focus read out of
+    /// `render_prompt_panel` is what lets the screenshot harness draw a
+    /// pinned armed or disarmed panel instead of racing a 500ms timer.
+    pub fn note_focus(&mut self, focused: bool) {
+        if focused {
+            self.focus_since.get_or_insert_with(Instant::now);
+        } else {
+            self.focus_since = None;
+            self.armed_by_click = false;
+        }
+    }
+
+    /// Arm the keyboard immediately, on a click inside the window.
+    ///
+    /// A click is unambiguous intent in a way a keystroke is not: you
+    /// cannot click this window by accident while typing into another one,
+    /// so there is nothing to protect against and no reason to make a user
+    /// who has clearly arrived here wait out the delay.
+    pub fn arm_keyboard(&mut self) {
+        self.armed_by_click = true;
+    }
+
+    /// Whether keyboard decisions are live this frame.
+    pub fn keyboard_armed(&self) -> bool {
+        self.armed_by_click
+            || self
+                .focus_since
+                .is_some_and(|t| t.elapsed() >= KEYBOARD_ARM_DELAY)
+    }
+
+    /// How long until the delay expires, or `None` if the keyboard is
+    /// already armed or the window is unfocused. The child schedules its
+    /// repaint off this so the affordance flips on time.
+    pub fn arming_remaining(&self) -> Option<Duration> {
+        if self.armed_by_click {
+            return None;
+        }
+        self.focus_since
+            .map(|t| KEYBOARD_ARM_DELAY.saturating_sub(t.elapsed()))
+            .filter(|d| !d.is_zero())
     }
 }
 
@@ -114,20 +181,23 @@ pub fn render_prompt_panel(
         state.expanded_for = current.map(|r| r.key.clone());
     }
 
-    // Keyboard: mnemonics + platform keys, active only while the
-    // current ask is awaiting a decision. The prompt has no text
-    // inputs, so bare letter keys are safe to claim.
+    // Keyboard: approve takes the command modifier, deny does not.
+    //
+    // The asymmetry is the point. An accidental deny costs a re-run; an
+    // accidental approve releases a live credential and writes an audit
+    // row claiming the user meant it. Approve used to be bare `A` or bare
+    // `Enter` — the letter and the keystroke most likely to already be in
+    // flight when a window steals focus mid-sentence. Deny keeps its bare
+    // keys because failing closed in a hurry is the behaviour we want.
     if let Some(row) = current {
-        if row.status == super::proto::RowStatus::Awaiting {
+        if row.status == super::proto::RowStatus::Awaiting && state.keyboard_armed() {
             let scope = row_scope(row);
             let no_text_input_focused = ctx.memory(|m| m.focused().is_none());
             ctx.input(|i| {
                 if !no_text_input_focused {
                     return;
                 }
-                if i.modifiers.is_none()
-                    && (i.key_pressed(egui::Key::A) || i.key_pressed(egui::Key::Enter))
-                {
+                if i.modifiers.command_only() && i.key_pressed(egui::Key::Enter) {
                     actions_out.push(PendingAction {
                         key: row.key.clone(),
                         decision: approve_decision(row),
@@ -1509,6 +1579,8 @@ fn render_footer(
 ) {
     let awaiting = current.is_some_and(|r| r.status == super::proto::RowStatus::Awaiting);
     let more_waiting = snapshot.entries.len().saturating_sub(1);
+    // Dims the key hints while a stray keystroke still can't decide.
+    let armed = state.keyboard_armed();
 
     // Full-bleed footer band.
     let band = egui::Rect::from_min_max(
@@ -1583,7 +1655,16 @@ fn render_footer(
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         match current {
                             Some(row) if awaiting => {
-                                if mnemonic_button(ui, th, "Approve", 'A', true).clicked() {
+                                if mnemonic_button(
+                                    ui,
+                                    th,
+                                    "Approve",
+                                    KeyHint::Chord(approve_chord(th.flavor)),
+                                    true,
+                                    armed,
+                                )
+                                .clicked()
+                                {
                                     actions_out.push(PendingAction {
                                         key: row.key.clone(),
                                         decision: approve_decision(row),
@@ -1591,7 +1672,16 @@ fn render_footer(
                                         scope: row_scope(row),
                                     });
                                 }
-                                if mnemonic_button(ui, th, "Deny", 'D', false).clicked() {
+                                if mnemonic_button(
+                                    ui,
+                                    th,
+                                    "Deny",
+                                    KeyHint::Mnemonic('D'),
+                                    false,
+                                    armed,
+                                )
+                                .clicked()
+                                {
                                     actions_out.push(PendingAction {
                                         key: row.key.clone(),
                                         decision: Decision::Deny,
@@ -1623,7 +1713,17 @@ fn render_footer(
                             let gap = 8.0;
                             let w = (ui.available_width() - gap) / 2.0;
                             ui.spacing_mut().item_spacing.x = gap;
-                            if mnemonic_button_sized(ui, th, "Approve", 'A', true, w).clicked() {
+                            if mnemonic_button_sized(
+                                ui,
+                                th,
+                                "Approve",
+                                KeyHint::Chord(approve_chord(th.flavor)),
+                                true,
+                                w,
+                                armed,
+                            )
+                            .clicked()
+                            {
                                 actions_out.push(PendingAction {
                                     key: row.key.clone(),
                                     decision: approve_decision(row),
@@ -1631,7 +1731,17 @@ fn render_footer(
                                     scope: row_scope(row),
                                 });
                             }
-                            if mnemonic_button_sized(ui, th, "Deny", 'D', false, w).clicked() {
+                            if mnemonic_button_sized(
+                                ui,
+                                th,
+                                "Deny",
+                                KeyHint::Mnemonic('D'),
+                                false,
+                                w,
+                                armed,
+                            )
+                            .clicked()
+                            {
                                 actions_out.push(PendingAction {
                                     key: row.key.clone(),
                                     decision: Decision::Deny,
@@ -1731,7 +1841,17 @@ fn render_footer(
                             egui::pos2(mid, full.top()),
                             full.right_bottom(),
                         );
-                        if gnome_response(ui, th, left, "Deny", 'D', false).clicked() {
+                        if gnome_response(
+                            ui,
+                            th,
+                            left,
+                            "Deny",
+                            KeyHint::Mnemonic('D'),
+                            false,
+                            armed,
+                        )
+                        .clicked()
+                        {
                             actions_out.push(PendingAction {
                                 key: row.key.clone(),
                                 decision: Decision::Deny,
@@ -1739,7 +1859,17 @@ fn render_footer(
                                 scope: row_scope(row),
                             });
                         }
-                        if gnome_response(ui, th, right, "Approve", 'A', true).clicked() {
+                        if gnome_response(
+                            ui,
+                            th,
+                            right,
+                            "Approve",
+                            KeyHint::Chord(approve_chord(th.flavor)),
+                            true,
+                            armed,
+                        )
+                        .clicked()
+                        {
                             actions_out.push(PendingAction {
                                 key: row.key.clone(),
                                 decision: approve_decision(row),
@@ -1763,12 +1893,57 @@ fn render_footer(
     }
 }
 
-/// Button label with the mnemonic character underlined.
+/// How a decision button spells its keyboard binding.
+///
+/// Deny still carries an underlined mnemonic because its binding is a
+/// bare letter. Approve carries a written-out chord instead, because
+/// `⌘↩` is not a character in the word "Approve" and pretending otherwise
+/// is how the underlined `A` came to advertise a binding that no longer
+/// existed.
+enum KeyHint<'a> {
+    /// Underline this character in the label.
+    Mnemonic(char),
+    /// Append this chord after the label.
+    Chord(&'a str),
+}
+
+/// The chord that approves, spelled for the chrome being drawn.
+///
+/// Keyed off the rendered flavour rather than `cfg!(target_os)` so the
+/// screenshot matrix — which draws all three chromes on one machine —
+/// publishes each platform's real chord instead of the host's. At runtime
+/// `OsFlavor` is itself derived from `cfg!`, so live windows agree with
+/// what egui's `command_only()` actually matches.
+fn approve_chord(flavor: OsFlavor) -> &'static str {
+    match flavor {
+        OsFlavor::MacOs => "⌘↩",
+        OsFlavor::Windows | OsFlavor::Gnome => "Ctrl+↩",
+    }
+}
+
+/// Dimming applied to a key hint when the keyboard is armed, and when it
+/// is not. The hint is always quieter than the label it annotates; while
+/// disarmed it recedes further, which is the whole of the disarmed
+/// affordance. The button itself never dims — it stays clickable, and a
+/// click is precisely what arms the keyboard.
+/// Chosen by looking at the rendered fixtures, not by taste in the
+/// abstract. An earlier 0.65/0.28 pair was a real 2.3× difference in the
+/// layout snapshot and still indistinguishable on screen: the chord sits
+/// in white on the saturated accent fill, where dropping alpha converges
+/// toward the button colour instead of reading as faded. The armed state
+/// is near-opaque now so the disarmed one has somewhere to fall from.
+const HINT_ARMED: f32 = 0.92;
+const HINT_DISARMED: f32 = 0.22;
+/// Space between a button's label and its trailing chord.
+const CHORD_GAP: f32 = 6.0;
+
+/// Button label carrying its keyboard hint, dimmed per `armed`.
 fn mnemonic_job(
     th: &Theme,
     label: &str,
-    mnemonic: char,
+    hint: KeyHint<'_>,
     fg: egui::Color32,
+    armed: bool,
 ) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     let base = egui::TextFormat {
@@ -1776,21 +1951,37 @@ fn mnemonic_job(
         color: fg,
         ..Default::default()
     };
-    let underlined = egui::TextFormat {
-        underline: egui::Stroke::new(1.0, fg),
-        ..base.clone()
-    };
-    match label.find(mnemonic) {
-        Some(idx) => {
-            let (before, rest) = label.split_at(idx);
-            let mut chars = rest.chars();
-            let m = chars.next().map(String::from).unwrap_or_default();
-            let after: String = chars.collect();
-            job.append(before, 0.0, base.clone());
-            job.append(&m, 0.0, underlined);
-            job.append(&after, 0.0, base);
+    let hint_color = fg.gamma_multiply(if armed { HINT_ARMED } else { HINT_DISARMED });
+    match hint {
+        KeyHint::Mnemonic(mnemonic) => {
+            let underlined = egui::TextFormat {
+                underline: egui::Stroke::new(1.0, hint_color),
+                ..base.clone()
+            };
+            match label.find(mnemonic) {
+                Some(idx) => {
+                    let (before, rest) = label.split_at(idx);
+                    let mut chars = rest.chars();
+                    let m = chars.next().map(String::from).unwrap_or_default();
+                    let after: String = chars.collect();
+                    job.append(before, 0.0, base.clone());
+                    job.append(&m, 0.0, underlined);
+                    job.append(&after, 0.0, base);
+                }
+                None => job.append(label, 0.0, base),
+            }
         }
-        None => job.append(label, 0.0, base),
+        KeyHint::Chord(chord) => {
+            job.append(label, 0.0, base.clone());
+            job.append(
+                chord,
+                CHORD_GAP,
+                egui::TextFormat {
+                    color: hint_color,
+                    ..base
+                },
+            );
+        }
     }
     job
 }
@@ -1799,8 +1990,9 @@ fn mnemonic_button(
     ui: &mut egui::Ui,
     th: &Theme,
     label: &str,
-    mnemonic: char,
+    hint: KeyHint<'_>,
     default: bool,
+    armed: bool,
 ) -> egui::Response {
     let (fill, fg, stroke) = if default {
         (th.accent, th.accent_fg, egui::Stroke::new(1.0, th.accent))
@@ -1808,7 +2000,7 @@ fn mnemonic_button(
         (th.btn, th.btn_fg, egui::Stroke::new(1.0, th.btn_border))
     };
     ui.add(
-        egui::Button::new(mnemonic_job(th, label, mnemonic, fg))
+        egui::Button::new(mnemonic_job(th, label, hint, fg, armed))
             .fill(fill)
             .stroke(stroke)
             .corner_radius(th.btn_radius)
@@ -1820,9 +2012,10 @@ fn mnemonic_button_sized(
     ui: &mut egui::Ui,
     th: &Theme,
     label: &str,
-    mnemonic: char,
+    hint: KeyHint<'_>,
     default: bool,
     width: f32,
+    armed: bool,
 ) -> egui::Response {
     let (fill, fg, stroke) = if default {
         (th.accent, th.accent_fg, egui::Stroke::new(1.0, th.accent))
@@ -1831,7 +2024,7 @@ fn mnemonic_button_sized(
     };
     ui.add_sized(
         egui::vec2(width, 30.0),
-        egui::Button::new(mnemonic_job(th, label, mnemonic, fg))
+        egui::Button::new(mnemonic_job(th, label, hint, fg, armed))
             .fill(fill)
             .stroke(stroke)
             .corner_radius(th.btn_radius),
@@ -1845,8 +2038,9 @@ fn gnome_response(
     th: &Theme,
     rect: egui::Rect,
     label: &str,
-    mnemonic: char,
+    hint: KeyHint<'_>,
     suggested: bool,
+    armed: bool,
 ) -> egui::Response {
     let resp = ui.interact(rect, ui.id().with(label), egui::Sense::click());
     if resp.hovered() {
@@ -1854,7 +2048,7 @@ fn gnome_response(
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     let fg = if suggested { th.accent_text } else { th.fg };
-    let mut job = mnemonic_job(th, label, mnemonic, fg);
+    let mut job = mnemonic_job(th, label, hint, fg, armed);
     job.sections.iter_mut().for_each(|s| {
         s.format.font_id = egui::FontId::proportional(th.body_size);
     });
@@ -2171,6 +2365,30 @@ mod tests {
         found
     }
 
+    /// Find a decision control by label.
+    ///
+    /// Approve paints its keyboard chord into the same galley, so its text
+    /// is `Approve⌘↩` on macOS and `ApproveCtrl+↩` elsewhere — an exact
+    /// lookup would pass on one CI runner and fail on the other. A bare
+    /// `starts_with` is not enough either: `Approve` prefixes
+    /// `Approve for 30 min`, and the `BTreeMap` would hand back the grant
+    /// button's position instead. So: exact match first, then the label
+    /// followed by a chord and nothing else.
+    fn control_pos(
+        map: &std::collections::BTreeMap<String, egui::Pos2>,
+        label: &str,
+    ) -> Option<egui::Pos2> {
+        if let Some(pos) = map.get(label) {
+            return Some(*pos);
+        }
+        map.iter()
+            .find(|(text, _)| {
+                text.strip_prefix(label)
+                    .is_some_and(|rest| rest.starts_with('⌘') || rest.starts_with("Ctrl"))
+            })
+            .map(|(_, pos)| *pos)
+    }
+
     fn collect_text(shape: &egui::Shape, out: &mut std::collections::BTreeMap<String, egui::Pos2>) {
         match shape {
             egui::Shape::Text(text) => {
@@ -2204,7 +2422,7 @@ mod tests {
         let hostile = control_positions(ssh_row(hostile_chain(), true, "/home/dev/repos/acme"));
 
         for label in DECISION_CONTROLS {
-            let (a, b) = (benign.get(*label), hostile.get(*label));
+            let (a, b) = (control_pos(&benign, label), control_pos(&hostile, label));
             assert!(a.is_some(), "benign prompt painted no {label:?}");
             assert_eq!(
                 a, b,
@@ -2220,7 +2438,7 @@ mod tests {
     fn every_decision_control_lands_inside_the_initial_viewport() {
         let hostile = control_positions(ssh_row(hostile_chain(), true, "/home/dev/repos/acme"));
         for label in DECISION_CONTROLS {
-            let pos = hostile.get(*label).unwrap_or_else(|| {
+            let pos = control_pos(&hostile, label).unwrap_or_else(|| {
                 panic!("the prompt painted no {label:?} at all");
             });
             assert!(

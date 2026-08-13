@@ -129,30 +129,25 @@ pub enum ClientMsg {
     },
     /// "I'm closing cleanly." Daemon removes me from its subscriber list.
     ConsentWindowDetach,
+    /// "The user closed me with asks still parked." Every awaiting entry
+    /// is denied.
+    ///
+    /// Distinct from [`ClientMsg::ConsentWindowDetach`] because the two
+    /// closes mean opposite things. A detach is the daemon's own
+    /// `ConsentExitPlease` being honoured — the queue already drained, or
+    /// the daemon is shutting down, and nothing should be decided. This is
+    /// the user hitting the window's close button while a decision is
+    /// outstanding, which is an answer: dismissing the question is
+    /// declining it.
+    ///
+    /// Denying **every** awaiting entry rather than just the visible one is
+    /// deliberate. The prompt shows one ask at a time but speaks for the
+    /// whole queue, and there is no longer a second surface to remember the
+    /// rest — leaving siblings parked would strand their callers with
+    /// nothing on screen, which is the failure this replaced the pending
+    /// badge to avoid.
+    ConsentWindowDismissed,
 
-    // ── Streaming protocol for the pending-badge child process ──
-    //
-    // The badge is a second, much smaller always-on-top child the
-    // daemon spawns while requests are pending — a "N pending" pill
-    // floating over other apps so a backgrounded consent window can't
-    // be forgotten with processes still hung on a decision. Unlike the
-    // consent window it never restarts-to-raise and never reports
-    // focus; it just subscribes to the same snapshot stream (reusing
-    // `DaemonMsg::ConsentUpdate`, counting `RowStatus::Awaiting` rows)
-    // and exits on `DaemonMsg::ConsentExitPlease` when the queue drains.
-    /// "I'm the pending-badge child process; subscribe me to snapshot
-    /// updates." Daemon registers the badge as a separate subscriber
-    /// kind and replies with an immediate `ConsentUpdate`.
-    BadgeWindowAttach { pid: u32 },
-    /// "I'm closing cleanly." Daemon removes me from its badge
-    /// subscriber list.
-    BadgeWindowDetach,
-    /// "The user clicked the badge — bring the consent window
-    /// forward." The daemon ensures a consent-window child exists and
-    /// raises it (the same kill-and-respawn foreground path a new ask
-    /// or `secreq pending` takes). The badge itself never opens the
-    /// consent UI — it only asks the daemon to.
-    RaiseConsentRequested,
     /// "My OS focus state just changed." Sent by the consent-window
     /// child whenever `egui::InputState.focused` transitions; lets the
     /// daemon distinguish "UI is alive AND in front" from "UI is alive
@@ -283,12 +278,10 @@ impl ClientMsg {
             ClientMsg::ConsentWindowAttach { .. } => "ConsentWindowAttach",
             ClientMsg::ConsentDecision { .. } => "ConsentDecision",
             ClientMsg::ConsentWindowDetach => "ConsentWindowDetach",
+            ClientMsg::ConsentWindowDismissed => "ConsentWindowDismissed",
             ClientMsg::ConsentWindowFocus { .. } => "ConsentWindowFocus",
             ClientMsg::ManagerWindowAttach { .. } => "ManagerWindowAttach",
             ClientMsg::OpenManager { .. } => "OpenManager",
-            ClientMsg::BadgeWindowAttach { .. } => "BadgeWindowAttach",
-            ClientMsg::BadgeWindowDetach => "BadgeWindowDetach",
-            ClientMsg::RaiseConsentRequested => "RaiseConsentRequested",
             ClientMsg::ListRules => "ListRules",
             ClientMsg::AddRule { .. } => "AddRule",
             ClientMsg::AddWasmRule { .. } => "AddWasmRule",

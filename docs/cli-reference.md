@@ -485,3 +485,4 @@ Exits 0 on a release, 3 when the host denies (reason on stderr, nothing on stdou
 | Flag | Meaning |
 | --- | --- |
 | `--list` | Print the ref names this socket may resolve, one per line, and exit. Free: listing never prompts and never releases a value |
+

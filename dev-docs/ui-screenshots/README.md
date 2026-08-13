@@ -24,7 +24,6 @@ harness mirrors that split:
 - **Manager** fixtures drive `manager_ui::render_manager_panel` at the
   production manager size (900×600): Rules + Audit behind per-OS header
   chrome.
-- **Badge** fixtures drive `render_badge` in its own minimal harness.
 
 **Chrome is not pinned; it is swept.** Every documented fixture renders
 **six times**: three OS flavors (`macos`, `windows`, `gnome`) by two
@@ -178,6 +177,7 @@ a snapshot blessed in one hour doesn't fail in another.
 | `01-empty-all-clear` | `empty_state` | Prompt with no asks: centred app icon + "No pending requests."; the manager link stays reachable in the footer. |
 | `02-single-pending` | `single_pending` | One wrap, one secret: the canonical prompt: header summary, evidence well (SECRET / ASKED BY / IN), the pinned HISTORY block, macOS footer pair with mnemonic underlines. |
 | `54-pending-denial-reason` | `pending_with_denial_reason` | The optional denial-reason input populated beside the decision controls; leaving it blank still permits a one-click denial. |
+| `57-keyboard-disarmed` | `keyboard_disarmed_pending` | The prompt as it first appears — on top, holding no focus, shortcuts inert. Both key hints are dimmed: Deny's underlined `D` and Approve's `⌘↩` chord. Every other prompt fixture is armed, so this is the only place the pair is visible, and the pair is the whole point — a keystroke aimed at the editor the window just covered cannot decide anything here. Compare `02-single-pending` for the armed rendering of the same band. |
 | `03-nested-tree` | `nested_tree` | An ask with a deeper ancestry: the ASKED BY tree shows each ancestor with its argv and pid, the asking leaf in accent. |
 | `04-multi-root` | `multi_root` | Two queued asks from independent roots: the prompt focuses the oldest; the other appears only as "1 more waiting". |
 | `05-folded-run` | `folded_run` | A `gh→gh→gh→gh` self-exec chain: the coalesced ask's chain renders once per distinct process. |
@@ -235,13 +235,6 @@ a snapshot blessed in one hour doesn't fail in another.
 | `45-rules-pattern-refused` | `rules_tab_pattern_refused` | Fixture 39 one step further in: a declarative rule with no module, no hash and nothing on disk to tamper with, refused anyway because its `argv` pattern is not a valid glob. The summary line reads the pattern back exactly as it was typed (that is the trap this closes, since a broken glob used to be reread as plain text and matched nothing), so the red `refused` + `bad argv glob` pair is the only thing on the row that says it is dead. The approve and the deny carry the same typo and are badged identically while meaning opposite things: the refused approve stops approving, while the refused deny sends every ask it covered to the consent prompt rather than let another rule's approve carry it. That difference lives in the hover text, which is why both rows are here. |
 | `44-audit-agent-declared-by` | `audit_tab_agent_declared_by` | The audit counterpart to fixtures 34 and 42: two sandbox releases against one scope, identical in every field the log kept until now, separated only by the `named by` line. The lower row names the `secreq agent open` the user started, at `/usr/local/bin/secreq`; the upper one reports the same `comm` and `/tmp/.build-cache/postinstall`, which is the half a forger does not get to choose. The daemon reads that peer for the prompt and now hands it back on the decision reply, because the scoped agent writes its own audit rows and is the one party that cannot honestly answer the question. Nothing is refused, here or on the prompt. |
 | `35-audit-tab-agent-out-of-scope` | `audit_tab_agent_out_of_scope_row` | Audit view showing a scoped agent's rows (`agent:brain-nx-t5`). The `deny+out-of-scope` row carries the "out of scope" tag: the guest asked for a ref its socket was never opened with, so it was refused **without a prompt**, distinct from the plain danger-tinted `deny` on the neighbouring `aws` row, where a ref *was* offered and the user refused it. A run of these rows is what a probing sandbox looks like. The agent rows carry no caller chain and no cwd, because a guest has neither. The approved row's `named by` line is the local process the daemon read off `consent.sock`; the out-of-scope row above it has none, because the scope's own allowlist refused that ref before any daemon was dialled, so nothing read a peer for it. Fixture 44 is the comparison that line exists for. |
-
-### Badge
-
-| Fixture id | Test fn | What it exercises |
-|---|---|---|
-| `25-badge-one-pending` | `badge_one_pending` | The always-on-top pending badge, singular branch ("1 pending"). |
-| `26-badge-three-pending` | `badge_three_pending` | The badge with a multi-request count; the pill is one click target that raises the prompt. |
 
 ## How a fixture is shaped
 

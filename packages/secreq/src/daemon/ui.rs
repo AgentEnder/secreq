@@ -2,7 +2,7 @@
 //!
 //! The window-level renderers live elsewhere — the transient prompt in
 //! [`super::prompt_ui`], the persistent Rules + Audit manager in
-//! [`super::manager_ui`], the "N pending" pill in [`super::badge`].
+//! [`super::manager_ui`].
 //! This module owns what they share:
 //!
 //! - the style/font installer ([`install_style`]) that maps the
@@ -33,7 +33,7 @@ use crate::rules::{
 
 use super::manager_ui::ManagerView;
 use super::proto::DedupeKey;
-use super::theme::{OsFlavor, Theme};
+use super::theme::Theme;
 use crate::provenance::ProcessIdentity;
 
 /// How often the UI re-reads the audit log to refresh the per-wrap history
@@ -516,68 +516,6 @@ pub fn install_style(ctx: &egui::Context) {
         style.spacing.item_spacing = egui::vec2(8.0, 6.0);
         style.spacing.button_padding = egui::vec2(10.0, 6.0);
     });
-}
-
-/// Render the always-on-top pending-requests badge: a compact pill
-/// reading "N pending" with an accent indicator dot. The background is
-/// painted here (not left to the window/panel fill) so the screenshot
-/// fixture renders the exact pixels the production badge window shows:
-/// a `th.panel` surface with a 1px `th.rule` border, the count in
-/// `th.accent_text`, and the "pending" label in `th.fg`.
-/// Returns the click response over the whole pill — the badge child
-/// turns a click into a `RaiseConsentRequested`.
-pub fn render_badge(ui: &mut egui::Ui, count: usize) -> egui::Response {
-    let th = Theme::of(ui.ctx());
-    let rect = ui.max_rect();
-    // Clone so the painter doesn't hold a borrow across `allocate_rect`.
-    let painter = ui.painter().clone();
-
-    // Opaque fill of the whole (small, borderless) window, with a
-    // hairline border so the pill reads as a surface over any desktop.
-    painter.rect_filled(rect, egui::CornerRadius::ZERO, th.panel);
-    painter.rect_stroke(
-        rect,
-        egui::CornerRadius::ZERO,
-        egui::Stroke::new(1.0, th.rule),
-        egui::StrokeKind::Inside,
-    );
-
-    // Accent indicator dot, vertically centred, inset from the left.
-    let dot_radius = 5.0;
-    let dot_center = egui::pos2(rect.left() + 16.0, rect.center().y);
-    painter.circle_filled(dot_center, dot_radius, th.accent);
-
-    // Count in accent text, then the "pending" label in the body tier.
-    let font = egui::FontId::proportional(18.0);
-    let count_rect = painter.text(
-        egui::pos2(dot_center.x + dot_radius + 10.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        count.to_string(),
-        font.clone(),
-        th.accent_text,
-    );
-    painter.text(
-        egui::pos2(count_rect.right() + 6.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        "pending",
-        font,
-        th.fg,
-    );
-
-    ui.allocate_rect(rect, egui::Sense::click())
-}
-
-/// The badge window's clear colour, matching [`render_badge`]'s fill, so
-/// any pixels the painter doesn't cover (sub-pixel edges, the frame
-/// before the first paint) show the surface colour rather than flashing
-/// a stale or black background. No `egui::Context` is available in
-/// `eframe::App::clear_color`'s caller before the first frame, so this
-/// resolves the host flavor's dark surface directly. Shape matches
-/// `clear_color`'s `[r, g, b, a]` gamma-normalised return.
-pub fn badge_clear_color() -> [f32; 4] {
-    Theme::resolve(OsFlavor::current(), true)
-        .panel
-        .to_normalized_gamma_f32()
 }
 
 // ── Audit history cache ──────────────────────────────────────────────────
@@ -3792,6 +3730,7 @@ fn abbreviate_home_within(path: &str, home: Option<&str>) -> String {
 mod tests {
     use super::*;
     use crate::audit::AuditCaller;
+    use crate::daemon::theme::OsFlavor;
 
     // ── every decision the daemon can record is rendered ─────────
 

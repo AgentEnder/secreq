@@ -139,18 +139,6 @@ fn handle_connection(
         return Ok(());
     }
 
-    // Branch: streaming pending-badge attach. Same push-stream shape as
-    // the consent window but a leaner read loop (no decisions / rules —
-    // only a click-to-raise nudge and detach).
-    if let ClientMsg::BadgeWindowAttach { pid } = msg {
-        super::log::log_at(
-            "server",
-            format_args!("← ClientMsg::BadgeWindowAttach (pid={pid})"),
-        );
-        handle_badge_window_connection(reader, stream, state)?;
-        return Ok(());
-    }
-
     // Branch: one-shot Ask. Handled here rather than through
     // `handle_message` because this thread must keep the raw socket to
     // watch for the client hanging up while the ask is parked — a wrap
@@ -335,6 +323,18 @@ fn handle_consent_window_connection(
             }
             ClientMsg::ConsentWindowDetach => {
                 super::log::log_at("server", format_args!("← ConsentWindowDetach"));
+                break;
+            }
+            ClientMsg::ConsentWindowDismissed => {
+                super::log::log_at("server", format_args!("← ConsentWindowDismissed"));
+                // Same `resolve`-needs-its-own-handle dance as
+                // `ConsentDecision` above: the off-thread resolver takes a
+                // clone of `state`, so the call can't hold the only lock.
+                let handle = state.clone();
+                handle
+                    .lock()
+                    .expect("state mutex")
+                    .deny_all_awaiting("prompt window closed", &state);
                 break;
             }
             ClientMsg::ConsentWindowFocus { focused } => {
@@ -532,131 +532,6 @@ fn handle_manager_window_connection(
     Ok(())
 }
 
-/// Streaming connection for a pending-badge child. Mirrors
-/// [`handle_consent_window_connection`]'s writer-thread + read-loop
-/// shape (and its exact detach-ordering contract), but the badge's read
-/// loop only handles two messages: `RaiseConsentRequested` (the user
-/// clicked the pill → bring the consent window forward) and
-/// `BadgeWindowDetach`. The badge gets the same `ConsentUpdate` stream
-/// as the consent window — it just renders the `Awaiting` count.
-fn handle_badge_window_connection(
-    reader: BufReader<UnixStream>,
-    socket: UnixStream,
-    state: SharedState,
-) -> Result<()> {
-    let (tx, rx) = mpsc::channel::<DaemonMsg>();
-
-    let (subscriber_id, initial_snapshot) = state
-        .lock()
-        .expect("state mutex")
-        .attach_badge_window(tx.clone());
-
-    let writer_socket = socket
-        .try_clone()
-        .context("clone socket for badge writer")?;
-    let writer_handle = thread::Builder::new()
-        .name("pending-badge-writer".to_owned())
-        .spawn(move || {
-            let mut writer = writer_socket;
-            while let Ok(msg) = rx.recv() {
-                let json = match serde_json::to_string(&msg) {
-                    Ok(j) => j,
-                    Err(err) => {
-                        eprintln!("secreqd: serialize badge update: {err}");
-                        return;
-                    }
-                };
-                if writeln!(writer, "{json}").is_err() {
-                    return; // Socket closed.
-                }
-            }
-        })
-        .context("spawn pending-badge writer thread")?;
-
-    // Eager initial push so the badge can paint its first frame.
-    let _ = tx.send(DaemonMsg::ConsentUpdate {
-        snapshot: initial_snapshot,
-    });
-
-    let mut reader = reader;
-    let mut line = String::new();
-    loop {
-        line.clear();
-        let Ok(n) = reader.read_line(&mut line) else {
-            break;
-        };
-        if n == 0 {
-            super::log::log_at(
-                "server",
-                format_args!("pending-badge socket closed by child"),
-            );
-            break;
-        }
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let msg: ClientMsg = match serde_json::from_str(trimmed) {
-            Ok(m) => m,
-            Err(err) => {
-                super::log::log_at(
-                    "server",
-                    format_args!("pending-badge: malformed msg: {err}; line=[{trimmed}]"),
-                );
-                continue;
-            }
-        };
-        match msg {
-            ClientMsg::RaiseConsentRequested => {
-                super::log::log_at(
-                    "server",
-                    format_args!("← RaiseConsentRequested (badge click)"),
-                );
-                // Same raise path as `ShowWindow`: show the window and,
-                // unless a live consent child is already in front, kill
-                // and respawn it so the fresh process gets foreground
-                // intent (the macOS App-Nap workaround). Then ensure a
-                // child exists at all.
-                {
-                    let mut guard = state.lock().expect("state mutex");
-                    guard.show_window();
-                    if !guard.any_consent_focused() {
-                        guard.initiate_consent_restart();
-                    }
-                    guard.touch();
-                }
-                if let Err(err) = super::ensure_consent_window(&state) {
-                    super::log::log_at(
-                        "server",
-                        format_args!("badge-raise ensure_consent_window failed: {err:#}"),
-                    );
-                }
-            }
-            ClientMsg::BadgeWindowDetach => {
-                super::log::log_at("server", format_args!("← BadgeWindowDetach"));
-                break;
-            }
-            other => {
-                super::log::log_at(
-                    "server",
-                    format_args!("pending-badge sent unexpected message: {other:?}"),
-                );
-            }
-        }
-    }
-
-    // Same detach-order contract as the consent window: remove the
-    // subscriber before dropping our local tx so the writer thread's
-    // `rx.recv()` returns `Err` and we can join without deadlocking.
-    state
-        .lock()
-        .expect("state mutex")
-        .detach_badge_window(subscriber_id);
-    drop(tx);
-    let _ = writer_handle.join();
-    Ok(())
-}
-
 fn handle_message(
     msg: ClientMsg,
     state: SharedState,
@@ -760,20 +635,18 @@ fn handle_message(
         }
         // The streaming window messages must arrive on the streaming
         // connection paths (`handle_consent_window_connection` /
-        // `handle_manager_window_connection` / the badge handler).
-        // Seeing them on the one-shot path means the child connected
-        // without its Attach message first; reply with an error so the
-        // child doesn't deadlock.
+        // `handle_manager_window_connection`). Seeing them on the
+        // one-shot path means the child connected without its Attach
+        // message first; reply with an error so the child doesn't
+        // deadlock.
         ClientMsg::ConsentWindowAttach { .. }
         | ClientMsg::ConsentDecision { .. }
         | ClientMsg::ConsentWindowDetach
+        | ClientMsg::ConsentWindowDismissed
         | ClientMsg::ConsentWindowFocus { .. }
         | ClientMsg::ManagerWindowAttach { .. }
-        | ClientMsg::OpenManager { .. }
-        | ClientMsg::BadgeWindowAttach { .. }
-        | ClientMsg::BadgeWindowDetach
-        | ClientMsg::RaiseConsentRequested => DaemonMsg::Err {
-            message: "streaming consent/badge message arrived on one-shot path; \
+        | ClientMsg::OpenManager { .. } => DaemonMsg::Err {
+            message: "streaming consent message arrived on one-shot path; \
                       child must send its Attach message first"
                 .to_owned(),
         },
@@ -995,16 +868,6 @@ fn handle_ask(ask: Ask, state: SharedState) -> AskDisposition {
         super::log::log_at(
             "server",
             format_args!("ensure_consent_window failed: {err:#}"),
-        );
-    }
-    // Raise the always-on-top "N pending" badge too, so a backgrounded
-    // or dismissed consent window can't leave this ask forgotten with
-    // the wrap process hung. Idempotent — a no-op if a badge is already
-    // up. The badge persists until the queue drains.
-    if let Err(err) = super::ensure_badge_window(&state) {
-        super::log::log_at(
-            "server",
-            format_args!("ensure_badge_window failed: {err:#}"),
         );
     }
     AskDisposition::Enqueued {

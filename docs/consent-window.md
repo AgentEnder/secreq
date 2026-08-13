@@ -59,10 +59,29 @@ histories.
 **Approve** releases the secret. **Deny** aborts the run; the wrapped binary
 never starts. The optional reason field adds context to the terminal and
 audit row, but leaving it empty keeps Deny a single click or keystroke.
-<kbd>A</kbd> or <kbd>Enter</kbd> approves, <kbd>D</kbd> or <kbd>Esc</kbd>
-denies. The buttons carry the same letters as underlined mnemonics. Those
-shortcuts are live only while a decision is pending and the reason field is
-not focused.
+<kbd>Cmd</kbd><kbd>Enter</kbd> approves (<kbd>Ctrl</kbd><kbd>Enter</kbd> off
+macOS), <kbd>D</kbd> or <kbd>Esc</kbd> denies. Each button shows its own
+binding. Those shortcuts are live only while a decision is pending and the
+reason field is not focused.
+
+Approve takes a modifier and Deny does not, because the two mistakes cost
+different amounts. A stray Deny costs you a re-run; a stray Approve hands
+out a credential and records that you meant to.
+
+**Closing the prompt denies.** There is no timeout on a waiting request, so
+a dismissed window would otherwise leave the asking command hung with
+nothing on screen. Dismissing the question answers it.
+
+### The keyboard arms a moment after you arrive
+
+The prompt appears above your other windows without taking focus, so it
+cannot swallow a sentence you were part-way through typing. Keystrokes keep
+going wherever they were already going.
+
+Once you do focus the prompt, its shortcuts stay inert for half a second —
+long enough to notice where your keys are now landing. Clicking anywhere in
+the window skips that wait, since a click already says you meant to be here.
+While the shortcuts are inert the key hints on the buttons are dimmed.
 
 ::shot{id=54-pending-denial-reason}
 
@@ -113,14 +132,6 @@ declared when you opened the socket is the principal. See
 **Gate-only wraps.** A wrap with no secrets still asks; the SECRET row
 gives way to a gate-only marker. See
 [wraps](./wraps.md#gate-only-wraps).
-
-### The badge
-
-While anything is waiting, a small always-on-top pill sits above your other
-windows, so a backgrounded prompt can't be forgotten. Clicking it raises
-the prompt.
-
-::shot{id=26-badge-three-pending}
 
 ## The manager
 

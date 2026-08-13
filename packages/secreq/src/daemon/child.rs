@@ -180,6 +180,19 @@ pub fn run(kind: WindowKind, always_on_top: bool) -> Result<i32> {
             .with_inner_size(manager_ui::MANAGER_DEFAULT_SIZE)
             .with_decorations(true),
     };
+    if kind == WindowKind::Prompt {
+        // Appear without taking focus. The prompt interrupts whatever the
+        // user was typing into, and stealing the keyboard mid-sentence
+        // both loses their keystrokes and aims them at a window whose
+        // bare keys decide the ask. Always-on-top already makes it
+        // impossible to miss; activation adds nothing but the theft.
+        //
+        // Unsupported on X11/Wayland (winit), where it degrades to the old
+        // behaviour — which is why `prompt_ui::KEYBOARD_ARM_DELAY` is a
+        // second, platform-independent line of defence rather than a
+        // belt-and-braces nicety.
+        viewport = viewport.with_active(false);
+    }
     if kind == WindowKind::Prompt && always_on_top {
         if super::always_on_top_supported() {
             viewport = viewport.with_always_on_top();
@@ -485,8 +498,12 @@ impl eframe::App for ChildApp {
         if ctx.input(|i| i.viewport().close_requested()) {
             super::log::log_at("child", format_args!("close_requested → honouring"));
             if self.kind == WindowKind::Prompt {
-                // Best-effort early notify; `run` will also try.
-                let _ = send_msg(&self.writer, &ClientMsg::ConsentWindowDetach);
+                // The user closed the prompt themselves — the daemon-asked
+                // exit returned above, before this branch. Dismissing an
+                // outstanding question is answering it, so this denies
+                // rather than detaching. Best-effort early notify; `run`
+                // will also send its detach on the way out.
+                let _ = send_msg(&self.writer, &ClientMsg::ConsentWindowDismissed);
             }
             return;
         }
@@ -511,6 +528,22 @@ impl eframe::App for ChildApp {
                     } else {
                         self.last_reported_focused = focused;
                     }
+                }
+
+                // Drive the keyboard arming from here rather than from the
+                // renderer. Focus and pointer state are facts about this
+                // process's OS window, and reading them mid-render would
+                // make the panel's output depend on the wall clock — which
+                // the screenshot harness, drawing the same panel with no
+                // real window, cannot reproduce or pin.
+                prompt_state.note_focus(focused);
+                if ctx.input(|i| i.pointer.any_click()) {
+                    prompt_state.arm_keyboard();
+                }
+                // Nothing else would wake the loop to un-dim the key hints
+                // when the delay lapses, so ask for that frame explicitly.
+                if let Some(remaining) = prompt_state.arming_remaining() {
+                    ctx.request_repaint_after(remaining);
                 }
 
                 // Build a local `QueueSnapshot` from the wire form. The

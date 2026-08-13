@@ -213,6 +213,63 @@ impl RunSession {
     }
 }
 
+/// Consecutive abandonments of one signature before it stops raising a
+/// window. Two is too eager — a user who walks away mid-decision twice has
+/// not told us anything — and a probe loop reaches three in about five
+/// seconds, so the flood is cut short either way.
+const ABANDON_SUPPRESS_AFTER: u32 = 3;
+/// Quiet period the first time suppression engages. Each further
+/// abandonment doubles it, up to [`ABANDON_QUIET_MAX_SECS`].
+const ABANDON_QUIET_BASE_SECS: u64 = 30;
+/// Ceiling on the doubling, so a signature is never silenced for longer
+/// than a user would plausibly wait before retrying whatever they were
+/// doing by hand.
+const ABANDON_QUIET_MAX_SECS: u64 = 300;
+/// Idle gap after which a signature's streak is forgotten entirely. Also
+/// the retention bound on the streak map: nothing abandoned longer ago
+/// than this is kept, so the map tracks recent behaviour rather than
+/// growing for the daemon's lifetime.
+const ABANDON_STREAK_RESET_SECS: u64 = 600;
+
+/// What makes two asks "the same ask" for the purpose of noticing that
+/// nobody can ever answer them.
+///
+/// Deliberately **not** the [`DedupeKey`]. That keys on the asking
+/// process, so a loop that spawns a fresh process per attempt — which is
+/// exactly the shape that floods — produces a brand new key every time and
+/// would never look repetitive. What actually repeats is the *command*, run
+/// by the *same parent*: `gh --version` under `ChatGPT.app`, three hundred
+/// times, each from a pid that existed for one second.
+///
+/// The caller is a [`ProcessIdentity`] (pid + start time), so the streak is
+/// scoped to one live instance of the parent app. Restarting the app earns
+/// a fresh set of chances, which is right: the previous instance's
+/// behaviour says nothing about this one's.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct AskSignature {
+    wrap: String,
+    argv: String,
+    /// The nearest non-secreq ancestor, when the chain has one. `None` for
+    /// an ask with no recorded callers, which still groups sensibly — the
+    /// wrap and argv carry it.
+    caller: Option<ProcessIdentity>,
+}
+
+/// How often one [`AskSignature`] has been abandoned in a row, and how
+/// long it is consequently staying off the screen.
+#[derive(Debug, Clone)]
+struct AbandonStreak {
+    /// Consecutive abandonments, reset by any real decision or by
+    /// [`ABANDON_STREAK_RESET_SECS`] of quiet.
+    count: u32,
+    /// Unix second of the most recent abandonment. Drives both the streak
+    /// reset and the map's retention.
+    last_abandon: u64,
+    /// Unix second past which this signature may raise a window again.
+    /// Stays 0 until `count` reaches [`ABANDON_SUPPRESS_AFTER`].
+    quiet_until: u64,
+}
+
 /// Daemon state. Wrap in `Arc<Mutex<_>>` for sharing.
 pub struct State {
     queue: HashMap<DedupeKey, QueueEntry>,
@@ -232,6 +289,21 @@ pub struct State {
     /// divergences. No disk backing — same `secreq daemon stop` reset as
     /// `approvals`.
     ssh_grants: Vec<SshGrant>,
+    /// Recent consecutive-abandonment history, keyed by [`AskSignature`].
+    ///
+    /// An ask whose client keeps dying before the user can answer it is one
+    /// the user cannot answer *at all*: the window is on screen for less
+    /// time than a decision takes. Left alone, each attempt spawns a fresh
+    /// always-on-top child, so the failure mode is a screen full of windows
+    /// that flash and vanish — and no amount of clicking fixes it, because
+    /// the click never lands. This map is what lets
+    /// [`State::needs_consent_window`] stop raising a window nothing can be
+    /// done about, while the ask itself still queues, still blocks its
+    /// caller, and still writes its `abandoned` audit row.
+    ///
+    /// No disk backing, same as `approvals` — a daemon restart is a clean
+    /// slate here too.
+    abandon_streaks: HashMap<AskSignature, AbandonStreak>,
     /// Encrypted in-memory cache of resolved secret values.
     secret_cache: Arc<Mutex<SecretCache>>,
     /// Singleflight coordinator. Ensures concurrent asks for the same
@@ -277,16 +349,6 @@ pub struct State {
     // rules + the viewer-mode flag).
     manager: SubscriberGroup<ManagerExtra>,
 
-    // ── Pending-badge streaming subscribers ───────────────────────
-    //
-    // The always-on-top "N pending" badge child(ren). A separate group
-    // from `consent` because the badge has a deliberately different
-    // lifecycle: it persists while the queue is non-empty (even when the
-    // consent window is closed/backgrounded — that's the whole point),
-    // never restarts-to-raise, and never reports focus. Keeping it
-    // parallel means none of the consent-window focus / restart /
-    // auto-hide logic accidentally tears the badge down.
-    badge: SubscriberGroup<()>,
     /// Spawned window children awaiting reaping. Deliberately *not* part
     /// of the three `SubscriberGroup`s above: those track a child's
     /// socket subscription, which a child that crashed before attaching
@@ -396,6 +458,7 @@ impl Default for State {
             pending: HashMap::new(),
             approvals: Vec::new(),
             ssh_grants: Vec::new(),
+            abandon_streaks: HashMap::new(),
             secret_cache: Arc::new(Mutex::new(SecretCache::new())),
             in_flight: InFlightMap::new(),
             last_activity: Instant::now(),
@@ -404,7 +467,6 @@ impl Default for State {
             shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             consent: SubscriberGroup::new("consent window"),
             manager: SubscriberGroup::new("manager window"),
-            badge: SubscriberGroup::new("badge window"),
             window_children: ChildReaper::default(),
             link: LinkSubscriberGroup::new(),
             link_nonces: Arc::new(crate::link::nonce::NonceStore::default()),
@@ -852,10 +914,6 @@ impl State {
         // outlive the daemon.
         self.consent
             .broadcast(super::proto::DaemonMsg::ConsentExitPlease);
-        // Same for the badge child(ren) — it reuses `ConsentExitPlease`
-        // as its "please exit" signal.
-        self.badge
-            .broadcast(super::proto::DaemonMsg::ConsentExitPlease);
         self.link
             .broadcast(crate::link::projection::LinkEvent::ExitPlease);
     }
@@ -970,33 +1028,6 @@ impl State {
         self.consent.count()
     }
 
-    // ── Pending-badge subscriber API ─────────────────────────────
-
-    /// Register a pending-badge child. Returns its detach ID and the
-    /// initial snapshot to ship immediately so it can paint frame 1
-    /// without a round-trip. Mirrors [`attach_consent_window`] but with
-    /// no focus state and no foreground intent — the badge is never the
-    /// thing the user is "in".
-    pub fn attach_badge_window(
-        &mut self,
-        sender: mpsc::Sender<super::proto::DaemonMsg>,
-    ) -> (u64, super::proto::WireSnapshot) {
-        let id = self.badge.attach(sender, ());
-        (id, self.snapshot_for_wire())
-    }
-
-    /// Remove a badge subscriber by ID. Called by the badge streaming
-    /// connection handler when its read loop exits — same detach-order
-    /// contract as [`detach_consent_window`].
-    pub fn detach_badge_window(&mut self, id: u64) {
-        self.badge.detach(id);
-    }
-
-    /// Number of currently-attached badge children.
-    pub fn badge_subscriber_count(&self) -> usize {
-        self.badge.count()
-    }
-
     // ── Linked-device SSE subscriber API ────────────────────────
 
     /// Attach one HTTP event stream and return its detach id plus the
@@ -1057,39 +1088,6 @@ impl State {
     /// daemon tidying up after itself on a timer it already has.
     pub fn reap_exited_window_children(&mut self) -> usize {
         self.window_children.reap()
-    }
-
-    /// Should the daemon ensure a pending-badge child is running? True
-    /// iff there's at least one ask awaiting a decision and no badge is
-    /// already up. Resolving (already-approved) cards don't count — the
-    /// badge surfaces *undecided* requests, the ones a process is hung
-    /// on, not work that's merely finishing.
-    pub fn needs_badge_window(&self) -> bool {
-        !self.queue.is_empty() && self.badge.is_empty()
-    }
-
-    /// True if a badge `Command::spawn` is in flight and we shouldn't
-    /// start another. Stale entries auto-clear after
-    /// [`CONSENT_SPAWN_TIMEOUT`] (shared constant — the spawn race is
-    /// identical to the consent window's).
-    pub fn badge_spawn_in_flight(&mut self) -> bool {
-        self.badge.spawn.in_flight()
-    }
-
-    /// Record that a badge `Command::spawn` has just been kicked off.
-    pub fn mark_badge_spawn_in_flight(&mut self) {
-        self.badge.spawn.mark();
-    }
-
-    /// Tell every attached badge child to exit. Sent when the queue
-    /// drains — the badge has nothing left to count, so it should
-    /// vanish. No-op if no badge is attached. Unlike
-    /// [`broadcast_consent_exit_please`] this doesn't touch
-    /// `queue_empty_since`: the badge has no auto-hide grace period, it
-    /// just goes the moment the last awaiting ask resolves.
-    pub fn broadcast_badge_exit_please(&mut self) {
-        self.badge
-            .broadcast(super::proto::DaemonMsg::ConsentExitPlease);
     }
 
     /// Record a focus-state update for one attached child. Called by
@@ -1257,8 +1255,28 @@ impl State {
     /// True iff there's a decision (or a resolving card) for the user
     /// to see *and* nobody is already there to see it. Viewer mode is
     /// the manager window's business, not the prompt's.
+    ///
+    /// A queued ask whose signature is serving a quiet period doesn't
+    /// count — see [`AskSignature`]. It stays queued and its caller stays
+    /// parked; what it loses is the power to put a window on screen that
+    /// would vanish before it could be clicked.
     pub fn needs_consent_window(&self) -> bool {
-        (!self.queue.is_empty() || !self.pending.is_empty()) && self.consent.is_empty()
+        self.needs_consent_window_at(now_unix_secs())
+    }
+
+    /// Clock-injectable core of [`State::needs_consent_window`].
+    fn needs_consent_window_at(&self, now: u64) -> bool {
+        if !self.consent.is_empty() {
+            return false;
+        }
+        // A resolving card is post-authorization: someone already said yes,
+        // so there is nothing to suppress.
+        if !self.pending.is_empty() {
+            return true;
+        }
+        self.queue
+            .values()
+            .any(|entry| !self.entry_is_suppressed_at(entry, now))
     }
 
     /// Push the current snapshot to every attached window child.
@@ -1274,7 +1292,6 @@ impl State {
         // projection so local-only fields cannot cross by serde accident.
         self.consent.broadcast(msg.clone());
         self.manager.broadcast(msg.clone());
-        self.badge.broadcast(msg.clone());
         self.link
             .broadcast(crate::link::projection::LinkEvent::Snapshot(link_snapshot));
     }
@@ -1368,6 +1385,117 @@ impl State {
         if !self.ssh_grants.contains(&grant) {
             self.ssh_grants.push(grant);
         }
+    }
+
+    // ── Unanswerable-ask suppression ─────────────────────────────────────
+    //
+    // Same split as the SSH grants above: a public method that reads the
+    // wall clock and a private `_at(now)` core the unit tests drive.
+
+    /// The [`AskSignature`] for a command, as the two sites that need one
+    /// see it — [`State::submit_ask`] holds an [`Ask`], while
+    /// [`State::withdraw_waiter`] holds a [`DedupeKey`] and a [`Waiter`].
+    /// Both reduce to the same three fields, and they must reduce to them
+    /// *identically* or a streak never accumulates.
+    fn signature(wrap: &str, command: &[String], callers: &[super::proto::Caller]) -> AskSignature {
+        AskSignature {
+            wrap: wrap.to_owned(),
+            argv: rules::joined_argv(command),
+            caller: callers.first().map(super::proto::Caller::identity),
+        }
+    }
+
+    /// Note that an ask with this signature was abandoned — its client went
+    /// away before anyone decided. Extends the quiet period once the streak
+    /// crosses [`ABANDON_SUPPRESS_AFTER`], and prunes signatures nothing has
+    /// been heard from in [`ABANDON_STREAK_RESET_SECS`].
+    ///
+    /// Pruning happens here, on the write path, so the read side
+    /// ([`State::needs_consent_window_at`]) stays `&self` — it is called
+    /// from the daemon's spawn check and has no business taking a mutable
+    /// borrow to answer a question.
+    fn record_abandonment_at(&mut self, sig: AskSignature, now: u64) {
+        self.abandon_streaks
+            .retain(|_, s| now.saturating_sub(s.last_abandon) <= ABANDON_STREAK_RESET_SECS);
+
+        let streak = self.abandon_streaks.entry(sig).or_insert(AbandonStreak {
+            count: 0,
+            last_abandon: now,
+            quiet_until: 0,
+        });
+
+        // A long gap means the previous burst is over; this is a new one.
+        if now.saturating_sub(streak.last_abandon) > ABANDON_STREAK_RESET_SECS {
+            streak.count = 0;
+            streak.quiet_until = 0;
+        }
+        streak.count = streak.count.saturating_add(1);
+        streak.last_abandon = now;
+
+        if streak.count >= ABANDON_SUPPRESS_AFTER {
+            // Double per extra strike, capped. `min(6)` keeps the shift
+            // itself in range regardless of how long a loop runs; the
+            // `.min(MAX)` is what actually bounds the result.
+            let steps = streak.count - ABANDON_SUPPRESS_AFTER;
+            let quiet = ABANDON_QUIET_BASE_SECS
+                .saturating_mul(1u64 << steps.min(6))
+                .min(ABANDON_QUIET_MAX_SECS);
+            streak.quiet_until = now.saturating_add(quiet);
+            super::log::log_at(
+                "state",
+                format_args!(
+                    "ask abandoned {}× in a row; not raising a window for it for {quiet}s",
+                    streak.count
+                ),
+            );
+        }
+    }
+
+    /// Deny every ask currently awaiting a decision, as the user closing
+    /// the prompt window does.
+    ///
+    /// `reason` lands on each audit row through
+    /// [`crate::audit::AuditEntry::with_reason`], so a dismissed window is
+    /// legible in the log as something other than a clicked Deny — the
+    /// decision is the same, what the user did to produce it is not.
+    ///
+    /// Only `queue` entries are touched. A `pending` row is past
+    /// authorization with its provider call already in flight; there is
+    /// nothing left to refuse, and cancelling it would strand a resolved
+    /// value nobody consumes.
+    pub fn deny_all_awaiting(&mut self, reason: &str, shared: &SharedState) {
+        let keys: Vec<DedupeKey> = self.queue.keys().cloned().collect();
+        if keys.is_empty() {
+            return;
+        }
+        super::log::log_at(
+            "state",
+            format_args!("prompt dismissed; denying {} awaiting ask(s)", keys.len()),
+        );
+        for key in keys {
+            self.resolve(&key, Decision::Deny, Some(reason.to_owned()), None, shared);
+        }
+    }
+
+    /// Forget a signature's streak. Called when an ask is actually decided:
+    /// whatever the answer, the signature has demonstrated it *can* be
+    /// answered, which is the entire thing suppression is guessing about.
+    fn clear_abandon_streak(&mut self, sig: &AskSignature) {
+        self.abandon_streaks.remove(sig);
+    }
+
+    /// True if every waiter parked on `entry` carries a signature that is
+    /// currently in its quiet period. **Every**, not any: one answerable
+    /// waiter coalesced onto the entry is reason enough to show the window,
+    /// since suppressing it would hide a decision someone is waiting on.
+    fn entry_is_suppressed_at(&self, entry: &QueueEntry, now: u64) -> bool {
+        !entry.waiters.is_empty()
+            && entry.waiters.iter().all(|w| {
+                let sig = State::signature(&entry.key.wrap, &w.command, &w.callers);
+                self.abandon_streaks
+                    .get(&sig)
+                    .is_some_and(|s| now < s.quiet_until)
+            })
     }
 
     /// Mark an authorized ask as resolving: show a read-only card in
@@ -1577,6 +1705,18 @@ impl State {
             self.maybe_immediate_auto_hide();
             return;
         };
+        // Someone answered. Whatever they said, every signature on this
+        // entry has just proved it outlives a decision, so it keeps no
+        // suppression history — the single funnel every decision passes
+        // through, local or linked-device.
+        for sig in entry
+            .waiters
+            .iter()
+            .map(|w| State::signature(&entry.key.wrap, &w.command, &w.callers))
+            .collect::<Vec<_>>()
+        {
+            self.clear_abandon_streak(&sig);
+        }
         // The ask is terminal regardless of who decided it. Drop any replay
         // state a raced or earlier linked request allocated for this id.
         let _ = self.link_nonces.retire(&entry.request_id);
@@ -1802,6 +1942,15 @@ impl State {
                 let _ = self.link_nonces.retire(&entry.request_id);
             }
         }
+
+        // This client died undecided. If that keeps happening to the same
+        // command from the same parent, stop putting a window on screen
+        // for it — nobody can answer a prompt that outlives its asker by
+        // less than a second.
+        self.record_abandonment_at(
+            State::signature(&key.wrap, &waiter.command, &waiter.callers),
+            now_unix_secs(),
+        );
 
         self.broadcast_consent_update();
         self.refresh_queue_empty_since();
@@ -3638,84 +3787,6 @@ mod tests {
     }
 
     #[test]
-    fn badge_window_lifecycle_tracks_the_awaiting_queue() {
-        use std::sync::mpsc;
-
-        let shared: SharedState = Arc::new(Mutex::new(State::new()));
-
-        // Empty queue: no badge needed, none attached.
-        {
-            let guard = shared.lock().expect("state mutex");
-            assert!(!guard.needs_badge_window());
-            assert_eq!(guard.badge_subscriber_count(), 0);
-        }
-
-        // An ask awaiting a decision → a badge is needed (but not yet up).
-        let ask = mk_ask("gh", vec![(100, 1_700_000_000)]);
-        let key = ask.dedupe_key.clone();
-        let (tx, _rx) = mpsc::channel();
-        shared.lock().expect("state mutex").submit_ask(ask, tx);
-        assert!(shared.lock().unwrap().needs_badge_window());
-
-        // Attach a badge → it's up now, so we don't need to spawn another.
-        let (btx, brx) = mpsc::channel();
-        let id = {
-            let mut guard = shared.lock().expect("state mutex");
-            let (id, _snap) = guard.attach_badge_window(btx);
-            assert_eq!(guard.badge_subscriber_count(), 1);
-            assert!(!guard.needs_badge_window());
-            id
-        };
-        // The attach pushed an initial snapshot; the queue change pushed
-        // another. Both are `ConsentUpdate`s — drain them.
-        while let Ok(msg) = brx.try_recv() {
-            assert!(matches!(
-                msg,
-                crate::daemon::proto::DaemonMsg::ConsentUpdate { .. }
-            ));
-        }
-
-        // Drain the queue (deny the only ask). The badge is no longer
-        // needed once nothing awaits a decision.
-        {
-            let mut guard = shared.lock().expect("state mutex");
-            guard.resolve(
-                &key,
-                Decision::Deny,
-                None,
-                Some(ProcessIdentity {
-                    pid: 100,
-                    start_time: 1_700_000_000,
-                }),
-                &shared,
-            );
-            assert!(guard.queue_is_empty());
-            // A badge is still attached, but `needs_badge_window` is false
-            // because the queue is empty — the daemon's main loop will send
-            // the exit signal on its next tick.
-            assert!(!guard.needs_badge_window());
-        }
-
-        // The exit broadcast reaches the attached badge.
-        {
-            let mut guard = shared.lock().expect("state mutex");
-            guard.broadcast_badge_exit_please();
-        }
-        // Skip any trailing snapshot pushes; the exit signal must arrive.
-        let mut saw_exit = false;
-        while let Ok(msg) = brx.try_recv() {
-            if matches!(msg, crate::daemon::proto::DaemonMsg::ConsentExitPlease) {
-                saw_exit = true;
-            }
-        }
-        assert!(saw_exit, "badge must receive ConsentExitPlease on drain");
-
-        // Detaching with an empty queue leaves no badge needed.
-        shared.lock().expect("state mutex").detach_badge_window(id);
-        assert!(!shared.lock().unwrap().needs_badge_window());
-    }
-
-    #[test]
     fn approval_at_direct_parent_hits_with_scope_of_direct_parent() {
         let approvals = vec![ApprovalEntry {
             wrap: "gh".into(),
@@ -4171,6 +4242,282 @@ mod tests {
             assert!(
                 matches!(rx_b.try_recv(), Err(mpsc::TryRecvError::Empty)),
                 "the sibling waiter is still parked with its channel open"
+            );
+        });
+    }
+
+    /// A `gh --version`-shaped probe: same wrap, argv and parent every
+    /// time, but a **fresh pid per attempt** — the shape ChatGPT's 1-second
+    /// availability check produced 309 times in one afternoon. Every one of
+    /// these has its own `DedupeKey`; only the [`AskSignature`] repeats,
+    /// which is the whole reason suppression can't key on the dedupe key.
+    fn probe_ask(pid: u32) -> Ask {
+        let mut ask = ask_with_secret("gh", &["gh", "--version"], "GITHUB_TOKEN");
+        ask.dedupe_key.anchor = AskAnchor::Process(ProcessIdentity {
+            pid,
+            start_time: u64::from(pid),
+        });
+        wrap_of(&mut ask).callers = chatgpt_callers();
+        ask
+    }
+
+    /// The long-lived parent every probe shares. Its `ProcessIdentity` is
+    /// what makes the signature stable across a fleet of one-second pids.
+    fn chatgpt_callers() -> Vec<super::super::proto::Caller> {
+        vec![super::super::proto::Caller {
+            pid: 900,
+            name: "ChatGPT".to_owned(),
+            command: "ChatGPT".to_owned(),
+            start_time: 7,
+            exe: Some("/Applications/ChatGPT.app/Contents/MacOS/ChatGPT".to_owned()),
+        }]
+    }
+
+    /// Submit a probe and immediately abandon it, as a client killed by its
+    /// own timeout does. Returns the ask so the caller can assert on it.
+    fn probe_and_abandon(state: &mut State, pid: u32) -> Ask {
+        let ask = probe_ask(pid);
+        let (tx, _rx) = mpsc::channel();
+        let (_result, id) = state.submit_ask(ask.clone(), tx);
+        state.withdraw_waiter(&ask.dedupe_key, id);
+        ask
+    }
+
+    #[test]
+    fn dismissing_the_prompt_denies_every_parked_ask() {
+        crate::audit::with_temp_log(|| {
+            let shared = Arc::new(Mutex::new(State::new()));
+            // Two unrelated asks parked at once. The prompt shows one at a
+            // time but speaks for both.
+            let a = ask_with_secret("gh", &["gh", "pr", "create"], "GITHUB_TOKEN");
+            let mut b = ask_with_secret("aws", &["aws", "s3", "rm"], "AWS_KEY");
+            b.dedupe_key.anchor = AskAnchor::Process(ProcessIdentity {
+                pid: 4242,
+                start_time: 9,
+            });
+            let (tx_a, rx_a) = mpsc::channel();
+            let (tx_b, rx_b) = mpsc::channel();
+            shared.lock().unwrap().submit_ask(a.clone(), tx_a);
+            shared.lock().unwrap().submit_ask(b.clone(), tx_b);
+
+            shared
+                .lock()
+                .unwrap()
+                .deny_all_awaiting("prompt window closed", &shared);
+
+            // Neither ask is left parked, so no caller is stranded waiting
+            // on a window that is gone.
+            assert!(shared
+                .lock()
+                .unwrap()
+                .queue_entry_for_test(&a.dedupe_key)
+                .is_none());
+            assert!(shared
+                .lock()
+                .unwrap()
+                .queue_entry_for_test(&b.dedupe_key)
+                .is_none());
+            // Both waiters were answered rather than dropped: a closed
+            // channel would unblock the client too, but as an error rather
+            // than as the deny the user actually expressed.
+            assert!(
+                matches!(
+                    rx_a.try_recv(),
+                    Ok(WaiterReply::Decision {
+                        decision: Decision::Deny,
+                        ..
+                    })
+                ),
+                "the visible ask is denied"
+            );
+            assert!(
+                matches!(
+                    rx_b.try_recv(),
+                    Ok(WaiterReply::Decision {
+                        decision: Decision::Deny,
+                        ..
+                    })
+                ),
+                "so is the one behind it"
+            );
+        });
+    }
+
+    #[test]
+    fn dismissing_an_empty_prompt_decides_nothing() {
+        crate::audit::with_temp_log(|| {
+            let shared = Arc::new(Mutex::new(State::new()));
+            shared
+                .lock()
+                .unwrap()
+                .deny_all_awaiting("prompt window closed", &shared);
+            let rows = crate::audit::read_history(None).expect("read audit log");
+            assert!(
+                rows.is_empty(),
+                "closing an idle prompt is not a decision about anything"
+            );
+        });
+    }
+
+    #[test]
+    fn repeatedly_abandoned_ask_stops_raising_the_consent_window() {
+        crate::audit::with_temp_log(|| {
+            let mut state = State::new();
+
+            // Each attempt raises a window right up to the threshold: we
+            // only suppress on demonstrated evidence, never on the first
+            // sighting of an unfamiliar command.
+            for i in 0..ABANDON_SUPPRESS_AFTER {
+                let ask = probe_ask(1000 + i);
+                let (tx, _rx) = mpsc::channel();
+                let (_result, id) = state.submit_ask(ask.clone(), tx);
+                assert!(
+                    state.needs_consent_window(),
+                    "attempt {i} is still worth showing"
+                );
+                state.withdraw_waiter(&ask.dedupe_key, id);
+            }
+
+            // The next identical probe queues and blocks its caller as
+            // before — but no longer puts a window on screen.
+            let ask = probe_ask(2000);
+            let (tx, _rx) = mpsc::channel();
+            state.submit_ask(ask.clone(), tx);
+            assert!(
+                state.queue_entry_for_test(&ask.dedupe_key).is_some(),
+                "the ask is still queued — suppression hides the window, not the request"
+            );
+            assert!(
+                !state.needs_consent_window(),
+                "a signature abandoned {ABANDON_SUPPRESS_AFTER}× in a row stops raising a window"
+            );
+        });
+    }
+
+    #[test]
+    fn abandoned_ask_still_writes_its_audit_row_while_suppressed() {
+        crate::audit::with_temp_log(|| {
+            let mut state = State::new();
+            for i in 0..ABANDON_SUPPRESS_AFTER + 2 {
+                probe_and_abandon(&mut state, 1000 + i);
+            }
+            let rows = crate::audit::read_history(None).expect("read audit log");
+            assert_eq!(
+                rows.len() as u32,
+                ABANDON_SUPPRESS_AFTER + 2,
+                "every abandonment is audited, suppressed or not — the record of \
+                 what asked is exactly what suppression must not cost"
+            );
+            assert!(rows.iter().all(|r| r.decision == "abandoned"));
+        });
+    }
+
+    #[test]
+    fn suppression_lifts_once_the_quiet_period_expires() {
+        crate::audit::with_temp_log(|| {
+            let mut state = State::new();
+            let sig = State::signature(
+                "gh",
+                &["gh".to_owned(), "--version".to_owned()],
+                &chatgpt_callers(),
+            );
+            for _ in 0..ABANDON_SUPPRESS_AFTER {
+                state.record_abandonment_at(sig.clone(), 1_000);
+            }
+            let ask = probe_ask(2000);
+            let (tx, _rx) = mpsc::channel();
+            state.submit_ask(ask, tx);
+
+            assert!(
+                !state.needs_consent_window_at(1_000 + ABANDON_QUIET_BASE_SECS - 1),
+                "still inside the quiet period"
+            );
+            assert!(
+                state.needs_consent_window_at(1_000 + ABANDON_QUIET_BASE_SECS + 1),
+                "the quiet period is a pause, not a permanent mute — otherwise a \
+                 signature that becomes answerable could never be answered"
+            );
+        });
+    }
+
+    #[test]
+    fn a_decision_clears_the_streak() {
+        crate::audit::with_temp_log(|| {
+            let shared = Arc::new(Mutex::new(State::new()));
+            for i in 0..ABANDON_SUPPRESS_AFTER {
+                probe_and_abandon(&mut shared.lock().unwrap(), 1000 + i);
+            }
+            // Someone answers one. That proves the signature can outlive a
+            // decision, so its history stops counting against it.
+            let ask = probe_ask(2000);
+            let (tx, _rx) = mpsc::channel();
+            shared.lock().unwrap().submit_ask(ask.clone(), tx);
+            shared
+                .lock()
+                .unwrap()
+                .resolve(&ask.dedupe_key, Decision::Approve, None, None, &shared);
+
+            let next = probe_ask(3000);
+            let (tx2, _rx2) = mpsc::channel();
+            shared.lock().unwrap().submit_ask(next, tx2);
+            assert!(
+                shared.lock().unwrap().needs_consent_window(),
+                "an answered ask resets the streak"
+            );
+        });
+    }
+
+    #[test]
+    fn a_different_command_from_the_same_parent_is_not_suppressed() {
+        crate::audit::with_temp_log(|| {
+            let mut state = State::new();
+            for i in 0..ABANDON_SUPPRESS_AFTER + 3 {
+                probe_and_abandon(&mut state, 1000 + i);
+            }
+
+            // Same parent app, real command. Suppression keys on argv too,
+            // so the flood never buys silence for anything that matters.
+            let mut real = ask_with_secret("gh", &["gh", "pr", "create"], "GITHUB_TOKEN");
+            real.dedupe_key.anchor = AskAnchor::Process(ProcessIdentity {
+                pid: 5000,
+                start_time: 5000,
+            });
+            wrap_of(&mut real).callers = chatgpt_callers();
+            let (tx, _rx) = mpsc::channel();
+            state.submit_ask(real, tx);
+
+            assert!(
+                state.needs_consent_window(),
+                "a different argv is a different signature"
+            );
+        });
+    }
+
+    #[test]
+    fn a_coalesced_answerable_waiter_keeps_the_window() {
+        crate::audit::with_temp_log(|| {
+            let mut state = State::new();
+            for i in 0..ABANDON_SUPPRESS_AFTER {
+                probe_and_abandon(&mut state, 1000 + i);
+            }
+
+            // A suppressed probe and a real command land on one entry.
+            // `entry_is_suppressed_at` requires *every* waiter to be quiet,
+            // so the real one still raises the window.
+            let probe = probe_ask(2000);
+            let (tx_a, _rx_a) = mpsc::channel();
+            state.submit_ask(probe.clone(), tx_a);
+            assert!(!state.needs_consent_window(), "the probe alone stays quiet");
+
+            let sibling = with_dedupe_key(
+                ask_with_secret("gh", &["gh", "pr", "create"], "GITHUB_TOKEN"),
+                probe.dedupe_key.clone(),
+            );
+            let (tx_b, _rx_b) = mpsc::channel();
+            state.submit_ask(sibling, tx_b);
+            assert!(
+                state.needs_consent_window(),
+                "one answerable waiter is reason enough to show the window"
             );
         });
     }
