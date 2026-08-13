@@ -16,6 +16,62 @@ hand — put the prose in the commit message.
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/AgentEnder/secreq/compare/v0.1.0...v0.2.0) - 2026-08-13
+
+### Added
+
+- _(daemon)_ stop the consent prompt stealing focus or flooding the screen
+- _(link)_ add CLI lifecycle and documentation ([#318](https://github.com/AgentEnder/secreq/pull/318))
+- _(link)_ sync signed remote decisions
+- _(link)_ add QR pairing enrollment flow
+- _(link)_ verify canonical signed decisions
+- _(secrets)_ declare a secret once, with a per-secret cache TTL ([#310](https://github.com/AgentEnder/secreq/pull/310))
+- _(cli)_ add `secreq rules new-wasm <dir>` ([#264](https://github.com/AgentEnder/secreq/pull/264))
+- _(rules)_ scaffold a buildable project, not a bare rule.ts ([#264](https://github.com/AgentEnder/secreq/pull/264))
+- _(#265)_ per-secret rule evaluation — approve iff every requested secret is blessed
+- _(manifest)_ derive serde on the provider model
+
+### Fixed
+
+- _(dist)_ drop the committed formula, and fail loudly on a missing digest
+- _(daemon)_ reap window children instead of leaking zombies
+- _(link)_ verify asks and redact LAN snapshots ([#317](https://github.com/AgentEnder/secreq/pull/317))
+- _(link)_ harden live client and bundle checks ([#317](https://github.com/AgentEnder/secreq/pull/317))
+- _(link)_ sign decisions without Web Crypto ([#317](https://github.com/AgentEnder/secreq/pull/317))
+- _(link)_ harden enrollment boundaries
+- _(link)_ reconnect saturated event streams
+- _(link)_ bound SSE and nonce lifecycles
+- _(migrate)_ make private dirs umask-independent
+- _(config)_ stop writing a header for a table that only holds tables
+- _(config)_ un-garble the `--env` rejection, and cover it with a test ([#310](https://github.com/AgentEnder/secreq/pull/310))
+- _(rules)_ a scaffold's files took the umask's answer too ([#264](https://github.com/AgentEnder/secreq/pull/264))
+- _(rules)_ a scaffold under a hostile umask was unwritable ([#264](https://github.com/AgentEnder/secreq/pull/264))
+- _(ci)_ allow the one conversion that is only useless on Linux
+- satisfy clippy on Linux, restore the publish guard, and correct the crate URLs
+
+### Other
+
+- review snapshot 1
+- Merge #197: use the published SDK scaffold path
+- Merge #298: rebuild project documentation
+- Merge #314: add LAN listener and pairing transport
+- Merge #312: persist device link registry
+- Merge #425: add rule usage stats and SDK test helpers
+- Merge #423: make rule mutations stale-safe
+- Merge #418: validate wasm-declared subjects
+- Merge #417: scope auto-rules by wrap
+- Merge #416: add wrap env_secrets
+- Merge #309: record denial reasons
+- Merge #324: report and preserve background survivors
+- Merge #373: make migration permissions umask-independent
+- _(config)_ write named edits, not a reconciled model
+- Merge #21: move config to TOML, with an m0003 migration
+- migrate the workspace to pnpm + Nx, and give every package a graph node
+- _(manifest)_ delete the secrets.json5 loader
+- _(resolve)_ delete the manifest-era plan builder
+- _(rules)_ describe the reload the daemon actually does
+- _(cli)_ give the daemon-death test the display it depends on
+
 ## [0.1.0] - 2026-07-27
 
 Initial release.
