@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <link rel="stylesheet" type="text/css" href="/secreq/pr/27/assets/static/pages_tailwind-65fb2459.Caq2hfe2.css">
+        <meta charset="UTF-8" />
+        
+        
+    <title>secreq</title><meta property="og:title" content="secreq" />
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <link rel="icon" type="image/svg+xml" href="/secreq/pr/27/favicon.svg"/><meta name="color-scheme" content="dark light"/><link rel="preconnect" href="https://fonts.googleapis.com"/><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin=""/><link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&amp;family=JetBrains+Mono:wght@400;500;600&amp;family=Martian+Mono:wght@400..700&amp;display=swap" rel="stylesheet"/><script>
+(function () {
+  var root = document.documentElement;
+  try {
+    var stored = localStorage.getItem('sq-theme');
+    root.dataset.theme = stored || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  } catch (e) {
+    root.dataset.theme = 'dark';
+  }
+  try {
+    var storedOs = localStorage.getItem('sq-os');
+    if (storedOs) { root.dataset.os = storedOs; return; }
+    var hint = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+    var ua = navigator.userAgent || '';
+    var probe = (hint + ' ' + ua).toLowerCase();
+    // Order matters: an iPhone UA contains "mac", and an Android UA contains
+    // "linux", so the mobile cases have to be settled first. Neither runs
+    // secreq, so they get the desktop chrome their vendor is closest to.
+    root.dataset.os =
+      /android/.test(probe) ? 'gnome'
+      : /iphone|ipad|ipod|mac/.test(probe) ? 'macos'
+      : /win/.test(probe) ? 'windows'
+      : /linux|x11|cros|bsd/.test(probe) ? 'gnome'
+      : 'macos';
+  } catch (e) {
+    root.dataset.os = 'macos';
+  }
+})();
+</script>
+    
+    <meta name="description" content="1Password Shell Plugins, but generic — wrap the CLIs you use every day so each invocation gets its credentials from your secret store, with provenance-aware consent and output masking." /><meta property="og:description" content="1Password Shell Plugins, but generic — wrap the CLIs you use every day so each invocation gets its credentials from your secret store, with provenance-aware consent and output masking." />
+    
+  
+        
+      </head>
+      <body>
+        
+        <div id="root"><div class="shell min-h-screen text-text-2 relative"><div class="ambient" aria-hidden="true"><div class="ambient-wash"></div><div class="ambient-grain"></div></div><header class="shell-header" data-pagefind-ignore="true"><div class="flex items-center h-full gap-2 px-4 sm:px-6"><a href="/secreq/pr/27/" class="brand"><svg class="brand-mark" viewBox="6 6 52 52" aria-hidden="true"><circle class="brand-ping" cx="32" cy="32" r="7"></circle><g class="brand-gate" fill="none" stroke-width="7" stroke-linejoin="miter"><path d="M23 10 H13 V54 H23"></path><path d="M41 10 H51 V54 H41"></path></g><circle class="brand-secret" cx="32" cy="32" r="7"></circle></svg>secreq</a><nav class="hidden md:flex items-stretch h-full ml-6"><a href="/secreq/pr/27/docs" class="nav-link no-underline" data-active="true">Docs</a><a href="/secreq/pr/27/api" class="nav-link no-underline" data-active="false">API</a><a href="/secreq/pr/27/schemas" class="nav-link no-underline" data-active="false">Schemas</a></nav><div class="ml-auto flex items-center gap-1.5"><div class="hidden sm:block w-44 lg:w-56"><div class="relative"><div class="relative"><svg class="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none w-3.5 h-3.5 text-text-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg><input type="search" placeholder="Search the docs" aria-label="Search the docs" class="search-input" value=""/><kbd class="key absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none hidden lg:block">⌘K</kbd></div></div></div><a href="https://github.com/AgentEnder/secreq" target="_blank" rel="noopener noreferrer" class="icon-btn" aria-label="secreq on GitHub"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0a8 8 0 0 0-2.5 15.6c.4.07.55-.17.55-.38v-1.35C3.84 14.3 3.4 13 3.4 13c-.36-.9-.87-1.15-.87-1.15-.71-.48.05-.47.05-.47.79.05 1.2.81 1.2.81.7 1.2 1.83.85 2.28.65.07-.5.27-.85.5-1.05-1.74-.2-3.56-.87-3.56-3.87 0-.85.3-1.55.8-2.1-.08-.2-.35-1 .08-2.07 0 0 .65-.21 2.14.8a7.4 7.4 0 0 1 3.9 0c1.49-1.01 2.14-.8 2.14-.8.43 1.07.16 1.87.08 2.07.5.55.8 1.25.8 2.1 0 3.01-1.83 3.67-3.57 3.86.28.24.53.72.53 1.45v2.15c0 .21.14.46.55.38A8 8 0 0 0 8 0z"></path></svg></a><span class="w-8 h-8 shrink-0" aria-hidden="true"></span><span class="w-8 h-8 shrink-0" aria-hidden="true"></span><button type="button" class="icon-btn md:hidden" aria-expanded="false" aria-label="Open the menu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"></path></svg></button></div></div></header><div class="doc-layout"><div class="rail-wrap hidden md:block border-r border-hairline overflow-y-auto" data-pagefind-ignore="true"><nav class="rail"><div class="rail-group"><span class="rail-group-label">Getting started</span><a href="/secreq/pr/27/docs/install" class="rail-link no-underline" data-active="false">Install</a><a href="/secreq/pr/27/docs/getting-started" class="rail-link no-underline" data-active="false">Getting started</a><a href="/secreq/pr/27/docs/overview" class="rail-link no-underline" data-active="false">Overview</a></div><div class="rail-group"><span class="rail-group-label">Reference</span><a href="/secreq/pr/27/docs/cli" class="rail-link no-underline" data-active="true">CLI guide</a><a href="/secreq/pr/27/docs/cli-reference" class="rail-link no-underline" data-active="false">All commands</a><a href="/secreq/pr/27/docs/wraps" class="rail-link no-underline" data-active="false">Authoring wraps</a><a href="/secreq/pr/27/docs/providers" class="rail-link no-underline" data-active="false">Providers</a></div><div class="rail-group"><span class="rail-group-label">Agents</span><a href="/secreq/pr/27/docs/ssh-agent" class="rail-link no-underline" data-active="false">SSH agent</a><a href="/secreq/pr/27/docs/secret-agent" class="rail-link no-underline" data-active="false">Secret agent</a><a href="/secreq/pr/27/docs/consent-window" class="rail-link no-underline" data-active="false">Consent window</a><a href="/secreq/pr/27/docs/link" class="rail-link no-underline" data-active="false">Linked devices</a></div><div class="rail-group"><span class="rail-group-label">Advanced</span><a href="/secreq/pr/27/docs/wasm-rules" class="rail-link no-underline" data-active="false">Programmable rules</a><a href="/secreq/pr/27/api" class="rail-link no-underline" data-active="false">SDK API reference</a><a href="/secreq/pr/27/docs/platform-support" class="rail-link no-underline" data-active="false">Platform support</a><a href="/secreq/pr/27/docs/troubleshooting" class="rail-link no-underline" data-active="false">Troubleshooting</a></div><div class="rail-group"><a href="/secreq/pr/27/schemas" class="rail-link no-underline" data-active="false">Schemas</a></div></nav></div><main class="min-w-0 px-5 py-9 md:px-10 md:py-12"><div class="flex gap-12"><article class="flex-1 min-w-0" style="view-transition-name:doc-article"><nav aria-label="Breadcrumb" class="crumbs mb-7" data-pagefind-ignore="true"><ol><li><a href="/secreq/pr/27/docs">Docs</a></li><li><span class="crumb-sep" aria-hidden="true">/</span><a href="/secreq/pr/27/docs#reference">Reference</a></li><li><span class="crumb-sep" aria-hidden="true">/</span><span aria-current="page">CLI guide</span></li></ol></nav><h1 class="t-title mb-8">CLI guide</h1><div class="prose-content" data-pagefind-body="true"><p><code>secreq</code> has <strong>admin verbs</strong> that configure things (<code>init</code>, <code>wrap</code>, <code>ssh</code>,
+<code>rules</code>, <code>daemon</code>, …) and <strong>two run verbs</strong> that actually release secrets:</p>
+<pre><code>secreq x    &#x3C;WRAP> [ARGS...]        # a wrapped binary; what a PATH shim calls
+secreq run  -- &#x3C;CMD> [ARGS...]      # any command, resolving ambient secret:// refs
+</code></pre>
+<p>Everything each command accepts is in
+<a href="/secreq/pr/27/docs/cli-reference">All commands</a>, generated from the CLI itself so it
+can't drift from the binary you have. This page is the part that isn't a
+flag list: why there are two run verbs, why <code>x</code> forwards every flag you
+give it, and what each one does between your keystroke and the child
+process.</p>
+<h2 id="wrap-and-run-x">Wrap-and-run: <code>x</code></h2>
+<p><code>x</code> runs a binary you have wrapped. You rarely type it: <code>secreq wrap gh</code>
+drops a five-line shim at <code>&#x3C;shim_dir>/gh</code> whose body is
+<code>exec '&#x3C;path to secreq>' x 'gh' "$@"</code>, so anything that resolves <code>gh</code>
+through <code>PATH</code> (your shell, <code>npm</code>, <code>make</code>, your IDE) routes through secreq
+without knowing it. The shim names secreq by absolute path, so a <code>secreq</code>
+that appears earlier on <code>PATH</code> later (direnv, asdf, <code>node_modules/.bin</code>)
+cannot take its place.</p>
+<h3 id="the-argv-contract">The argv contract</h3>
+<p>Because the shim forwards your argv wholesale, <strong><code>x</code> owns no ordinary
+flags.</strong> Every argument except the wrap name reaches the wrapped binary
+untouched, so <code>gh --help</code> through the shim means gh's help, <code>gh -y</code> means
+gh's <code>-y</code>. Anything else would mean secreq could silently eat a flag you
+meant for the binary.</p>
+<p>secreq's own options therefore use a reserved <code>--sq-</code> prefix, recognized
+before or after the wrap name:</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Flag</th><th>Effect</th></tr></thead><tbody><tr><td><code>--sq-config &#x3C;PATH></code></td><td>Use this config instead of <code>~/.secreq/config.toml</code>.</td></tr><tr><td><code>--sq-raw</code></td><td>Disable output masking. Secrets are still injected.</td></tr><tr><td><code>--sq-yes</code></td><td>Auto-approve without prompting; resolves client-side, no daemon.</td></tr><tr><td><code>--sq-no-remember</code></td><td>Don't read or write the remembered-approval cache.</td></tr><tr><td><code>--sq-help</code></td><td>Print <code>x</code>'s help.</td></tr><tr><td><code>--</code></td><td>Stop <code>--sq-</code> recognition; everything after a literal <code>--</code> forwards as-is.</td></tr></tbody></table>
+<p>These are the one part of the CLI that clap never sees. They're parsed by
+hand, so that <code>&#x3C;wrap> --help</code> can reach the binary. That is why they are
+listed here rather than in the generated reference.</p>
+<p>An unrecognized <code>--sq-*</code> argument is an error (exit 2), not a forward: the
+prefix is reserved so a typo can't hand the flag to the wrong process. The
+global options (<code>--raw</code>, <code>--yes</code>, …) don't compose with <code>x</code>; passing one
+before the wrap name is rejected with a hint to use the <code>--sq-</code> form.</p>
+<h3 id="what-a-run-does">What a run does</h3>
+<ol>
+<li>Look up <code>&#x3C;WRAP></code> in the config.</li>
+<li><strong>No wrap configured → pass through.</strong> Find the real binary on <code>PATH</code>
+(skipping the shim dir, so it can't recurse) and exec it with no
+injection. This is what makes it safe to shim a binary before you've
+decided what it needs.</li>
+<li><strong>Drop <code>env_secrets</code> and <code>env</code> entries the environment already
+satisfies.</strong> A variable already set to a non-empty, non-<code>secret://</code> value
+needs no injection; the child inherits it. If <em>every</em> entry is satisfied,
+the run passes through with no prompt at all, because secreq is releasing
+nothing. Gate-only wraps have neither form, so they always gate.</li>
+<li>Walk the parent process tree, then hand off to the consent daemon
+(auto-spawning it if no socket is live). A cache hit replies
+immediately; otherwise you get the <a href="/secreq/pr/27/docs/consent-window">prompt</a>.
+Parallel asks with the same key coalesce into one request.</li>
+<li>On approve, resolve each entry through its provider, batched when a
+provider supports it, so N secrets cost one biometric.</li>
+<li>Exec the real binary with the resolved values in its environment,
+streaming its output through a masker that redacts every resolved value
+(unless <code>--sq-raw</code>).</li>
+</ol>
+<h3 id="exit-codes">Exit codes</h3>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Code</th><th>Meaning</th></tr></thead><tbody><tr><td>0</td><td>Child exited cleanly.</td></tr><tr><td>1</td><td>Consent denied, or provider resolution failed.</td></tr><tr><td>2</td><td>Usage error: no wrap name, or an unknown <code>--sq-*</code> option.</td></tr><tr><td>child's</td><td>Otherwise the child's own exit code propagates.</td></tr></tbody></table>
+<h2 id="ambient-references-run">Ambient references: <code>run</code></h2>
+<p>Where <code>x</code> injects a <em>declared</em> env map for a <em>known binary</em>, <code>run</code> resolves
+<code>secret://provider/locator</code> references it finds <em>in the environment</em> for an
+<em>arbitrary</em> command. Nothing needs configuring first, because the
+references describe the secrets inline:</p>
+<pre class="shiki shiki-themes github-light github-dark" style="--shiki-light:#24292e;--shiki-dark:#e1e4e8;--shiki-light-bg:#fff;--shiki-dark-bg:#24292e" tabindex="0"><code><span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D"># A committable, refs-only .env. No plaintext secrets:</span></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">#   DATABASE_URL=secret://op/Work/Postgres/url</span></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">#   STRIPE_KEY=secret://keychain/stripe-live</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0">secreq</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF"> run</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> --env-file</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF"> .env</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> --</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF"> ./deploy.sh</span></span></code></pre>
+<p><code>--env-file</code> entries layer <strong>under</strong> the inherited environment (inherited
+wins on conflict, matching <code>op run --env-file</code>). A value that starts with
+<code>secret://</code> but doesn't parse is a hard error <em>before</em> the command runs, so
+a literal <code>secret://…</code> never reaches the child. With no references at all,
+<code>run</code> execs directly, with no daemon and no prompt.</p>
+<h3 id="why-run-always-asks">Why <code>run</code> always asks</h3>
+<p><code>run</code> presents a <strong>fixed identity</strong> for every invocation, so a remembered
+approval would over-match wildly: approving one <code>run</code> would approve every
+later one from that shell. It therefore never persists approvals.</p>
+<p>The re-prompt is cheap: all <code>run</code> invocations share one
+value-cache bucket, so a reference that's already resolved is served
+without a provider call and without a biometric. The prompt is one click,
+not an unlock. A rule on the Rules view can remove even that.</p>
+<p>Two consequences follow:</p>
+<ul>
+<li><strong>Nested <code>run</code> needs no special handling.</strong> The outer run already
+replaced every reference with a plain value, so the inner one sees no
+refs and just execs.</li>
+<li><strong>Concurrent runs in one process tree share one prompt.</strong> The daemon
+unions their requests into a single card, annotating each secret with the
+command that asked for it. You approve once, and each command receives
+<strong>only its own</strong> secrets, never a sibling's.</li>
+</ul>
+<secreq-window shot="run-session-card"><secreq-shot><figure class="shot" data-window="prompt"><button type="button" class="shot-zoom" aria-label="View this screenshot full size"><img class="shot-img" data-os="gnome" data-appearance="dark" src="/secreq/pr/27/ui/run-session-card-gnome-dark.png" width="1000" height="1020" alt="Three sibling requests from one run, merged into a single decision. Hover a secret to see which command wanted it." loading="lazy" decoding="async"><img class="shot-img" data-os="gnome" data-appearance="light" src="/secreq/pr/27/ui/run-session-card-gnome-light.png" width="1000" height="1020" alt="Three sibling requests from one run, merged into a single decision. Hover a secret to see which command wanted it." loading="lazy" decoding="async"><img class="shot-img" data-os="macos" data-appearance="dark" data-fallback="true" src="/secreq/pr/27/ui/run-session-card-macos-dark.png" width="1000" height="1020" alt="Three sibling requests from one run, merged into a single decision. Hover a secret to see which command wanted it." loading="lazy" decoding="async"><img class="shot-img" data-os="macos" data-appearance="light" src="/secreq/pr/27/ui/run-session-card-macos-light.png" width="1000" height="1020" alt="Three sibling requests from one run, merged into a single decision. Hover a secret to see which command wanted it." loading="lazy" decoding="async"><img class="shot-img" data-os="windows" data-appearance="dark" src="/secreq/pr/27/ui/run-session-card-windows-dark.png" width="1000" height="1020" alt="Three sibling requests from one run, merged into a single decision. Hover a secret to see which command wanted it." loading="lazy" decoding="async"><img class="shot-img" data-os="windows" data-appearance="light" src="/secreq/pr/27/ui/run-session-card-windows-light.png" width="1000" height="1020" alt="Three sibling requests from one run, merged into a single decision. Hover a secret to see which command wanted it." loading="lazy" decoding="async"></button><figcaption>Three sibling requests from one run, merged into a single decision. Hover a secret to see which command wanted it.</figcaption></figure></secreq-shot></secreq-window>
+<p>Exit codes match <code>x</code>.</p>
+<h2 id="reading-a-value-directly">Reading a value directly</h2>
+<p><code>secreq read &#x3C;REF>…</code> resolves references and prints them as a JSON object
+keyed by each ref exactly as typed, so it pipes into <code>jq</code>. Every read goes
+through the consent daemon, so it is prompted and audited. There is <strong>no
+<code>--yes</code> bypass</strong>: the value lands on stdout, where masking cannot help you.</p>
+<p><code>secreq resolve</code> is a different thing that looks similar: it is the <em>guest</em>
+half of a sandbox socket, asking a <strong>host</strong> secreq to release something.
+See <a href="/secreq/pr/27/docs/secret-agent">secret-agent</a>.</p>
+<h2 id="bare-secreq">Bare <code>secreq</code></h2>
+<p>With no subcommand and a terminal to prompt on, <code>secreq</code> presents an action
+picker (open the manager, list wraps, manage rules, open pending requests,
+set up the SSH agent, run first-time setup) and dispatches into the verb you
+choose. The cursor starts on the manager, so <code>secreq</code> then
+<kbd>Enter</kbd> opens the window.</p>
+<p>Without a terminal (a shim, a pipe, CI) there is nothing to pick from, so a
+bare invocation exits 2 with a usage hint instead.</p>
+<h2 id="revoking-an-approval">Revoking an approval</h2>
+<p>There is no per-invocation "forget this" flag. Approvals live in the
+daemon's memory, so <code>secreq daemon stop</code> clears every one of them; the next
+wrap auto-spawns a fresh daemon with an empty cache. How the scope is keyed,
+and why it has no TTL, is in <a href="/secreq/pr/27/docs/wraps#how-approval-is-scoped">wraps</a>.</p>
+<h2 id="environment-variables">Environment variables</h2>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Variable</th><th>When</th></tr></thead><tbody><tr><td><code>SECREQ_HOME</code></td><td>Root for everything secreq owns: config, <code>audit.log</code>, <code>daemon.log</code>, registered rule modules. Falls back to <code>~/.secreq</code>.</td></tr><tr><td><code>SECREQ_SOCK</code></td><td>Read by <code>secreq resolve</code>: the scoped agent socket to ask, mirroring <code>SSH_AUTH_SOCK</code>. See <a href="/secreq/pr/27/docs/secret-agent">secret-agent</a>.</td></tr><tr><td><code>SECREQ_NO_DAEMON</code></td><td>Any non-empty value disables the daemon entirely; consent fails closed unless <code>--sq-yes</code> / <code>--yes</code> is used. For tests and headless automation.</td></tr><tr><td><code>SECREQ_NO_WAIT_INDICATOR</code></td><td>Silences the "waiting for approval" indicator for one invocation, regardless of the <code>wait_indicator</code> config setting.</td></tr><tr><td><code>XDG_RUNTIME_DIR</code></td><td>Preferred home for the daemon's sockets and pidfile; it is mode-0700 tmpfs. Falls back to <code>&#x3C;root>/run</code>.</td></tr><tr><td><code>XDG_CONFIG_HOME</code></td><td>Legacy config location the first-run migration copies into the root. No longer used for discovery.</td></tr><tr><td><code>SHELL</code></td><td><code>init</code> reads this to choose which shell config to edit.</td></tr><tr><td><code>EDITOR</code> / <code>VISUAL</code></td><td>Used by <code>secreq edit</code>.</td></tr><tr><td><code>DISPLAY</code> / <code>WAYLAND_DISPLAY</code></td><td>Linux/BSD: with neither set, secreq fails closed rather than spawning a daemon that can't render.</td></tr></tbody></table>
+<h2 id="next">Next</h2>
+<ul>
+<li><a href="/secreq/pr/27/docs/cli-reference">All commands</a>: every subcommand and flag.</li>
+<li><a href="/secreq/pr/27/docs/wraps">wraps</a>: authoring <code>config.toml</code>, and how approval is scoped.</li>
+<li><a href="/secreq/pr/27/docs/consent-window">consent-window</a>: the windows these verbs put up.</li>
+</ul></div><div data-pagefind-ignore="true" class="mt-16 pt-7 border-t border-hairline flex items-center justify-between gap-4"><a href="/secreq/pr/27/docs" class="text-sm text-text-3 no-underline hover:text-text">← All documentation</a><a href="https://github.com/AgentEnder/secreq/edit/main/docs/cli.md" target="_blank" rel="noopener noreferrer" class="text-sm text-text-3 no-underline hover:text-text">Edit this page</a></div></article><aside data-pagefind-ignore="true" class="hidden xl:block w-52 shrink-0"><div class="sticky top-24"><p class="t-eyebrow mb-3">On this page</p><nav><a href="#wrap-and-run-x" class="toc-link" data-level="2" data-active="false">Wrap-and-run: x</a><a href="#the-argv-contract" class="toc-link" data-level="3" data-active="false">The argv contract</a><a href="#what-a-run-does" class="toc-link" data-level="3" data-active="false">What a run does</a><a href="#exit-codes" class="toc-link" data-level="3" data-active="false">Exit codes</a><a href="#ambient-references-run" class="toc-link" data-level="2" data-active="false">Ambient references: run</a><a href="#why-run-always-asks" class="toc-link" data-level="3" data-active="false">Why run always asks</a><a href="#reading-a-value-directly" class="toc-link" data-level="2" data-active="false">Reading a value directly</a><a href="#bare-secreq" class="toc-link" data-level="2" data-active="false">Bare secreq</a><a href="#revoking-an-approval" class="toc-link" data-level="2" data-active="false">Revoking an approval</a><a href="#environment-variables" class="toc-link" data-level="2" data-active="false">Environment variables</a><a href="#next" class="toc-link" data-level="2" data-active="false">Next</a></nav></div></aside></div></main></div></div></div>
+        
+        <script id="vike_pageContext" type="application/json">{"pageId":"\/pages\/docs\/@slug","routeParams":{"slug":"cli"},"data":{"doc":{"slug":"cli","title":"CLI guide","label":"CLI guide","section":"Reference","order":3,"renderedHtml":"\u003cp>\u003ccode>secreq\u003c\/code> has \u003cstrong>admin verbs\u003c\/strong> that configure things (\u003ccode>init\u003c\/code>, \u003ccode>wrap\u003c\/code>, \u003ccode>ssh\u003c\/code>,\n\u003ccode>rules\u003c\/code>, \u003ccode>daemon\u003c\/code>, …) and \u003cstrong>two run verbs\u003c\/strong> that actually release secrets:\u003c\/p>\n\u003cpre>\u003ccode>secreq x    &#x3C;WRAP> [ARGS...]        # a wrapped binary; what a PATH shim calls\nsecreq run  -- &#x3C;CMD> [ARGS...]      # any command, resolving ambient secret:\/\/ refs\n\u003c\/code>\u003c\/pre>\n\u003cp>Everything each command accepts is in\n\u003ca href=\"\/secreq\/pr\/27\/docs\/cli-reference\">All commands\u003c\/a>, generated from the CLI itself so it\ncan't drift from the binary you have. This page is the part that isn't a\nflag list: why there are two run verbs, why \u003ccode>x\u003c\/code> forwards every flag you\ngive it, and what each one does between your keystroke and the child\nprocess.\u003c\/p>\n\u003ch2 id=\"wrap-and-run-x\">Wrap-and-run: \u003ccode>x\u003c\/code>\u003c\/h2>\n\u003cp>\u003ccode>x\u003c\/code> runs a binary you have wrapped. You rarely type it: \u003ccode>secreq wrap gh\u003c\/code>\ndrops a five-line shim at \u003ccode>&#x3C;shim_dir>\/gh\u003c\/code> whose body is\n\u003ccode>exec '&#x3C;path to secreq>' x 'gh' \"$@\"\u003c\/code>, so anything that resolves \u003ccode>gh\u003c\/code>\nthrough \u003ccode>PATH\u003c\/code> (your shell, \u003ccode>npm\u003c\/code>, \u003ccode>make\u003c\/code>, your IDE) routes through secreq\nwithout knowing it. The shim names secreq by absolute path, so a \u003ccode>secreq\u003c\/code>\nthat appears earlier on \u003ccode>PATH\u003c\/code> later (direnv, asdf, \u003ccode>node_modules\/.bin\u003c\/code>)\ncannot take its place.\u003c\/p>\n\u003ch3 id=\"the-argv-contract\">The argv contract\u003c\/h3>\n\u003cp>Because the shim forwards your argv wholesale, \u003cstrong>\u003ccode>x\u003c\/code> owns no ordinary\nflags.\u003c\/strong> Every argument except the wrap name reaches the wrapped binary\nuntouched, so \u003ccode>gh --help\u003c\/code> through the shim means gh's help, \u003ccode>gh -y\u003c\/code> means\ngh's \u003ccode>-y\u003c\/code>. Anything else would mean secreq could silently eat a flag you\nmeant for the binary.\u003c\/p>\n\u003cp>secreq's own options therefore use a reserved \u003ccode>--sq-\u003c\/code> prefix, recognized\nbefore or after the wrap name:\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Flag\u003c\/th>\u003cth>Effect\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>--sq-config &#x3C;PATH>\u003c\/code>\u003c\/td>\u003ctd>Use this config instead of \u003ccode>~\/.secreq\/config.toml\u003c\/code>.\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--sq-raw\u003c\/code>\u003c\/td>\u003ctd>Disable output masking. Secrets are still injected.\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--sq-yes\u003c\/code>\u003c\/td>\u003ctd>Auto-approve without prompting; resolves client-side, no daemon.\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--sq-no-remember\u003c\/code>\u003c\/td>\u003ctd>Don't read or write the remembered-approval cache.\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--sq-help\u003c\/code>\u003c\/td>\u003ctd>Print \u003ccode>x\u003c\/code>'s help.\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--\u003c\/code>\u003c\/td>\u003ctd>Stop \u003ccode>--sq-\u003c\/code> recognition; everything after a literal \u003ccode>--\u003c\/code> forwards as-is.\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003cp>These are the one part of the CLI that clap never sees. They're parsed by\nhand, so that \u003ccode>&#x3C;wrap> --help\u003c\/code> can reach the binary. That is why they are\nlisted here rather than in the generated reference.\u003c\/p>\n\u003cp>An unrecognized \u003ccode>--sq-*\u003c\/code> argument is an error (exit 2), not a forward: the\nprefix is reserved so a typo can't hand the flag to the wrong process. The\nglobal options (\u003ccode>--raw\u003c\/code>, \u003ccode>--yes\u003c\/code>, …) don't compose with \u003ccode>x\u003c\/code>; passing one\nbefore the wrap name is rejected with a hint to use the \u003ccode>--sq-\u003c\/code> form.\u003c\/p>\n\u003ch3 id=\"what-a-run-does\">What a run does\u003c\/h3>\n\u003col>\n\u003cli>Look up \u003ccode>&#x3C;WRAP>\u003c\/code> in the config.\u003c\/li>\n\u003cli>\u003cstrong>No wrap configured → pass through.\u003c\/strong> Find the real binary on \u003ccode>PATH\u003c\/code>\n(skipping the shim dir, so it can't recurse) and exec it with no\ninjection. This is what makes it safe to shim a binary before you've\ndecided what it needs.\u003c\/li>\n\u003cli>\u003cstrong>Drop \u003ccode>env_secrets\u003c\/code> and \u003ccode>env\u003c\/code> entries the environment already\nsatisfies.\u003c\/strong> A variable already set to a non-empty, non-\u003ccode>secret:\/\/\u003c\/code> value\nneeds no injection; the child inherits it. If \u003cem>every\u003c\/em> entry is satisfied,\nthe run passes through with no prompt at all, because secreq is releasing\nnothing. Gate-only wraps have neither form, so they always gate.\u003c\/li>\n\u003cli>Walk the parent process tree, then hand off to the consent daemon\n(auto-spawning it if no socket is live). A cache hit replies\nimmediately; otherwise you get the \u003ca href=\"\/secreq\/pr\/27\/docs\/consent-window\">prompt\u003c\/a>.\nParallel asks with the same key coalesce into one request.\u003c\/li>\n\u003cli>On approve, resolve each entry through its provider, batched when a\nprovider supports it, so N secrets cost one biometric.\u003c\/li>\n\u003cli>Exec the real binary with the resolved values in its environment,\nstreaming its output through a masker that redacts every resolved value\n(unless \u003ccode>--sq-raw\u003c\/code>).\u003c\/li>\n\u003c\/ol>\n\u003ch3 id=\"exit-codes\">Exit codes\u003c\/h3>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Code\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>0\u003c\/td>\u003ctd>Child exited cleanly.\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>1\u003c\/td>\u003ctd>Consent denied, or provider resolution failed.\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>2\u003c\/td>\u003ctd>Usage error: no wrap name, or an unknown \u003ccode>--sq-*\u003c\/code> option.\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>child's\u003c\/td>\u003ctd>Otherwise the child's own exit code propagates.\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003ch2 id=\"ambient-references-run\">Ambient references: \u003ccode>run\u003c\/code>\u003c\/h2>\n\u003cp>Where \u003ccode>x\u003c\/code> injects a \u003cem>declared\u003c\/em> env map for a \u003cem>known binary\u003c\/em>, \u003ccode>run\u003c\/code> resolves\n\u003ccode>secret:\/\/provider\/locator\u003c\/code> references it finds \u003cem>in the environment\u003c\/em> for an\n\u003cem>arbitrary\u003c\/em> command. Nothing needs configuring first, because the\nreferences describe the secrets inline:\u003c\/p>\n\u003cpre class=\"shiki shiki-themes github-light github-dark\" style=\"--shiki-light:#24292e;--shiki-dark:#e1e4e8;--shiki-light-bg:#fff;--shiki-dark-bg:#24292e\" tabindex=\"0\">\u003ccode>\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#6A737D;--shiki-dark:#6A737D\"># A committable, refs-only .env. No plaintext secrets:\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#6A737D;--shiki-dark:#6A737D\">#   DATABASE_URL=secret:\/\/op\/Work\/Postgres\/url\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#6A737D;--shiki-dark:#6A737D\">#   STRIPE_KEY=secret:\/\/keychain\/stripe-live\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#6F42C1;--shiki-dark:#B392F0\">secreq\u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\"> run\u003c\/span>\u003cspan style=\"--shiki-light:#005CC5;--shiki-dark:#79B8FF\"> --env-file\u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\"> .env\u003c\/span>\u003cspan style=\"--shiki-light:#005CC5;--shiki-dark:#79B8FF\"> --\u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\"> .\/deploy.sh\u003c\/span>\u003c\/span>\u003c\/code>\u003c\/pre>\n\u003cp>\u003ccode>--env-file\u003c\/code> entries layer \u003cstrong>under\u003c\/strong> the inherited environment (inherited\nwins on conflict, matching \u003ccode>op run --env-file\u003c\/code>). A value that starts with\n\u003ccode>secret:\/\/\u003c\/code> but doesn't parse is a hard error \u003cem>before\u003c\/em> the command runs, so\na literal \u003ccode>secret:\/\/…\u003c\/code> never reaches the child. With no references at all,\n\u003ccode>run\u003c\/code> execs directly, with no daemon and no prompt.\u003c\/p>\n\u003ch3 id=\"why-run-always-asks\">Why \u003ccode>run\u003c\/code> always asks\u003c\/h3>\n\u003cp>\u003ccode>run\u003c\/code> presents a \u003cstrong>fixed identity\u003c\/strong> for every invocation, so a remembered\napproval would over-match wildly: approving one \u003ccode>run\u003c\/code> would approve every\nlater one from that shell. It therefore never persists approvals.\u003c\/p>\n\u003cp>The re-prompt is cheap: all \u003ccode>run\u003c\/code> invocations share one\nvalue-cache bucket, so a reference that's already resolved is served\nwithout a provider call and without a biometric. The prompt is one click,\nnot an unlock. A rule on the Rules view can remove even that.\u003c\/p>\n\u003cp>Two consequences follow:\u003c\/p>\n\u003cul>\n\u003cli>\u003cstrong>Nested \u003ccode>run\u003c\/code> needs no special handling.\u003c\/strong> The outer run already\nreplaced every reference with a plain value, so the inner one sees no\nrefs and just execs.\u003c\/li>\n\u003cli>\u003cstrong>Concurrent runs in one process tree share one prompt.\u003c\/strong> The daemon\nunions their requests into a single card, annotating each secret with the\ncommand that asked for it. You approve once, and each command receives\n\u003cstrong>only its own\u003c\/strong> secrets, never a sibling's.\u003c\/li>\n\u003c\/ul>\n\u003csecreq-window shot=\"run-session-card\">\u003csecreq-shot>\u003cfigure class=\"shot\" data-window=\"prompt\">\u003cbutton type=\"button\" class=\"shot-zoom\" aria-label=\"View this screenshot full size\">\u003cimg class=\"shot-img\" data-os=\"gnome\" data-appearance=\"dark\" src=\"\/secreq\/pr\/27\/ui\/run-session-card-gnome-dark.png\" width=\"1000\" height=\"1020\" alt=\"Three sibling requests from one run, merged into a single decision. Hover a secret to see which command wanted it.\" loading=\"lazy\" decoding=\"async\">\u003cimg class=\"shot-img\" data-os=\"gnome\" data-appearance=\"light\" src=\"\/secreq\/pr\/27\/ui\/run-session-card-gnome-light.png\" width=\"1000\" height=\"1020\" alt=\"Three sibling requests from one run, merged into a single decision. Hover a secret to see which command wanted it.\" loading=\"lazy\" decoding=\"async\">\u003cimg class=\"shot-img\" data-os=\"macos\" data-appearance=\"dark\" data-fallback=\"true\" src=\"\/secreq\/pr\/27\/ui\/run-session-card-macos-dark.png\" width=\"1000\" height=\"1020\" alt=\"Three sibling requests from one run, merged into a single decision. Hover a secret to see which command wanted it.\" loading=\"lazy\" decoding=\"async\">\u003cimg class=\"shot-img\" data-os=\"macos\" data-appearance=\"light\" src=\"\/secreq\/pr\/27\/ui\/run-session-card-macos-light.png\" width=\"1000\" height=\"1020\" alt=\"Three sibling requests from one run, merged into a single decision. Hover a secret to see which command wanted it.\" loading=\"lazy\" decoding=\"async\">\u003cimg class=\"shot-img\" data-os=\"windows\" data-appearance=\"dark\" src=\"\/secreq\/pr\/27\/ui\/run-session-card-windows-dark.png\" width=\"1000\" height=\"1020\" alt=\"Three sibling requests from one run, merged into a single decision. Hover a secret to see which command wanted it.\" loading=\"lazy\" decoding=\"async\">\u003cimg class=\"shot-img\" data-os=\"windows\" data-appearance=\"light\" src=\"\/secreq\/pr\/27\/ui\/run-session-card-windows-light.png\" width=\"1000\" height=\"1020\" alt=\"Three sibling requests from one run, merged into a single decision. Hover a secret to see which command wanted it.\" loading=\"lazy\" decoding=\"async\">\u003c\/button>\u003cfigcaption>Three sibling requests from one run, merged into a single decision. Hover a secret to see which command wanted it.\u003c\/figcaption>\u003c\/figure>\u003c\/secreq-shot>\u003c\/secreq-window>\n\u003cp>Exit codes match \u003ccode>x\u003c\/code>.\u003c\/p>\n\u003ch2 id=\"reading-a-value-directly\">Reading a value directly\u003c\/h2>\n\u003cp>\u003ccode>secreq read &#x3C;REF>…\u003c\/code> resolves references and prints them as a JSON object\nkeyed by each ref exactly as typed, so it pipes into \u003ccode>jq\u003c\/code>. Every read goes\nthrough the consent daemon, so it is prompted and audited. There is \u003cstrong>no\n\u003ccode>--yes\u003c\/code> bypass\u003c\/strong>: the value lands on stdout, where masking cannot help you.\u003c\/p>\n\u003cp>\u003ccode>secreq resolve\u003c\/code> is a different thing that looks similar: it is the \u003cem>guest\u003c\/em>\nhalf of a sandbox socket, asking a \u003cstrong>host\u003c\/strong> secreq to release something.\nSee \u003ca href=\"\/secreq\/pr\/27\/docs\/secret-agent\">secret-agent\u003c\/a>.\u003c\/p>\n\u003ch2 id=\"bare-secreq\">Bare \u003ccode>secreq\u003c\/code>\u003c\/h2>\n\u003cp>With no subcommand and a terminal to prompt on, \u003ccode>secreq\u003c\/code> presents an action\npicker (open the manager, list wraps, manage rules, open pending requests,\nset up the SSH agent, run first-time setup) and dispatches into the verb you\nchoose. The cursor starts on the manager, so \u003ccode>secreq\u003c\/code> then\n\u003ckbd>Enter\u003c\/kbd> opens the window.\u003c\/p>\n\u003cp>Without a terminal (a shim, a pipe, CI) there is nothing to pick from, so a\nbare invocation exits 2 with a usage hint instead.\u003c\/p>\n\u003ch2 id=\"revoking-an-approval\">Revoking an approval\u003c\/h2>\n\u003cp>There is no per-invocation \"forget this\" flag. Approvals live in the\ndaemon's memory, so \u003ccode>secreq daemon stop\u003c\/code> clears every one of them; the next\nwrap auto-spawns a fresh daemon with an empty cache. How the scope is keyed,\nand why it has no TTL, is in \u003ca href=\"\/secreq\/pr\/27\/docs\/wraps#how-approval-is-scoped\">wraps\u003c\/a>.\u003c\/p>\n\u003ch2 id=\"environment-variables\">Environment variables\u003c\/h2>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Variable\u003c\/th>\u003cth>When\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>SECREQ_HOME\u003c\/code>\u003c\/td>\u003ctd>Root for everything secreq owns: config, \u003ccode>audit.log\u003c\/code>, \u003ccode>daemon.log\u003c\/code>, registered rule modules. Falls back to \u003ccode>~\/.secreq\u003c\/code>.\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>SECREQ_SOCK\u003c\/code>\u003c\/td>\u003ctd>Read by \u003ccode>secreq resolve\u003c\/code>: the scoped agent socket to ask, mirroring \u003ccode>SSH_AUTH_SOCK\u003c\/code>. See \u003ca href=\"\/secreq\/pr\/27\/docs\/secret-agent\">secret-agent\u003c\/a>.\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>SECREQ_NO_DAEMON\u003c\/code>\u003c\/td>\u003ctd>Any non-empty value disables the daemon entirely; consent fails closed unless \u003ccode>--sq-yes\u003c\/code> \/ \u003ccode>--yes\u003c\/code> is used. For tests and headless automation.\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>SECREQ_NO_WAIT_INDICATOR\u003c\/code>\u003c\/td>\u003ctd>Silences the \"waiting for approval\" indicator for one invocation, regardless of the \u003ccode>wait_indicator\u003c\/code> config setting.\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>XDG_RUNTIME_DIR\u003c\/code>\u003c\/td>\u003ctd>Preferred home for the daemon's sockets and pidfile; it is mode-0700 tmpfs. Falls back to \u003ccode>&#x3C;root>\/run\u003c\/code>.\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>XDG_CONFIG_HOME\u003c\/code>\u003c\/td>\u003ctd>Legacy config location the first-run migration copies into the root. No longer used for discovery.\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>SHELL\u003c\/code>\u003c\/td>\u003ctd>\u003ccode>init\u003c\/code> reads this to choose which shell config to edit.\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>EDITOR\u003c\/code> \/ \u003ccode>VISUAL\u003c\/code>\u003c\/td>\u003ctd>Used by \u003ccode>secreq edit\u003c\/code>.\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>DISPLAY\u003c\/code> \/ \u003ccode>WAYLAND_DISPLAY\u003c\/code>\u003c\/td>\u003ctd>Linux\/BSD: with neither set, secreq fails closed rather than spawning a daemon that can't render.\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003ch2 id=\"next\">Next\u003c\/h2>\n\u003cul>\n\u003cli>\u003ca href=\"\/secreq\/pr\/27\/docs\/cli-reference\">All commands\u003c\/a>: every subcommand and flag.\u003c\/li>\n\u003cli>\u003ca href=\"\/secreq\/pr\/27\/docs\/wraps\">wraps\u003c\/a>: authoring \u003ccode>config.toml\u003c\/code>, and how approval is scoped.\u003c\/li>\n\u003cli>\u003ca href=\"\/secreq\/pr\/27\/docs\/consent-window\">consent-window\u003c\/a>: the windows these verbs put up.\u003c\/li>\n\u003c\/ul>","headings":[{"id":"wrap-and-run-x","text":"Wrap-and-run: x","level":2},{"id":"the-argv-contract","text":"The argv contract","level":3},{"id":"what-a-run-does","text":"What a run does","level":3},{"id":"exit-codes","text":"Exit codes","level":3},{"id":"ambient-references-run","text":"Ambient references: run","level":2},{"id":"why-run-always-asks","text":"Why run always asks","level":3},{"id":"reading-a-value-directly","text":"Reading a value directly","level":2},{"id":"bare-secreq","text":"Bare secreq","level":2},{"id":"revoking-an-approval","text":"Revoking an approval","level":2},{"id":"environment-variables","text":"Environment variables","level":2},{"id":"next","text":"Next","level":2}]}}}</script>
+        <script id="vike_globalContext" type="application/json">{"navigation":[{"title":"Getting started","children":[{"title":"Install","path":"\/docs\/install"},{"title":"Getting started","path":"\/docs\/getting-started"},{"title":"Overview","path":"\/docs\/overview"}]},{"title":"Reference","children":[{"title":"CLI guide","path":"\/docs\/cli"},{"title":"All commands","path":"\/docs\/cli-reference"},{"title":"Authoring wraps","path":"\/docs\/wraps"},{"title":"Providers","path":"\/docs\/providers"}]},{"title":"Agents","children":[{"title":"SSH agent","path":"\/docs\/ssh-agent"},{"title":"Secret agent","path":"\/docs\/secret-agent"},{"title":"Consent window","path":"\/docs\/consent-window"},{"title":"Linked devices","path":"\/docs\/link"}]},{"title":"Advanced","children":[{"title":"Programmable rules","path":"\/docs\/wasm-rules"},{"title":"SDK API reference","path":"\/api"},{"title":"Platform support","path":"\/docs\/platform-support"},{"title":"Troubleshooting","path":"\/docs\/troubleshooting"}]},{"title":"Schemas","path":"\/schemas"}]}</script>
+        <script src="/secreq/pr/27/assets/entries/entry-client-routing.DIjf0xRK.js" type="module" async></script>
+        <link rel="modulepreload" href="/secreq/pr/27/assets/entries/pages_docs_-slug.CqwrNuiG.js" as="script" type="text/javascript">
+        <link rel="modulepreload" href="/secreq/pr/27/assets/chunks/chunk-CBBBfLXO.js" as="script" type="text/javascript">
+        <link rel="modulepreload" href="/secreq/pr/27/assets/chunks/chunk-CcAiM0l8.js" as="script" type="text/javascript">
+        <link rel="modulepreload" href="/secreq/pr/27/assets/chunks/chunk-BRx9Qmla.js" as="script" type="text/javascript">
+        <link rel="modulepreload" href="/secreq/pr/27/assets/chunks/chunk-D-_Oy3BM.js" as="script" type="text/javascript">
+        <link rel="modulepreload" href="/secreq/pr/27/assets/chunks/chunk-BMeWq2nI.js" as="script" type="text/javascript">
+      </body>
+    </html>
