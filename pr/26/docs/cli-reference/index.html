@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <link rel="stylesheet" type="text/css" href="/secreq/pr/26/assets/static/pages_tailwind-65fb2459.BIXKgZ-d.css">
+        <meta charset="UTF-8" />
+        
+        
+    <title>secreq</title><meta property="og:title" content="secreq" />
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <link rel="icon" type="image/svg+xml" href="/secreq/pr/26/favicon.svg"/><meta name="color-scheme" content="dark light"/><link rel="preconnect" href="https://fonts.googleapis.com"/><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin=""/><link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&amp;family=JetBrains+Mono:wght@400;500;600&amp;family=Martian+Mono:wght@400..700&amp;display=swap" rel="stylesheet"/><script>
+(function () {
+  var root = document.documentElement;
+  try {
+    var stored = localStorage.getItem('sq-theme');
+    root.dataset.theme = stored || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  } catch (e) {
+    root.dataset.theme = 'dark';
+  }
+  try {
+    var storedOs = localStorage.getItem('sq-os');
+    if (storedOs) { root.dataset.os = storedOs; return; }
+    var hint = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+    var ua = navigator.userAgent || '';
+    var probe = (hint + ' ' + ua).toLowerCase();
+    // Order matters: an iPhone UA contains "mac", and an Android UA contains
+    // "linux", so the mobile cases have to be settled first. Neither runs
+    // secreq, so they get the desktop chrome their vendor is closest to.
+    root.dataset.os =
+      /android/.test(probe) ? 'gnome'
+      : /iphone|ipad|ipod|mac/.test(probe) ? 'macos'
+      : /win/.test(probe) ? 'windows'
+      : /linux|x11|cros|bsd/.test(probe) ? 'gnome'
+      : 'macos';
+  } catch (e) {
+    root.dataset.os = 'macos';
+  }
+})();
+</script>
+    
+    <meta name="description" content="1Password Shell Plugins, but generic — wrap the CLIs you use every day so each invocation gets its credentials from your secret store, with provenance-aware consent and output masking." /><meta property="og:description" content="1Password Shell Plugins, but generic — wrap the CLIs you use every day so each invocation gets its credentials from your secret store, with provenance-aware consent and output masking." />
+    
+  
+        
+      </head>
+      <body>
+        
+        <div id="root"><div class="shell min-h-screen text-text-2 relative"><div class="ambient" aria-hidden="true"><div class="ambient-wash"></div><div class="ambient-grain"></div></div><header class="shell-header" data-pagefind-ignore="true"><div class="flex items-center h-full gap-2 px-4 sm:px-6"><a href="/secreq/pr/26/" class="brand"><svg class="brand-mark" viewBox="6 6 52 52" aria-hidden="true"><circle class="brand-ping" cx="32" cy="32" r="7"></circle><g class="brand-gate" fill="none" stroke-width="7" stroke-linejoin="miter"><path d="M23 10 H13 V54 H23"></path><path d="M41 10 H51 V54 H41"></path></g><circle class="brand-secret" cx="32" cy="32" r="7"></circle></svg>secreq</a><nav class="hidden md:flex items-stretch h-full ml-6"><a href="/secreq/pr/26/docs" class="nav-link no-underline" data-active="true">Docs</a><a href="/secreq/pr/26/api" class="nav-link no-underline" data-active="false">API</a><a href="/secreq/pr/26/schemas" class="nav-link no-underline" data-active="false">Schemas</a></nav><div class="ml-auto flex items-center gap-1.5"><div class="hidden sm:block w-44 lg:w-56"><div class="relative"><div class="relative"><svg class="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none w-3.5 h-3.5 text-text-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg><input type="search" placeholder="Search the docs" aria-label="Search the docs" class="search-input" value=""/><kbd class="key absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none hidden lg:block">⌘K</kbd></div></div></div><a href="https://github.com/AgentEnder/secreq" target="_blank" rel="noopener noreferrer" class="icon-btn" aria-label="secreq on GitHub"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0a8 8 0 0 0-2.5 15.6c.4.07.55-.17.55-.38v-1.35C3.84 14.3 3.4 13 3.4 13c-.36-.9-.87-1.15-.87-1.15-.71-.48.05-.47.05-.47.79.05 1.2.81 1.2.81.7 1.2 1.83.85 2.28.65.07-.5.27-.85.5-1.05-1.74-.2-3.56-.87-3.56-3.87 0-.85.3-1.55.8-2.1-.08-.2-.35-1 .08-2.07 0 0 .65-.21 2.14.8a7.4 7.4 0 0 1 3.9 0c1.49-1.01 2.14-.8 2.14-.8.43 1.07.16 1.87.08 2.07.5.55.8 1.25.8 2.1 0 3.01-1.83 3.67-3.57 3.86.28.24.53.72.53 1.45v2.15c0 .21.14.46.55.38A8 8 0 0 0 8 0z"></path></svg></a><span class="w-8 h-8 shrink-0" aria-hidden="true"></span><span class="w-8 h-8 shrink-0" aria-hidden="true"></span><button type="button" class="icon-btn md:hidden" aria-expanded="false" aria-label="Open the menu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"></path></svg></button></div></div></header><div class="doc-layout"><div class="rail-wrap hidden md:block border-r border-hairline overflow-y-auto" data-pagefind-ignore="true"><nav class="rail"><div class="rail-group"><span class="rail-group-label">Getting started</span><a href="/secreq/pr/26/docs/install" class="rail-link no-underline" data-active="false">Install</a><a href="/secreq/pr/26/docs/getting-started" class="rail-link no-underline" data-active="false">Getting started</a><a href="/secreq/pr/26/docs/overview" class="rail-link no-underline" data-active="false">Overview</a></div><div class="rail-group"><span class="rail-group-label">Reference</span><a href="/secreq/pr/26/docs/cli" class="rail-link no-underline" data-active="false">CLI guide</a><a href="/secreq/pr/26/docs/cli-reference" class="rail-link no-underline" data-active="true">All commands</a><a href="/secreq/pr/26/docs/wraps" class="rail-link no-underline" data-active="false">Authoring wraps</a><a href="/secreq/pr/26/docs/providers" class="rail-link no-underline" data-active="false">Providers</a></div><div class="rail-group"><span class="rail-group-label">Agents</span><a href="/secreq/pr/26/docs/ssh-agent" class="rail-link no-underline" data-active="false">SSH agent</a><a href="/secreq/pr/26/docs/secret-agent" class="rail-link no-underline" data-active="false">Secret agent</a><a href="/secreq/pr/26/docs/consent-window" class="rail-link no-underline" data-active="false">Consent window</a><a href="/secreq/pr/26/docs/link" class="rail-link no-underline" data-active="false">Linked devices</a></div><div class="rail-group"><span class="rail-group-label">Advanced</span><a href="/secreq/pr/26/docs/wasm-rules" class="rail-link no-underline" data-active="false">Programmable rules</a><a href="/secreq/pr/26/api" class="rail-link no-underline" data-active="false">SDK API reference</a><a href="/secreq/pr/26/docs/platform-support" class="rail-link no-underline" data-active="false">Platform support</a><a href="/secreq/pr/26/docs/troubleshooting" class="rail-link no-underline" data-active="false">Troubleshooting</a></div><div class="rail-group"><a href="/secreq/pr/26/schemas" class="rail-link no-underline" data-active="false">Schemas</a></div></nav></div><main class="min-w-0 px-5 py-9 md:px-10 md:py-12"><div class="flex gap-12"><article class="flex-1 min-w-0" style="view-transition-name:doc-article"><nav aria-label="Breadcrumb" class="crumbs mb-7" data-pagefind-ignore="true"><ol><li><a href="/secreq/pr/26/docs">Docs</a></li><li><span class="crumb-sep" aria-hidden="true">/</span><a href="/secreq/pr/26/docs#reference">Reference</a></li><li><span class="crumb-sep" aria-hidden="true">/</span><span aria-current="page">All commands</span></li></ol></nav><h1 class="t-title mb-8">All commands</h1><div class="prose-content" data-pagefind-body="true"><!-- GENERATED FILE. DO NOT EDIT.
+     Source: packages/secreq/src/cli.rs (the clap tree).
+     Regenerate: cargo run --example gen-cli-reference > docs/cli-reference.md
+     Guarded by: packages/secreq/tests/cli_drift.rs -->
+<p>Every command, subcommand, and flag <code>secreq</code> accepts, generated from the CLI definition itself.</p>
+<p>This is the exhaustive list. For what the commands are <em>for</em> (the two run verbs, why <code>x</code> forwards every flag it is given, how approval is scoped) read the <a href="/secreq/pr/26/docs/cli">CLI guide</a>.</p>
+<h2 id="global-options">Global options</h2>
+<p>These reach the admin verbs and <code>run</code>. They do <strong>not</strong> apply to <code>x</code>, whose argv belongs to the wrapped binary. See the <a href="/secreq/pr/26/docs/cli#the-argv-contract">argv contract</a> for its <code>--sq-</code> equivalents.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody><tr><td><code>--config &#x3C;PATH></code></td><td>Use a specific config file instead of <code>~/.secreq/config.toml</code>. For <code>x</code> use <code>--sq-config</code></td></tr><tr><td><code>--raw</code></td><td>Skip output masking. The wrapped binary still runs with secrets in its env; only redaction of its stdout/stderr is disabled. Applies only to <code>run</code>, not admin verbs; for <code>x</code> use <code>--sq-raw</code></td></tr><tr><td><code>-y, --yes</code></td><td>Auto-approve without prompting. Composes through nested runs. For <code>x</code> use <code>--sq-yes</code></td></tr><tr><td><code>--no-remember</code></td><td>Don't read or write the remembered-approval cache. For <code>x</code> use <code>--sq-no-remember</code></td></tr></tbody></table>
+<p><code>-h</code>/<code>--help</code> and <code>-V</code>/<code>--version</code> work everywhere.</p>
+<h2 id="secreq-init"><code>secreq init</code></h2>
+<pre><code>secreq init [OPTIONS]
+</code></pre>
+<p>First-time setup: pick the shim dir and (optionally) wire it into PATH</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody><tr><td><code>--shim-dir &#x3C;PATH></code></td><td>Default shim dir to suggest (overrides <code>~/.secreq/shims</code>)</td></tr></tbody></table>
+<h2 id="secreq-wrap"><code>secreq wrap</code></h2>
+<pre><code>secreq wrap [OPTIONS] &#x3C;BINARY>
+</code></pre>
+<p>Add (or update) a wrap for a binary; installs the PATH shim</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Argument</th><th>Meaning</th></tr></thead><tbody><tr><td><code>&#x3C;BINARY></code></td><td>The binary name to wrap, e.g. <code>gh</code></td></tr></tbody></table>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody><tr><td><code>--secret &#x3C;NAME>…</code></td><td>Inject a declared secret under its own name. Repeatable</td></tr><tr><td><code>--env &#x3C;NAME=REF>…</code></td><td><code>--env NAME=secret://provider/locator</code>. Repeatable. When neither <code>--env</code> nor <code>--secret</code> is given, runs the interactive flow</td></tr><tr><td><code>--reason &#x3C;REASON></code></td><td>Reason to show in the consent prompt</td></tr></tbody></table>
+<h2 id="secreq-unwrap"><code>secreq unwrap</code></h2>
+<pre><code>secreq unwrap &#x3C;BINARY>
+</code></pre>
+<p>Remove a wrap (config entry + shim)</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Argument</th><th>Meaning</th></tr></thead><tbody><tr><td><code>&#x3C;BINARY></code></td><td>The binary name</td></tr></tbody></table>
+<h2 id="secreq-wraps"><code>secreq wraps</code></h2>
+<pre><code>secreq wraps
+</code></pre>
+<p>List configured wraps</p>
+<h2 id="secreq-ssh"><code>secreq ssh</code></h2>
+<pre><code>secreq ssh &#x3C;SUBCOMMAND>
+</code></pre>
+<p>Manage secreq's SSH agent: configure identities, wire SSH clients to the agent socket, and verify that signing works</p>
+<h3 id="secreq-ssh-setup"><code>secreq ssh setup</code></h3>
+<pre><code>secreq ssh setup [OPTIONS]
+</code></pre>
+<p>Wire SSH clients at secreq's agent socket by writing a managed block to <code>~/.ssh/config</code> (<code>IdentityAgent</code>) or your shell rc (<code>SSH_AUTH_SOCK</code>). Pick the method with <code>--method</code>, or get an interactive prompt when it's omitted. <code>--undo</code> strips the block back out</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody><tr><td><code>--method &#x3C;METHOD></code></td><td>Which file to wire: <code>ssh-config</code> (<code>~/.ssh/config</code> <code>IdentityAgent</code>) or <code>shell-rc</code> (<code>SSH_AUTH_SOCK</code> export). Omit to choose interactively</td></tr><tr><td><code>--undo</code></td><td>Remove the managed block instead of adding it</td></tr></tbody></table>
+<h3 id="secreq-ssh-add"><code>secreq ssh add</code></h3>
+<pre><code>secreq ssh add [OPTIONS] &#x3C;NAME>
+</code></pre>
+<p>Add (or overwrite) an SSH identity in <code>config.toml</code>. The agent serves this identity once the daemon is running. The public key is stored inline; the private key is a <code>secret://provider/locator</code> reference resolved only at sign time. Omit <code>--public-key</code>/<code>--private-key</code> to resolve them interactively (with 1Password <code>op</code> discovery when on PATH). Pass both for a fully non-interactive run</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Argument</th><th>Meaning</th></tr></thead><tbody><tr><td><code>&#x3C;NAME></code></td><td>The identity name (the key under the <code>ssh</code> block), e.g. <code>github</code></td></tr></tbody></table>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody><tr><td><code>--public-key &#x3C;PATH-OR-LITERAL></code></td><td>The OpenSSH public key: a path to a <code>.pub</code> file, or the literal <code>ssh-… / ecdsa-… / sk-…</code> line. Prompted for if omitted</td></tr><tr><td><code>--private-key &#x3C;secret://…></code></td><td>The private key reference, <code>secret://provider/locator</code>. Prompted for (with <code>op</code> discovery) if omitted</td></tr><tr><td><code>--reason &#x3C;REASON></code></td><td>Reason shown in the consent prompt when this identity signs</td></tr><tr><td><code>--force</code></td><td>Overwrite an existing identity of the same name</td></tr></tbody></table>
+<h3 id="secreq-ssh-validate"><code>secreq ssh validate</code></h3>
+<pre><code>secreq ssh validate [&#x3C;NAME>]
+</code></pre>
+<p>Prove the agent can sign with a configured SSH identity. Connects to the agent socket, lists identities, then asks the agent to sign a fixed test message with the key and verifies the returned signature against its public half, exercising the real consent → resolve → sign path. With no <code>&#x3C;name></code>, validates every configured identity. Signing is a real sign, so it may prompt for consent (and a biometric). Exits 0 only if every validated identity verifies</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Argument</th><th>Meaning</th></tr></thead><tbody><tr><td><code>&#x3C;NAME></code></td><td>The identity name to validate (the key under the <code>ssh</code> block). Omit to validate every configured identity</td></tr></tbody></table>
+<h2 id="secreq-agent"><code>secreq agent</code></h2>
+<pre><code>secreq agent &#x3C;SUBCOMMAND>
+</code></pre>
+<p>Manage scoped secret agent sockets: the host-side end of serving <code>secret://</code> refs to a guest VM instead of copying tokens into it</p>
+<h3 id="secreq-agent-open"><code>secreq agent open</code></h3>
+<pre><code>secreq agent open [OPTIONS]
+</code></pre>
+<p>Open a scoped, ephemeral socket that resolves <code>secret://</code> refs for a guest, and serve it until interrupted.</p>
+<p>The scope name and the allowlist are declared <strong>here, by you, at open time</strong>, and are immutable for the socket's life. A ref outside the allowlist is denied without a prompt (and audited), so a compromised guest can neither train you to click through nor enumerate your vault one prompt at a time. Every allowed request prompts for consent, showing the scope as the principal: a guest has no host process tree, so there is no caller chain to show.</p>
+<p>The resolved socket path is printed to stdout on its own line, so the caller can read it back rather than reconstruct it.</p>
+<p>Forward the socket into a VM the way <code>ssh -A</code> forwards an agent:</p>
+<pre class="shiki shiki-themes github-light github-dark" style="--shiki-light:#24292e;--shiki-dark:#e1e4e8;--shiki-light-bg:#fff;--shiki-dark-bg:#24292e" tabindex="0"><code><span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0">secreq</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF"> agent</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF"> open</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> --scope</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF"> my-vm</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> --allow</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF"> secret://op/Dev/gh/token</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> \</span></span>
+<span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">  --sock</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF"> "</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">$HOME</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">/.secreq/run/my-vm.sock"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> &#x26;</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0">ssh</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> -R</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF"> /run/secreq.sock:"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">$HOME</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">/.secreq/run/my-vm.sock"</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF"> my-vm</span></span></code></pre>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody><tr><td><code>--scope &#x3C;NAME></code></td><td>The scope name shown in the consent prompt as the principal, typically the sandbox / VM name</td></tr><tr><td><code>--allow &#x3C;secret://…>…</code></td><td>A <code>secret://provider/locator</code> ref this socket may resolve. Repeatable; at least one is required. Matched exactly: there is no prefix or wildcard form, by design</td></tr><tr><td><code>--sock &#x3C;PATH></code></td><td>Where to bind the socket. Must not already exist. Defaults to <code>scope-&#x3C;name>.sock</code> in secreq's socket dir (<code>$XDG_RUNTIME_DIR/secreq</code>, else <code>&#x3C;$SECREQ_HOME>/run</code>), beside the consent and SSH-agent sockets. Pass this to bind elsewhere, e.g. at a path you are about to <code>ssh -R</code> into a guest. Pick a directory only you can write. The socket is owner-only from the moment it exists, but in a shared one like <code>/tmp</code> anyone can plant a file at the path first and break the bind.</td></tr></tbody></table>
+<h2 id="secreq-link"><code>secreq link</code></h2>
+<pre><code>secreq link &#x3C;SUBCOMMAND>
+</code></pre>
+<p>Pair and manage devices that can approve pending requests over your private LAN. Bare <code>secreq link</code> opens a one-minute enrollment window and prints a QR code. The linked page uses plain HTTP: request names are visible on the LAN, while signed decisions prevent an ordinary LAN peer without an enrolled key from approving or denying them</p>
+<h3 id="secreq-link-list"><code>secreq link list</code></h3>
+<pre><code>secreq link list
+</code></pre>
+<p>List the nicknames of every paired device</p>
+<h3 id="secreq-link-rm"><code>secreq link rm</code></h3>
+<pre><code>secreq link rm &#x3C;NICKNAME>
+</code></pre>
+<p>Revoke one paired device immediately. An in-flight decision signed by that device is refused after this command returns</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Argument</th><th>Meaning</th></tr></thead><tbody><tr><td><code>&#x3C;NICKNAME></code></td><td>The exact nickname entered when the device was paired</td></tr></tbody></table>
+<h2 id="secreq-check"><code>secreq check</code></h2>
+<pre><code>secreq check
+</code></pre>
+<p>Validate the config</p>
+<h2 id="secreq-doctor"><code>secreq doctor</code></h2>
+<pre><code>secreq doctor
+</code></pre>
+<p><code>check</code> plus confirm every used provider's CLI is installed</p>
+<h2 id="secreq-edit"><code>secreq edit</code></h2>
+<pre><code>secreq edit
+</code></pre>
+<p>Open the config in <code>$EDITOR</code></p>
+<h2 id="secreq-migrate"><code>secreq migrate</code></h2>
+<pre><code>secreq migrate &#x3C;SUBCOMMAND>
+</code></pre>
+<p>Inspect and roll back config migrations.</p>
+<p>secreq migrates its own config on first run after an upgrade, taking a snapshot beforehand. This is how you get back to one.</p>
+<h3 id="secreq-migrate-restore"><code>secreq migrate restore</code></h3>
+<pre><code>secreq migrate restore &#x3C;LEVEL>
+</code></pre>
+<p>Restore the config snapshot taken before migration <level>.</level></p>
+<p>Use this when a downgraded secreq refuses to run because your config was migrated by a newer build. Lossy: anything added since that snapshot is discarded. The diff is shown and confirmed first, and your current config is saved alongside the snapshots before anything is overwritten.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Argument</th><th>Meaning</th></tr></thead><tbody><tr><td><code>&#x3C;LEVEL></code></td><td>Migration level to go back to (the snapshot is the config as it stood <em>before</em> migration LEVEL+1 ran)</td></tr></tbody></table>
+<h2 id="secreq-daemon"><code>secreq daemon</code></h2>
+<pre><code>secreq daemon [OPTIONS] &#x3C;SUBCOMMAND>
+</code></pre>
+<p>Run or manage the consent daemon. Bare <code>secreq daemon</code> ensures a daemon is running in the background (spawning one if needed) and then tails its log until you Ctrl-C, which is handy for watching the consent flow live. Use <code>--fg</code> to run the daemon in the foreground in this process instead (the form auto-spawned by wraps). <code>secreq daemon stop</code> tells a running daemon to exit, which also clears every remembered approval (the cache is in-memory only by design). <code>secreq daemon status</code> reports whether one is running. <code>secreq daemon log-path</code> prints the log file path</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody><tr><td><code>--fg</code></td><td>Run the daemon in the foreground in this process instead of starting a background daemon and tailing its log</td></tr></tbody></table>
+<h3 id="secreq-daemon-stop"><code>secreq daemon stop</code></h3>
+<pre><code>secreq daemon stop [OPTIONS]
+</code></pre>
+<p>Stop the running daemon. Clears the in-memory approvals cache; the next wrap invocation auto-spawns a fresh daemon</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody><tr><td><code>-f, --force</code></td><td>Skip the graceful protocol and SIGKILL the daemon outright. Use when the daemon is unresponsive (wedged UI, hung socket thread). Also removes the pidfile + socket, which the killed process can no longer clean up itself</td></tr></tbody></table>
+<h3 id="secreq-daemon-status"><code>secreq daemon status</code></h3>
+<pre><code>secreq daemon status
+</code></pre>
+<p>Report whether a daemon is running, without spawning one. Prints the pid, the running build (flagging a stale daemon whose build differs from this CLI's), and the socket + log paths. Exits 0 when a daemon is running and 3 when none is, so scripts can branch on it</p>
+<h3 id="secreq-daemon-log-path"><code>secreq daemon log-path</code></h3>
+<pre><code>secreq daemon log-path
+</code></pre>
+<p>Print the path of the daemon's persistent log file and exit. Does not start a daemon</p>
+<h3 id="secreq-daemon-install"><code>secreq daemon install</code></h3>
+<pre><code>secreq daemon install [OPTIONS]
+</code></pre>
+<p>Install a per-user login service that runs the daemon at login and keeps it alive (launchd LaunchAgent on macOS, systemd <code>--user</code> unit on Linux). This is what keeps the SSH agent socket live for incoming connections. <code>--undo</code> unloads and removes the service</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody><tr><td><code>--undo</code></td><td>Unload and remove the login service instead of installing it</td></tr></tbody></table>
+<h2 id="secreq-pending"><code>secreq pending</code></h2>
+<pre><code>secreq pending
+</code></pre>
+<p>Open the consent daemon's pending-requests window. Auto-spawns the daemon if it isn't running</p>
+<h2 id="secreq-view"><code>secreq view</code></h2>
+<pre><code>secreq view
+</code></pre>
+<p>Also spelled <code>secreq ui</code>.</p>
+<p>Open the manager window: the persistent surface holding your auto-rules and the audit log. Lands on Audit; a segmented control switches to Rules. It never holds a pending decision (that is the prompt window's job, <code>secreq pending</code>), so browsing history never blocks a waiting request. Auto-spawns the daemon if it isn't running</p>
+<h2 id="secreq-rules"><code>secreq rules</code></h2>
+<pre><code>secreq rules &#x3C;SUBCOMMAND>
+</code></pre>
+<p>Manage auto-approve / auto-deny rules. Declarative rules are created from the manager window's Rules view (or by hand-editing the rules file); compiled wasm rule modules are registered here with <code>add-wasm</code>. The CLI surface covers the headless management path: list, inspect, enable/disable, delete, add-wasm</p>
+<h3 id="secreq-rules-list"><code>secreq rules list</code></h3>
+<pre><code>secreq rules list
+</code></pre>
+<p>One-line listing of every rule with its decide direction, enabled state, declarative wrap match, and consultation wrap scope. Default action for <code>secreq rules</code></p>
+<h3 id="secreq-rules-stats"><code>secreq rules stats</code></h3>
+<pre><code>secreq rules stats [OPTIONS]
+</code></pre>
+<p>Validate the installed ruleset and replay it over historical audit asks using the same evaluator and wasm host as live requests</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody><tr><td><code>--since &#x3C;DATE></code></td><td>Include rows at or after this UTC date (<code>YYYY-MM-DD</code>) or Unix timestamp</td></tr><tr><td><code>--wrap &#x3C;WRAP></code></td><td>Replay only rows for this exact wrap</td></tr><tr><td><code>--top &#x3C;TOP></code></td><td>Maximum prompt-shape rows in each ranked breakdown</td></tr><tr><td><code>--audit &#x3C;PATH></code></td><td>Read this audit file instead of <code>~/.secreq/audit.log</code></td></tr><tr><td><code>--json</code></td><td>Emit the stable machine-readable report schema</td></tr><tr><td><code>--verify</code></td><td>Check eligible historical auto decisions for evaluator drift. Also exits non-zero for refused modules/patterns, invalid live scope, malformed audit records, or runtime wasm failures. Ordinary uncovered prompts are not failures</td></tr></tbody></table>
+<h3 id="secreq-rules-show"><code>secreq rules show</code></h3>
+<pre><code>secreq rules show &#x3C;TARGET>
+</code></pre>
+<p>Show one rule in full (consultation wrap scope, every match field, trained_secrets, deny_message, created_at). <code>target</code> matches by id, falling back to exact name</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Argument</th><th>Meaning</th></tr></thead><tbody><tr><td><code>&#x3C;TARGET></code></td><td>The rule's id, or its exact name</td></tr></tbody></table>
+<h3 id="secreq-rules-enable"><code>secreq rules enable</code></h3>
+<pre><code>secreq rules enable &#x3C;TARGET>
+</code></pre>
+<p>Set <code>enabled = true</code> on a rule</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Argument</th><th>Meaning</th></tr></thead><tbody><tr><td><code>&#x3C;TARGET></code></td><td>The rule's id, or its exact name</td></tr></tbody></table>
+<h3 id="secreq-rules-disable"><code>secreq rules disable</code></h3>
+<pre><code>secreq rules disable &#x3C;TARGET>
+</code></pre>
+<p>Set <code>enabled = false</code> on a rule. The rule stays in the file; re-enable later without re-typing</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Argument</th><th>Meaning</th></tr></thead><tbody><tr><td><code>&#x3C;TARGET></code></td><td>The rule's id, or its exact name</td></tr></tbody></table>
+<h3 id="secreq-rules-rm"><code>secreq rules rm</code></h3>
+<pre><code>secreq rules rm &#x3C;TARGET>
+</code></pre>
+<p>Delete a rule by id or exact name. A wasm rule's stored module file goes with it</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Argument</th><th>Meaning</th></tr></thead><tbody><tr><td><code>&#x3C;TARGET></code></td><td>The rule's id, or its exact name</td></tr></tbody></table>
+<h3 id="secreq-rules-new-wasm"><code>secreq rules new-wasm</code></h3>
+<pre><code>secreq rules new-wasm [OPTIONS] &#x3C;DIR>
+</code></pre>
+<p>Scaffold a buildable wasm rule project into <code>&#x3C;DIR></code>: a <code>package.json</code> wired to the <code>secreq-rule</code> SDK, an <code>assembly/rule.ts</code> stub exporting <code>decide(ctx)</code>, an as-pect spec, and the test-runner config. <code>npm install &#x26;&#x26; npm run build</code> produces the module <code>rules add-wasm</code> then registers</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Argument</th><th>Meaning</th></tr></thead><tbody><tr><td><code>&#x3C;DIR></code></td><td>Directory to write the project into. Created if missing; an existing one must be empty</td></tr></tbody></table>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody><tr><td><code>--name &#x3C;NAME></code></td><td>npm package name for the project, also the suggested rule name. Folded to something npm accepts (lowercase, no spaces). Defaults to a slug of <code>&#x3C;DIR></code>'s last component</td></tr><tr><td><code>--sdk &#x3C;PATH></code></td><td>Path to the <code>secreq-rule</code> package (<code>packages/secreq-rule</code> in a secreq checkout), written into <code>package.json</code> as an absolute <code>file:</code> dependency. Auto-detected by walking up from this binary and the working directory; without one the manifest falls back to the registry, which does not carry the SDK yet</td></tr><tr><td><code>--from &#x3C;EXAMPLE></code></td><td>Seed <code>assembly/</code> from one of the SDK's worked examples (e.g. <code>npm-publish-guard</code>) instead of the empty stub</td></tr></tbody></table>
+<h3 id="secreq-rules-add-wasm"><code>secreq rules add-wasm</code></h3>
+<pre><code>secreq rules add-wasm [OPTIONS] &#x3C;FILE>
+</code></pre>
+<p>Register a compiled wasm rule module (built with the <code>secreq-rule</code> SDK). The daemon vets the module in its sandbox, copies it into the canonical store under the secreq root, pins it by sha256, and persists the rule. A failed vetting registers nothing. The module decides approve/pass/deny per ask at evaluation time</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Argument</th><th>Meaning</th></tr></thead><tbody><tr><td><code>&#x3C;FILE></code></td><td>Path to the compiled <code>.wasm</code> module</td></tr></tbody></table>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody><tr><td><code>--name &#x3C;NAME></code></td><td>Rule name shown in the UI and audit log. Defaults to the module's file stem</td></tr><tr><td><code>--secret &#x3C;NAME>…</code></td><td>Subject the rule is allowed to decide: an env key, <code>ssh:&#x3C;key_id></code>, or <code>wrap:&#x3C;name></code>. Repeatable; when the module declares subjects, this narrows them by intersection</td></tr><tr><td><code>--wrap &#x3C;NAME>…</code></td><td>Wrap name for which the rule may be consulted. Repeatable. Omit to allow every wrap. This gate is applied before the wasm module is instantiated</td></tr><tr><td><code>--accept-declared</code></td><td>Grant the nonempty subjects declared by the module without an interactive confirmation. Intended for CI/headless registration</td></tr><tr><td><code>--all-secrets</code></td><td>Register with NO trained-secrets snapshot: the module will be consulted for every ask in its wrap scope (or across every wrap when no --wrap is given). Dangerous; required explicitly when no --secret is given</td></tr></tbody></table>
+<h2 id="secreq-x"><code>secreq x</code></h2>
+<pre><code>secreq x [--sq-OPTIONS] &#x3C;WRAP> [ARGS...]
+</code></pre>
+<p>Run a wrapped binary through secreq: consent → inject secrets → exec the real binary with output masking. This is what the PATH shims call (<code>exec '&#x3C;path to secreq>' x '&#x3C;wrap>' "$@"</code> — the shim names secreq by absolute path so it cannot be hijacked by a <code>secreq</code> earlier on the caller's PATH). <code>x</code> owns no ordinary flags: everything after the wrap name is forwarded to the binary verbatim (so <code>&#x3C;wrap> --help</code> reaches the binary, not secreq), and secreq's own options use the reserved <code>--sq-</code> prefix; <code>secreq x --sq-help</code> lists them. Parsed by hand in <code>run_x</code>, never by clap; this variant exists so <code>secreq --help</code> documents the verb</p>
+<h2 id="secreq-run"><code>secreq run</code></h2>
+<pre><code>secreq run [OPTIONS] [&#x3C;COMMAND>…]
+</code></pre>
+<p><code>op run</code>, but for every secret store: resolve every <code>secret://provider/locator</code> reference found in the environment (the inherited environment plus any <code>--env-file</code>) through the consent daemon, then run the command with the resolved values injected and its output masked. Plain <code>NAME=value</code> entries pass through unchanged. Unlike <code>x</code>, no wrap entry is required: the references describe the secrets inline</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Argument</th><th>Meaning</th></tr></thead><tbody><tr><td><code>&#x3C;COMMAND>…</code></td><td>The command to run, followed by its arguments</td></tr></tbody></table>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody><tr><td><code>--env-file &#x3C;PATH>…</code></td><td>Load <code>NAME=value</code> lines from this file, layered <em>under</em> the inherited environment (inherited wins on conflict). Values may be <code>secret://provider/locator</code> references or plaintext. Repeatable</td></tr><tr><td><code>--prompt-unresolved</code></td><td>For each <code>secret://</code> reference whose locator resolves to nothing, prompt for the value (masked, no echo) and write it, via the provider's <code>store</code> capability, to exactly where the locator points, so this and every later run resolves it normally. A reference whose provider is read-only (no <code>store</code> capability) fails with a clear error instead of being silently skipped. Without this flag an unresolved reference fails as before</td></tr></tbody></table>
+<h2 id="secreq-read"><code>secreq read</code></h2>
+<pre><code>secreq read &#x3C;REF>…
+</code></pre>
+<p><code>op read</code>, but for every secret store: resolve one or more secret references and print their values as a JSON object. Each reference is <code>secret://provider/locator</code> or the bare <code>provider/locator</code> shorthand. Output is always a JSON object keyed by each ref exactly as typed, even for a single ref, so it pipes cleanly into <code>jq</code>. Resolution always goes through the consent daemon (every read is prompted and audited); there is no <code>--yes</code> bypass, by design</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Argument</th><th>Meaning</th></tr></thead><tbody><tr><td><code>&#x3C;REF>…</code></td><td>The references to resolve, e.g. <code>secret://op/Work/key</code> or <code>op/Work/key</code>. At least one is required</td></tr></tbody></table>
+<h2 id="secreq-resolve"><code>secreq resolve</code></h2>
+<pre><code>secreq resolve [OPTIONS] [&#x3C;REF>]
+</code></pre>
+<p>Ask the host's secreq for one secret, from inside a sandbox.</p>
+<p>This is the guest end of a scoped agent socket (<code>secreq agent open</code> opens the host end). It dials the socket named by <code>$SECREQ_SOCK</code>, the same convention as <code>SSH_AUTH_SOCK</code>, so nothing is stored in the sandbox: each use is asked for, gated by consent on the host, and audited there. <code>$SECREQ_SOCK</code> is set for you inside a brain <code>--vm</code> sandbox.</p>
+<p>The value goes to stdout and everything else to stderr, so it composes:</p>
+<pre class="shiki shiki-themes github-light github-dark" style="--shiki-light:#24292e;--shiki-dark:#e1e4e8;--shiki-light-bg:#fff;--shiki-dark-bg:#24292e" tabindex="0"><code><span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">export</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> GH_TOKEN</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"$(</span><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0">secreq</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF"> resolve secret://op/Dev/gh/token)"</span></span></code></pre>
+<p>Exits 0 on a release, 3 when the host denies (reason on stderr, nothing on stdout), 1 on any error.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Argument</th><th>Meaning</th></tr></thead><tbody><tr><td><code>&#x3C;REF></code></td><td>The reference to resolve, e.g. <code>secret://op/Dev/gh/token</code> or the bare <code>op/Dev/gh/token</code>. It must be one the host declared with <code>--allow</code> when it opened this socket; anything else is denied without troubling the user for a decision</td></tr></tbody></table>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table style="--cols: 2"><thead><tr><th>Flag</th><th>Meaning</th></tr></thead><tbody><tr><td><code>--list</code></td><td>Print the ref names this socket may resolve, one per line, and exit. Free: listing never prompts and never releases a value</td></tr></tbody></table></div><div data-pagefind-ignore="true" class="mt-16 pt-7 border-t border-hairline flex items-center justify-between gap-4"><a href="/secreq/pr/26/docs" class="text-sm text-text-3 no-underline hover:text-text">← All documentation</a><a href="https://github.com/AgentEnder/secreq/edit/main/docs/cli-reference.md" target="_blank" rel="noopener noreferrer" class="text-sm text-text-3 no-underline hover:text-text">Edit this page</a></div></article><aside data-pagefind-ignore="true" class="hidden xl:block w-52 shrink-0"><div class="sticky top-24"><p class="t-eyebrow mb-3">On this page</p><nav><a href="#global-options" class="toc-link" data-level="2" data-active="false">Global options</a><a href="#secreq-init" class="toc-link" data-level="2" data-active="false">secreq init</a><a href="#secreq-wrap" class="toc-link" data-level="2" data-active="false">secreq wrap</a><a href="#secreq-unwrap" class="toc-link" data-level="2" data-active="false">secreq unwrap</a><a href="#secreq-wraps" class="toc-link" data-level="2" data-active="false">secreq wraps</a><a href="#secreq-ssh" class="toc-link" data-level="2" data-active="false">secreq ssh</a><a href="#secreq-ssh-setup" class="toc-link" data-level="3" data-active="false">secreq ssh setup</a><a href="#secreq-ssh-add" class="toc-link" data-level="3" data-active="false">secreq ssh add</a><a href="#secreq-ssh-validate" class="toc-link" data-level="3" data-active="false">secreq ssh validate</a><a href="#secreq-agent" class="toc-link" data-level="2" data-active="false">secreq agent</a><a href="#secreq-agent-open" class="toc-link" data-level="3" data-active="false">secreq agent open</a><a href="#secreq-link" class="toc-link" data-level="2" data-active="false">secreq link</a><a href="#secreq-link-list" class="toc-link" data-level="3" data-active="false">secreq link list</a><a href="#secreq-link-rm" class="toc-link" data-level="3" data-active="false">secreq link rm</a><a href="#secreq-check" class="toc-link" data-level="2" data-active="false">secreq check</a><a href="#secreq-doctor" class="toc-link" data-level="2" data-active="false">secreq doctor</a><a href="#secreq-edit" class="toc-link" data-level="2" data-active="false">secreq edit</a><a href="#secreq-migrate" class="toc-link" data-level="2" data-active="false">secreq migrate</a><a href="#secreq-migrate-restore" class="toc-link" data-level="3" data-active="false">secreq migrate restore</a><a href="#secreq-daemon" class="toc-link" data-level="2" data-active="false">secreq daemon</a><a href="#secreq-daemon-stop" class="toc-link" data-level="3" data-active="false">secreq daemon stop</a><a href="#secreq-daemon-status" class="toc-link" data-level="3" data-active="false">secreq daemon status</a><a href="#secreq-daemon-log-path" class="toc-link" data-level="3" data-active="false">secreq daemon log-path</a><a href="#secreq-daemon-install" class="toc-link" data-level="3" data-active="false">secreq daemon install</a><a href="#secreq-pending" class="toc-link" data-level="2" data-active="false">secreq pending</a><a href="#secreq-view" class="toc-link" data-level="2" data-active="false">secreq view</a><a href="#secreq-rules" class="toc-link" data-level="2" data-active="false">secreq rules</a><a href="#secreq-rules-list" class="toc-link" data-level="3" data-active="false">secreq rules list</a><a href="#secreq-rules-stats" class="toc-link" data-level="3" data-active="false">secreq rules stats</a><a href="#secreq-rules-show" class="toc-link" data-level="3" data-active="false">secreq rules show</a><a href="#secreq-rules-enable" class="toc-link" data-level="3" data-active="false">secreq rules enable</a><a href="#secreq-rules-disable" class="toc-link" data-level="3" data-active="false">secreq rules disable</a><a href="#secreq-rules-rm" class="toc-link" data-level="3" data-active="false">secreq rules rm</a><a href="#secreq-rules-new-wasm" class="toc-link" data-level="3" data-active="false">secreq rules new-wasm</a><a href="#secreq-rules-add-wasm" class="toc-link" data-level="3" data-active="false">secreq rules add-wasm</a><a href="#secreq-x" class="toc-link" data-level="2" data-active="false">secreq x</a><a href="#secreq-run" class="toc-link" data-level="2" data-active="false">secreq run</a><a href="#secreq-read" class="toc-link" data-level="2" data-active="false">secreq read</a><a href="#secreq-resolve" class="toc-link" data-level="2" data-active="false">secreq resolve</a></nav></div></aside></div></main></div></div></div>
+        
+        <script id="vike_pageContext" type="application/json">{"pageId":"\/pages\/docs\/@slug","routeParams":{"slug":"cli-reference"},"data":{"doc":{"slug":"cli-reference","title":"All commands","label":"All commands","section":"Reference","order":4,"renderedHtml":"\u003c!-- GENERATED FILE. DO NOT EDIT.\n     Source: packages\/secreq\/src\/cli.rs (the clap tree).\n     Regenerate: cargo run --example gen-cli-reference > docs\/cli-reference.md\n     Guarded by: packages\/secreq\/tests\/cli_drift.rs -->\n\u003cp>Every command, subcommand, and flag \u003ccode>secreq\u003c\/code> accepts, generated from the CLI definition itself.\u003c\/p>\n\u003cp>This is the exhaustive list. For what the commands are \u003cem>for\u003c\/em> (the two run verbs, why \u003ccode>x\u003c\/code> forwards every flag it is given, how approval is scoped) read the \u003ca href=\"\/secreq\/pr\/26\/docs\/cli\">CLI guide\u003c\/a>.\u003c\/p>\n\u003ch2 id=\"global-options\">Global options\u003c\/h2>\n\u003cp>These reach the admin verbs and \u003ccode>run\u003c\/code>. They do \u003cstrong>not\u003c\/strong> apply to \u003ccode>x\u003c\/code>, whose argv belongs to the wrapped binary. See the \u003ca href=\"\/secreq\/pr\/26\/docs\/cli#the-argv-contract\">argv contract\u003c\/a> for its \u003ccode>--sq-\u003c\/code> equivalents.\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Flag\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>--config &#x3C;PATH>\u003c\/code>\u003c\/td>\u003ctd>Use a specific config file instead of \u003ccode>~\/.secreq\/config.toml\u003c\/code>. For \u003ccode>x\u003c\/code> use \u003ccode>--sq-config\u003c\/code>\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--raw\u003c\/code>\u003c\/td>\u003ctd>Skip output masking. The wrapped binary still runs with secrets in its env; only redaction of its stdout\/stderr is disabled. Applies only to \u003ccode>run\u003c\/code>, not admin verbs; for \u003ccode>x\u003c\/code> use \u003ccode>--sq-raw\u003c\/code>\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>-y, --yes\u003c\/code>\u003c\/td>\u003ctd>Auto-approve without prompting. Composes through nested runs. For \u003ccode>x\u003c\/code> use \u003ccode>--sq-yes\u003c\/code>\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--no-remember\u003c\/code>\u003c\/td>\u003ctd>Don't read or write the remembered-approval cache. For \u003ccode>x\u003c\/code> use \u003ccode>--sq-no-remember\u003c\/code>\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003cp>\u003ccode>-h\u003c\/code>\/\u003ccode>--help\u003c\/code> and \u003ccode>-V\u003c\/code>\/\u003ccode>--version\u003c\/code> work everywhere.\u003c\/p>\n\u003ch2 id=\"secreq-init\">\u003ccode>secreq init\u003c\/code>\u003c\/h2>\n\u003cpre>\u003ccode>secreq init [OPTIONS]\n\u003c\/code>\u003c\/pre>\n\u003cp>First-time setup: pick the shim dir and (optionally) wire it into PATH\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Flag\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>--shim-dir &#x3C;PATH>\u003c\/code>\u003c\/td>\u003ctd>Default shim dir to suggest (overrides \u003ccode>~\/.secreq\/shims\u003c\/code>)\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003ch2 id=\"secreq-wrap\">\u003ccode>secreq wrap\u003c\/code>\u003c\/h2>\n\u003cpre>\u003ccode>secreq wrap [OPTIONS] &#x3C;BINARY>\n\u003c\/code>\u003c\/pre>\n\u003cp>Add (or update) a wrap for a binary; installs the PATH shim\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Argument\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>&#x3C;BINARY>\u003c\/code>\u003c\/td>\u003ctd>The binary name to wrap, e.g. \u003ccode>gh\u003c\/code>\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Flag\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>--secret &#x3C;NAME>…\u003c\/code>\u003c\/td>\u003ctd>Inject a declared secret under its own name. Repeatable\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--env &#x3C;NAME=REF>…\u003c\/code>\u003c\/td>\u003ctd>\u003ccode>--env NAME=secret:\/\/provider\/locator\u003c\/code>. Repeatable. When neither \u003ccode>--env\u003c\/code> nor \u003ccode>--secret\u003c\/code> is given, runs the interactive flow\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--reason &#x3C;REASON>\u003c\/code>\u003c\/td>\u003ctd>Reason to show in the consent prompt\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003ch2 id=\"secreq-unwrap\">\u003ccode>secreq unwrap\u003c\/code>\u003c\/h2>\n\u003cpre>\u003ccode>secreq unwrap &#x3C;BINARY>\n\u003c\/code>\u003c\/pre>\n\u003cp>Remove a wrap (config entry + shim)\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Argument\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>&#x3C;BINARY>\u003c\/code>\u003c\/td>\u003ctd>The binary name\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003ch2 id=\"secreq-wraps\">\u003ccode>secreq wraps\u003c\/code>\u003c\/h2>\n\u003cpre>\u003ccode>secreq wraps\n\u003c\/code>\u003c\/pre>\n\u003cp>List configured wraps\u003c\/p>\n\u003ch2 id=\"secreq-ssh\">\u003ccode>secreq ssh\u003c\/code>\u003c\/h2>\n\u003cpre>\u003ccode>secreq ssh &#x3C;SUBCOMMAND>\n\u003c\/code>\u003c\/pre>\n\u003cp>Manage secreq's SSH agent: configure identities, wire SSH clients to the agent socket, and verify that signing works\u003c\/p>\n\u003ch3 id=\"secreq-ssh-setup\">\u003ccode>secreq ssh setup\u003c\/code>\u003c\/h3>\n\u003cpre>\u003ccode>secreq ssh setup [OPTIONS]\n\u003c\/code>\u003c\/pre>\n\u003cp>Wire SSH clients at secreq's agent socket by writing a managed block to \u003ccode>~\/.ssh\/config\u003c\/code> (\u003ccode>IdentityAgent\u003c\/code>) or your shell rc (\u003ccode>SSH_AUTH_SOCK\u003c\/code>). Pick the method with \u003ccode>--method\u003c\/code>, or get an interactive prompt when it's omitted. \u003ccode>--undo\u003c\/code> strips the block back out\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Flag\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>--method &#x3C;METHOD>\u003c\/code>\u003c\/td>\u003ctd>Which file to wire: \u003ccode>ssh-config\u003c\/code> (\u003ccode>~\/.ssh\/config\u003c\/code> \u003ccode>IdentityAgent\u003c\/code>) or \u003ccode>shell-rc\u003c\/code> (\u003ccode>SSH_AUTH_SOCK\u003c\/code> export). Omit to choose interactively\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--undo\u003c\/code>\u003c\/td>\u003ctd>Remove the managed block instead of adding it\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003ch3 id=\"secreq-ssh-add\">\u003ccode>secreq ssh add\u003c\/code>\u003c\/h3>\n\u003cpre>\u003ccode>secreq ssh add [OPTIONS] &#x3C;NAME>\n\u003c\/code>\u003c\/pre>\n\u003cp>Add (or overwrite) an SSH identity in \u003ccode>config.toml\u003c\/code>. The agent serves this identity once the daemon is running. The public key is stored inline; the private key is a \u003ccode>secret:\/\/provider\/locator\u003c\/code> reference resolved only at sign time. Omit \u003ccode>--public-key\u003c\/code>\/\u003ccode>--private-key\u003c\/code> to resolve them interactively (with 1Password \u003ccode>op\u003c\/code> discovery when on PATH). Pass both for a fully non-interactive run\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Argument\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>&#x3C;NAME>\u003c\/code>\u003c\/td>\u003ctd>The identity name (the key under the \u003ccode>ssh\u003c\/code> block), e.g. \u003ccode>github\u003c\/code>\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Flag\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>--public-key &#x3C;PATH-OR-LITERAL>\u003c\/code>\u003c\/td>\u003ctd>The OpenSSH public key: a path to a \u003ccode>.pub\u003c\/code> file, or the literal \u003ccode>ssh-… \/ ecdsa-… \/ sk-…\u003c\/code> line. Prompted for if omitted\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--private-key &#x3C;secret:\/\/…>\u003c\/code>\u003c\/td>\u003ctd>The private key reference, \u003ccode>secret:\/\/provider\/locator\u003c\/code>. Prompted for (with \u003ccode>op\u003c\/code> discovery) if omitted\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--reason &#x3C;REASON>\u003c\/code>\u003c\/td>\u003ctd>Reason shown in the consent prompt when this identity signs\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--force\u003c\/code>\u003c\/td>\u003ctd>Overwrite an existing identity of the same name\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003ch3 id=\"secreq-ssh-validate\">\u003ccode>secreq ssh validate\u003c\/code>\u003c\/h3>\n\u003cpre>\u003ccode>secreq ssh validate [&#x3C;NAME>]\n\u003c\/code>\u003c\/pre>\n\u003cp>Prove the agent can sign with a configured SSH identity. Connects to the agent socket, lists identities, then asks the agent to sign a fixed test message with the key and verifies the returned signature against its public half, exercising the real consent → resolve → sign path. With no \u003ccode>&#x3C;name>\u003c\/code>, validates every configured identity. Signing is a real sign, so it may prompt for consent (and a biometric). Exits 0 only if every validated identity verifies\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Argument\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>&#x3C;NAME>\u003c\/code>\u003c\/td>\u003ctd>The identity name to validate (the key under the \u003ccode>ssh\u003c\/code> block). Omit to validate every configured identity\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003ch2 id=\"secreq-agent\">\u003ccode>secreq agent\u003c\/code>\u003c\/h2>\n\u003cpre>\u003ccode>secreq agent &#x3C;SUBCOMMAND>\n\u003c\/code>\u003c\/pre>\n\u003cp>Manage scoped secret agent sockets: the host-side end of serving \u003ccode>secret:\/\/\u003c\/code> refs to a guest VM instead of copying tokens into it\u003c\/p>\n\u003ch3 id=\"secreq-agent-open\">\u003ccode>secreq agent open\u003c\/code>\u003c\/h3>\n\u003cpre>\u003ccode>secreq agent open [OPTIONS]\n\u003c\/code>\u003c\/pre>\n\u003cp>Open a scoped, ephemeral socket that resolves \u003ccode>secret:\/\/\u003c\/code> refs for a guest, and serve it until interrupted.\u003c\/p>\n\u003cp>The scope name and the allowlist are declared \u003cstrong>here, by you, at open time\u003c\/strong>, and are immutable for the socket's life. A ref outside the allowlist is denied without a prompt (and audited), so a compromised guest can neither train you to click through nor enumerate your vault one prompt at a time. Every allowed request prompts for consent, showing the scope as the principal: a guest has no host process tree, so there is no caller chain to show.\u003c\/p>\n\u003cp>The resolved socket path is printed to stdout on its own line, so the caller can read it back rather than reconstruct it.\u003c\/p>\n\u003cp>Forward the socket into a VM the way \u003ccode>ssh -A\u003c\/code> forwards an agent:\u003c\/p>\n\u003cpre class=\"shiki shiki-themes github-light github-dark\" style=\"--shiki-light:#24292e;--shiki-dark:#e1e4e8;--shiki-light-bg:#fff;--shiki-dark-bg:#24292e\" tabindex=\"0\">\u003ccode>\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#6F42C1;--shiki-dark:#B392F0\">secreq\u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\"> agent\u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\"> open\u003c\/span>\u003cspan style=\"--shiki-light:#005CC5;--shiki-dark:#79B8FF\"> --scope\u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\"> my-vm\u003c\/span>\u003cspan style=\"--shiki-light:#005CC5;--shiki-dark:#79B8FF\"> --allow\u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\"> secret:\/\/op\/Dev\/gh\/token\u003c\/span>\u003cspan style=\"--shiki-light:#005CC5;--shiki-dark:#79B8FF\"> \\\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#005CC5;--shiki-dark:#79B8FF\">  --sock\u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\"> \"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">$HOME\u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\/.secreq\/run\/my-vm.sock\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\"> &#x26;\u003c\/span>\u003c\/span>\n\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#6F42C1;--shiki-dark:#B392F0\">ssh\u003c\/span>\u003cspan style=\"--shiki-light:#005CC5;--shiki-dark:#79B8FF\"> -R\u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\"> \/run\/secreq.sock:\"\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\">$HOME\u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\/.secreq\/run\/my-vm.sock\"\u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\"> my-vm\u003c\/span>\u003c\/span>\u003c\/code>\u003c\/pre>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Flag\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>--scope &#x3C;NAME>\u003c\/code>\u003c\/td>\u003ctd>The scope name shown in the consent prompt as the principal, typically the sandbox \/ VM name\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--allow &#x3C;secret:\/\/…>…\u003c\/code>\u003c\/td>\u003ctd>A \u003ccode>secret:\/\/provider\/locator\u003c\/code> ref this socket may resolve. Repeatable; at least one is required. Matched exactly: there is no prefix or wildcard form, by design\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--sock &#x3C;PATH>\u003c\/code>\u003c\/td>\u003ctd>Where to bind the socket. Must not already exist. Defaults to \u003ccode>scope-&#x3C;name>.sock\u003c\/code> in secreq's socket dir (\u003ccode>$XDG_RUNTIME_DIR\/secreq\u003c\/code>, else \u003ccode>&#x3C;$SECREQ_HOME>\/run\u003c\/code>), beside the consent and SSH-agent sockets. Pass this to bind elsewhere, e.g. at a path you are about to \u003ccode>ssh -R\u003c\/code> into a guest. Pick a directory only you can write. The socket is owner-only from the moment it exists, but in a shared one like \u003ccode>\/tmp\u003c\/code> anyone can plant a file at the path first and break the bind.\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003ch2 id=\"secreq-link\">\u003ccode>secreq link\u003c\/code>\u003c\/h2>\n\u003cpre>\u003ccode>secreq link &#x3C;SUBCOMMAND>\n\u003c\/code>\u003c\/pre>\n\u003cp>Pair and manage devices that can approve pending requests over your private LAN. Bare \u003ccode>secreq link\u003c\/code> opens a one-minute enrollment window and prints a QR code. The linked page uses plain HTTP: request names are visible on the LAN, while signed decisions prevent an ordinary LAN peer without an enrolled key from approving or denying them\u003c\/p>\n\u003ch3 id=\"secreq-link-list\">\u003ccode>secreq link list\u003c\/code>\u003c\/h3>\n\u003cpre>\u003ccode>secreq link list\n\u003c\/code>\u003c\/pre>\n\u003cp>List the nicknames of every paired device\u003c\/p>\n\u003ch3 id=\"secreq-link-rm\">\u003ccode>secreq link rm\u003c\/code>\u003c\/h3>\n\u003cpre>\u003ccode>secreq link rm &#x3C;NICKNAME>\n\u003c\/code>\u003c\/pre>\n\u003cp>Revoke one paired device immediately. An in-flight decision signed by that device is refused after this command returns\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Argument\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>&#x3C;NICKNAME>\u003c\/code>\u003c\/td>\u003ctd>The exact nickname entered when the device was paired\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003ch2 id=\"secreq-check\">\u003ccode>secreq check\u003c\/code>\u003c\/h2>\n\u003cpre>\u003ccode>secreq check\n\u003c\/code>\u003c\/pre>\n\u003cp>Validate the config\u003c\/p>\n\u003ch2 id=\"secreq-doctor\">\u003ccode>secreq doctor\u003c\/code>\u003c\/h2>\n\u003cpre>\u003ccode>secreq doctor\n\u003c\/code>\u003c\/pre>\n\u003cp>\u003ccode>check\u003c\/code> plus confirm every used provider's CLI is installed\u003c\/p>\n\u003ch2 id=\"secreq-edit\">\u003ccode>secreq edit\u003c\/code>\u003c\/h2>\n\u003cpre>\u003ccode>secreq edit\n\u003c\/code>\u003c\/pre>\n\u003cp>Open the config in \u003ccode>$EDITOR\u003c\/code>\u003c\/p>\n\u003ch2 id=\"secreq-migrate\">\u003ccode>secreq migrate\u003c\/code>\u003c\/h2>\n\u003cpre>\u003ccode>secreq migrate &#x3C;SUBCOMMAND>\n\u003c\/code>\u003c\/pre>\n\u003cp>Inspect and roll back config migrations.\u003c\/p>\n\u003cp>secreq migrates its own config on first run after an upgrade, taking a snapshot beforehand. This is how you get back to one.\u003c\/p>\n\u003ch3 id=\"secreq-migrate-restore\">\u003ccode>secreq migrate restore\u003c\/code>\u003c\/h3>\n\u003cpre>\u003ccode>secreq migrate restore &#x3C;LEVEL>\n\u003c\/code>\u003c\/pre>\n\u003cp>Restore the config snapshot taken before migration \u003clevel>.\u003c\/level>\u003c\/p>\n\u003cp>Use this when a downgraded secreq refuses to run because your config was migrated by a newer build. Lossy: anything added since that snapshot is discarded. The diff is shown and confirmed first, and your current config is saved alongside the snapshots before anything is overwritten.\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Argument\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>&#x3C;LEVEL>\u003c\/code>\u003c\/td>\u003ctd>Migration level to go back to (the snapshot is the config as it stood \u003cem>before\u003c\/em> migration LEVEL+1 ran)\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003ch2 id=\"secreq-daemon\">\u003ccode>secreq daemon\u003c\/code>\u003c\/h2>\n\u003cpre>\u003ccode>secreq daemon [OPTIONS] &#x3C;SUBCOMMAND>\n\u003c\/code>\u003c\/pre>\n\u003cp>Run or manage the consent daemon. Bare \u003ccode>secreq daemon\u003c\/code> ensures a daemon is running in the background (spawning one if needed) and then tails its log until you Ctrl-C, which is handy for watching the consent flow live. Use \u003ccode>--fg\u003c\/code> to run the daemon in the foreground in this process instead (the form auto-spawned by wraps). \u003ccode>secreq daemon stop\u003c\/code> tells a running daemon to exit, which also clears every remembered approval (the cache is in-memory only by design). \u003ccode>secreq daemon status\u003c\/code> reports whether one is running. \u003ccode>secreq daemon log-path\u003c\/code> prints the log file path\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Flag\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>--fg\u003c\/code>\u003c\/td>\u003ctd>Run the daemon in the foreground in this process instead of starting a background daemon and tailing its log\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003ch3 id=\"secreq-daemon-stop\">\u003ccode>secreq daemon stop\u003c\/code>\u003c\/h3>\n\u003cpre>\u003ccode>secreq daemon stop [OPTIONS]\n\u003c\/code>\u003c\/pre>\n\u003cp>Stop the running daemon. Clears the in-memory approvals cache; the next wrap invocation auto-spawns a fresh daemon\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Flag\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>-f, --force\u003c\/code>\u003c\/td>\u003ctd>Skip the graceful protocol and SIGKILL the daemon outright. Use when the daemon is unresponsive (wedged UI, hung socket thread). Also removes the pidfile + socket, which the killed process can no longer clean up itself\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003ch3 id=\"secreq-daemon-status\">\u003ccode>secreq daemon status\u003c\/code>\u003c\/h3>\n\u003cpre>\u003ccode>secreq daemon status\n\u003c\/code>\u003c\/pre>\n\u003cp>Report whether a daemon is running, without spawning one. Prints the pid, the running build (flagging a stale daemon whose build differs from this CLI's), and the socket + log paths. Exits 0 when a daemon is running and 3 when none is, so scripts can branch on it\u003c\/p>\n\u003ch3 id=\"secreq-daemon-log-path\">\u003ccode>secreq daemon log-path\u003c\/code>\u003c\/h3>\n\u003cpre>\u003ccode>secreq daemon log-path\n\u003c\/code>\u003c\/pre>\n\u003cp>Print the path of the daemon's persistent log file and exit. Does not start a daemon\u003c\/p>\n\u003ch3 id=\"secreq-daemon-install\">\u003ccode>secreq daemon install\u003c\/code>\u003c\/h3>\n\u003cpre>\u003ccode>secreq daemon install [OPTIONS]\n\u003c\/code>\u003c\/pre>\n\u003cp>Install a per-user login service that runs the daemon at login and keeps it alive (launchd LaunchAgent on macOS, systemd \u003ccode>--user\u003c\/code> unit on Linux). This is what keeps the SSH agent socket live for incoming connections. \u003ccode>--undo\u003c\/code> unloads and removes the service\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Flag\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>--undo\u003c\/code>\u003c\/td>\u003ctd>Unload and remove the login service instead of installing it\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003ch2 id=\"secreq-pending\">\u003ccode>secreq pending\u003c\/code>\u003c\/h2>\n\u003cpre>\u003ccode>secreq pending\n\u003c\/code>\u003c\/pre>\n\u003cp>Open the consent daemon's pending-requests window. Auto-spawns the daemon if it isn't running\u003c\/p>\n\u003ch2 id=\"secreq-view\">\u003ccode>secreq view\u003c\/code>\u003c\/h2>\n\u003cpre>\u003ccode>secreq view\n\u003c\/code>\u003c\/pre>\n\u003cp>Also spelled \u003ccode>secreq ui\u003c\/code>.\u003c\/p>\n\u003cp>Open the manager window: the persistent surface holding your auto-rules and the audit log. Lands on Audit; a segmented control switches to Rules. It never holds a pending decision (that is the prompt window's job, \u003ccode>secreq pending\u003c\/code>), so browsing history never blocks a waiting request. Auto-spawns the daemon if it isn't running\u003c\/p>\n\u003ch2 id=\"secreq-rules\">\u003ccode>secreq rules\u003c\/code>\u003c\/h2>\n\u003cpre>\u003ccode>secreq rules &#x3C;SUBCOMMAND>\n\u003c\/code>\u003c\/pre>\n\u003cp>Manage auto-approve \/ auto-deny rules. Declarative rules are created from the manager window's Rules view (or by hand-editing the rules file); compiled wasm rule modules are registered here with \u003ccode>add-wasm\u003c\/code>. The CLI surface covers the headless management path: list, inspect, enable\/disable, delete, add-wasm\u003c\/p>\n\u003ch3 id=\"secreq-rules-list\">\u003ccode>secreq rules list\u003c\/code>\u003c\/h3>\n\u003cpre>\u003ccode>secreq rules list\n\u003c\/code>\u003c\/pre>\n\u003cp>One-line listing of every rule with its decide direction, enabled state, declarative wrap match, and consultation wrap scope. Default action for \u003ccode>secreq rules\u003c\/code>\u003c\/p>\n\u003ch3 id=\"secreq-rules-stats\">\u003ccode>secreq rules stats\u003c\/code>\u003c\/h3>\n\u003cpre>\u003ccode>secreq rules stats [OPTIONS]\n\u003c\/code>\u003c\/pre>\n\u003cp>Validate the installed ruleset and replay it over historical audit asks using the same evaluator and wasm host as live requests\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Flag\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>--since &#x3C;DATE>\u003c\/code>\u003c\/td>\u003ctd>Include rows at or after this UTC date (\u003ccode>YYYY-MM-DD\u003c\/code>) or Unix timestamp\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--wrap &#x3C;WRAP>\u003c\/code>\u003c\/td>\u003ctd>Replay only rows for this exact wrap\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--top &#x3C;TOP>\u003c\/code>\u003c\/td>\u003ctd>Maximum prompt-shape rows in each ranked breakdown\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--audit &#x3C;PATH>\u003c\/code>\u003c\/td>\u003ctd>Read this audit file instead of \u003ccode>~\/.secreq\/audit.log\u003c\/code>\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--json\u003c\/code>\u003c\/td>\u003ctd>Emit the stable machine-readable report schema\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--verify\u003c\/code>\u003c\/td>\u003ctd>Check eligible historical auto decisions for evaluator drift. Also exits non-zero for refused modules\/patterns, invalid live scope, malformed audit records, or runtime wasm failures. Ordinary uncovered prompts are not failures\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003ch3 id=\"secreq-rules-show\">\u003ccode>secreq rules show\u003c\/code>\u003c\/h3>\n\u003cpre>\u003ccode>secreq rules show &#x3C;TARGET>\n\u003c\/code>\u003c\/pre>\n\u003cp>Show one rule in full (consultation wrap scope, every match field, trained_secrets, deny_message, created_at). \u003ccode>target\u003c\/code> matches by id, falling back to exact name\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Argument\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>&#x3C;TARGET>\u003c\/code>\u003c\/td>\u003ctd>The rule's id, or its exact name\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003ch3 id=\"secreq-rules-enable\">\u003ccode>secreq rules enable\u003c\/code>\u003c\/h3>\n\u003cpre>\u003ccode>secreq rules enable &#x3C;TARGET>\n\u003c\/code>\u003c\/pre>\n\u003cp>Set \u003ccode>enabled = true\u003c\/code> on a rule\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Argument\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>&#x3C;TARGET>\u003c\/code>\u003c\/td>\u003ctd>The rule's id, or its exact name\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003ch3 id=\"secreq-rules-disable\">\u003ccode>secreq rules disable\u003c\/code>\u003c\/h3>\n\u003cpre>\u003ccode>secreq rules disable &#x3C;TARGET>\n\u003c\/code>\u003c\/pre>\n\u003cp>Set \u003ccode>enabled = false\u003c\/code> on a rule. The rule stays in the file; re-enable later without re-typing\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Argument\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>&#x3C;TARGET>\u003c\/code>\u003c\/td>\u003ctd>The rule's id, or its exact name\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003ch3 id=\"secreq-rules-rm\">\u003ccode>secreq rules rm\u003c\/code>\u003c\/h3>\n\u003cpre>\u003ccode>secreq rules rm &#x3C;TARGET>\n\u003c\/code>\u003c\/pre>\n\u003cp>Delete a rule by id or exact name. A wasm rule's stored module file goes with it\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Argument\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>&#x3C;TARGET>\u003c\/code>\u003c\/td>\u003ctd>The rule's id, or its exact name\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003ch3 id=\"secreq-rules-new-wasm\">\u003ccode>secreq rules new-wasm\u003c\/code>\u003c\/h3>\n\u003cpre>\u003ccode>secreq rules new-wasm [OPTIONS] &#x3C;DIR>\n\u003c\/code>\u003c\/pre>\n\u003cp>Scaffold a buildable wasm rule project into \u003ccode>&#x3C;DIR>\u003c\/code>: a \u003ccode>package.json\u003c\/code> wired to the \u003ccode>secreq-rule\u003c\/code> SDK, an \u003ccode>assembly\/rule.ts\u003c\/code> stub exporting \u003ccode>decide(ctx)\u003c\/code>, an as-pect spec, and the test-runner config. \u003ccode>npm install &#x26;&#x26; npm run build\u003c\/code> produces the module \u003ccode>rules add-wasm\u003c\/code> then registers\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Argument\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>&#x3C;DIR>\u003c\/code>\u003c\/td>\u003ctd>Directory to write the project into. Created if missing; an existing one must be empty\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Flag\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>--name &#x3C;NAME>\u003c\/code>\u003c\/td>\u003ctd>npm package name for the project, also the suggested rule name. Folded to something npm accepts (lowercase, no spaces). Defaults to a slug of \u003ccode>&#x3C;DIR>\u003c\/code>'s last component\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--sdk &#x3C;PATH>\u003c\/code>\u003c\/td>\u003ctd>Path to the \u003ccode>secreq-rule\u003c\/code> package (\u003ccode>packages\/secreq-rule\u003c\/code> in a secreq checkout), written into \u003ccode>package.json\u003c\/code> as an absolute \u003ccode>file:\u003c\/code> dependency. Auto-detected by walking up from this binary and the working directory; without one the manifest falls back to the registry, which does not carry the SDK yet\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--from &#x3C;EXAMPLE>\u003c\/code>\u003c\/td>\u003ctd>Seed \u003ccode>assembly\/\u003c\/code> from one of the SDK's worked examples (e.g. \u003ccode>npm-publish-guard\u003c\/code>) instead of the empty stub\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003ch3 id=\"secreq-rules-add-wasm\">\u003ccode>secreq rules add-wasm\u003c\/code>\u003c\/h3>\n\u003cpre>\u003ccode>secreq rules add-wasm [OPTIONS] &#x3C;FILE>\n\u003c\/code>\u003c\/pre>\n\u003cp>Register a compiled wasm rule module (built with the \u003ccode>secreq-rule\u003c\/code> SDK). The daemon vets the module in its sandbox, copies it into the canonical store under the secreq root, pins it by sha256, and persists the rule. A failed vetting registers nothing. The module decides approve\/pass\/deny per ask at evaluation time\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Argument\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>&#x3C;FILE>\u003c\/code>\u003c\/td>\u003ctd>Path to the compiled \u003ccode>.wasm\u003c\/code> module\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Flag\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>--name &#x3C;NAME>\u003c\/code>\u003c\/td>\u003ctd>Rule name shown in the UI and audit log. Defaults to the module's file stem\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--secret &#x3C;NAME>…\u003c\/code>\u003c\/td>\u003ctd>Subject the rule is allowed to decide: an env key, \u003ccode>ssh:&#x3C;key_id>\u003c\/code>, or \u003ccode>wrap:&#x3C;name>\u003c\/code>. Repeatable; when the module declares subjects, this narrows them by intersection\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--wrap &#x3C;NAME>…\u003c\/code>\u003c\/td>\u003ctd>Wrap name for which the rule may be consulted. Repeatable. Omit to allow every wrap. This gate is applied before the wasm module is instantiated\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--accept-declared\u003c\/code>\u003c\/td>\u003ctd>Grant the nonempty subjects declared by the module without an interactive confirmation. Intended for CI\/headless registration\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--all-secrets\u003c\/code>\u003c\/td>\u003ctd>Register with NO trained-secrets snapshot: the module will be consulted for every ask in its wrap scope (or across every wrap when no --wrap is given). Dangerous; required explicitly when no --secret is given\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003ch2 id=\"secreq-x\">\u003ccode>secreq x\u003c\/code>\u003c\/h2>\n\u003cpre>\u003ccode>secreq x [--sq-OPTIONS] &#x3C;WRAP> [ARGS...]\n\u003c\/code>\u003c\/pre>\n\u003cp>Run a wrapped binary through secreq: consent → inject secrets → exec the real binary with output masking. This is what the PATH shims call (\u003ccode>exec '&#x3C;path to secreq>' x '&#x3C;wrap>' \"$@\"\u003c\/code> — the shim names secreq by absolute path so it cannot be hijacked by a \u003ccode>secreq\u003c\/code> earlier on the caller's PATH). \u003ccode>x\u003c\/code> owns no ordinary flags: everything after the wrap name is forwarded to the binary verbatim (so \u003ccode>&#x3C;wrap> --help\u003c\/code> reaches the binary, not secreq), and secreq's own options use the reserved \u003ccode>--sq-\u003c\/code> prefix; \u003ccode>secreq x --sq-help\u003c\/code> lists them. Parsed by hand in \u003ccode>run_x\u003c\/code>, never by clap; this variant exists so \u003ccode>secreq --help\u003c\/code> documents the verb\u003c\/p>\n\u003ch2 id=\"secreq-run\">\u003ccode>secreq run\u003c\/code>\u003c\/h2>\n\u003cpre>\u003ccode>secreq run [OPTIONS] [&#x3C;COMMAND>…]\n\u003c\/code>\u003c\/pre>\n\u003cp>\u003ccode>op run\u003c\/code>, but for every secret store: resolve every \u003ccode>secret:\/\/provider\/locator\u003c\/code> reference found in the environment (the inherited environment plus any \u003ccode>--env-file\u003c\/code>) through the consent daemon, then run the command with the resolved values injected and its output masked. Plain \u003ccode>NAME=value\u003c\/code> entries pass through unchanged. Unlike \u003ccode>x\u003c\/code>, no wrap entry is required: the references describe the secrets inline\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Argument\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>&#x3C;COMMAND>…\u003c\/code>\u003c\/td>\u003ctd>The command to run, followed by its arguments\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Flag\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>--env-file &#x3C;PATH>…\u003c\/code>\u003c\/td>\u003ctd>Load \u003ccode>NAME=value\u003c\/code> lines from this file, layered \u003cem>under\u003c\/em> the inherited environment (inherited wins on conflict). Values may be \u003ccode>secret:\/\/provider\/locator\u003c\/code> references or plaintext. Repeatable\u003c\/td>\u003c\/tr>\u003ctr>\u003ctd>\u003ccode>--prompt-unresolved\u003c\/code>\u003c\/td>\u003ctd>For each \u003ccode>secret:\/\/\u003c\/code> reference whose locator resolves to nothing, prompt for the value (masked, no echo) and write it, via the provider's \u003ccode>store\u003c\/code> capability, to exactly where the locator points, so this and every later run resolves it normally. A reference whose provider is read-only (no \u003ccode>store\u003c\/code> capability) fails with a clear error instead of being silently skipped. Without this flag an unresolved reference fails as before\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003ch2 id=\"secreq-read\">\u003ccode>secreq read\u003c\/code>\u003c\/h2>\n\u003cpre>\u003ccode>secreq read &#x3C;REF>…\n\u003c\/code>\u003c\/pre>\n\u003cp>\u003ccode>op read\u003c\/code>, but for every secret store: resolve one or more secret references and print their values as a JSON object. Each reference is \u003ccode>secret:\/\/provider\/locator\u003c\/code> or the bare \u003ccode>provider\/locator\u003c\/code> shorthand. Output is always a JSON object keyed by each ref exactly as typed, even for a single ref, so it pipes cleanly into \u003ccode>jq\u003c\/code>. Resolution always goes through the consent daemon (every read is prompted and audited); there is no \u003ccode>--yes\u003c\/code> bypass, by design\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Argument\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>&#x3C;REF>…\u003c\/code>\u003c\/td>\u003ctd>The references to resolve, e.g. \u003ccode>secret:\/\/op\/Work\/key\u003c\/code> or \u003ccode>op\/Work\/key\u003c\/code>. At least one is required\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\u003ch2 id=\"secreq-resolve\">\u003ccode>secreq resolve\u003c\/code>\u003c\/h2>\n\u003cpre>\u003ccode>secreq resolve [OPTIONS] [&#x3C;REF>]\n\u003c\/code>\u003c\/pre>\n\u003cp>Ask the host's secreq for one secret, from inside a sandbox.\u003c\/p>\n\u003cp>This is the guest end of a scoped agent socket (\u003ccode>secreq agent open\u003c\/code> opens the host end). It dials the socket named by \u003ccode>$SECREQ_SOCK\u003c\/code>, the same convention as \u003ccode>SSH_AUTH_SOCK\u003c\/code>, so nothing is stored in the sandbox: each use is asked for, gated by consent on the host, and audited there. \u003ccode>$SECREQ_SOCK\u003c\/code> is set for you inside a brain \u003ccode>--vm\u003c\/code> sandbox.\u003c\/p>\n\u003cp>The value goes to stdout and everything else to stderr, so it composes:\u003c\/p>\n\u003cpre class=\"shiki shiki-themes github-light github-dark\" style=\"--shiki-light:#24292e;--shiki-dark:#e1e4e8;--shiki-light-bg:#fff;--shiki-dark-bg:#24292e\" tabindex=\"0\">\u003ccode>\u003cspan class=\"line\">\u003cspan style=\"--shiki-light:#D73A49;--shiki-dark:#F97583\">export\u003c\/span>\u003cspan style=\"--shiki-light:#24292E;--shiki-dark:#E1E4E8\"> GH_TOKEN\u003c\/span>\u003cspan style=\"--shiki-light:#D73A49;--shiki-dark:#F97583\">=\u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\">\"$(\u003c\/span>\u003cspan style=\"--shiki-light:#6F42C1;--shiki-dark:#B392F0\">secreq\u003c\/span>\u003cspan style=\"--shiki-light:#032F62;--shiki-dark:#9ECBFF\"> resolve secret:\/\/op\/Dev\/gh\/token)\"\u003c\/span>\u003c\/span>\u003c\/code>\u003c\/pre>\n\u003cp>Exits 0 on a release, 3 when the host denies (reason on stderr, nothing on stdout), 1 on any error.\u003c\/p>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Argument\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>&#x3C;REF>\u003c\/code>\u003c\/td>\u003ctd>The reference to resolve, e.g. \u003ccode>secret:\/\/op\/Dev\/gh\/token\u003c\/code> or the bare \u003ccode>op\/Dev\/gh\/token\u003c\/code>. It must be one the host declared with \u003ccode>--allow\u003c\/code> when it opened this socket; anything else is denied without troubling the user for a decision\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\u003ctable style=\"--cols: 2\">\u003cthead>\u003ctr>\u003cth>Flag\u003c\/th>\u003cth>Meaning\u003c\/th>\u003c\/tr>\u003c\/thead>\u003ctbody>\u003ctr>\u003ctd>\u003ccode>--list\u003c\/code>\u003c\/td>\u003ctd>Print the ref names this socket may resolve, one per line, and exit. Free: listing never prompts and never releases a value\u003c\/td>\u003c\/tr>\u003c\/tbody>\u003c\/table>","headings":[{"id":"global-options","text":"Global options","level":2},{"id":"secreq-init","text":"secreq init","level":2},{"id":"secreq-wrap","text":"secreq wrap","level":2},{"id":"secreq-unwrap","text":"secreq unwrap","level":2},{"id":"secreq-wraps","text":"secreq wraps","level":2},{"id":"secreq-ssh","text":"secreq ssh","level":2},{"id":"secreq-ssh-setup","text":"secreq ssh setup","level":3},{"id":"secreq-ssh-add","text":"secreq ssh add","level":3},{"id":"secreq-ssh-validate","text":"secreq ssh validate","level":3},{"id":"secreq-agent","text":"secreq agent","level":2},{"id":"secreq-agent-open","text":"secreq agent open","level":3},{"id":"secreq-link","text":"secreq link","level":2},{"id":"secreq-link-list","text":"secreq link list","level":3},{"id":"secreq-link-rm","text":"secreq link rm","level":3},{"id":"secreq-check","text":"secreq check","level":2},{"id":"secreq-doctor","text":"secreq doctor","level":2},{"id":"secreq-edit","text":"secreq edit","level":2},{"id":"secreq-migrate","text":"secreq migrate","level":2},{"id":"secreq-migrate-restore","text":"secreq migrate restore","level":3},{"id":"secreq-daemon","text":"secreq daemon","level":2},{"id":"secreq-daemon-stop","text":"secreq daemon stop","level":3},{"id":"secreq-daemon-status","text":"secreq daemon status","level":3},{"id":"secreq-daemon-log-path","text":"secreq daemon log-path","level":3},{"id":"secreq-daemon-install","text":"secreq daemon install","level":3},{"id":"secreq-pending","text":"secreq pending","level":2},{"id":"secreq-view","text":"secreq view","level":2},{"id":"secreq-rules","text":"secreq rules","level":2},{"id":"secreq-rules-list","text":"secreq rules list","level":3},{"id":"secreq-rules-stats","text":"secreq rules stats","level":3},{"id":"secreq-rules-show","text":"secreq rules show","level":3},{"id":"secreq-rules-enable","text":"secreq rules enable","level":3},{"id":"secreq-rules-disable","text":"secreq rules disable","level":3},{"id":"secreq-rules-rm","text":"secreq rules rm","level":3},{"id":"secreq-rules-new-wasm","text":"secreq rules new-wasm","level":3},{"id":"secreq-rules-add-wasm","text":"secreq rules add-wasm","level":3},{"id":"secreq-x","text":"secreq x","level":2},{"id":"secreq-run","text":"secreq run","level":2},{"id":"secreq-read","text":"secreq read","level":2},{"id":"secreq-resolve","text":"secreq resolve","level":2}]}}}</script>
+        <script id="vike_globalContext" type="application/json">{"navigation":[{"title":"Getting started","children":[{"title":"Install","path":"\/docs\/install"},{"title":"Getting started","path":"\/docs\/getting-started"},{"title":"Overview","path":"\/docs\/overview"}]},{"title":"Reference","children":[{"title":"CLI guide","path":"\/docs\/cli"},{"title":"All commands","path":"\/docs\/cli-reference"},{"title":"Authoring wraps","path":"\/docs\/wraps"},{"title":"Providers","path":"\/docs\/providers"}]},{"title":"Agents","children":[{"title":"SSH agent","path":"\/docs\/ssh-agent"},{"title":"Secret agent","path":"\/docs\/secret-agent"},{"title":"Consent window","path":"\/docs\/consent-window"},{"title":"Linked devices","path":"\/docs\/link"}]},{"title":"Advanced","children":[{"title":"Programmable rules","path":"\/docs\/wasm-rules"},{"title":"SDK API reference","path":"\/api"},{"title":"Platform support","path":"\/docs\/platform-support"},{"title":"Troubleshooting","path":"\/docs\/troubleshooting"}]},{"title":"Schemas","path":"\/schemas"}]}</script>
+        <script src="/secreq/pr/26/assets/entries/entry-client-routing.CJ0xcNM0.js" type="module" async></script>
+        <link rel="modulepreload" href="/secreq/pr/26/assets/entries/pages_docs_-slug.DeUDgXpI.js" as="script" type="text/javascript">
+        <link rel="modulepreload" href="/secreq/pr/26/assets/chunks/chunk-svjoes31.js" as="script" type="text/javascript">
+        <link rel="modulepreload" href="/secreq/pr/26/assets/chunks/chunk-BiolkpeJ.js" as="script" type="text/javascript">
+        <link rel="modulepreload" href="/secreq/pr/26/assets/chunks/chunk-DWDh_6lG.js" as="script" type="text/javascript">
+        <link rel="modulepreload" href="/secreq/pr/26/assets/chunks/chunk-CUWWc74s.js" as="script" type="text/javascript">
+        <link rel="modulepreload" href="/secreq/pr/26/assets/chunks/chunk-BMeWq2nI.js" as="script" type="text/javascript">
+      </body>
+    </html>
