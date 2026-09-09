@@ -235,8 +235,7 @@ pub fn run() -> Result<i32> {
                     std::thread::sleep(Duration::from_millis(250));
                 }
                 let _ = crate::ssh_observer::reset_wait_markers();
-            })
-        {
+            }) {
             Ok(handle) => Some(handle),
             Err(err) => {
                 log::log_at(
