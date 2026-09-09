@@ -1,41 +1,55 @@
 //! Transparent `ssh` PATH observer for pending Secreq signatures.
 //!
 //! The SSH-agent protocol is request/reply: once OpenSSH sends a sign request
-//! it waits for the agent's final signature or failure. There is no portable
-//! progress message the agent can send while a human consent decision is
-//! pending. That silence is especially awkward for command-running agents,
-//! which can reasonably mistake a blocked `git push` for a hung process.
+//! it waits for the agent's final signature or failure. RFC 9987 makes that
+//! constraint explicit — agents do not send unsolicited progress messages.
+//! That silence is especially awkward for command-running agents, which can
+//! reasonably mistake a blocked `git push` for a hung process and retry it.
 //!
 //! `secreq ssh setup` therefore installs a tiny managed `ssh` shim. The shim
 //! re-enters this module, which spawns the real `ssh` with inherited stdio and
-//! otherwise stays out of the session. The daemon's SSH-agent handler drops a
-//! short-lived marker into the private runtime directory only while a sign is
-//! genuinely parked on interactive consent. This parent process watches the
-//! marker for its child and writes a heartbeat to the same stderr Git/ssh was
-//! given.
+//! otherwise stays out of the session. The daemon mirrors only the identities
+//! of callers with an SSH sign genuinely awaiting human consent into a private
+//! runtime marker directory; this parent process watches the marker belonging
+//! to the process that launched it and writes a heartbeat to the same stderr
+//! Git/ssh was given.
+//!
+//! The correlation deliberately uses the process immediately *above* the
+//! Secreq shim rather than the real ssh pid. The daemon's provenance walk
+//! strips Secreq self-frames, so both sides independently arrive at the same
+//! kernel-sourced `(pid, start_time)`:
+//!
+//! ```text
+//! git ──> secreq ssh observer ──> /usr/bin/ssh ──> agent.sock
+//!  ^                                  |
+//!  |                                  └─ daemon walk skips secreq, sees git
+//!  └─ observer's first caller
+//! ```
 //!
 //! The shim is **observability, not enforcement**. Calling `/usr/bin/ssh`,
-//! choosing another `IdentityAgent`, or otherwise bypassing it only loses the
-//! waiting message; the actual consent boundary remains `agent.sock`.
+//! choosing another SSH implementation, or otherwise bypassing it only loses
+//! the waiting message; the actual consent boundary remains `agent.sock`.
 
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
 use std::io::{IsTerminal as _, Read as _, Write as _};
-use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::os::unix::process::ExitStatusExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context as _, Result};
 
+use crate::daemon::proto::{AskSubject, RowStatus};
+use crate::daemon::state::QueueSnapshot;
 use crate::provenance::ProcessIdentity;
 
-/// Marks the managed `ssh` shim as the observer kind rather than an ordinary
-/// `secreq wrap ssh` shim. Both carry [`crate::shim::SENTINEL`] so the normal
-/// real-binary resolver skips either one.
+/// Marks the special observer shim. Deliberately distinct from
+/// [`crate::shim::SENTINEL`]: `secreq unwrap ssh` owns ordinary wrap shims and
+/// must not silently remove a helper installed by `secreq ssh setup`.
 const OBSERVER_SENTINEL: &str = "secreq-managed-ssh-observer";
 
 /// Private handshake from the shell shim to the re-execed Secreq binary.
@@ -74,10 +88,22 @@ fn run_observer() -> Result<i32> {
         .context("observer shim did not provide the real ssh path")?;
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
 
+    // Ask the kernel who launched this shim before spawning ssh. Starting the
+    // walk at ourselves excludes this Secreq process by construction; any
+    // other Secreq self-frames above us are filtered by provenance::walk in
+    // exactly the same way as the daemon's walk from the real ssh peer.
+    let caller = crate::provenance::caller_chain_from_pid(std::process::id())
+        .frames
+        .first()
+        .map(|frame| ProcessIdentity {
+            pid: frame.pid,
+            start_time: frame.start_time,
+        });
+
     // Do not leak the private re-entry marker into ssh's children. Inherited
     // stdin/stdout/stderr are deliberate: the observer is not a PTY, pipe, or
     // SSH transport proxy, so everything except the progress line remains
-    // byte-for-byte between the real ssh and its caller.
+    // directly between the real ssh and its caller.
     let mut child = Command::new(&real_ssh)
         .args(args)
         .env_remove(OBSERVER_ENV)
@@ -85,9 +111,37 @@ fn run_observer() -> Result<i32> {
         .spawn()
         .with_context(|| format!("start {}", real_ssh.display()))?;
 
+    // Terminal-generated signals already target the foreground process group,
+    // which contains both us and ssh. Supervisors, however, often terminate
+    // only the pid they launched. Forward TERM/HUP so a timeout that targets
+    // this transparent parent cannot orphan a live ssh process.
+    let (signal_handle, signal_thread) = match signal_hook::iterator::Signals::new([
+        signal_hook::consts::SIGTERM,
+        signal_hook::consts::SIGHUP,
+    ]) {
+        Ok(mut signals) => {
+            let handle = signals.handle();
+            let child_pid = i32::try_from(child.id()).ok();
+            let thread = thread::Builder::new()
+                .name("secreq-ssh-signal-forwarder".to_owned())
+                .spawn(move || {
+                    for signal in signals.forever() {
+                        if let Some(pid) = child_pid {
+                            // SAFETY: `pid` is the OS pid returned for the
+                            // child we just spawned; forwarding a signal uses
+                            // no borrowed memory and libc validates the pid.
+                            let _ = unsafe { libc::kill(pid, signal) };
+                        }
+                    }
+                })
+                .ok();
+            (Some(handle), thread)
+        }
+        Err(_) => (None, None),
+    };
+
     let tty = std::io::stderr().is_terminal();
     let render = !wait_indicator_silenced();
-    let mut child_identity: Option<ProcessIdentity> = None;
     let mut waiting_since: Option<Instant> = None;
     let mut last_nontty_print: Option<Instant> = None;
     let mut spinner_tick = 0usize;
@@ -98,19 +152,18 @@ fn run_observer() -> Result<i32> {
             if painted_tty {
                 clear_tty_indicator();
             }
+            if let Some(handle) = signal_handle.as_ref() {
+                handle.close();
+            }
+            if let Some(thread) = signal_thread {
+                let _ = thread.join();
+            }
             return Ok(status
                 .code()
                 .unwrap_or_else(|| 128 + status.signal().unwrap_or(1)));
         }
 
-        // `describe_pid` can lose a race immediately after spawn on some
-        // platforms. Keep trying while the child is alive instead of turning
-        // one missed lookup into a permanently unobservable invocation.
-        if child_identity.is_none() {
-            child_identity = crate::provenance::describe_pid(child.id()).map(|peer| peer.caller.identity());
-        }
-
-        let waiting = child_identity.is_some_and(wait_active);
+        let waiting = caller.is_some_and(wait_active);
         if waiting {
             let since = *waiting_since.get_or_insert_with(Instant::now);
             let elapsed = since.elapsed();
@@ -167,69 +220,97 @@ fn clear_tty_indicator() {
     let _ = err.flush();
 }
 
-// ── Pending-sign markers ─────────────────────────────────────────────────
+// ── Pending-sign projection ───────────────────────────────────────────────
 
 fn wait_root() -> Result<PathBuf> {
     Ok(crate::paths::socket_dir()?.join("ssh-waits"))
 }
 
-fn peer_dir(root: &Path, peer: ProcessIdentity) -> PathBuf {
-    root.join(format!("{}-{}", peer.pid, peer.start_time))
+fn marker_name(caller: ProcessIdentity) -> String {
+    format!("{}-{}.wait", caller.pid, caller.start_time)
 }
 
-fn wait_active(peer: ProcessIdentity) -> bool {
-    wait_root().is_ok_and(|root| wait_active_at(&root, peer))
+fn marker_path(root: &Path, caller: ProcessIdentity) -> PathBuf {
+    root.join(marker_name(caller))
 }
 
-fn wait_active_at(root: &Path, peer: ProcessIdentity) -> bool {
-    fs::read_dir(peer_dir(root, peer))
-        .ok()
-        .and_then(|mut entries| entries.next())
-        .is_some()
+fn wait_active(caller: ProcessIdentity) -> bool {
+    wait_root().is_ok_and(|root| marker_path(&root, caller).is_file())
 }
 
-/// RAII marker held only across the SSH agent's interactive-consent wait.
-/// Drop clears exactly this sign's marker; sibling signs for the same peer
-/// keep their own files, so one completion cannot make another disappear.
-pub(crate) struct WaitMarker {
-    path: PathBuf,
+/// Mirror the daemon's authoritative queue into the tiny filesystem surface
+/// the PATH observer can see without extending the SSH-agent protocol or the
+/// daemon control protocol. Only `Awaiting` SSH-sign rows participate; wrap
+/// asks, auto-rule hits, cached grants, and already-resolving rows create no
+/// marker.
+pub(crate) fn sync_pending_snapshot(snapshot: &QueueSnapshot) -> Result<()> {
+    let waiting = pending_callers(snapshot);
+    sync_waiters_at(&wait_root()?, &waiting)
 }
 
-impl WaitMarker {
-    pub(crate) fn begin(peer: ProcessIdentity) -> Result<WaitMarker> {
-        begin_wait_at(&wait_root()?, peer)
-    }
+fn pending_callers(snapshot: &QueueSnapshot) -> HashSet<ProcessIdentity> {
+    snapshot
+        .entries
+        .iter()
+        .filter(|row| matches!(row.status, RowStatus::Awaiting))
+        .filter_map(|row| match &row.representative.subject {
+            AskSubject::SshSign(sign) => sign.callers.first().map(|caller| ProcessIdentity {
+                pid: caller.pid,
+                start_time: caller.start_time,
+            }),
+            AskSubject::Wrap(_) | AskSubject::ScopedAgent(_) => None,
+        })
+        .collect()
 }
 
-fn begin_wait_at(root: &Path, peer: ProcessIdentity) -> Result<WaitMarker> {
+fn sync_waiters_at(root: &Path, waiting: &HashSet<ProcessIdentity>) -> Result<()> {
     crate::paths::ensure_private_dir(root)
         .with_context(|| format!("make {} private", root.display()))?;
-    let dir = peer_dir(root, peer);
-    crate::paths::ensure_private_dir(&dir)
-        .with_context(|| format!("make {} private", dir.display()))?;
 
-    static NEXT_MARKER: AtomicU64 = AtomicU64::new(1);
-    let nonce = NEXT_MARKER.fetch_add(1, Ordering::Relaxed);
-    let path = dir.join(format!("{}-{nonce}.wait", std::process::id()));
-    fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .with_context(|| format!("create SSH wait marker {}", path.display()))?;
-    Ok(WaitMarker { path })
-}
-
-impl Drop for WaitMarker {
-    fn drop(&mut self) {
-        // Leave the per-peer directory in place. Removing an empty directory
-        // races another sign between its mkdir and marker creation; empty dirs
-        // are harmless and the daemon clears the whole marker root at startup.
-        let _ = fs::remove_file(&self.path);
+    let wanted_names: HashSet<String> = waiting.iter().copied().map(marker_name).collect();
+    for entry in fs::read_dir(root).with_context(|| format!("read {}", root.display()))? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if wanted_names.contains(&name) {
+            continue;
+        }
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            fs::remove_dir_all(&path)
+                .with_context(|| format!("remove stale marker directory {}", path.display()))?;
+        } else {
+            fs::remove_file(&path)
+                .with_context(|| format!("remove stale marker {}", path.display()))?;
+        }
     }
+
+    for caller in waiting {
+        let path = marker_path(root, *caller);
+        if path.exists() {
+            continue;
+        }
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+        {
+            Ok(_) => {}
+            // Another daemon tick cannot race us (the main loop is single
+            // threaded), but tolerate an already-created marker so the helper
+            // stays idempotent when unit-tested directly.
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(err) => {
+                return Err(err).with_context(|| format!("create marker {}", path.display()))
+            }
+        }
+    }
+    Ok(())
 }
 
-/// A crashed daemon can leave marker files behind. A fresh SSH-agent listener
-/// owns the whole set, so it clears them before accepting requests.
+/// A crashed daemon can leave marker files behind. A fresh daemon owns the
+/// whole marker directory, so startup and clean shutdown both clear it.
 pub(crate) fn reset_wait_markers() -> Result<()> {
     reset_wait_markers_at(&wait_root()?)
 }
@@ -237,7 +318,8 @@ pub(crate) fn reset_wait_markers() -> Result<()> {
 fn reset_wait_markers_at(root: &Path) -> Result<()> {
     match fs::symlink_metadata(root) {
         Ok(meta) if meta.file_type().is_symlink() => {
-            fs::remove_file(root).with_context(|| format!("remove stale symlink {}", root.display()))?;
+            fs::remove_file(root)
+                .with_context(|| format!("remove stale symlink {}", root.display()))?;
         }
         Ok(_) => {
             fs::remove_dir_all(root)
@@ -259,8 +341,7 @@ fn reset_wait_markers_at(root: &Path) -> Result<()> {
 pub(crate) fn install_shim(shim_dir: &Path) -> Result<PathBuf> {
     crate::shim::ensure_shim_dir(shim_dir)?;
     let real_ssh = find_real_ssh(shim_dir)?;
-    let secreq = std::env::current_exe()
-        .context("determine the running secreq path")?;
+    let secreq = std::env::current_exe().context("determine the running secreq path")?;
     let secreq = fs::canonicalize(&secreq).unwrap_or(secreq);
     let target = shim_dir.join("ssh");
 
@@ -273,10 +354,12 @@ pub(crate) fn install_shim(shim_dir: &Path) -> Result<PathBuf> {
             let existing = fs::read_to_string(&target)
                 .with_context(|| format!("read existing {}", target.display()))?;
             if !existing.contains(OBSERVER_SENTINEL) {
-                bail!(
-                    "{} already exists and is not the secreq SSH observer; leaving it untouched",
-                    target.display()
-                );
+                let detail = if existing.contains(crate::shim::SENTINEL) {
+                    "it is already an ordinary `secreq wrap ssh` shim"
+                } else {
+                    "it is not managed by the secreq SSH setup"
+                };
+                bail!("{} already exists and {detail}; leaving it untouched", target.display());
             }
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -292,9 +375,8 @@ pub(crate) fn install_shim(shim_dir: &Path) -> Result<PathBuf> {
     Ok(target)
 }
 
-/// Remove only the special observer shim. An ordinary wrapped `ssh` also
-/// carries Secreq's generic sentinel, but `ssh setup --undo` must never delete
-/// that separately-requested wrap.
+/// Remove only the special observer shim. An ordinary wrapped `ssh` is a
+/// separate feature and `ssh setup --undo` must never delete it.
 pub(crate) fn remove_shim(shim_dir: &Path) -> Result<bool> {
     let target = shim_dir.join("ssh");
     match fs::symlink_metadata(&target) {
@@ -317,14 +399,12 @@ fn observer_body(secreq: &Path, real_ssh: &Path) -> String {
     let real_ssh = sh_quote(&real_ssh.display().to_string());
     format!(
         "#!/bin/sh\n\
-         # {}: ssh-observer\n\
          # {OBSERVER_SENTINEL}\n\
          # Created by `secreq ssh setup`. Removed by `secreq ssh setup --undo`.\n\
          # Do not edit by hand.\n\
          export {OBSERVER_ENV}=1\n\
          export {REAL_SSH_ENV}={real_ssh}\n\
-         exec {secreq} \"$@\"\n",
-        crate::shim::SENTINEL,
+         exec {secreq} \"$@\"\n"
     )
 }
 
@@ -339,7 +419,7 @@ fn find_real_ssh(shim_dir: &Path) -> Result<PathBuf> {
             continue;
         }
         let candidate = dir.join("ssh");
-        if !is_executable(&candidate) || is_secreq_managed_shim(&candidate) {
+        if !is_executable(&candidate) || is_secreq_ssh_shim(&candidate) {
             continue;
         }
         return Ok(fs::canonicalize(&candidate).unwrap_or(candidate));
@@ -354,17 +434,20 @@ fn is_executable(path: &Path) -> bool {
     meta.is_file() && (meta.permissions().mode() & 0o111 != 0)
 }
 
-fn is_secreq_managed_shim(path: &Path) -> bool {
+fn is_secreq_ssh_shim(path: &Path) -> bool {
     let Ok(file) = fs::File::open(path) else {
         return false;
     };
     let mut prefix = Vec::new();
-    if file.take(256).read_to_end(&mut prefix).is_err() || !prefix.starts_with(b"#!") {
+    if file.take(512).read_to_end(&mut prefix).is_err() || !prefix.starts_with(b"#!") {
         return false;
     }
-    prefix
-        .windows(crate::shim::SENTINEL.len())
-        .any(|window| window == crate::shim::SENTINEL.as_bytes())
+    let has = |needle: &str| {
+        prefix
+            .windows(needle.len())
+            .any(|window| window == needle.as_bytes())
+    };
+    has(OBSERVER_SENTINEL) || has(crate::shim::SENTINEL)
 }
 
 #[cfg(test)]
@@ -376,29 +459,19 @@ mod tests {
     }
 
     #[test]
-    fn wait_marker_exists_only_while_the_guard_is_alive() {
+    fn sync_creates_and_removes_only_current_wait_markers() {
         let temp = tempfile::tempdir().expect("tempdir");
         let root = temp.path().join("waits");
-        let identity = peer(42, 9001);
+        let first = peer(42, 9001);
+        let second = peer(43, 9002);
 
-        let marker = begin_wait_at(&root, identity).expect("begin wait");
-        assert!(wait_active_at(&root, identity));
-        drop(marker);
-        assert!(!wait_active_at(&root, identity));
-    }
+        sync_waiters_at(&root, &HashSet::from([first, second])).expect("first sync");
+        assert!(marker_path(&root, first).is_file());
+        assert!(marker_path(&root, second).is_file());
 
-    #[test]
-    fn one_completed_sign_does_not_clear_a_sibling_wait() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let root = temp.path().join("waits");
-        let identity = peer(42, 9001);
-
-        let first = begin_wait_at(&root, identity).expect("first wait");
-        let second = begin_wait_at(&root, identity).expect("second wait");
-        drop(first);
-        assert!(wait_active_at(&root, identity));
-        drop(second);
-        assert!(!wait_active_at(&root, identity));
+        sync_waiters_at(&root, &HashSet::from([second])).expect("second sync");
+        assert!(!marker_path(&root, first).exists());
+        assert!(marker_path(&root, second).is_file());
     }
 
     #[test]
@@ -406,18 +479,18 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let root = temp.path().join("waits");
         let identity = peer(42, 9001);
-        let marker = begin_wait_at(&root, identity).expect("begin wait");
-        std::mem::forget(marker); // model a daemon crash: Drop never ran.
+        sync_waiters_at(&root, &HashSet::from([identity])).expect("sync");
+        assert!(marker_path(&root, identity).is_file());
 
         reset_wait_markers_at(&root).expect("reset");
-        assert!(!wait_active_at(&root, identity));
+        assert!(!marker_path(&root, identity).exists());
     }
 
     #[test]
-    fn observer_body_is_a_generic_managed_shim_and_bakes_real_ssh() {
+    fn observer_body_bakes_real_ssh_without_claiming_to_be_a_wrap_shim() {
         let body = observer_body(Path::new("/opt/secreq/bin/secreq"), Path::new("/usr/bin/ssh"));
-        assert!(body.contains(crate::shim::SENTINEL));
         assert!(body.contains(OBSERVER_SENTINEL));
+        assert!(!body.contains(crate::shim::SENTINEL));
         assert!(body.contains("SECREQ_SSH_OBSERVER=1"));
         assert!(body.contains("SECREQ_SSH_REAL='/usr/bin/ssh'"));
         assert!(body.contains("exec '/opt/secreq/bin/secreq' \"$@\""));
