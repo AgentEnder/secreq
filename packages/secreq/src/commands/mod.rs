@@ -41,6 +41,7 @@ mod rules;
 mod run;
 mod secrets;
 mod ssh;
+mod ssh_observed;
 
 pub use config::{check, doctor, edit_cmd, unwrap_cmd, wrap, wraps_list, WrapArgs};
 pub use daemon::{daemon_install, daemon_log_path, daemon_status, daemon_stop, daemon_tail};
@@ -52,7 +53,8 @@ pub use rules::{
 };
 pub use run::{run, wrap_run, WrapRunOpts};
 pub use secrets::{agent_open, read, resolve};
-pub use ssh::{ssh_add, ssh_setup, ssh_test, SshAddArgs};
+pub use ssh::{ssh_add, ssh_test, SshAddArgs};
+pub use ssh_observed::ssh_setup;
 
 /// `secreq pending` — open the daemon's pending-requests window. Useful
 /// when you want to inspect the queue without waiting for a fresh ask.

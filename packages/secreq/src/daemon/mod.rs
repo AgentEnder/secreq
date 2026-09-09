@@ -206,6 +206,49 @@ pub fn run() -> Result<i32> {
     // `should_idle_exit`.
     let ssh_agent_enabled = _agent_listener.is_some();
 
+    // The agent protocol cannot carry an unsolicited "still waiting" frame,
+    // so project pending SSH asks into a tiny private runtime marker set for
+    // the optional PATH observer. This thread never participates in signing:
+    // if it cannot start, or marker I/O later fails, SSH keeps working and the
+    // only loss is the stderr heartbeat. A quarter-second cadence keeps the
+    // signal responsive without adding work to wrap-only daemons.
+    let ssh_wait_projector = if ssh_agent_enabled {
+        let projector_state = state.clone();
+        let projector_shutdown = shutdown_flag.clone();
+        match std::thread::Builder::new()
+            .name("secreqd-ssh-wait-projector".to_owned())
+            .spawn(move || {
+                if let Err(err) = crate::ssh_observer::reset_wait_markers() {
+                    log::log_at(
+                        "ssh-observer",
+                        format_args!("could not clear stale wait markers: {err:#}"),
+                    );
+                }
+                while !projector_shutdown.load(Ordering::SeqCst) {
+                    let snapshot = projector_state.lock().expect("state mutex").snapshot();
+                    if let Err(err) = crate::ssh_observer::sync_pending_snapshot(&snapshot) {
+                        log::log_at(
+                            "ssh-observer",
+                            format_args!("could not project pending SSH waits: {err:#}"),
+                        );
+                    }
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+                let _ = crate::ssh_observer::reset_wait_markers();
+            }) {
+            Ok(handle) => Some(handle),
+            Err(err) => {
+                log::log_at(
+                    "ssh-observer",
+                    format_args!("could not start wait projector: {err}"),
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     log::log(format_args!(
         "daemon ready; entering main loop (idle exit after {}s, resource sampling every {}s)",
         IDLE_EXIT_SECS,
@@ -355,6 +398,12 @@ pub fn run() -> Result<i32> {
     {
         let mut guard = state.lock().expect("state mutex");
         guard.broadcast_consent_exit_please();
+    }
+    // The projector sees the same shutdown flag; wait for its final marker
+    // cleanup before this process exits so a later observer cannot mistake a
+    // crashed-generation marker for a live consent wait.
+    if let Some(handle) = ssh_wait_projector {
+        let _ = handle.join();
     }
     let _ = std::fs::remove_file(&socket_path);
     log::log(format_args!("daemon exiting cleanly"));

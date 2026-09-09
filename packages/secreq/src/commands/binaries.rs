@@ -13,10 +13,17 @@ use std::process::Command;
 
 use anyhow::{bail, Context as _, Result};
 
+/// The SSH wait observer intentionally has distinct ownership from ordinary
+/// wrap shims (`secreq unwrap ssh` must not delete something installed by
+/// `secreq ssh setup`), but binary lookup still has to recognize and skip a
+/// stale observer left in an old PATH directory. Keep this spelling aligned
+/// with `ssh_observer::OBSERVER_SENTINEL`.
+const SSH_OBSERVER_SENTINEL: &str = "secreq-managed-ssh-observer";
+
 /// Locate the *real* binary on `$PATH`, skipping
 /// - the configured shim dir, and
-/// - any other secreq-managed shim found on PATH (identified by our
-///   sentinel string in the file body).
+/// - any other secreq-managed shim found on PATH (identified by one of our
+///   sentinel strings in the file body).
 ///
 /// The second exclusion is load-bearing: a user can end up with stray
 /// shims in `~/.local/bin`, `/usr/local/bin`, or wherever an earlier
@@ -26,7 +33,8 @@ use anyhow::{bail, Context as _, Result};
 /// to put one *before* the real binary's location, find_real_binary
 /// would otherwise pick up the stray and spawn `secreq` recursively,
 /// producing infinite-depth `secreq gh → secreq gh → secreq gh`
-/// process chains. Checking the sentinel kills that loop dead.
+/// process chains. The SSH observer has the same recursion shape, so its
+/// separate ownership sentinel participates in lookup too.
 pub(super) fn find_real_binary(binary: &str, skip: Option<&Path>) -> Result<PathBuf> {
     let path = std::env::var_os("PATH").context("no PATH in environment")?;
     for dir in std::env::split_paths(&path) {
@@ -55,12 +63,12 @@ fn is_executable(path: &Path) -> bool {
     meta.is_file() && (meta.permissions().mode() & 0o111 != 0)
 }
 
-/// True iff the file at `path` is a secreq-managed shim — i.e. carries
-/// the sentinel string our `shim::body` emits.
+/// True iff the file at `path` is a secreq-managed PATH helper: an ordinary
+/// wrap shim or the special SSH wait observer.
 ///
-/// We read at most the first 256 bytes, which is plenty: the sentinel
-/// sits on line 2 of a 5-line script. Larger files we read partially
-/// and bail; native binaries we'd never bother loading.
+/// We read at most the first 256 bytes, which is plenty: both sentinels sit
+/// near the top of their tiny scripts. Larger files we read partially and
+/// bail; native binaries we'd never bother loading.
 fn is_secreq_shim(path: &Path) -> bool {
     use std::io::Read;
     let Ok(f) = std::fs::File::open(path) else {
@@ -78,9 +86,13 @@ fn is_secreq_shim(path: &Path) -> bool {
     if !prefix.starts_with(b"#!") {
         return false;
     }
-    prefix
-        .windows(crate::shim::SENTINEL.len())
-        .any(|w| w == crate::shim::SENTINEL.as_bytes())
+    [crate::shim::SENTINEL, SSH_OBSERVER_SENTINEL]
+        .iter()
+        .any(|sentinel| {
+            prefix
+                .windows(sentinel.len())
+                .any(|window| window == sentinel.as_bytes())
+        })
 }
 
 /// Pass through an unwrapped binary unchanged. Used when `secreq <bin>` is
@@ -134,6 +146,22 @@ mod tests {
         .unwrap();
         make_executable(&path);
         assert!(is_secreq_shim(&path));
+    }
+
+    #[test]
+    fn is_secreq_shim_detects_the_ssh_wait_observer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ssh");
+        std::fs::write(
+            &path,
+            "#!/bin/sh\n# secreq-managed-ssh-observer\nexec /opt/secreq \"$@\"\n",
+        )
+        .unwrap();
+        make_executable(&path);
+        assert!(
+            is_secreq_shim(&path),
+            "a stale observer must never be selected as the real ssh binary"
+        );
     }
 
     #[test]

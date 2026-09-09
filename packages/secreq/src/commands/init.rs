@@ -14,7 +14,6 @@ use crate::shim;
 use crate::wraps::WrapsConfig;
 
 use super::config::{edit_config, ConfigEdit};
-use super::ssh::ssh_setup_core;
 use super::{prompt, resolve_config_path};
 
 /// `secreq init` — interactive first-time setup. Picks the shim dir,
@@ -208,11 +207,11 @@ pub fn init(config_path: Option<&Path>, default_shim_dir: Option<PathBuf>) -> Re
     // 5. Offer SSH-agent setup. secreq doubles as a provenance-aware SSH
     // agent when the config has an `ssh` block; wiring SSH clients at its
     // socket is the same plan/confirm/apply flow as `secreq ssh setup`, so
-    // we share `ssh_setup_core`. Entirely optional and non-fatal: declining
-    // (or any failure, including a non-terminal `interact`) must not fail
-    // `init`.
+    // we route through the same observer-aware wrapper. Entirely optional
+    // and non-fatal: declining (or any failure, including a non-terminal
+    // `interact`) must not fail `init`.
     if prompt::confirm_default_yes("Also set up secreq as your SSH agent?").unwrap_or(false) {
-        if let Err(err) = ssh_setup_core(None, false, false, Some(&config_path)) {
+        if let Err(err) = super::ssh_observed::ssh_setup(None, false, false, Some(&config_path)) {
             cliclack::log::warning(crate::term::wrap_log_text(&format!(
                 "skipped SSH-agent setup: {err:#}. Run `secreq ssh setup` later to wire it."
             )))?;

@@ -84,6 +84,7 @@ pub mod schema;
 pub mod scoped_agent;
 pub mod secret;
 pub mod shim;
+pub mod ssh_observer;
 pub mod ssh_selftest;
 pub mod ssh_setup;
 pub mod ssh_sign;
