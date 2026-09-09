@@ -61,7 +61,9 @@ const REAL_SSH_ENV: &str = "SECREQ_SSH_REAL";
 const POLL_TICK: Duration = Duration::from_millis(100);
 const INDICATOR_GRACE: Duration = Duration::from_millis(250);
 const NONTTY_REPRINT: Duration = Duration::from_secs(30);
-const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER_FRAMES: [&str; 10] = [
+    "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
+];
 
 /// Called before clap parsing. `None` means this is an ordinary Secreq
 /// invocation; `Some(code)` means the process came from the managed `ssh`
@@ -158,9 +160,7 @@ fn run_observer() -> Result<i32> {
             if let Some(thread) = signal_thread {
                 let _ = thread.join();
             }
-            return Ok(status
-                .code()
-                .unwrap_or_else(|| 128 + status.signal().unwrap_or(1)));
+            return Ok(status.code().unwrap_or_else(|| 128 + status.signal().unwrap_or(1)));
         }
 
         let waiting = caller.is_some_and(wait_active);
@@ -205,7 +205,9 @@ fn wait_indicator_silenced() -> bool {
 }
 
 fn paint_tty_indicator(tick: usize) {
-    let frame = SPINNER_FRAMES[tick % SPINNER_FRAMES.len()];
+    let Some(frame) = SPINNER_FRAMES.get(tick % SPINNER_FRAMES.len()) else {
+        return;
+    };
     let mut err = std::io::stderr();
     let _ = write!(
         err,
@@ -341,7 +343,8 @@ fn reset_wait_markers_at(root: &Path) -> Result<()> {
 pub(crate) fn install_shim(shim_dir: &Path) -> Result<PathBuf> {
     crate::shim::ensure_shim_dir(shim_dir)?;
     let real_ssh = find_real_ssh(shim_dir)?;
-    let secreq = std::env::current_exe().context("determine the running secreq path")?;
+    let secreq =
+        std::env::current_exe().context("determine the running secreq path")?;
     let secreq = fs::canonicalize(&secreq).unwrap_or(secreq);
     let target = shim_dir.join("ssh");
 
@@ -359,7 +362,10 @@ pub(crate) fn install_shim(shim_dir: &Path) -> Result<PathBuf> {
                 } else {
                     "it is not managed by the secreq SSH setup"
                 };
-                bail!("{} already exists and {detail}; leaving it untouched", target.display());
+                bail!(
+                    "{} already exists and {detail}; leaving it untouched",
+                    target.display()
+                );
             }
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
