@@ -89,7 +89,7 @@ p256 = { version = "0.13", features = ["ecdsa"] }
 # matched. Already in the tree through the P-256 crypto stack, so taking it
 # directly costs nothing extra to build.
 subtle = "2.6"
-ssh-encoding = "0.2"
+ssh-encoding = "0.3"
 # Needed only to honor the SSH_AGENT_RSA_SHA2_256/512 SIGN_REQUEST flags:
 # ssh-key 0.6's public Signer impl for RSA hardcodes SHA-512, so we drop to
 # the same rsa::pkcs1v15 path it uses internally to select the hash. Pinned
