@@ -55,7 +55,7 @@ toml = "0.8"
 # rebuild the file and drop the user's comments.
 toml_edit = "0.22"
 zeroize = { version = "1", features = ["derive"] }
-portable-pty = "0.8"
+portable-pty = "0.9"
 sysinfo = "0.33"
 cliclack = "0.3"
 crossterm = "0.28"
