@@ -82,7 +82,7 @@ jobs:
         with:
           key: ${{ matrix.os }}
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
       - run: pnpm install --frozen-lockfile
 
       # Vite's fixed-name output is byte-deterministic for identical sources
