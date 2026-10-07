@@ -1,0 +1,1 @@
+const c=["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"],r=["⣾","⣽","⣻","⢿","⡿","⣟","⣯","⣷"],e=["◐","◓","◑","◒"],s=[c,r,e],i=100;function l(t){for(const n of s){const o=n.indexOf(t);if(o!==-1)return[...n.slice(o),...n.slice(0,o)]}return null}function u(t){return s.some(n=>n.includes(t))}export{i as T,u as i,l as t};
