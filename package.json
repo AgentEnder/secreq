@@ -6,7 +6,7 @@
   "devDependencies": {
     "@monodon/rust": "^3.0.0",
     "@nx/js": "23.1.0",
-    "nx": "23.1.0",
+    "nx": "23.2.1",
     "nx-github-pages": "^1.2.0",
     "oxfmt": "0.60.0",
     "oxlint": "1.75.0",
